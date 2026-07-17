@@ -87,6 +87,88 @@ public class CursorReconnectRewindTests {
         await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
     }
 
+    // ---- AI-1382 review fix (r3, finding #2) — WatchCommand.SeedCursorByteOffsetAsync ----
+    //
+    // Shared by ApplyReconnectRewindAsync (already covered above) and RunWatch's INITIAL
+    // WatcherConnect registration, which — before this fix — left CursorByteOffset at its default
+    // (0) after resuming at server line N: the ack-to-byte mapping then measured acked lines
+    // relative to N but counted their bytes from 0, so a full ack of M resumed lines checkpointed
+    // at file offset M instead of N's TRUE offset plus M.
+
+    [Test]
+    public async Task SeedCursorByteOffsetAsync_seeds_the_true_byte_offset_of_the_resumed_line() {
+        var dir = Directory.CreateTempSubdirectory("kcap-seed-initial-resume").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            // Deliberately uneven line lengths: offsets 2, 7, 10, 15, 21.
+            await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\neeeee\n");
+
+            var guard = new CursorRewriteGuard(NewSessionId());
+            // A fresh watcher process resuming at server line 2 — CursorByteOffset starts at its
+            // default (0), exactly as WatchState leaves it before this fix's seeding runs.
+            var state = new WatchState { LinesProcessed = 2 };
+            await Assert.That(state.CursorByteOffset).IsEqualTo(0L);
+
+            await WatchCommand.SeedCursorByteOffsetAsync(
+                state, lineNumber: 2, vendor: "cursor", transcriptPath, guard, CancellationToken.None);
+
+            // The TRUE byte offset of line 2 ("a\nbbbb\n" = 7 bytes) — not the default 0, and not
+            // the resumed line COUNT (2) either.
+            await Assert.That(state.CursorByteOffset).IsEqualTo(7L);
+            // The checkpoint is reset so the guard's two-zone checks start clean from here.
+            await Assert.That(guard.VerifyPriorZone("anything-at-all")).IsTrue();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task SeedCursorByteOffsetAsync_is_a_no_op_for_non_cursor_vendors() {
+        var dir = Directory.CreateTempSubdirectory("kcap-seed-initial-resume-noncursor").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\n");
+
+            var state = new WatchState { LinesProcessed = 2, CursorByteOffset = 999 };
+            await WatchCommand.SeedCursorByteOffsetAsync(
+                state, lineNumber: 2, vendor: "codex", transcriptPath, cursorGuard: null, CancellationToken.None);
+
+            await Assert.That(state.CursorByteOffset).IsEqualTo(999L); // untouched — no guard to keep in sync
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task InitialResume_seeded_offset_composed_with_ByteOffsetForAckedLines_checkpoints_at_N_plus_M_not_M() {
+        // End-to-end regression for the actual production consequence, composed from the two pure
+        // functions DrainNewLines itself calls (no live hub needed — see the class doc on why a
+        // real ack round trip isn't unit-testable here).
+        var dir = Directory.CreateTempSubdirectory("kcap-seed-initial-resume-e2e").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\neeeee\n"); // 5 lines, offsets 2,7,10,15,21
+
+            var guard = new CursorRewriteGuard(NewSessionId());
+            // The server resumed this fresh watcher process at line N=2 (0-based frontier already
+            // sent/acked by a PRIOR watcher instance).
+            var state = new WatchState { LinesProcessed = 2 };
+
+            await WatchCommand.SeedCursorByteOffsetAsync(
+                state, lineNumber: 2, vendor: "cursor", transcriptPath, guard, CancellationToken.None);
+            await Assert.That(state.CursorByteOffset).IsEqualTo(7L);
+
+            // The watcher's next poll fully acks the M=3 remaining lines (2, 3, 4) — mirrors
+            // DrainNewLines' own ByteOffsetForAckedLines(verifiedRange, cursorGuardOldOffset,
+            // ackedLineCount) call, with rangeStartOffset seeded from the SAME offset above.
+            var remainingRange  = System.Text.Encoding.UTF8.GetBytes("cc\ndddd\neeeee\n"); // lines 2,3,4 — 14 bytes
+            var ackedByteOffset = WatchCommand.ByteOffsetForAckedLines(
+                remainingRange, rangeStartOffset: state.CursorByteOffset, ackedLineCount: 3);
+
+            // N's offset (7) + M's bytes (14) = 21 — the TRUE end-of-file offset. The pre-fix bug
+            // (CursorByteOffset left at 0, so the ack maps M's bytes as if counted from byte 0)
+            // would have produced 14 instead.
+            await Assert.That(ackedByteOffset).IsEqualTo(21L);
+            await Assert.That(ackedByteOffset).IsNotEqualTo(14L);
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
     // ---- WatchCommand.ApplyReconnectRewindAsync — the atomic composition ----
 
     [Test]
@@ -180,6 +262,112 @@ public class CursorReconnectRewindTests {
             await Assert.That(tripped).IsTrue();
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
             await Assert.That(result).IsEmpty();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // ---- AI-1382 review fix (r3, finding #1) — GatedApplyReconnectRewindAsync/GatedDrainNewLinesAsync ----
+    //
+    // RunWatch's own cursorRewindGate/Reconnected handler can't be driven without a live SignalR
+    // reconnect (same constraint CursorGuardWiringTests' class doc states), so these tests drive
+    // the extracted gate-composition helpers directly — the SAME SemaphoreSlim(1, 1) instance
+    // RunWatch constructs and passes to both call sites. A SemaphoreSlim(1, 1) enforces exclusivity
+    // unconditionally, so rather than chase a timing-dependent race, these tests prove the
+    // EXCLUSION property deterministically: while one gated operation holds the gate, the other
+    // cannot even START running (its Task stays incomplete), so it is architecturally impossible
+    // for a drain to observe a half-applied rewind (or vice versa).
+
+    [Test]
+    public async Task GatedDrainNewLinesAsync_cannot_run_while_the_gate_is_held_by_a_reconnect_rewind() {
+        var sid = NewSessionId();
+        var dir = Directory.CreateTempSubdirectory("kcap-gate-drain-blocked").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\n"); // 4 lines
+
+            var gate  = new SemaphoreSlim(1, 1);
+            var guard = new CursorRewriteGuard(sid);
+            var state = new WatchState { LinesProcessed = 4, CursorByteOffset = 15 };
+
+            // Simulate an in-flight reconnect rewind: acquire the gate ourselves (standing in for
+            // GatedApplyReconnectRewindAsync mid-ResolveByteOffsetForLineAsync, BEFORE it has
+            // applied any of its three writes).
+            await gate.WaitAsync();
+
+            await using var hub = new HubConnectionBuilder().WithUrl("http://127.0.0.1:1/hubs/sessions").Build();
+
+            var drainTask = WatchCommand.GatedDrainNewLinesAsync(
+                gate, hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            // Give the (incorrectly ungated) case every chance to complete — it must NOT, because
+            // the gate is still held.
+            await Task.Delay(50);
+            await Assert.That(drainTask.IsCompleted).IsFalse();
+
+            // A half-applied rewind is architecturally impossible here: DrainNewLines has not
+            // even started reading cursorGuardOldOffset/priorLineCursorForGuard yet, let alone
+            // written a checkpoint derived from stale pre-rewind numbers.
+            await Assert.That(state.CursorByteOffset).IsEqualTo(15L);
+
+            gate.Release(); // the "rewind" completes — now the queued drain may proceed
+            await drainTask;
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task GatedApplyReconnectRewindAsync_cannot_run_while_the_gate_is_held_by_a_drain() {
+        var sid = NewSessionId();
+        var dir = Directory.CreateTempSubdirectory("kcap-gate-rewind-blocked").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\ndddd\n"); // 4 lines: offsets 2,7,10,15
+
+            var gate  = new SemaphoreSlim(1, 1);
+            var guard = new CursorRewriteGuard(sid);
+            guard.Checkpoint(offset: 15, trailingSha: "acked-hash");
+            var state = new WatchState { LinesProcessed = 4, CursorByteOffset = 15 };
+
+            // Simulate an in-flight drain (standing in for GatedDrainNewLinesAsync mid-ack).
+            await gate.WaitAsync();
+
+            var rewindTask = WatchCommand.GatedApplyReconnectRewindAsync(
+                gate, state, serverPosition: 2, vendor: "cursor", transcriptPath, guard, CancellationToken.None);
+
+            await Task.Delay(50);
+            await Assert.That(rewindTask.IsCompleted).IsFalse();
+
+            // The rewind has not been allowed to touch state yet — no half-applied rewind for a
+            // concurrently-finishing drain to observe (or clobber).
+            await Assert.That(state.LinesProcessed).IsEqualTo(4);
+            await Assert.That(state.CursorByteOffset).IsEqualTo(15L);
+
+            gate.Release(); // the "drain" completes — now the queued rewind may proceed
+            await rewindTask;
+
+            await Assert.That(state.LinesProcessed).IsEqualTo(2);
+            await Assert.That(state.CursorByteOffset).IsEqualTo(7L); // true byte offset of line 2
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task GatedDrainNewLinesAsync_and_GatedApplyReconnectRewindAsync_are_no_ops_when_gate_is_null() {
+        // Every non-Cursor vendor passes a null gate — both helpers must fall back to calling the
+        // underlying method directly rather than deadlocking or throwing on a null semaphore.
+        var dir = Directory.CreateTempSubdirectory("kcap-gate-null-noncursor").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(transcriptPath, "a\nb\n");
+
+            var state = new WatchState { LinesProcessed = 2, CursorByteOffset = 999 };
+            await WatchCommand.GatedApplyReconnectRewindAsync(
+                gate: null, state, serverPosition: 1, vendor: "codex", transcriptPath, cursorGuard: null, CancellationToken.None);
+            await Assert.That(state.LinesProcessed).IsEqualTo(1);
+
+            await using var hub = new HubConnectionBuilder().WithUrl("http://127.0.0.1:1/hubs/sessions").Build();
+            var result = await WatchCommand.GatedDrainNewLinesAsync(
+                gate: null, hub, "sid", transcriptPath, agentId: null, new WatchState { ThresholdReached = true },
+                vendor: "codex", CancellationToken.None);
+            await Assert.That(result).IsNotNull();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 }

@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Microsoft.AspNetCore.SignalR.Client;
+using System.Linq;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
@@ -172,6 +173,99 @@ public class CursorGuardWiringTests {
             await Assert.That(tripped).IsTrue();
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
             await Assert.That(result).IsEmpty();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // AI-1382 review fix (r3, finding #3) — the guard's checks (prior-zone hash, shrink, new-range
+    // record) must still work correctly on a NON-cadence poll, where DrainNewLines now captures
+    // only a BOUNDED window (the guard's own trailing-tail zone plus the new range) instead of
+    // materializing the whole file. Before this fix, this poll would have re-allocated/re-read the
+    // ~50KB padding line below every single second; this test proves correctness survives making
+    // that incremental — a same-length in-place rewrite of already-checkpointed history (well
+    // outside the small new range) is still caught via the bounded read's prior-zone hash.
+    [Test]
+    public async Task DrainNewLines_still_catches_a_prior_zone_rewrite_via_the_bounded_non_cadence_read_path() {
+        var sid = NewSessionId();
+        var dir = Directory.CreateTempSubdirectory("kcap-cursor-guard-bounded-noncadence").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            var padding = string.Concat(Enumerable.Repeat("p", 50_000)); // one huge already-checkpointed line
+            await File.WriteAllTextAsync(transcriptPath, padding + "\nkept\nnew\n");
+
+            var paddingLineByteLength = padding.Length + 1; // "ppp...p\n"
+            var keptLineByteLength    = "kept\n".Length;
+            var checkpointOffset      = (long)(paddingLineByteLength + keptLineByteLength); // right before "new\n"
+
+            var guard = new CursorRewriteGuard(sid) { TrailingBytes = keptLineByteLength }; // exactly "kept\n"
+            guard.Checkpoint(checkpointOffset, CursorAppendOnlyProbe.Sha256Hex("kept\n"u8));
+
+            var state = new WatchState {
+                LinesProcessed       = 2, // padding + "kept" already sent/acked
+                CursorByteOffset     = checkpointOffset,
+                ThresholdReached     = true, // skip the below-threshold buffering short-circuit
+                // Neither poll 1 nor a multiple of the cadence — this poll MUST take the bounded
+                // (non-full-file) read path, not the periodic whole-file re-hash.
+                CursorGuardPollCount = 5,
+            };
+
+            // Rewrite already-checkpointed history (same length: "kept" → "XEPT") — entirely
+            // OUTSIDE the tiny new range ("new\n") this poll will actually read, and nowhere near
+            // the padding line. Only the guard's prior-zone check (which the bounded read still
+            // captures, since it starts at the checkpoint offset minus TrailingBytes) can catch it.
+            await File.WriteAllTextAsync(transcriptPath, padding + "\nXEPT\nnew\n");
+
+            var tripped = false;
+            await using var hub = UnconnectedHub();
+
+            var result = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => tripped = true);
+
+            await Assert.That(tripped).IsTrue();
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
+            await Assert.That(result).IsEmpty();
+            // The batch was discarded, not delivered.
+            await Assert.That(state.CursorByteOffset).IsEqualTo(checkpointOffset);
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task DrainNewLines_bounded_non_cadence_read_still_delivers_correct_new_lines_on_a_large_file() {
+        // The "happy path" counterpart to the rewrite test above: no tampering, just proving a
+        // large, mostly-unchanged file still correctly decodes and sends only the genuinely new
+        // line via the bounded (non-cadence) read.
+        var sid = NewSessionId();
+        var dir = Directory.CreateTempSubdirectory("kcap-cursor-guard-bounded-happy").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            var padding = string.Concat(Enumerable.Repeat("p", 50_000));
+            await File.WriteAllTextAsync(transcriptPath, padding + "\nkept\nnew\n");
+
+            var paddingLineByteLength = padding.Length + 1;
+            var checkpointOffset      = (long)(paddingLineByteLength + "kept\n".Length);
+
+            var guard = new CursorRewriteGuard(sid) { TrailingBytes = "kept\n".Length };
+            guard.Checkpoint(checkpointOffset, CursorAppendOnlyProbe.Sha256Hex("kept\n"u8));
+
+            var state = new WatchState {
+                LinesProcessed       = 2,
+                CursorByteOffset     = checkpointOffset,
+                ThresholdReached     = true,
+                CursorGuardPollCount = 5, // non-cadence poll, same as above
+            };
+
+            await using var hub = UnconnectedHub();
+
+            // agentId is null and ThresholdReached is true, so the send path is reached — the
+            // unconnected hub makes SendTranscriptBatchAcked fail, which DrainNewLines treats as a
+            // retryable send failure (logs, doesn't advance state) rather than a crash. The lines
+            // returned are what matters here: correctness of the bounded decode.
+            var result = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            await Assert.That(result).IsEquivalentTo(new[] { "new" });
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 }

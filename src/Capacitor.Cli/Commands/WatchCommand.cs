@@ -295,6 +295,17 @@ static partial class WatchCommand {
         // vendor == "cursor" AND this is non-null.
         var cursorGuard = vendor == "cursor" ? new CursorRewriteGuard(sessionId) : null;
 
+        // AI-1382 review fix (r3, finding #1) — serializes a reconnect-discovered rewind
+        // (ApplyReconnectRewindAsync, run from the Reconnected handler) against DrainNewLines'
+        // own guard/state mutations (main loop + final drain). Both mutate WatchState's
+        // CursorByteOffset/LinesProcessed and CursorRewriteGuard's checkpoint; without this a
+        // rewind's three writes (byte offset, checkpoint reset, line cursor) could interleave with
+        // a concurrently-running drain — the SignalR client can fire Reconnected on a background
+        // task while the main loop is mid-DrainNewLines — re-creating the exact byte/line-frontier
+        // divergence review fix #2 (r2) closed. Only ever contended for Cursor (the only vendor
+        // with a guard/rewind interplay); null — and never awaited — for every other vendor.
+        var cursorRewindGate = vendor == "cursor" ? new SemaphoreSlim(1, 1) : null;
+
         // AI-1382 Task 11 (D0) — a rewrite trip discards the unsent batch (DrainNewLines already
         // returned without advancing state) and quarantines the session (the guard itself writes
         // the marker); this just triggers the same clean-exit path StopWatcher uses.
@@ -466,6 +477,15 @@ static partial class WatchCommand {
         // ServerTimeout stays at the 30s default for rollout safety.
         hubConnection.KeepAliveInterval = TimeSpan.FromSeconds(7);
 
+        // AI-1382 review fix (r3, finding #1) — runs DrainNewLines under cursorRewindGate when one
+        // exists, so it can never observe a half-applied reconnect rewind (see cursorRewindGate's
+        // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
+        // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
+        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) =>
+            GatedDrainNewLinesAsync(
+                cursorRewindGate, hubConnection, sessionId, transcriptPath, agentId, state, vendor, drainCt,
+                isFinalDrain: isFinalDrainLocal, cursorGuard: cursorGuard, onCursorRewriteDetected: OnCursorRewriteDetected);
+
         // Register StopWatcher handler — server sends this to tell us to shut down
         hubConnection.On<string>(
             "StopWatcher",
@@ -490,7 +510,12 @@ static partial class WatchCommand {
 
                 if (serverPosition < state.LinesProcessed) {
                     Log($"Server behind ({serverPosition} vs {state.LinesProcessed}), rewinding to resend gap");
-                    await ApplyReconnectRewindAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, cts.Token);
+
+                    // AI-1382 review fix (r3, finding #1) — hold cursorRewindGate for the whole
+                    // rewind so a concurrently-running DrainNewLines (main loop or final drain)
+                    // can never interleave with it (see cursorRewindGate's declaration above).
+                    // Thin wrapper over the directly-testable GatedApplyReconnectRewindAsync.
+                    await GatedApplyReconnectRewindAsync(cursorRewindGate, state, serverPosition, vendor, transcriptPath, cursorGuard, cts.Token);
                 }
             } catch (Exception ex) {
                 Log($"Re-register after reconnect failed: {ex.Message}");
@@ -549,6 +574,17 @@ static partial class WatchCommand {
         Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
 
+        // AI-1382 review fix (r3, finding #2) — seed the Cursor byte frontier to the TRUE byte
+        // offset of the resumed line on this INITIAL registration too, not only on a later
+        // reconnect rewind (ApplyReconnectRewindAsync already does this for reconnects, via the
+        // SAME SeedCursorByteOffsetAsync helper — see below). Without this, a watcher resuming at
+        // server line N left CursorByteOffset at its default (0): the ack-to-byte mapping
+        // (ByteOffsetForAckedLines) then measures acked lines relative to N but counts their bytes
+        // from 0, so a full ack of M resumed lines checkpointed at file offset M instead of N's
+        // true offset plus M — a permanent, silent line/byte-frontier misalignment that made the
+        // guard re-scan/re-hash old history forever.
+        await SeedCursorByteOffsetAsync(state, state.LinesProcessed, vendor, transcriptPath, cursorGuard, cts.Token);
+
         // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
         // transcripts itself and spawns a child watcher per subagent (AI-900). Tracks the
         // files already registered + spawned so each is handled exactly once across ticks.
@@ -591,9 +627,9 @@ static partial class WatchCommand {
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
                 }
 
-                var drained = await DrainNewLines(
-                    hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token,
-                    cursorGuard: cursorGuard, onCursorRewriteDetected: OnCursorRewriteDetected);
+                // AI-1382 review fix (r3, finding #1) — gated so this can never interleave with a
+                // concurrently-running reconnect rewind (see cursorRewindGate's declaration above).
+                var drained = await DrainNewLinesGatedAsync(isFinalDrainLocal: false, cts.Token);
 
                 // Live subagent discovery: only the parent (agentId == null) watcher scans;
                 // child subagent watchers (agentId != null) just stream their file. Gemini
@@ -671,9 +707,9 @@ static partial class WatchCommand {
             // `kcap import` can recover the tail rather than dropping a truncated line.
             await WaitForFinalLineCompletionAsync(transcriptPath);
 
-            var finalDrained = await DrainNewLines(
-                hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None,
-                isFinalDrain: true, cursorGuard: cursorGuard, onCursorRewriteDetected: OnCursorRewriteDetected);
+            // AI-1382 review fix (r3, finding #1) — gated for the same reason as the main loop's
+            // drain call above (a reconnect right at shutdown is unlikely but not impossible).
+            var finalDrained = await DrainNewLinesGatedAsync(isFinalDrainLocal: true, CancellationToken.None);
 
             if (state.FinalDrainHeldIncompleteLine) {
                 // Keyed on the canonical server sessionId (not agentId) even for a subagent
@@ -1235,6 +1271,43 @@ static partial class WatchCommand {
                 }
             }
 
+            // AI-1382 Task 11 (D0/D3) — the runtime two-zone rewrite guard (Task 7) verifies the
+            // byte range this poll is about to send hasn't been rewritten underneath the watcher.
+            // Record the new range's hash NOW (right after the line-based read snapshot below) and
+            // re-verify the SAME range, freshly re-read from disk, immediately before send below —
+            // a rewrite racing between the two reads is exactly what VerifyNewRange/VerifyPriorZone
+            // are built to catch. A trip discards the unsent batch and quarantines the session (the
+            // guard does that itself); the caller (RunWatch) exits via onCursorRewriteDetected.
+            var cursorGuardOldOffset    = state.CursorByteOffset;
+            var priorLineCursorForGuard = state.LinesProcessed;
+
+            // AI-1382 review fix (r3, finding #3) — decide BEFORE reading whether this poll needs
+            // the (rare, amortized) periodic full-prefix re-hash, which genuinely needs the whole
+            // file, or can use a BOUNDED read starting near the guard's own prior-tail zone. Moved
+            // ahead of the read (previously decided only after) so ReadNewCompleteLinesAsync can be
+            // told where to start — an idle poll with nothing new then allocates ~nothing instead
+            // of a file-sized buffer every second, which the previous unconditional whole-file
+            // `captureRawBytes` read did even for large, mostly-unchanged Cursor transcripts.
+            var cursorFullPrefixPollNow = false;
+            var cursorBoundedReadFrom   = 0L;
+
+            if (vendor == "cursor" && cursorGuard is not null) {
+                // Periodic full-prefix re-hash: CursorRewriteGuard.VerifyFullPrefix existed (D0)
+                // but was never called from anywhere until review fix #2 wired it in on the Nth
+                // poll. Review fix #3 seeds it on the very FIRST poll too (not only lazily via the
+                // guard's own first call, which without this never happens before poll N) — without
+                // an early seed, a mid-region rewrite landing anywhere in polls 1..N-1 has no
+                // baseline to be caught against until poll N seeds the ALREADY-rewritten file as if
+                // it were the original, valid one. Every Nth poll after that still compares.
+                state.CursorGuardPollCount++;
+                cursorFullPrefixPollNow = state.CursorGuardPollCount == 1
+                    || state.CursorGuardPollCount % CursorFullPrefixVerifyEveryNPolls == 0;
+
+                if (!cursorFullPrefixPollNow) {
+                    cursorBoundedReadFrom = Math.Max(0, cursorGuardOldOffset - cursorGuard.TrailingBytes);
+                }
+            }
+
             // Read only newline-TERMINATED lines. A final line still being written by the agent
             // (no trailing '\n' yet) is held back — sending its truncated prefix and advancing the
             // position past it permanently drops the completed line (AI-1243: dropped Read results;
@@ -1251,10 +1324,14 @@ static partial class WatchCommand {
                 // AI-1382 review fix #1 — Cursor additionally captures the raw byte buffer this
                 // read decodes from (captureRawBytes), so the rewrite guard below can hash the
                 // EXACT bytes that produced `newLines` instead of a separately reopened read.
+                // AI-1382 review fix (r3, finding #3) — rawBytesReadFrom/newRangeByteOffset bound
+                // that capture instead of always reading the whole file (see above).
                 drainRead = await ReadNewCompleteLinesAsync(
                     stream, state.LinesProcessed,
                     isFinalDrain ? IncompleteFinalLinePolicy.ConsumeIfComplete : IncompleteFinalLinePolicy.Hold,
-                    ct, captureRawBytes: vendor == "cursor");
+                    ct, captureRawBytes: vendor == "cursor",
+                    rawBytesReadFrom: cursorBoundedReadFrom,
+                    newRangeByteOffset: vendor == "cursor" ? cursorGuardOldOffset : null);
             }
 
             // Surface whether the final drain held back an incomplete (unterminated/unparseable)
@@ -1264,14 +1341,6 @@ static partial class WatchCommand {
                 state.FinalDrainHeldIncompleteLine = drainRead.HeldIncompleteFinalLine;
             }
 
-            // AI-1382 Task 11 (D0/D3) — the runtime two-zone rewrite guard (Task 7) verifies the
-            // byte range this poll is about to send hasn't been rewritten underneath the watcher.
-            // Record the new range's hash NOW (right after the line-based read snapshot above) and
-            // re-verify the SAME range, freshly re-read from disk, immediately before send below —
-            // a rewrite racing between the two reads is exactly what VerifyNewRange/VerifyPriorZone
-            // are built to catch. A trip discards the unsent batch and quarantines the session (the
-            // guard does that itself); the caller (RunWatch) exits via onCursorRewriteDetected.
-            //
             // AI-1382 review fix #3 — cursorGuardNewLength is the SAME capped byte length
             // ReadNewCompleteLinesAsync sampled while building drainRead above
             // (drainRead.SnapshotByteLength), NOT a fresh FileInfo.Length re-sample. Re-sampling
@@ -1280,10 +1349,9 @@ static partial class WatchCommand {
             // even though drainRead (and therefore newLines/newLineNumbers) never saw them — a
             // silent, permanent skip on the next poll, since the guard's next prior-zone start
             // would already be past them.
-            var cursorGuardOldOffset    = state.CursorByteOffset;
-            var priorLineCursorForGuard = state.LinesProcessed;
-            var cursorGuardNewLength    = drainRead.SnapshotByteLength;
-            var cursorGuardSnapshot     = drainRead.SnapshotBytes;
+            var cursorGuardNewLength   = drainRead.SnapshotByteLength;
+            var cursorGuardSnapshot    = drainRead.SnapshotBytes;
+            var cursorGuardSnapshotAt  = drainRead.SnapshotStartOffset;
             byte[]? cursorGuardVerifiedRange = null;
 
             if (vendor == "cursor" && cursorGuard is not null && cursorGuardSnapshot is not null) {
@@ -1308,27 +1376,25 @@ static partial class WatchCommand {
                 // rewrite of already-checkpointed bytes that doesn't change the file's length is
                 // caught here even when cursorGuardNewLength == cursorGuardOldOffset. A single
                 // check suffices now — there is no separate "before/after" read of this snapshot to
-                // race against (it was captured once, atomically, above).
-                if (!cursorGuard.VerifyPriorZone(cursorGuard.HashPriorZone(cursorGuardSnapshot))) {
+                // race against (it was captured once, atomically, above). cursorGuardSnapshotAt
+                // (review fix r3 #3) is non-zero on a bounded (non-full-prefix) poll — HashPriorZone
+                // clips its window to whatever the snapshot actually covers.
+                if (!cursorGuard.VerifyPriorZone(cursorGuard.HashPriorZone(cursorGuardSnapshot, cursorGuardSnapshotAt))) {
                     onCursorRewriteDetected?.Invoke();
                     return [];
                 }
 
                 if (cursorGuardNewLength > cursorGuardOldOffset) {
                     var rangeLength = (int)(cursorGuardNewLength - cursorGuardOldOffset);
-                    var rangeBytes  = cursorGuardSnapshot.AsSpan((int)cursorGuardOldOffset, rangeLength);
+                    var rangeBytes  = cursorGuardSnapshot.AsSpan((int)(cursorGuardOldOffset - cursorGuardSnapshotAt), rangeLength);
                     cursorGuard.RecordNewRangeRead(cursorGuardOldOffset, rangeLength, rangeBytes);
                 }
 
-                // Periodic full-prefix re-hash: CursorRewriteGuard.VerifyFullPrefix existed (D0)
-                // but was never called from anywhere until review fix #2 wired it in on the Nth
-                // poll. Review fix #3 seeds it on the very FIRST poll too (not only lazily via the
-                // guard's own first call, which without this never happens before poll N) — without
-                // an early seed, a mid-region rewrite landing anywhere in polls 1..N-1 has no
-                // baseline to be caught against until poll N seeds the ALREADY-rewritten file as if
-                // it were the original, valid one. Every Nth poll after that still compares.
-                state.CursorGuardPollCount++;
-                if (state.CursorGuardPollCount == 1 || state.CursorGuardPollCount % CursorFullPrefixVerifyEveryNPolls == 0) {
+                // Periodic full-prefix re-hash — cadence decided up front (cursorFullPrefixPollNow)
+                // so the expensive whole-file read/hash only ever happens on its own cadence; a
+                // bounded (non-cadence) poll's snapshot never starts at byte 0, so it could never
+                // correctly feed VerifyFullPrefix anyway.
+                if (cursorFullPrefixPollNow) {
                     var sample = new CursorAppendOnlyProbe.Sample(
                         cursorGuardSnapshot.Length, CursorAppendOnlyProbe.Sha256Hex(cursorGuardSnapshot));
 
@@ -1655,11 +1721,14 @@ static partial class WatchCommand {
                         // the RPC had already returned — a rewrite landing while the ack was in
                         // flight would be blessed as the new checkpoint baseline instead of caught
                         // (this is the same TOCTOU class review fix #1 closes for the read side).
+                        // AI-1382 review fix (r3, finding #3) — cursorGuardSnapshot may now start at
+                        // cursorGuardSnapshotAt (a bounded, non-zero offset) rather than always byte
+                        // 0; the slice below is relative to the snapshot buffer, so subtract it.
                         var trailingLength = (int)Math.Min(cursorGuard.TrailingBytes, ackedByteOffset);
                         var trailingHash   = trailingLength <= 0 || cursorGuardSnapshot is null
                             ? CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty)
                             : CursorAppendOnlyProbe.Sha256Hex(
-                                  cursorGuardSnapshot.AsSpan((int)(ackedByteOffset - trailingLength), trailingLength));
+                                  cursorGuardSnapshot.AsSpan((int)(ackedByteOffset - trailingLength - cursorGuardSnapshotAt), trailingLength));
 
                         cursorGuard.Checkpoint(ackedByteOffset, trailingHash);
                     }
@@ -2613,12 +2682,19 @@ static partial class WatchCommand {
     /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/>, unparseable) final line was held
     /// back rather than consumed. The shutdown final drain uses this to flag the session
     /// needs-import instead of silently dropping a truncated tail. <see cref="SnapshotBytes"/> is
-    /// the raw byte buffer (offsets 0..<see cref="SnapshotByteLength"/>) captured during THIS same
-    /// capped read — populated only when the caller opts in via <c>captureRawBytes</c>
-    /// (<see cref="ReadNewCompleteLinesAsync"/>) — so the Cursor rewrite guard can hash the EXACT
-    /// bytes that decoded <see cref="Lines"/> instead of a later, separately-reopened disk read
-    /// (AI-1382 review fix #1: the previous two-read wiring left a TOCTOU window between decoding
-    /// the batch and hashing it).
+    /// the raw byte buffer captured during THIS same capped read, starting at absolute file offset
+    /// <see cref="SnapshotStartOffset"/> (0 by default — the true file start) and running
+    /// <see cref="SnapshotByteLength"/> - <see cref="SnapshotStartOffset"/> bytes — populated only
+    /// when the caller opts in via <c>captureRawBytes</c> (<see cref="ReadNewCompleteLinesAsync"/>)
+    /// — so the Cursor rewrite guard can hash the EXACT bytes that decoded <see cref="Lines"/>
+    /// instead of a later, separately-reopened disk read (AI-1382 review fix #1: the previous
+    /// two-read wiring left a TOCTOU window between decoding the batch and hashing it).
+    ///
+    /// AI-1382 review fix (r3, finding #3) — <see cref="SnapshotStartOffset"/> is non-zero whenever
+    /// the caller asked for a BOUNDED capture (<c>rawBytesReadFrom</c> on
+    /// <see cref="ReadNewCompleteLinesAsync"/>): <see cref="SnapshotBytes"/> then only spans the
+    /// guard's prior-tail zone plus the new range, not the whole file, so a poll with little/no new
+    /// content allocates ~nothing instead of a file-sized buffer every second.
     /// </summary>
     public readonly record struct NewTranscriptLines(
         List<string> Lines,
@@ -2626,7 +2702,8 @@ static partial class WatchCommand {
         int          NextPosition,
         bool         HeldIncompleteFinalLine = false,
         long         SnapshotByteLength      = 0,
-        byte[]?      SnapshotBytes           = null);
+        byte[]?      SnapshotBytes           = null,
+        long         SnapshotStartOffset     = 0);
 
     /// <summary>
     /// Policy for an unterminated (no trailing newline) final transcript line at drain time.
@@ -2787,13 +2864,115 @@ static partial class WatchCommand {
             CursorRewriteGuard? cursorGuard,
             CancellationToken   ct
         ) {
-        if (vendor == "cursor" && cursorGuard is not null) {
-            var rewoundByteOffset = await ResolveByteOffsetForLineAsync(transcriptPath, serverPosition, ct);
-            state.CursorByteOffset = rewoundByteOffset;
-            cursorGuard.ResetCheckpoint();
+        // AI-1382 review fix (r3, finding #2) — shares the byte-side seed with RunWatch's INITIAL
+        // WatcherConnect registration (see SeedCursorByteOffsetAsync's own doc) so both paths that
+        // resume at a server-given line number map it to the true byte offset identically.
+        await SeedCursorByteOffsetAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, ct);
+        state.LinesProcessed = serverPosition;
+    }
+
+    /// <summary>
+    /// AI-1382 review fix (r3, finding #2) — resolves <paramref name="lineNumber"/> to its TRUE
+    /// byte offset in <paramref name="transcriptPath"/> and seeds <see cref="WatchState.CursorByteOffset"/>
+    /// with it, resetting the guard's checkpoint so the two-zone checks start clean from that
+    /// offset (exactly as if this were the guard's very first poll). No-op for every non-Cursor
+    /// vendor (no guard to keep in sync).
+    ///
+    /// Shared by two call sites that both resume the watcher at a server-given line number and
+    /// must keep the byte/line frontier aligned from the very first poll: <see cref="ApplyReconnectRewindAsync"/>
+    /// (a reconnect discovers the server is behind the client) and RunWatch's INITIAL
+    /// <c>WatcherConnect</c> registration (the server resumes the watcher at line N on a fresh
+    /// process start — e.g. after a restart). Before this fix, only the reconnect path seeded the
+    /// byte offset; the initial-registration path left <see cref="WatchState.CursorByteOffset"/> at
+    /// its default (0) while <see cref="WatchState.LinesProcessed"/> was already N, so the
+    /// ack-to-byte mapping (<see cref="ByteOffsetForAckedLines"/>) measured acked lines relative to
+    /// N but counted their bytes from 0 — a permanent, silent line/byte-frontier misalignment.
+    /// </summary>
+    internal static async Task SeedCursorByteOffsetAsync(
+            WatchState          state,
+            int                 lineNumber,
+            string              vendor,
+            string              transcriptPath,
+            CursorRewriteGuard? cursorGuard,
+            CancellationToken   ct
+        ) {
+        if (vendor != "cursor" || cursorGuard is null) return;
+
+        state.CursorByteOffset = await ResolveByteOffsetForLineAsync(transcriptPath, lineNumber, ct);
+        cursorGuard.ResetCheckpoint();
+    }
+
+    /// <summary>
+    /// AI-1382 review fix (r3, finding #1) — runs <see cref="ApplyReconnectRewindAsync"/> under
+    /// <paramref name="gate"/> (RunWatch's <c>cursorRewindGate</c> — null for every non-Cursor
+    /// vendor) so it can never interleave with a concurrently-running <see cref="DrainNewLines"/>
+    /// (see <see cref="GatedDrainNewLinesAsync"/>, held under the SAME gate instance). Both mutate
+    /// <see cref="WatchState.CursorByteOffset"/>/<see cref="WatchState.LinesProcessed"/> and the
+    /// guard's checkpoint; without a shared mutual-exclusion gate, a rewind's three writes (byte
+    /// offset, checkpoint reset, line cursor) could land in the middle of a drain that already
+    /// snapshotted the PRE-rewind offsets — re-creating the byte/line-frontier divergence review
+    /// fix #2 (r2) closed, just via a different interleaving. Extracted as a standalone testable
+    /// method (rather than inlined in RunWatch's Reconnected handler) so the gate composition
+    /// itself — not just <see cref="ApplyReconnectRewindAsync"/>'s own atomicity — is directly
+    /// unit-testable without a live SignalR reconnect.
+    /// </summary>
+    internal static async Task GatedApplyReconnectRewindAsync(
+            SemaphoreSlim?      gate,
+            WatchState          state,
+            int                 serverPosition,
+            string              vendor,
+            string              transcriptPath,
+            CursorRewriteGuard? cursorGuard,
+            CancellationToken   ct
+        ) {
+        if (gate is null) {
+            await ApplyReconnectRewindAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, ct);
+
+            return;
         }
 
-        state.LinesProcessed = serverPosition;
+        await gate.WaitAsync(ct);
+        try {
+            await ApplyReconnectRewindAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, ct);
+        } finally {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// AI-1382 review fix (r3, finding #1) — runs <see cref="DrainNewLines"/> under
+    /// <paramref name="gate"/> (RunWatch's <c>cursorRewindGate</c> — null for every non-Cursor
+    /// vendor), the exact counterpart to <see cref="GatedApplyReconnectRewindAsync"/>: the SAME
+    /// gate instance serializes both, so a drain can never observe a half-applied reconnect
+    /// rewind (or vice versa — a rewind can never observe/clobber a half-applied drain ack).
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> GatedDrainNewLinesAsync(
+            SemaphoreSlim?      gate,
+            HubConnection       hubConnection,
+            string              sessionId,
+            string              transcriptPath,
+            string?             agentId,
+            WatchState          state,
+            string              vendor,
+            CancellationToken   ct,
+            bool                isFinalDrain            = false,
+            CursorRewriteGuard? cursorGuard             = null,
+            Action?             onCursorRewriteDetected = null
+        ) {
+        if (gate is null) {
+            return await DrainNewLines(
+                hubConnection, sessionId, transcriptPath, agentId, state, vendor, ct,
+                isFinalDrain: isFinalDrain, cursorGuard: cursorGuard, onCursorRewriteDetected: onCursorRewriteDetected);
+        }
+
+        await gate.WaitAsync(ct);
+        try {
+            return await DrainNewLines(
+                hubConnection, sessionId, transcriptPath, agentId, state, vendor, ct,
+                isFinalDrain: isFinalDrain, cursorGuard: cursorGuard, onCursorRewriteDetected: onCursorRewriteDetected);
+        } finally {
+            gate.Release();
+        }
     }
 
     /// <summary>
@@ -2804,12 +2983,32 @@ static partial class WatchCommand {
     /// unterminated final line look complete and get consumed (which would re-drop it — AI-1243).
     /// Opened by the caller with FileShare.ReadWrite (Qodo #291 #1) so the writing agent is never blocked.
     /// </summary>
+    /// <param name="rawBytesReadFrom">
+    /// AI-1382 review fix (r3, finding #3) — only meaningful when <paramref name="captureRawBytes"/>
+    /// is true: the absolute file offset the captured buffer starts at. 0 (the default) captures
+    /// the whole file, exactly as before. A caller that knows it only needs a bounded window (the
+    /// Cursor guard's prior-tail zone plus the new range) passes the true start offset instead, so
+    /// the buffer allocated is bounded by how much is actually new/relevant, not file size.
+    /// </param>
+    /// <param name="newRangeByteOffset">
+    /// AI-1382 review fix (r3, finding #3) — only meaningful when <paramref name="captureRawBytes"/>
+    /// is true: the absolute file offset of the first NEW line (line number <paramref name="linesProcessed"/>).
+    /// Bytes in the captured buffer before this offset (the prior-tail zone, present only for the
+    /// guard's hash) are never decoded as lines. When null (the default), the legacy behaviour
+    /// applies: every line in the buffer is decoded and filtered by absolute index — required for
+    /// every caller that doesn't (yet) know this offset, and pinned by
+    /// <c>ReadNewCompleteLinesAsyncTests</c>. The caller is responsible for ensuring this offset
+    /// lands exactly on a line boundary (true by construction for the Cursor watcher's own
+    /// <c>CursorByteOffset</c> — see <see cref="ByteOffsetForAckedLines"/>).
+    /// </param>
     internal static async Task<NewTranscriptLines> ReadNewCompleteLinesAsync(
             FileStream                stream,
             int                       linesProcessed,
             IncompleteFinalLinePolicy policy,
             CancellationToken         ct,
-            bool                      captureRawBytes = false) {
+            bool                      captureRawBytes    = false,
+            long                      rawBytesReadFrom   = 0,
+            long?                     newRangeByteOffset = null) {
         var length = stream.Length;
 
         bool endsWithNewline;
@@ -2821,10 +3020,11 @@ static partial class WatchCommand {
             stream.Seek(0, SeekOrigin.Begin);
         }
 
-        var newLines       = new List<string>();
-        var newLineNumbers = new List<int>();
-        var lineIndex      = 0;
-        byte[]? rawBytes   = null;
+        var newLines           = new List<string>();
+        var newLineNumbers     = new List<int>();
+        var lineIndex          = 0;
+        byte[]? rawBytes       = null;
+        var     snapshotStart  = 0L;
 
         // AI-1382 review fix #1 — when the caller (the Cursor watcher) needs it, capture the raw
         // bytes of this SAME capped read into a buffer and decode lines from THAT buffer, rather
@@ -2835,7 +3035,15 @@ static partial class WatchCommand {
         // and the pre-send re-verify would see the same, but stale, later snapshot). Every other
         // vendor keeps the original zero-buffering streaming path (captureRawBytes defaults false).
         if (captureRawBytes) {
-            var buffer = new byte[length];
+            // AI-1382 review fix (r3, finding #3) — bound the capture to [rawBytesReadFrom, EOF)
+            // instead of always materializing the whole file. The caller (DrainNewLines) only ever
+            // passes a non-zero rawBytesReadFrom on a poll that doesn't need the periodic
+            // full-prefix re-hash, so an idle/small poll allocates a buffer sized to the guard's
+            // small trailing-tail zone plus whatever actually grew — not file length.
+            snapshotStart = Math.Min(rawBytesReadFrom, length);
+            if (snapshotStart > 0) stream.Position = snapshotStart;
+
+            var buffer = new byte[length - snapshotStart];
             var total  = 0;
 
             while (total < buffer.Length) {
@@ -2848,16 +3056,39 @@ static partial class WatchCommand {
             // `total` short of `length` — trim to what was ACTUALLY read so SnapshotByteLength/
             // SnapshotBytes never claim bytes that were never really on disk.
             rawBytes = total == buffer.Length ? buffer : buffer[..total];
-            length   = rawBytes.Length;
+            length   = snapshotStart + rawBytes.Length;
 
-            using var bytesReader = new StreamReader(new MemoryStream(rawBytes, writable: false));
-            while (await bytesReader.ReadLineAsync(ct) is { } line) {
-                if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
-                    newLines.Add(line);
-                    newLineNumbers.Add(lineIndex);
+            if (newRangeByteOffset is { } nro) {
+                // Every byte at/after this position in the buffer is NEW (the offset is guaranteed
+                // to land on a line boundary — see the parameter doc); bytes before it are the
+                // prior-tail zone, captured only so the guard can hash it, never decoded as lines.
+                var decodeFrom = (int)Math.Clamp(nro - snapshotStart, 0, rawBytes.Length);
+                lineIndex = linesProcessed;
+
+                using var bytesReader = new StreamReader(
+                    new MemoryStream(rawBytes, decodeFrom, rawBytes.Length - decodeFrom, writable: false));
+                while (await bytesReader.ReadLineAsync(ct) is { } line) {
+                    if (!string.IsNullOrWhiteSpace(line)) {
+                        newLines.Add(line);
+                        newLineNumbers.Add(lineIndex);
+                    }
+
+                    lineIndex++;
                 }
+            } else {
+                // Legacy path: the caller doesn't know the new range's exact byte offset (every
+                // caller other than the live Cursor watcher), so the whole buffer (necessarily the
+                // whole file — rawBytesReadFrom stays 0 with no newRangeByteOffset) is decoded and
+                // filtered by absolute line index, exactly as before this fix.
+                using var bytesReader = new StreamReader(new MemoryStream(rawBytes, writable: false));
+                while (await bytesReader.ReadLineAsync(ct) is { } line) {
+                    if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
+                        newLines.Add(line);
+                        newLineNumbers.Add(lineIndex);
+                    }
 
-                lineIndex++;
+                    lineIndex++;
+                }
             }
         } else {
             using var reader = new StreamReader(new LengthLimitedReadStream(stream, length), leaveOpen: true);
@@ -2878,7 +3109,7 @@ static partial class WatchCommand {
         // landed in between the two samples.
         return ApplyPartialLineHoldback(
             newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy,
-            snapshotByteLength: length, snapshotBytes: rawBytes);
+            snapshotByteLength: length, snapshotBytes: rawBytes, snapshotStartOffset: snapshotStart);
     }
 
     // Decide the fate of a still-being-written final line (no trailing newline yet). Under
@@ -2898,12 +3129,14 @@ static partial class WatchCommand {
             int                       linesProcessed,
             bool                      endsWithNewline,
             IncompleteFinalLinePolicy policy,
-            long                      snapshotByteLength = 0,
-            byte[]?                   snapshotBytes      = null) {
+            long                      snapshotByteLength  = 0,
+            byte[]?                   snapshotBytes       = null,
+            long                      snapshotStartOffset = 0) {
         if (endsWithNewline || nextPosition <= linesProcessed) {
             return new NewTranscriptLines(
                 newLines, newLineNumbers, nextPosition,
-                SnapshotByteLength: snapshotByteLength, SnapshotBytes: snapshotBytes);
+                SnapshotByteLength: snapshotByteLength, SnapshotBytes: snapshotBytes,
+                SnapshotStartOffset: snapshotStartOffset);
         }
 
         var partialIndex = nextPosition - 1;
@@ -2919,7 +3152,8 @@ static partial class WatchCommand {
         if (consume) {
             return new NewTranscriptLines(
                 newLines, newLineNumbers, nextPosition,
-                SnapshotByteLength: snapshotByteLength, SnapshotBytes: snapshotBytes);
+                SnapshotByteLength: snapshotByteLength, SnapshotBytes: snapshotBytes,
+                SnapshotStartOffset: snapshotStartOffset);
         }
 
         if (hasPartial) {
@@ -2933,7 +3167,8 @@ static partial class WatchCommand {
         // must still verify those bytes weren't rewritten even though they weren't sent this poll.
         return new NewTranscriptLines(
             newLines, newLineNumbers, partialIndex, HeldIncompleteFinalLine: hasPartial,
-            SnapshotByteLength: snapshotByteLength, SnapshotBytes: snapshotBytes);
+            SnapshotByteLength: snapshotByteLength, SnapshotBytes: snapshotBytes,
+            SnapshotStartOffset: snapshotStartOffset);
     }
 
     /// <summary>True if <paramref name="line"/> (a single, newline-less transcript line) parses as a

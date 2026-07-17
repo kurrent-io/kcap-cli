@@ -86,23 +86,35 @@ public sealed class CursorRewriteGuard(string sessionId) {
     /// <summary>
     /// AI-1382 review fix #1 — snapshot-based counterpart to <see cref="HashPriorZone(FileStream)"/>.
     /// Hashes the trailing <see cref="TrailingBytes"/> bytes ending at the current checkpoint
-    /// offset directly from <paramref name="snapshotFromByteZero"/> — an in-memory buffer that
-    /// starts at absolute file offset 0, captured during the SAME capped read that decoded the
-    /// batch about to be sent. Binding the prior-zone hash to that snapshot (rather than a fresh
-    /// disk reopen taken moments later) closes the exact TOCTOU window review fix #1 found: a
-    /// rewrite landing between the decode read and a later reopen used to produce a hash that was
-    /// then "stable" for the rest of the poll even though it never corresponded to the bytes the
-    /// batch was actually built from.
+    /// offset directly from <paramref name="snapshot"/> — an in-memory buffer captured during the
+    /// SAME capped read that decoded the batch about to be sent, starting at absolute file offset
+    /// <paramref name="snapshotStartOffset"/> (0 — the default — when the caller captured from the
+    /// true file start). Binding the prior-zone hash to that snapshot (rather than a fresh disk
+    /// reopen taken moments later) closes the exact TOCTOU window review fix #1 found: a rewrite
+    /// landing between the decode read and a later reopen used to produce a hash that was then
+    /// "stable" for the rest of the poll even though it never corresponded to the bytes the batch
+    /// was actually built from.
+    ///
+    /// AI-1382 review fix (r3, finding #3) — <paramref name="snapshotStartOffset"/> lets the caller
+    /// pass a snapshot that starts PARTWAY through the file (a bounded read covering only the
+    /// prior-tail zone + new range, not the whole file) instead of always materializing everything
+    /// from byte 0. The window this method actually needs — [checkpoint - TrailingBytes,
+    /// checkpoint) — is clipped to whatever the snapshot actually covers.
     /// </summary>
-    public string HashPriorZone(ReadOnlySpan<byte> snapshotFromByteZero) {
+    public string HashPriorZone(ReadOnlySpan<byte> snapshot, long snapshotStartOffset = 0) {
         if (_checkpoint is not { } cp) return "";
 
         var start = Math.Max(0, cp.Offset - TrailingBytes);
-        var end   = Math.Min(cp.Offset, snapshotFromByteZero.Length);
+        var end   = cp.Offset;
 
-        if (end <= start) return CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty);
+        // Clip to the region this snapshot actually covers.
+        var clippedStart = Math.Max(start, snapshotStartOffset);
+        var clippedEnd   = Math.Min(end, snapshotStartOffset + snapshot.Length);
 
-        return CursorAppendOnlyProbe.Sha256Hex(snapshotFromByteZero[(int)start..(int)end]);
+        if (clippedEnd <= clippedStart) return CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty);
+
+        return CursorAppendOnlyProbe.Sha256Hex(
+            snapshot[(int)(clippedStart - snapshotStartOffset)..(int)(clippedEnd - snapshotStartOffset)]);
     }
 
     /// <summary>
