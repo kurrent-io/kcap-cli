@@ -34,6 +34,17 @@ internal sealed class CursorImportSource : IImportSource {
     readonly Lazy<IReadOnlyDictionary<string, string?>>  _sanitizedToFolder;
     readonly Func<string, Task<RepositoryPayload?>>      _repoDetector;
 
+    // AI-1358 (item 5): per-cwd cache of the detected repo payload, populated during
+    // ImportSessionAsync. Historical import can walk many sessions that share one workspace
+    // folder — without this, each session would re-run repo detection for the same cwd. Keyed
+    // by the resolved workspace folder (Ordinal — the same string ImportSessionAsync already
+    // compares against SourceMeta["WorkspaceFolder"], no case-folding needed for a cache key).
+    // Caches the RepositoryPayload rather than the built JsonObject: a JsonNode can only ever
+    // have one parent, so reusing the same JsonObject instance across two sessions' payloads
+    // throws InvalidOperationException on the second attach — BuildRepositoryNode must be
+    // called fresh per session from the cached payload.
+    readonly Dictionary<string, RepositoryPayload?> _repoCache = new(StringComparer.Ordinal);
+
     public CursorImportSource(
         string?                                  projectsDirOverride         = null,
         string?                                  workspaceStorageDirOverride = null,
@@ -42,11 +53,15 @@ internal sealed class CursorImportSource : IImportSource {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
-        // Cursor is the one import source that emits a `repository` node in its synthetic
-        // session-start (AI-1152) via BuildRepositoryNode, which includes pr_* when populated —
-        // so it keeps live PR detection (unlike the owner/repo-only detectors in the other
-        // sources). Dropping it here would silently strip PR tagging from imported Cursor sessions.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
+        // AI-1358 (item 5): historical import must never attach a live PR to an old session —
+        // stamping today's open PR onto a transcript from weeks ago is an anachronism, and it's
+        // exactly the wasted `gh pr view` / `glab api` round-trip per cwd that AI-1122 already
+        // skips for the other import sources. detectPullRequest:false still resolves
+        // owner/repo/branch (BuildRepositoryNode's non-PR fields), so imported sessions keep
+        // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
+        // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
+        // separate call site untouched by this default and keeps live PR detection.
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
     }
 
     /// <summary>
@@ -114,71 +129,81 @@ internal sealed class CursorImportSource : IImportSource {
         var result       = new List<DiscoveredSession>();
 
         foreach (var sanitizedDir in Directory.EnumerateDirectories(_projectsDir)) {
-            var sanitized      = Path.GetFileName(sanitizedDir);
-            var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
+            try {
+                var sanitized      = Path.GetFileName(sanitizedDir);
+                var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
 
-            if (!Directory.Exists(transcriptsDir)) continue;
+                if (!Directory.Exists(transcriptsDir)) continue;
 
-            // sanitizedMap value is null when the sanitized key collided with
-            // multiple distinct workspace folders (lossy encoding) — treat as
-            // unknown rather than misattributing to one of them.
-            sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
+                // sanitizedMap value is null when the sanitized key collided with
+                // multiple distinct workspace folders (lossy encoding) — treat as
+                // unknown rather than misattributing to one of them.
+                sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
 
-            if (normalizedCwd is not null
-             && (workspaceFolder is null
-              || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
+                if (normalizedCwd is not null
+                 && (workspaceFolder is null
+                  || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
+                    continue;
+                }
+
+                foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                    try {
+                        var sessionDirName = Path.GetFileName(sessionDir);
+                        var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
+
+                        if (!File.Exists(jsonl)) continue;
+
+                        var dashless = NormalizeCursorSessionId(sessionDirName);
+
+                        if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+                            continue;
+
+                        // Use the JSONL file's creation time as the session-start
+                        // proxy. Cursor's transcript JSONL lines carry no timestamp
+                        // field (Anthropic content-block format without metadata),
+                        // and the file is created when the session starts and
+                        // appended throughout — so birth-time on supported
+                        // filesystems (APFS, NTFS) is the closest proxy.
+                        //
+                        // `--since` MUST gate on session-start, not last-modified,
+                        // or any old session appended to after the cutoff would be
+                        // re-imported.
+                        //
+                        // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
+                        // falls back to mtime when btime isn't queryable. On those
+                        // hosts started_at == ended_at and `--since` effectively
+                        // gates on last-write. Acceptable degradation — most Cursor
+                        // users are on macOS/Windows and the production behavior is
+                        // still strictly better than not having `--since` at all.
+                        DateTimeOffset? firstTimestamp = null;
+                        try {
+                            firstTimestamp = File.GetCreationTimeUtc(jsonl);
+                        } catch {
+                            // Best effort.
+                        }
+
+                        if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
+                            continue;
+                        }
+
+                        result.Add(new DiscoveredSession(
+                            SessionId:      dashless,
+                            Vendor:         Vendor,
+                            Cwd:            workspaceFolder,
+                            FirstTimestamp: firstTimestamp,
+                            SourceMeta:     new Dictionary<string, object?> {
+                                ["TranscriptPath"]  = jsonl,
+                                ["WorkspaceFolder"] = workspaceFolder,
+                                ["SanitizedDir"]    = sanitized,
+                            }));
+                    } catch {
+                        // A hostile/inaccessible session subtree must not abort the whole scan.
+                        continue;
+                    }
+                }
+            } catch {
+                // A hostile/inaccessible workspace subtree must not abort the whole scan.
                 continue;
-            }
-
-            foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
-                var sessionDirName = Path.GetFileName(sessionDir);
-                var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
-
-                if (!File.Exists(jsonl)) continue;
-
-                var dashless = NormalizeCursorSessionId(sessionDirName);
-
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
-                    continue;
-
-                // Use the JSONL file's creation time as the session-start
-                // proxy. Cursor's transcript JSONL lines carry no timestamp
-                // field (Anthropic content-block format without metadata),
-                // and the file is created when the session starts and
-                // appended throughout — so birth-time on supported
-                // filesystems (APFS, NTFS) is the closest proxy.
-                //
-                // `--since` MUST gate on session-start, not last-modified,
-                // or any old session appended to after the cutoff would be
-                // re-imported.
-                //
-                // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
-                // falls back to mtime when btime isn't queryable. On those
-                // hosts started_at == ended_at and `--since` effectively
-                // gates on last-write. Acceptable degradation — most Cursor
-                // users are on macOS/Windows and the production behavior is
-                // still strictly better than not having `--since` at all.
-                DateTimeOffset? firstTimestamp = null;
-                try {
-                    firstTimestamp = File.GetCreationTimeUtc(jsonl);
-                } catch {
-                    // Best effort.
-                }
-
-                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
-                    continue;
-                }
-
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            workspaceFolder,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"]  = jsonl,
-                        ["WorkspaceFolder"] = workspaceFolder,
-                        ["SanitizedDir"]    = sanitized,
-                    }));
             }
 
             ct.ThrowIfCancellationRequested();
@@ -260,6 +285,13 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
+            // Ended-at contract (AI-1358 A3): unlike Copilot (session.shutdown record) or
+            // Gemini/Pi (per-record "timestamp" field), Cursor's Anthropic content-block
+            // transcript carries no authoritative session-end record to tail-scan. The
+            // fallback is: the last parsed user-wrapper timestamp when the normalizer
+            // surfaced one (live-hook path), else this file's last-write time. Do NOT
+            // treat a tail-scan of this transcript as authoritative — there is no
+            // per-line timestamp field here the way there is for Gemini/Pi.
             try {
                 meta.LastTimestamp = File.GetLastWriteTimeUtc(transcriptPath);
             } catch {
@@ -344,14 +376,21 @@ internal sealed class CursorImportSource : IImportSource {
         // sessionStart carries a `repository` node → server emits RepositoryDetected
         // and the (historical/backfilled) session groups under its repo. Fail-open:
         // a non-git workspace or detection error leaves it null and unattributed.
+        //
+        // AI-1358 (item 5): cached per cwd — a historical import walks every session under a
+        // workspace, and many share one cwd, so this only runs detection once per distinct
+        // folder for the whole import rather than once per session.
         JsonObject? repositoryNode = null;
         if (workspaceFolder is not null) {
-            try {
-                var repo = await _repoDetector(workspaceFolder);
-                if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
-            } catch {
-                repositoryNode = null;
+            if (!_repoCache.TryGetValue(workspaceFolder, out var repo)) {
+                try {
+                    repo = await _repoDetector(workspaceFolder);
+                } catch {
+                    repo = null;
+                }
+                _repoCache[workspaceFolder] = repo;
             }
+            if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
         }
 
         // sessionStart MUST succeed before transcript advances the server
@@ -548,6 +587,7 @@ internal sealed class CursorImportSource : IImportSource {
         if (startedAt is { } ts) {
             payload["started_at"] = ts.ToString("O");
         }
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -566,6 +606,7 @@ internal sealed class CursorImportSource : IImportSource {
         if (endedAt is { } ts) {
             payload["ended_at"] = ts.ToString("O");
         }
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 

@@ -65,7 +65,7 @@ internal sealed class KiroImportSource : IImportSource {
         if (!Directory.Exists(_sessionsDir))
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
 
-        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl")) {
+        foreach (var jsonl in GuardedDiscovery.EnumerateFiles(_sessionsDir, "*.jsonl", recursive: false)) {
             ct.ThrowIfCancellationRequested();
 
             // Filename stem is the dashed session UUID Kiro uses for both files.
@@ -314,6 +314,7 @@ internal sealed class KiroImportSource : IImportSource {
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (model is not null) payload["model"] = model;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -325,6 +326,7 @@ internal sealed class KiroImportSource : IImportSource {
         };
         if (cwd is not null) payload["cwd"] = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 

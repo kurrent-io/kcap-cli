@@ -79,48 +79,53 @@ internal sealed class CopilotImportSource : IImportSource {
             if (!Directory.Exists(root)) continue;
 
             foreach (var sessionDir in Directory.EnumerateDirectories(root)) {
-                var dirName = Path.GetFileName(sessionDir);
-                var jsonl   = CopilotPaths.EventsJsonl(root, dirName);
+                try {
+                    var dirName = Path.GetFileName(sessionDir);
+                    var jsonl   = CopilotPaths.EventsJsonl(root, dirName);
 
-                // Dirs without events.jsonl are failed-startup scaffolding
-                // (workspace.yaml + checkpoints only) — nothing to import.
-                if (!File.Exists(jsonl)) continue;
+                    // Dirs without events.jsonl are failed-startup scaffolding
+                    // (workspace.yaml + checkpoints only) — nothing to import.
+                    if (!File.Exists(jsonl)) continue;
 
-                var dashless = dirName.Replace("-", "");
+                    var dashless = dirName.Replace("-", "");
 
-                if (!seen.Add(dashless)) continue;
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
-                    continue;
+                    if (!seen.Add(dashless)) continue;
+                    if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+                        continue;
 
-                var meta = CopilotWorkspaceYaml.TryRead(CopilotPaths.WorkspaceYaml(root, dirName));
+                    var meta = CopilotWorkspaceYaml.TryRead(CopilotPaths.WorkspaceYaml(root, dirName));
 
-                if (normalizedCwd is not null
-                 && (meta?.Cwd is null
-                  || !NormalizeForComparison(meta.Cwd).Equals(normalizedCwd, PathComparison))) {
+                    if (normalizedCwd is not null
+                     && (meta?.Cwd is null
+                      || !NormalizeForComparison(meta.Cwd).Equals(normalizedCwd, PathComparison))) {
+                        continue;
+                    }
+
+                    // Session-start proxy: workspace.yaml created_at is written by
+                    // Copilot at session creation; fall back to the transcript's
+                    // filesystem birth time (same degradation notes as Cursor —
+                    // Linux ext4 reports mtime).
+                    var firstTimestamp = meta?.CreatedAt;
+                    if (firstTimestamp is null) {
+                        try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch { /* best effort */ }
+                    }
+
+                    if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
+
+                    result.Add(new DiscoveredSession(
+                        SessionId:      dashless,
+                        Vendor:         Vendor,
+                        Cwd:            meta?.Cwd,
+                        FirstTimestamp: firstTimestamp,
+                        SourceMeta:     new Dictionary<string, object?> {
+                            ["TranscriptPath"] = jsonl,
+                            ["Cwd"]            = meta?.Cwd,
+                            ["Name"]           = meta?.Name,
+                        }));
+                } catch {
+                    // A hostile/inaccessible session subtree must not abort the whole scan.
                     continue;
                 }
-
-                // Session-start proxy: workspace.yaml created_at is written by
-                // Copilot at session creation; fall back to the transcript's
-                // filesystem birth time (same degradation notes as Cursor —
-                // Linux ext4 reports mtime).
-                var firstTimestamp = meta?.CreatedAt;
-                if (firstTimestamp is null) {
-                    try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch { /* best effort */ }
-                }
-
-                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
-
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            meta?.Cwd,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"] = jsonl,
-                        ["Cwd"]            = meta?.Cwd,
-                        ["Name"]           = meta?.Name,
-                    }));
             }
 
             ct.ThrowIfCancellationRequested();
@@ -182,10 +187,16 @@ internal sealed class CopilotImportSource : IImportSource {
             }
 
             // workspace.yaml's updated_at is stamped when Copilot assigns the
-            // session name (near session START), not at session end — the
-            // transcript file's last-write time is the only reliable
-            // end-time proxy (same approach as Cursor).
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // session name (near session START), not at session end. The
+            // truthful end time is the session-final `session.shutdown`
+            // record's own timestamp (AI-1358 A3) — read directly off the raw
+            // transcript, NOT through IsImportRelevantLine, which deliberately
+            // skips session.* records for a different purpose (watermark
+            // comparison against the server's normalized line count above).
+            // Fall back to a tail-scan of any timestamped record, then mtime.
+            meta.LastTimestamp = EndedAtResolvers.CopilotShutdownTimestamp(transcriptPath)
+                ?? EndedAtResolvers.LastTimestampFromJsonl(transcriptPath)
+                ?? TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
             if (hasExcludes && s.Cwd is { } cwd) {
@@ -318,6 +329,7 @@ internal sealed class CopilotImportSource : IImportSource {
         // so routed imports carry the same workspace_root the file-based path does.
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -329,6 +341,7 @@ internal sealed class CopilotImportSource : IImportSource {
         };
         if (cwd is not null) payload["cwd"] = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 

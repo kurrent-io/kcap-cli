@@ -76,7 +76,7 @@ internal sealed class PiImportSource : IImportSource {
         var result = new List<DiscoveredSession>();
         var seen   = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl", SearchOption.AllDirectories)) {
+        foreach (var jsonl in GuardedDiscovery.EnumerateFiles(_sessionsDir, "*.jsonl")) {
             ct.ThrowIfCancellationRequested();
 
             var header = await TryReadHeaderAsync(jsonl, ct);
@@ -165,7 +165,10 @@ internal sealed class PiImportSource : IImportSource {
                 continue;
             }
 
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // Pi transcript records carry a per-record "timestamp" field (AI-1358 A3);
+            // prefer the tail-scanned last one over file mtime, which can be skewed
+            // by unrelated later writes to the same session-scoped file.
+            meta.LastTimestamp = EndedAtResolvers.LastTimestampFromJsonl(transcriptPath) ?? TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
             if (hasExcludes && s.Cwd is { } cwd) {
@@ -284,6 +287,7 @@ internal sealed class PiImportSource : IImportSource {
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
         if (forcePrivate) payload["default_visibility"] = "private";
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -295,6 +299,7 @@ internal sealed class PiImportSource : IImportSource {
         };
         if (cwd is not null) payload["cwd"] = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 

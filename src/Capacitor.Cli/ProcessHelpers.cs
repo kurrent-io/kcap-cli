@@ -567,19 +567,27 @@ static partial class ProcessHelpers {
         }
 
         var slash    = comm.LastIndexOfAny(['/', '\\']);
-        var basename  = slash >= 0 ? comm[(slash + 1)..] : comm;
+        var basename = slash >= 0 ? comm[(slash + 1)..] : comm;
 
-        if (basename.Equals(vendor, StringComparison.OrdinalIgnoreCase)) {
-            return true;
+        // Reduce the basename to a clean stem: the whole name if it has no dot, or the part before a
+        // single trailing extension (".exe"). Anything else (multiple dots, a space) is not a clean
+        // executable name and never matches.
+        var dot = basename.IndexOf('.');
+        string stem;
+
+        if (dot < 0) {
+            stem = basename;
+        } else if (dot > 0 && !basename.AsSpan(dot + 1).Contains('.') && !basename.AsSpan(dot + 1).Contains(' ')) {
+            stem = basename[..dot];
+        } else {
+            return false;
         }
 
-        // "claude.exe" style: vendor token followed by a single extension and nothing else.
-        var dot = basename.IndexOf('.');
-
-        return dot > 0
-            && basename[..dot].Equals(vendor, StringComparison.OrdinalIgnoreCase)
-            && !basename.AsSpan(dot + 1).Contains('.')
-            && !basename.AsSpan(dot + 1).Contains(' ');
+        // Match the vendor token OR `{vendor}-cli`. The bounded `-cli` tolerance fixes the Kiro
+        // watchdog, whose durable process image is `kiro-cli` while its vendor token is `kiro`
+        // (AI-1359); the clean-stem gate above keeps it from over-matching unrelated processes.
+        return stem.Equals(vendor, StringComparison.OrdinalIgnoreCase)
+            || stem.Equals($"{vendor}-cli", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

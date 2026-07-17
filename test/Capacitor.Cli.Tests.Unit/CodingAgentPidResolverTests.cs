@@ -181,4 +181,44 @@ public class CodingAgentPidResolverTests {
 
         await Assert.That(pid).IsNull();
     }
+
+    [Test]
+    public async Task Resolves_kiro_when_process_is_kiro_cli() {
+        // Kiro's process image is `kiro-cli`, but the vendor token is `kiro`. The by-name ancestry
+        // walk must match a bounded `-cli` suffix so the parent-exit watchdog identifies the durable
+        // process instead of falling back to the fragile pgid heuristic (AI-1359).
+        // hook(100) -> sh(90) -> kiro-cli(50) -> zsh(20)
+        var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, "kiro-cli"), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "kiro", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
+    public async Task Resolves_kiro_when_process_is_kiro_cli_exe_on_windows() {
+        var lookup = ProcTable.Of(
+            (90, 50, @"C:\Windows\System32\cmd.exe"),
+            (50, 20, @"C:\Users\me\AppData\Local\Programs\kiro\kiro-cli.exe"),
+            (20, 1, @"C:\Windows\explorer.exe")
+        );
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "kiro", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
+    [Arguments("kiroctl")]        // not a `-cli` suffix
+    [Arguments("my-kiro")]        // wrong side
+    [Arguments("kiro-cli-wrapper")] // extra suffix past `-cli`
+    [Arguments("kiro.cli.exe")]   // dotted, not a clean single extension
+    [Arguments("kiro-server")]    // different suffix
+    public async Task Does_not_over_match_the_cli_suffix(string comm) {
+        var lookup = ProcTable.Of((50, 20, comm), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 50, vendor: "kiro", lookup);
+
+        await Assert.That(pid).IsNull();
+    }
 }

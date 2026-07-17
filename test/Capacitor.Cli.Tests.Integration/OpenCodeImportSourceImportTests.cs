@@ -23,6 +23,16 @@ public class OpenCodeImportSourceImportTests : IDisposable {
     }
 
     [Test]
+    public async Task QueryRoots_maps_null_time_updated_to_null_not_epoch() {
+        _fix.AddSessionRaw("ses_root", null, "/work/a", "T", timeCreated: 1782241513759, timeUpdated: null);
+
+        using var db  = new OpenCodeDb(_fix.DbPath);
+        var       row = db.QueryRoots().Single(r => r.Id == "ses_root");
+
+        await Assert.That(row.TimeUpdated).IsNull();
+    }
+
+    [Test]
     public async Task ImportSession_posts_parent_lifecycle_transcript_and_title() {
         _fix.AddSession("ses_root", null, "/work/a", "Repo overview", 1782241513759);
         _fix.AddMessageWithText("ses_root", "msg_1", "hello", 1782241513760);

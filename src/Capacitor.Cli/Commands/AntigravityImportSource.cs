@@ -65,7 +65,13 @@ internal sealed class AntigravityImportSource : IImportSource {
         // root's subagents. Cycle-/non-tree-safe (BuildRootDescendants) so a deep chain isn't
         // lost and a cycle imports standalone rather than vanishing. Linkage is complete on disk.
         var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
-        var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        List<string> convIds;
+        try {
+            convIds = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        } catch {
+            // A hostile/inaccessible brain root must not abort the whole import pass.
+            convIds = [];
+        }
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
         // AI-1218 drift observability: surface format drift without a messages fallback.
@@ -208,6 +214,13 @@ internal sealed class AntigravityImportSource : IImportSource {
 
             await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
 
+            // Explicit gen_metadata usage pass — even though AlreadyLoaded sends zero real
+            // transcript lines (the content watermark is already at the tip), a session
+            // re-imported after this feature shipped may still be missing its USAGE lines
+            // (they were never emitted on the original import). Always attempted, always
+            // before session-end (AI-1358 item 7).
+            await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
+
             if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
                     BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
                 return ImportOutcome.Failed;
@@ -234,6 +247,12 @@ internal sealed class AntigravityImportSource : IImportSource {
         } catch {
             return ImportOutcome.Failed;
         }
+
+        // Explicit gen_metadata usage pass — decodes the sibling conversation .db and posts the
+        // synthetic USAGE lines the live watcher would have streamed, so a content-only import
+        // still gains cost. Best-effort (cost is never load-bearing, AI-728); always before
+        // session-end (AI-1358 item 7).
+        await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
 
         // Children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
         // Subagent failures don't fail the (already-imported) parent; a re-import retries.
@@ -350,6 +369,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 
@@ -357,6 +377,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         var p = new JsonObject { ["hook_event_name"] = "sessionEnd", ["session_id"] = sid, ["reason"] = "antigravity-import" };
         if (cwd is not null) p["cwd"] = cwd;
         if (endedAt is { } ts) p["ended_at"] = ts.ToString("O");
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 
@@ -396,6 +417,66 @@ internal sealed class AntigravityImportSource : IImportSource {
         };
         if (strict) p["strict"] = true;
         return p;
+    }
+
+    // Synthetic USAGE line numbers live in a high band so they never collide with real transcript
+    // line numbers (which start at 0). MUST match the live path's WatchCommand.
+    // AntigravityUsageLineBase AND the server's SessionWriter.AntigravityUsageLineBase — all
+    // three are pinned to the same literal (grepped: WatchCommand.cs:1692,
+    // SessionWriter.TranscriptPipeline.cs:21) since the server derives the USAGE event id from
+    // line CONTENT (gen_row), not the line number, so the number is only a non-colliding
+    // ordering hint (AI-1358 item 7).
+    const long AntigravityUsageLineBase = 1_000_000_000L;
+
+    /// <summary>
+    /// Decodes the sibling conversation <c>.db</c>'s <c>gen_metadata</c> rows into synthetic
+    /// USAGE transcript lines and posts them directly via <c>/hooks/transcript</c> — NOT through
+    /// <see cref="SessionImporter.SendTranscriptBatches"/>, whose AlreadyLoaded-derived startLine
+    /// would skip a USAGE line entirely (it lives past the real-content watermark, in the high
+    /// band). Deterministic USAGE event ids (keyed on gen_row) dedupe server-side, so re-posting
+    /// on every re-import is safe. Called for every classification (New/Partial AND
+    /// AlreadyLoaded) so a session imported before this feature shipped — content but no cost —
+    /// gains usage on a bare re-import even though zero physical transcript lines are (re)sent
+    /// (AI-1358 item 7). Best-effort: cost is never load-bearing (AI-728) — a decode/post failure
+    /// here must never fail the import.
+    /// </summary>
+    static async Task<bool> PostUsageLinesAsync(
+            ImportContext ctx, string sessionId, string transcriptPath, DateTimeOffset? createdAt, CancellationToken ct) {
+        if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return true;
+
+        var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, afterIdx: -1, createdAt: createdAt?.ToString("O"));
+        if (rows.Count == 0) return true;
+
+        var lines       = new string[rows.Count];
+        var lineNumbers = new int[rows.Count];
+        for (var i = 0; i < rows.Count; i++) {
+            lines[i]       = rows[i].Line;
+            lineNumbers[i] = (int)(AntigravityUsageLineBase + rows[i].Idx);
+        }
+
+        return await PostTranscriptLinesAsync(ctx.HttpClient, ctx.BaseUrl, sessionId, lines, lineNumbers, ct);
+    }
+
+    static async Task<bool> PostTranscriptLinesAsync(
+            HttpClient client, string baseUrl, string sessionId, string[] lines, int[] lineNumbers, CancellationToken ct) {
+        var batch = new TranscriptBatch {
+            SessionId   = sessionId,
+            Lines       = lines,
+            LineNumbers = lineNumbers,
+            Vendor      = "antigravity",
+            Strict      = false,
+        };
+        var json = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);
+
+        try {
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, ct: ct);
+            return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return false; // cost is always best-effort (AI-728) — never let a post failure surface
+        }
     }
 
     static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {

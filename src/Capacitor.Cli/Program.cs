@@ -698,6 +698,21 @@ switch (command) {
         return 0;
     }
     case "hook": {
+        // AI-1357 Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
+        // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
+        // added (removed from their Handle methods so this runs exactly once per invocation) and
+        // additionally covers Claude/Cursor, which never called it (they only drain their OWN
+        // route-agnostic FIFO backlog via HookSpool.DrainAllAsync). Codex is exempt — it runs its
+        // own drain in the BACKGROUND, after satisfying its synchronous stdout contract.
+        // Cross-process-throttled (~30s) and auth-gated inside DrainSpoolsAsync, so this adds no
+        // per-invocation network cost beyond a disk stat on the vast majority of firings.
+        if (!args.Contains("--codex") && baseUrl is not null && HttpClientExtensions.IsAcceptableUrl(baseUrl)) {
+            await AgentHookPoster.DrainSpoolsAsync(
+                baseUrl,
+                new HookSpool(PathHelpers.ConfigPath("spool")),
+                new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool")),
+                sessionId: null); // current session unknown here — reading stdin now would consume it
+        }
         if (args.Contains("--claude")) {
             return await ClaudeHookCommand.Handle(baseUrl!, Console.In, updateCheckTask, hookProcessStart);
         }

@@ -47,6 +47,10 @@ static class OpenCodeHookCommand {
         // and watcher restart for the session.
         if (DisabledSessions.IsDisabled(sessionId)) return 0;
 
+        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
         if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
@@ -56,18 +60,19 @@ static class OpenCodeHookCommand {
 
         // session-start is the only actionable event; the watcher owns session-end.
         return eventName == "session-start"
-            ? await HandleSessionStart(baseUrl, sessionId, sessionIdRaw, file, cwd, args, activeProfile)
+            ? await HandleSessionStart(baseUrl, sessionId, sessionIdRaw, file, cwd, args, activeProfile, spool)
             : 0;
     }
 
     static async Task<int> HandleSessionStart(
-            string   baseUrl,
-            string   sessionId,
-            string   sessionIdRaw,
-            string   file,
-            string?  cwd,
-            string[] args,
-            Profile? activeProfile
+            string    baseUrl,
+            string    sessionId,
+            string    sessionIdRaw,
+            string    file,
+            string?   cwd,
+            string[]  args,
+            Profile?  activeProfile,
+            HookSpool spool
         ) {
         var forwarded = new JsonObject {
             ["hook_event_name"] = "sessionStart",
@@ -105,11 +110,16 @@ static class OpenCodeHookCommand {
             return 0;
         }
 
-        // Fail-open like Kiro: a non-zero exit would surface as a failed plugin call. On a real
-        // failure PostHookAsync logged to stderr; on an auth lapse it stayed silent (no doomed
-        // POST). Either way skip the watcher this firing and exit 0; the next session.idle retries.
-        var outcome = await PostHookAsync(baseUrl, "session-start/opencode", enriched);
-        if (outcome != HookPostOutcome.Posted) return 0;
+        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
+        // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
+        // durably spools the payload for a later drain pass. Only a permanent failure skips the
+        // watcher this firing; the next session.idle retries.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/opencode", enriched, "opencode-hook",
+            spool, sessionId, route: "session-start/opencode");
+
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return 0;
 
         await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, file,
@@ -119,12 +129,6 @@ static class OpenCodeHookCommand {
 
         return 0;
     }
-
-    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
-    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
-    // cleanly instead of erroring. See AgentHookPoster.
-    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
-        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "opencode-hook");
 
     static string? GetArg(string[] args, string flag) {
         var idx = Array.IndexOf(args, flag);

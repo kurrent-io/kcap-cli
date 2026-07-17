@@ -40,6 +40,128 @@ static partial class WatchCommand {
         : !isAlive(ppid)          ? ParentWatchdog.ParentAlreadyDead
         :                           ParentWatchdog.Monitor;
 
+    /// <summary>
+    /// Staged outcome for the wedged/parent-dead recovery loop. A watcher that hit
+    /// <see cref="ParentWatchdog.ParentAlreadyDead"/> is alive-and-connected with no end path
+    /// (the server sweep only sees GONE watchers, and Kiro/OpenCode have no idle fallback), so
+    /// recovery re-resolves + re-arms the watchdog when possible and only ends on a long ceiling.
+    /// </summary>
+    internal enum ParentDeadRecovery {
+        /// <summary>Re-resolution found a live parent — re-arm the watchdog; end nothing (preferred).</summary>
+        ReArm,
+
+        /// <summary>No live parent yet AND still under the ceiling with recent progress — keep polling.</summary>
+        KeepWaiting,
+
+        /// <summary>Resolution keeps failing AND no transcript progress for longer than the ceiling — end.</summary>
+        EndTerminal
+    }
+
+    /// <summary>
+    /// Pure staged decision for the parent-dead recovery loop. Re-arm takes priority (a found,
+    /// live parent is the preferred outcome and never ends the session). Otherwise the session ends
+    /// ONLY when the no-progress window exceeds the ceiling — a user parked at a Kiro/OpenCode prompt
+    /// produces no transcript lines but must not be ended before then, and any new progress resets
+    /// <paramref name="noProgressElapsed"/> via the caller.
+    /// </summary>
+    internal static ParentDeadRecovery DecideParentDeadRecovery(
+            int?            reResolvedPid,
+            Func<int, bool> isAlive,
+            TimeSpan        noProgressElapsed,
+            TimeSpan        ceiling
+        ) =>
+        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
+        :                                          ParentDeadRecovery.KeepWaiting;
+
+    /// <summary>
+    /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
+    /// 60-min idle default: an idle GUI conversation ends via the idle timeout, whereas this ceiling
+    /// exists only to eventually end a wedged, alive-but-connected watcher (invisible to the server
+    /// sweep) whose parent can't be re-resolved — without false-ending a user parked at a prompt.
+    /// </summary>
+    internal static readonly TimeSpan DefaultParentDeadCeiling = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// Resolves the parent-dead recovery ceiling from KCAP_PARENT_DEAD_CEILING_MINUTES, falling back
+    /// to <see cref="DefaultParentDeadCeiling"/> for unset/blank/non-numeric/non-positive values.
+    /// Pure so the parsing is unit-testable.
+    /// </summary>
+    internal static TimeSpan ResolveParentDeadCeiling(string? envValue) =>
+        int.TryParse(envValue, out var minutes) && minutes > 0
+            ? TimeSpan.FromMinutes(minutes)
+            : DefaultParentDeadCeiling;
+
+    /// <summary>
+    /// Shutdown completion signal for a JSONL transcript's final line: complete when the file is
+    /// empty, newline-terminated, OR its last (newline-less) line parses as JSON. Length-stability
+    /// is NOT proof of completion — a large write can pause mid-record for longer than any bounded
+    /// wait, so a static-but-unparseable tail is still incomplete. Pure so it is unit-testable
+    /// without a real file (AI-1357 task 7).
+    /// </summary>
+    internal static bool IsFinalLineComplete(string fileText) {
+        if (fileText.Length == 0 || fileText[^1] == '\n') return true;
+
+        var lastNl = fileText.LastIndexOf('\n');
+        var tail   = lastNl < 0 ? fileText : fileText[(lastNl + 1)..];
+
+        // A whitespace-only trailing partial carries nothing to lose → treat as complete; otherwise
+        // the tail must parse as a complete JSON record (length-stability alone is NOT proof).
+        return tail.Trim().Length == 0 || IsCompleteJsonRecord(tail);
+    }
+
+    /// <summary>
+    /// Bounded wait (≤2s, 4×500ms) for the shutdown final drain: re-reads <paramref name="path"/>
+    /// looking for <see cref="IsFinalLineComplete"/> before the watcher decides whether it's safe to
+    /// send-and-advance the newline-less final line. Never throws — a read failure just counts as
+    /// "not yet complete" for that iteration; the delay between iterations is likewise best-effort so
+    /// cancellation/short-lived environments can't turn this into a hang.
+    /// </summary>
+    internal static async Task<bool> WaitForFinalLineCompletionAsync(string path, int attempts = 4, int delayMs = 500) {
+        for (var i = 0; i < attempts; i++) {
+            try {
+                if (IsFinalLineComplete(await File.ReadAllTextAsync(path))) return true;
+            } catch {
+                // Transient read failure (e.g. concurrent write) — try again on the next iteration.
+            }
+
+            try {
+                await Task.Delay(delayMs);
+            } catch {
+                // Never let a delay hiccup abort the shutdown path.
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Maximum single wait between heartbeat touches (AI-1357 task 9). Comfortably below the
+    /// <c>WatcherHeartbeat.Threshold</c> so no chunked wait can ever look stale, and matches the
+    /// main loop's disconnected-branch poll cadence.
+    /// </summary>
+    internal static readonly TimeSpan HeartbeatSlice = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Splits a total wait into consecutive chunks of at most <paramref name="maxSlice"/> so the
+    /// caller can refresh the heartbeat between each — keeping a reconnecting-but-alive watcher
+    /// from ever crossing the staleness threshold while it waits out a long connect-retry backoff.
+    /// Pure so the "no chunk exceeds the slice" guarantee is unit-testable without spawning a
+    /// watcher or a real server (AI-1357 task 9). A non-positive total yields no chunks.
+    /// </summary>
+    internal static IReadOnlyList<TimeSpan> HeartbeatSlices(TimeSpan total, TimeSpan maxSlice) {
+        var slices    = new List<TimeSpan>();
+        var remaining = total;
+
+        while (remaining > TimeSpan.Zero) {
+            var chunk = remaining < maxSlice ? remaining : maxSlice;
+            slices.Add(chunk);
+            remaining -= chunk;
+        }
+
+        return slices;
+    }
+
     public static async Task<int> RunWatch(
             string  baseUrl,
             string  sessionId,
@@ -59,6 +181,23 @@ static partial class WatchCommand {
         Console.SetOut(logWriter);
         Console.SetError(logWriter);
 
+        // AI-1357 task 9: `logKey` is already the same `{sessionId}` / `{sessionId}-{agentId}`
+        // key WatcherManager uses for the pid file, so it doubles as the heartbeat key. Touch
+        // once here (startup) and then every main-loop iteration below so a hook-side
+        // staleness probe can distinguish a wedged (hung-but-alive) watcher from a healthy
+        // one — a PID-only liveness check can't tell the difference.
+        var heartbeatPath = WatcherManager.GetHeartbeatFilePath(logKey);
+
+        void TouchHeartbeat() {
+            try {
+                WatcherHeartbeat.Touch(heartbeatPath, DateTimeOffset.UtcNow);
+            } catch {
+                /* best-effort — a missed touch just risks one false-stale reading, never worse */
+            }
+        }
+
+        TouchHeartbeat();
+
         // Detach from controlling terminal so closing the parent's terminal does
         // not deliver SIGHUP to the watcher. Without this, both the coding agent
         // and the watcher die simultaneously when the user closes the terminal
@@ -70,6 +209,25 @@ static partial class WatchCommand {
 
         using var cts = new CancellationTokenSource();
 
+        // A cancellable delay that keeps the heartbeat fresh across long waits. The connect-retry
+        // backoff grows to 30s — longer than the ~20s staleness threshold — so a single Task.Delay
+        // would let the heartbeat go stale mid-wait and get a healthy-but-reconnecting watcher
+        // falsely reaped. Chunk the wait into ≤5s slices (the same cadence as the main loop's
+        // disconnected branch), touching before each slice. Returns false if cancelled (AI-1357 task 9).
+        async Task<bool> DelayWithHeartbeatAsync(TimeSpan total) {
+            foreach (var chunk in HeartbeatSlices(total, HeartbeatSlice)) {
+                TouchHeartbeat();
+
+                try {
+                    await Task.Delay(chunk, cts.Token);
+                } catch (OperationCanceledException) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         // Tracks whether shutdown was triggered by the parent coding-agent process
         // dying without firing session-end. When true (1), the watcher takes over the
         // server's session-end POST (which the parent normally fires) so the read
@@ -80,6 +238,8 @@ static partial class WatchCommand {
         // guarantees the write is observed even though awaits already act as memory
         // barriers in practice.
         var parentExited = 0;
+        // AI-1359: set by the staged parent-dead recovery loop when it ends a wedged watcher on the ceiling.
+        var wedgedCeilingExit = 0;
 
         // Handle SIGTERM/SIGINT for graceful shutdown.
         //
@@ -114,12 +274,43 @@ static partial class WatchCommand {
             ctx.Cancel = true;
         });
 
+        // AI-1359: declared before the parent-watchdog block so the staged parent-dead recovery
+        // task can read state.LastActivityAt as its no-progress clock.
+        var state = new WatchState();
+        state.LastActivityAt = DateTimeOffset.UtcNow;
+
+        // AI-1357 task 8: the dedicated undelivered-transcript-tail spool, shared by the final-drain
+        // needs-import marker below and the shutdown-during-outage tail spool.
+        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
+
         // Watch the spawning coding-agent process. If it dies without firing
         // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
         // POST session-end instead of orphaning. Crucially, the cases where we DON'T
         // monitor are now logged: a silently-skipped watchdog is exactly the failure
         // that left sessions stuck "active" with the watcher still connected — the
         // resolved parent PID was already dead at startup and nothing recorded it.
+        // Local so both the initial Monitor case and the recovery re-arm start the identical poll.
+        void ArmParentMonitor(int ppid) {
+            Log($"Monitoring parent pid {ppid}");
+            _ = Task.Run(async () => {
+                while (!cts.Token.IsCancellationRequested) {
+                    try {
+                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                    } catch (OperationCanceledException) {
+                        return;
+                    }
+
+                    if (!ProcessHelpers.IsProcessAlive(ppid)) {
+                        Log($"Parent pid {ppid} exited; shutting down watcher");
+                        Interlocked.Exchange(ref parentExited, 1);
+                        cts.Cancel();
+
+                        return;
+                    }
+                }
+            }, cts.Token);
+        }
+
         switch (DecideParentWatchdog(parentPid, ProcessHelpers.IsProcessAlive)) {
             case ParentWatchdog.NoParentPid:
                 Log("No parent pid supplied; parent-exit watchdog disabled (session-end relies on the agent's own hook)");
@@ -127,38 +318,59 @@ static partial class WatchCommand {
                 break;
 
             case ParentWatchdog.ParentAlreadyDead:
-                Log($"Parent pid {parentPid} already dead at watcher startup; parent-exit watchdog NOT started — "
-                  + "session-end will not be POSTed if the agent ends abruptly. This usually means parent-PID "
-                  + "resolution returned a transient process; see ProcessHelpers.GetCodingAgentPid.");
+                Log($"Parent pid {parentPid} already dead at watcher startup; entering staged recovery — "
+                  + "will periodically re-resolve + re-arm the watchdog, and only end after a long ceiling "
+                  + "with no transcript progress and continued resolution failure (AI-1359).");
+
+                // Staged recovery: re-resolve the durable agent (using the vendor alias) and re-arm if
+                // found; otherwise end ONLY after `ceiling` of no transcript progress. Any new progress
+                // resets the window (state.LastActivityAt advances on drained lines). Session watchers
+                // only — subagent watchers are torn down by the parent's lifecycle.
+                if (agentId is null) {
+                    var ceiling = ResolveParentDeadCeiling(Environment.GetEnvironmentVariable("KCAP_PARENT_DEAD_CEILING_MINUTES"));
+
+                    _ = Task.Run(async () => {
+                        while (!cts.Token.IsCancellationRequested) {
+                            try {
+                                await Task.Delay(TimeSpan.FromSeconds(30), cts.Token);
+                            } catch (OperationCanceledException) {
+                                return;
+                            }
+
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
+                            var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
+
+                            switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
+                                case ParentDeadRecovery.ReArm:
+                                    Log($"Parent re-resolved to live pid {reResolved}; re-arming the watchdog");
+                                    ArmParentMonitor(reResolved!.Value);
+
+                                    return;
+
+                                case ParentDeadRecovery.EndTerminal:
+                                    Log($"Parent unresolved and no transcript progress for >{ceiling.TotalMinutes:F0}m; "
+                                      + "ending session (parent_dead_ceiling)");
+                                    Interlocked.Exchange(ref wedgedCeilingExit, 1);
+                                    cts.Cancel();
+
+                                    return;
+
+                                case ParentDeadRecovery.KeepWaiting:
+                                default:
+                                    break; // poll again
+                            }
+                        }
+                    }, cts.Token);
+                }
 
                 break;
 
             case ParentWatchdog.Monitor:
-                var ppid = parentPid!.Value;
-                Log($"Monitoring parent pid {ppid}");
-                _ = Task.Run(async () => {
-                    while (!cts.Token.IsCancellationRequested) {
-                        try {
-                            await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
-                        } catch (OperationCanceledException) {
-                            return;
-                        }
-
-                        if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                            Log($"Parent pid {ppid} exited; shutting down watcher");
-                            Interlocked.Exchange(ref parentExited, 1);
-                            cts.Cancel();
-
-                            return;
-                        }
-                    }
-                }, cts.Token);
+                ArmParentMonitor(parentPid!.Value);
 
                 break;
         }
 
-        var state = new WatchState();
-        state.LastActivityAt = DateTimeOffset.UtcNow;
         // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
         // already committed server-side — the below-threshold buffering (which exists to avoid
         // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
@@ -257,6 +469,13 @@ static partial class WatchCommand {
         var connectRetryDelay = TimeSpan.FromSeconds(1);
 
         while (!cts.Token.IsCancellationRequested) {
+            // AI-1357 task 9: touch every connect-retry iteration too. A server outage at
+            // startup (backoff up to 30s) that lasts longer than grace+threshold (~50s) is a
+            // healthy-but-reconnecting watcher, NOT a wedged one — without a heartbeat here
+            // the hook probe would judge it stale and reap+respawn it repeatedly for the
+            // whole outage. Staleness must mean "the loop is wedged", not "the server is down".
+            TouchHeartbeat();
+
             try {
                 await hubConnection.StartAsync(cts.Token);
 
@@ -267,9 +486,9 @@ static partial class WatchCommand {
             } catch (Exception ex) {
                 Log($"SignalR connect failed, retrying in {connectRetryDelay.TotalSeconds}s: {ex.Message}");
 
-                try {
-                    await Task.Delay(connectRetryDelay, cts.Token);
-                } catch (OperationCanceledException) {
+                // Heartbeat-aware wait: the backoff caps at 30s > the staleness threshold, so a
+                // plain Task.Delay here would falsely mark a reconnecting watcher stale (AI-1357).
+                if (!await DelayWithHeartbeatAsync(connectRetryDelay)) {
                     break;
                 }
 
@@ -287,6 +506,7 @@ static partial class WatchCommand {
         // Register with server and get resume position
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
         Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
+        TouchHeartbeat();
 
         // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
         // transcripts itself and spawns a child watcher per subagent (AI-900). Tracks the
@@ -295,9 +515,18 @@ static partial class WatchCommand {
 
         try {
             while (!cts.Token.IsCancellationRequested) {
+                // AI-1357 task 9: touch every iteration — including no-content drains and
+                // while disconnected/reconnecting below — so staleness unambiguously means
+                // the loop itself is wedged, not merely idle or mid-reconnect.
+                TouchHeartbeat();
+
                 // Skip work while disconnected — SignalR auto-reconnect handles recovery.
                 // No point re-reading the file or attempting sends that will fail.
                 if (hubConnection.State != HubConnectionState.Connected) {
+                    // Freeze the idle clock: record when we went offline so the reconnect path can
+                    // subtract the outage from the idle measure (AI-1359).
+                    state.DisconnectedSince ??= DateTimeOffset.UtcNow;
+
                     try {
                         await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
                     } catch (OperationCanceledException) {
@@ -305,6 +534,14 @@ static partial class WatchCommand {
                     }
 
                     continue;
+                }
+
+                // Reconnected (or never disconnected): fold any accrued outage into the disconnected
+                // accumulator so the idle measure ignores it. DisconnectedSince is only ever set while
+                // disconnected, so this runs exactly once per outage.
+                if (state.DisconnectedSince is { } since) {
+                    state.AccumulatedDisconnected += DateTimeOffset.UtcNow - since;
+                    state.DisconnectedSince        = null;
                 }
 
                 // Periodically refresh repository info (every 60s)
@@ -341,7 +578,8 @@ static partial class WatchCommand {
                         // Antigravity counts PLANNER_RESPONSE calls vs result steps (AI-1157 review).
                         toolInFlight: vendor == "antigravity"
                             ? state.PendingAntigravityToolCalls > 0
-                            : state.PendingCodexToolCalls.Count > 0)) {
+                            : state.PendingCodexToolCalls.Count > 0,
+                        disconnectedSinceActivity: state.AccumulatedDisconnected)) {
                     Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
@@ -366,7 +604,43 @@ static partial class WatchCommand {
             Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
             Log("Draining remaining lines...");
-            var finalDrained = await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None, isFinalDrain: true);
+
+            // Shutdown completion signal (AI-1357 task 7): the outage/idle-timeout final drain used
+            // to disable the half-written-line holdback unconditionally, which could consume a line
+            // the agent was still mid-write on. Instead:
+            //   1. Bounded-wait (≤2s) to give the writer a chance to finish the final record — a
+            //      trailing newline OR a parseable last line, NOT length-stability alone, since a
+            //      large write can pause mid-record past the window. This is best-effort ONLY.
+            //   2. Run the final drain with ConsumeIfComplete: the completeness decision is re-made
+            //      on the EXACT bytes consumed, so a line that resumed growing into an incomplete
+            //      record after the wait is still held, never sent-and-advanced (no TOCTOU).
+            // If the final line was held back at consume time, flag the session needs-import so
+            // `kcap import` can recover the tail rather than dropping a truncated line.
+            await WaitForFinalLineCompletionAsync(transcriptPath);
+
+            var finalDrained = await DrainNewLines(
+                hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None,
+                isFinalDrain: true);
+
+            if (state.FinalDrainHeldIncompleteLine) {
+                // Keyed on the canonical server sessionId (not agentId) even for a subagent
+                // watcher — TranscriptSpool/LifecycleSpoolDrain's session-id space is the server's,
+                // and `kcap import`/session-needs-import operate at the session level.
+                Log("Final transcript line still incomplete at consume time; held back and flagging needs-import");
+                transcriptSpool.MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
+            }
+
+            // AI-1357 task 8: shutdown-during-outage. DrainNewLines above only advances
+            // state.LinesProcessed past lines the hub actually CONFIRMED — a failed final-drain send
+            // (hub down, OR a HubException while the connection stays Connected — the generic catch
+            // below does not change connection state) leaves LinesProcessed unchanged, so any lines
+            // between there and EOF are undelivered and this is the LAST chance to act (the process
+            // exits right after). Run UNCONDITIONALLY — never gate on connection state: it is a cheap
+            // no-op when nothing is undelivered (position already == EOF). Spool the tail into the
+            // dedicated TranscriptSpool so the global drain (task 3) replays it after recovery,
+            // instead of silently dropping it.
+            await SpoolUndeliveredTranscriptTailAsync(
+                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, CancellationToken.None);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -405,9 +679,10 @@ static partial class WatchCommand {
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        var endReason = Volatile.Read(ref parentExited) == 1 ? "parent_exited"
-                      : idleExit                              ? "idle_timeout"
-                      :                                         null;
+        var endReason = Volatile.Read(ref parentExited)      == 1 ? "parent_exited"
+                      : Volatile.Read(ref wedgedCeilingExit) == 1 ? "parent_dead_ceiling"
+                      : idleExit                                  ? "idle_timeout"
+                      :                                             null;
 
         if (endReason is not null && agentId is null && state.ThresholdReached) {
             await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
@@ -610,12 +885,13 @@ static partial class WatchCommand {
             DateTimeOffset lastActivityAt,
             DateTimeOffset now,
             TimeSpan       idleTimeout,
-            bool           toolInFlight = false
+            bool           toolInFlight              = false,
+            TimeSpan       disconnectedSinceActivity = default
         ) =>
         (vendor == "codex" || vendor == "antigravity")
         && isSessionWatcher
         && thresholdReached
-        && now - lastActivityAt > idleTimeout
+        && now - lastActivityAt - disconnectedSinceActivity > idleTimeout
         && !toolInFlight;
 
     /// <summary>
@@ -794,8 +1070,21 @@ static partial class WatchCommand {
             NewTranscriptLines drainRead;
             await using (var stream = new FileStream(
                     transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+                // Shutdown final drain (AI-1357 task 7): consume an unterminated final line only if
+                // the exact bytes read parse as a complete JSON record (re-validated at consume time,
+                // so no TOCTOU with the bounded pre-wait); a still-growing/unparseable tail is held.
+                // Every live drain always holds an unterminated final line (AI-1243).
                 drainRead = await ReadNewCompleteLinesAsync(
-                    stream, state.LinesProcessed, holdIncompleteFinalLine: !isFinalDrain, ct);
+                    stream, state.LinesProcessed,
+                    isFinalDrain ? IncompleteFinalLinePolicy.ConsumeIfComplete : IncompleteFinalLinePolicy.Hold,
+                    ct);
+            }
+
+            // Surface whether the final drain held back an incomplete (unterminated/unparseable)
+            // final line so the shutdown path can flag the session needs-import instead of dropping
+            // a truncated tail. Only meaningful for the final drain; live drains hold routinely.
+            if (isFinalDrain) {
+                state.FinalDrainHeldIncompleteLine = drainRead.HeldIncompleteFinalLine;
             }
 
             var newLineNumbers = drainRead.LineNumbers;
@@ -827,8 +1116,23 @@ static partial class WatchCommand {
                 antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
             }
 
+            // AI-1357 task 10: Kiro's per-turn credits/context% live in the sibling {id}.json, not
+            // the .jsonl (see KiroUsage docs) — by the time Kiro flushes that sidecar, a live drain
+            // has usually already sent the anchor's AssistantMessage line, so import-style inline
+            // enrichment can't reach it. Backfill it instead as a synthetic KiroUsageBackfilled line
+            // (server Task 12 folds these into a backfill event, keyed on the anchor). Same
+            // buffering/agentId gating as the Antigravity block above; staged anchors are committed
+            // into state.KiroUsageEmittedAnchors only after a successful send (below), so a failed
+            // batch re-reads and re-stages the same anchors next drain.
+            if (vendor == "kiro" && (agentId is not null || state.ThresholdReached)) {
+                AppendKiroUsageBackfillLines(state, newLines, newLineNumbers, transcriptPath);
+            }
+
             if (newLines.Count > 0) {
-                state.LastActivityAt = DateTimeOffset.UtcNow;
+                state.LastActivityAt          = DateTimeOffset.UtcNow;
+                // New activity restarts the idle measure, so discard disconnected time accrued
+                // before it (draining only happens while connected, so DisconnectedSince is null).
+                state.AccumulatedDisconnected = TimeSpan.Zero;
             }
 
             // Track Codex tool calls in flight across all new lines (Codex-only,
@@ -1027,6 +1331,13 @@ static partial class WatchCommand {
                 if (antigravityGenMax > state.LastAntigravityGenIdx)
                     state.LastAntigravityGenIdx = antigravityGenMax;
 
+                // Commit the Kiro usage-backfill anchors ONLY now (after the batch carrying their
+                // synthetic lines landed); a failed send above leaves KiroUsageEmittedAnchors
+                // unchanged so AppendKiroUsageBackfillLines re-stages the same anchors next drain
+                // instead of losing them.
+                foreach (var anchor in state.KiroUsagePendingAnchors)
+                    state.KiroUsageEmittedAnchors.Add(anchor);
+
                 if (repoToSend is not null) {
                     state.LastSentRepository = repoToSend;
                 }
@@ -1050,6 +1361,91 @@ static partial class WatchCommand {
         }
 
         return [];
+    }
+
+    /// <summary>
+    /// Pure builder (AI-1357 task 8) for the JSON payload spooled into <see cref="TranscriptSpool"/>
+    /// at shutdown when the hub is down and the final drain's still-undelivered tail cannot be sent
+    /// live. Mirrors the <see cref="TranscriptBatch"/> construction in <see cref="DrainNewLines"/>
+    /// (the live SignalR send) so the shape the global drain (task 3) later POSTs to
+    /// <c>/hooks/transcript</c> on replay is identical to a normal live batch.
+    /// </summary>
+    internal static string BuildTranscriptSpoolBatch(
+            string                sessionId,
+            string?               agentId,
+            string                vendor,
+            IReadOnlyList<string> lines,
+            IReadOnlyList<int>    lineNumbers
+        ) => JsonSerializer.Serialize(
+            new TranscriptBatch {
+                SessionId   = sessionId,
+                AgentId     = agentId,
+                Lines       = lines.ToArray(),
+                LineNumbers = lineNumbers.ToArray(),
+                Vendor      = vendor,
+            },
+            CapacitorJsonContext.Default.TranscriptBatch);
+
+    /// <summary>
+    /// AI-1357 task 8: called from the shutdown path only when the hub is NOT connected at the point
+    /// the final drain finishes. Re-reads the transcript from <paramref name="linesProcessed"/> (the
+    /// last line the server actually confirmed, per <see cref="DrainNewLines"/>'s
+    /// "only advance position after successful send" rule) to EOF, using the same
+    /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/> decision as the final drain itself so
+    /// a still-growing/unparseable last line is never spooled prematurely. Any resulting lines are the
+    /// tail the outage prevented from being delivered live; spools them via
+    /// <see cref="TranscriptSpool.Append"/> so the global drain (task 3) replays them once the hub
+    /// recovers, rather than dropping them when this process exits.
+    /// Returns <c>null</c> when there is nothing undelivered (nothing spooled), otherwise the
+    /// <see cref="TranscriptSpool.AppendResult"/> from the spool write.
+    /// </summary>
+    internal static async Task<TranscriptSpool.AppendResult?> SpoolUndeliveredTranscriptTailAsync(
+            TranscriptSpool   transcriptSpool,
+            string            transcriptPath,
+            string            sessionId,
+            string?           agentId,
+            string            vendor,
+            int               linesProcessed,
+            CancellationToken ct
+        ) {
+        if (!File.Exists(transcriptPath)) return null;
+
+        NewTranscriptLines tail;
+        try {
+            await using var stream = new FileStream(
+                transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            tail = await ReadNewCompleteLinesAsync(
+                stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct);
+        } catch (IOException ex) {
+            Log($"Shutdown-tail spool: failed to read transcript for {sessionId}: {ex.Message}");
+
+            return null;
+        }
+
+        if (tail.Lines.Count == 0) return null;
+
+        // Redact secrets exactly as the live drain does (DrainNewLines: drainRead.Lines.Select(
+        // SecretRedactor.RedactLine)) — otherwise the spooled tail lands on disk raw and is POSTed
+        // unredacted on replay, leaking secrets the live path would have stripped.
+        var redacted = tail.Lines.Select(SecretRedactor.RedactLine).ToList();
+
+        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers);
+        var result = transcriptSpool.Append(sessionId, batch);
+
+        switch (result) {
+            case TranscriptSpool.AppendResult.Appended:
+                Log($"Spooled {tail.Lines.Count} undelivered transcript line(s) at shutdown for "
+                  + $"{sessionId} (hub down) — will replay on the next global drain");
+
+                break;
+            case TranscriptSpool.AppendResult.MarkedNeedsImport:
+                Log($"Undelivered transcript tail for {sessionId} could not be spooled (cap exhausted "
+                  + "or write failed); session flagged needs-import — recover via `kcap import`");
+
+                break;
+        }
+
+        return result;
     }
 
     static void SetFirstUserText(WatchState state, string userText) {
@@ -1325,6 +1721,75 @@ static partial class WatchCommand {
             Log($"Antigravity usage poll failed: {ex.Message}");
         }
         return maxIdx;
+    }
+
+    // AI-1357 task 10: Kiro's per-turn credits/context% live in the sidecar {id}.json, not the
+    // .jsonl the live watcher tails (see KiroUsage docs) — the import path enriches the anchor
+    // AssistantMessage line inline because it reads the whole file up front, but a live drain has
+    // already sent that line by the time Kiro flushes the sidecar. So the live path emits a
+    // synthetic KiroUsageBackfilled line per turn anchor instead (server: Task 12 folds it into a
+    // backfill event, deterministic id keyed on the anchor — never the same shape/idea as a real
+    // transcript line, hence its own kind). High band keeps its line numbers clear of both real
+    // transcript lines and Antigravity's synthetic USAGE band (AntigravityUsageLineBase).
+    const long KiroUsageLineBase = 2_000_000_000L;
+
+    /// <summary>
+    /// Builds the synthetic JSONL line the server recognizes as a Kiro usage backfill for one
+    /// turn anchor (the turn's final <c>message_id</c>). <paramref name="contextPct"/> is omitted
+    /// when absent, mirroring <see cref="KiroUsage.EnrichLine"/>'s optional-field handling.
+    /// </summary>
+    internal static string BuildKiroUsageBackfillLine(string anchor, double credits, double? contextPct) {
+        var data = new JsonObject {
+            ["message_id"] = anchor,
+            ["credits"]    = credits,
+        };
+        if (contextPct is { } pct) data["context_usage_percentage"] = pct;
+
+        var root = new JsonObject {
+            ["kind"] = "KiroUsageBackfilled",
+            ["data"] = data,
+        };
+        return root.ToJsonString();
+    }
+
+    /// <summary>
+    /// Reads the sidecar <c>{id}.json</c> next to <paramref name="transcriptPath"/> and appends a
+    /// synthetic <see cref="BuildKiroUsageBackfillLine"/> line for each turn anchor NOT already in
+    /// <see cref="WatchState.KiroUsageEmittedAnchors"/>, staging the newly-seen anchors on
+    /// <see cref="WatchState.KiroUsagePendingAnchors"/> for the caller to commit after a successful
+    /// send (mirrors <see cref="AppendAntigravityUsageLines"/>'s watermark-after-send contract, but
+    /// keyed on anchor strings rather than a monotonic row index). Returns the count staged (0 on a
+    /// missing/malformed sidecar or when every turn's anchor is already emitted) — never throws;
+    /// usage is always best-effort (AI-728/AI-1196).
+    /// </summary>
+    internal static long AppendKiroUsageBackfillLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath) {
+        state.KiroUsagePendingAnchors.Clear();
+        var staged = 0L;
+        try {
+            var metaPath = Path.ChangeExtension(transcriptPath, ".json");
+            if (!File.Exists(metaPath)) return 0;
+
+            var anchors = KiroUsage.AnchorMap(File.ReadAllText(metaPath));
+            var offset  = 0;
+
+            foreach (var (anchor, usage) in anchors) {
+                if (state.KiroUsageEmittedAnchors.Contains(anchor)) { offset++; continue; }
+
+                // Task 10 scope is credits/context% only — tokens stay upstream-blocked (AI-1196),
+                // so a turn with only (dormant, zero) token counts has nothing to backfill yet.
+                if (usage.Credits == 0 && usage.ContextPct is null) { offset++; continue; }
+
+                newLines.Add(BuildKiroUsageBackfillLine(anchor, usage.Credits, usage.ContextPct));
+                newLineNumbers.Add((int)(KiroUsageLineBase + offset));
+                state.KiroUsagePendingAnchors.Add(anchor);
+                staged++;
+                offset++;
+            }
+        } catch (Exception ex) {
+            // Usage is always best-effort (AI-728) — never let a sidecar read break the drain.
+            Log($"Kiro usage backfill poll failed: {ex.Message}");
+        }
+        return staged;
     }
 
     /// <summary>
@@ -1787,10 +2252,35 @@ static partial class WatchCommand {
 
     /// <summary>
     /// Result of a transcript drain read: the new non-blank <see cref="Lines"/> (beyond the
-    /// caller's processed position), their 0-based <see cref="LineNumbers"/>, and the
-    /// <see cref="NextPosition"/> the caller should advance its watermark to.
+    /// caller's processed position), their 0-based <see cref="LineNumbers"/>, the
+    /// <see cref="NextPosition"/> the caller should advance its watermark to, and
+    /// <see cref="HeldIncompleteFinalLine"/> — true when a non-blank, unterminated (or, under
+    /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/>, unparseable) final line was held
+    /// back rather than consumed. The shutdown final drain uses this to flag the session
+    /// needs-import instead of silently dropping a truncated tail.
     /// </summary>
-    public readonly record struct NewTranscriptLines(List<string> Lines, List<int> LineNumbers, int NextPosition);
+    public readonly record struct NewTranscriptLines(
+        List<string> Lines,
+        List<int>    LineNumbers,
+        int          NextPosition,
+        bool         HeldIncompleteFinalLine = false);
+
+    /// <summary>
+    /// Policy for an unterminated (no trailing newline) final transcript line at drain time.
+    /// </summary>
+    public enum IncompleteFinalLinePolicy {
+        /// <summary>Every normal live drain: ALWAYS hold an unterminated final line — the agent is
+        /// mid-write of it, and consuming its truncated prefix would permanently drop the completed
+        /// line (AI-1243).</summary>
+        Hold,
+
+        /// <summary>The shutdown final drain (AI-1357 task 7): consume the unterminated final line
+        /// ONLY IF the exact bytes read parse as a complete JSON record; otherwise hold it. The
+        /// parseable-JSON check runs on the SAME bytes being consumed, so there is no TOCTOU with a
+        /// separate pre-read completeness probe — a line that resumed growing into an incomplete
+        /// record after any earlier probe is still held, never sent-and-advanced.</summary>
+        ConsumeIfComplete
+    }
 
     /// <summary>
     /// Split <paramref name="fileText"/> into the new complete (newline-terminated) transcript
@@ -1803,9 +2293,9 @@ static partial class WatchCommand {
     /// matching the long-standing drain behaviour.
     /// </summary>
     public static NewTranscriptLines SplitNewCompleteLines(
-            string fileText,
-            int    linesProcessed,
-            bool   holdIncompleteFinalLine = true
+            string                    fileText,
+            int                       linesProcessed,
+            IncompleteFinalLinePolicy policy = IncompleteFinalLinePolicy.Hold
         ) {
         var newLines       = new List<string>();
         var newLineNumbers = new List<int>();
@@ -1825,7 +2315,7 @@ static partial class WatchCommand {
         }
 
         return ApplyPartialLineHoldback(
-            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, holdIncompleteFinalLine);
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy);
     }
 
     /// <summary>
@@ -1837,10 +2327,10 @@ static partial class WatchCommand {
     /// Opened by the caller with FileShare.ReadWrite (Qodo #291 #1) so the writing agent is never blocked.
     /// </summary>
     internal static async Task<NewTranscriptLines> ReadNewCompleteLinesAsync(
-            FileStream        stream,
-            int               linesProcessed,
-            bool              holdIncompleteFinalLine,
-            CancellationToken ct) {
+            FileStream                stream,
+            int                       linesProcessed,
+            IncompleteFinalLinePolicy policy,
+            CancellationToken         ct) {
         var length = stream.Length;
 
         bool endsWithNewline;
@@ -1867,33 +2357,66 @@ static partial class WatchCommand {
         }
 
         return ApplyPartialLineHoldback(
-            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, holdIncompleteFinalLine);
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy);
     }
 
-    // Hold back a still-being-written final line (no trailing newline yet): keep the position
-    // before it and drop it from this batch if it was collected. The final drain at session end
-    // opts out (holdIncompleteFinalLine: false) — the file is static then, so an unterminated
-    // last line is genuinely the end and must be delivered, not lost. Shared by the string helper
-    // (SplitNewCompleteLines) and the streaming reader (ReadNewCompleteLinesAsync).
+    // Decide the fate of a still-being-written final line (no trailing newline yet). Under
+    // Hold (every live drain) it is always held back: the position stays before it and it is dropped
+    // from this batch, so a later drain re-reads it once newline-terminated — consuming its truncated
+    // prefix would permanently drop the completed line (AI-1243). Under ConsumeIfComplete (the
+    // shutdown final drain — AI-1357 task 7) it is consumed ONLY IF the exact bytes read parse as a
+    // complete JSON record; a still-growing/unparseable tail is held (never sent-and-advanced) and
+    // signalled via HeldIncompleteFinalLine so the caller can flag needs-import. Because the parse
+    // check runs on the bytes actually being consumed here, there is no TOCTOU with any earlier
+    // completeness probe. Shared by the string helper (SplitNewCompleteLines) and the streaming
+    // reader (ReadNewCompleteLinesAsync).
     static NewTranscriptLines ApplyPartialLineHoldback(
-            List<string> newLines,
-            List<int>    newLineNumbers,
-            int          nextPosition,
-            int          linesProcessed,
-            bool         endsWithNewline,
-            bool         holdIncompleteFinalLine) {
-        if (holdIncompleteFinalLine && !endsWithNewline && nextPosition > linesProcessed) {
-            var partialIndex = nextPosition - 1;
-
-            if (newLineNumbers.Count > 0 && newLineNumbers[^1] == partialIndex) {
-                newLines.RemoveAt(newLines.Count - 1);
-                newLineNumbers.RemoveAt(newLineNumbers.Count - 1);
-            }
-
-            nextPosition = partialIndex;
+            List<string>              newLines,
+            List<int>                 newLineNumbers,
+            int                       nextPosition,
+            int                       linesProcessed,
+            bool                      endsWithNewline,
+            IncompleteFinalLinePolicy policy) {
+        if (endsWithNewline || nextPosition <= linesProcessed) {
+            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
         }
 
-        return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+        var partialIndex = nextPosition - 1;
+        var hasPartial   = newLineNumbers.Count > 0 && newLineNumbers[^1] == partialIndex;
+
+        // Consume the unterminated final line only when the policy allows it AND the exact bytes
+        // read form a complete JSON record. Anything else (Hold, blank/whitespace partial, or an
+        // unparseable tail) is held back.
+        var consume = policy == IncompleteFinalLinePolicy.ConsumeIfComplete
+                      && hasPartial
+                      && IsCompleteJsonRecord(newLines[^1]);
+
+        if (consume) {
+            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+        }
+
+        if (hasPartial) {
+            newLines.RemoveAt(newLines.Count - 1);
+            newLineNumbers.RemoveAt(newLineNumbers.Count - 1);
+        }
+
+        // Only a real (non-blank) held line is "incomplete content" the caller must surface; a
+        // whitespace-only trailing partial carries nothing to lose.
+        return new NewTranscriptLines(newLines, newLineNumbers, partialIndex, HeldIncompleteFinalLine: hasPartial);
+    }
+
+    /// <summary>True if <paramref name="line"/> (a single, newline-less transcript line) parses as a
+    /// complete JSON document. Used to gate consuming an unterminated final line at shutdown.</summary>
+    static bool IsCompleteJsonRecord(string line) {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0) return false;
+
+        try {
+            using var _ = JsonDocument.Parse(trimmed);
+            return true;
+        } catch (JsonException) {
+            return false;
+        }
     }
 
     /// <summary>Read-only view of <c>inner</c> that reports EOF after <c>limit</c> bytes, so a

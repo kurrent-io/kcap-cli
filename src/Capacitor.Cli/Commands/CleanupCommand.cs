@@ -1,10 +1,10 @@
-using Capacitor.Cli.Core;
-
 namespace Capacitor.Cli.Commands;
 
 static class CleanupCommand {
     public static async Task<int> HandleCleanup() {
-        var watcherDir = PathHelpers.ConfigPath("watchers");
+        // Honor the KCAP_WATCHER_DIR override (via GetWatcherDir) so cleanup targets the same
+        // directory KillWatcher/SpawnWatcher use, rather than always the config default.
+        var watcherDir = WatcherManager.GetWatcherDir();
 
         if (!Directory.Exists(watcherDir)) {
             await Console.Out.WriteLineAsync("No watchers directory found.");
@@ -13,12 +13,6 @@ static class CleanupCommand {
         }
 
         var pidFiles = Directory.GetFiles(watcherDir, "*.pid");
-
-        if (pidFiles.Length == 0) {
-            await Console.Out.WriteLineAsync("No watcher PID files found.");
-
-            return 0;
-        }
 
         var killed  = 0;
         var cleaned = 0;
@@ -36,7 +30,14 @@ static class CleanupCommand {
             }
         }
 
-        await Console.Out.WriteLineAsync($"Done. Killed {killed} watcher(s), cleaned {cleaned} stale PID file(s).");
+        // Sweep any leftover per-key auxiliary files (heartbeat/started/spawnlock). KillWatcher
+        // removes the heartbeat/started markers per key but deliberately leaves spawn locks
+        // behind (unlink-race safety); cleanup holds no lock, so it's the safe place to purge
+        // them, and this also mops up orphans whose .pid was already gone (AI-1357 task 9).
+        var purged = WatcherManager.PurgeAuxiliaryFiles();
+
+        await Console.Out.WriteLineAsync(
+            $"Done. Killed {killed} watcher(s), cleaned {cleaned} stale PID file(s), purged {purged} auxiliary file(s).");
 
         return 0;
     }

@@ -83,15 +83,31 @@ public class SplitNewCompleteLinesTests {
     }
 
     [Test]
-    public async Task Final_drain_flushes_the_incomplete_final_line() {
-        // At session end the file is static — an unterminated final line is genuinely the end, so
-        // the final drain must deliver it (a vendor that never newline-terminates its last line
-        // must not lose it). Only the LIVE polling drain holds partial lines back.
-        var r = WatchCommand.SplitNewCompleteLines("a\nb\nc", 0, holdIncompleteFinalLine: false);
+    public async Task Final_drain_consumes_a_parseable_unterminated_final_line() {
+        // AI-1357 task 7: the shutdown final drain (ConsumeIfComplete) delivers an unterminated
+        // final line ONLY when it is a complete JSON record. Here the last line parses, so it is
+        // consumed and the position advances past it.
+        var r = WatchCommand.SplitNewCompleteLines(
+            "{\"a\":1}\n{\"b\":2}", 0, WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete);
 
-        await Assert.That(r.Lines).IsEquivalentTo(new[] { "a", "b", "c" });
-        await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 0, 1, 2 });
-        await Assert.That(r.NextPosition).IsEqualTo(3);
+        await Assert.That(r.Lines).IsEquivalentTo(new[] { "{\"a\":1}", "{\"b\":2}" });
+        await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 0, 1 });
+        await Assert.That(r.NextPosition).IsEqualTo(2);
+        await Assert.That(r.HeldIncompleteFinalLine).IsFalse();
+    }
+
+    [Test]
+    public async Task Final_drain_holds_an_unparseable_unterminated_final_line() {
+        // The core task-7 guard: a still-growing / truncated final record (no newline, does not
+        // parse) is HELD even by the final drain — never sent-and-advanced — and flagged so the
+        // caller can mark the session needs-import.
+        var r = WatchCommand.SplitNewCompleteLines(
+            "{\"a\":1}\n{\"b\":2", 0, WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete);
+
+        await Assert.That(r.Lines).IsEquivalentTo(new[] { "{\"a\":1}" });
+        await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 0 });
+        await Assert.That(r.NextPosition).IsEqualTo(1);
+        await Assert.That(r.HeldIncompleteFinalLine).IsTrue();
     }
 
     [Test]

@@ -139,10 +139,23 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
+    // AI-1357 task 7: set by the shutdown final drain (isFinalDrain) when it held back an
+    // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
+    // the final drain to flag the session needs-import (never drop a truncated tail).
+    public bool FinalDrainHeldIncompleteLine { get; set; }
+
     // Last wall-clock time new transcript content was observed on the rollout file.
     // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
     // Initialized when the watcher starts; updated in DrainNewLines on new lines.
     public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
+
+    // AI-1359: idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
+    // connection drops and cleared when it returns; AccumulatedDisconnected sums the disconnected
+    // durations SINCE the last transcript activity (reset to zero when LastActivityAt advances).
+    // ShouldEndOnIdle subtracts it so a transient outage isn't counted as idleness, while a
+    // genuinely idle session still ends after the configured CONNECTED-idle budget.
+    public DateTimeOffset? DisconnectedSince       { get; set; }
+    public TimeSpan        AccumulatedDisconnected { get; set; }
 
     // Tracks Codex tool-call call_ids that are currently in flight (started but
     // not yet finished). A function_call/custom_tool_call response_item adds the
@@ -174,6 +187,19 @@ class WatchState {
     // /hooks/antigravity/subagent-link for this parent watcher. A child stays OUT of this set
     // until its link POST succeeds, so a failed POST retries on the next scan (fail-open).
     public HashSet<string> PostedSubagentLinks { get; } = new(StringComparer.Ordinal);
+
+    // AI-1357 task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
+    // synthetic KiroUsageBackfilled line, so a later drain never re-emits the same anchor. Mirrors
+    // LastAntigravityGenIdx above, but keyed on the anchor string rather than a row index because
+    // Kiro's sidecar has no stable ordinal — committed ONLY after a successful send (see
+    // KiroUsagePendingAnchors).
+    public HashSet<string> KiroUsageEmittedAnchors { get; } = new(StringComparer.Ordinal);
+
+    // Anchors staged by the most recent AppendKiroUsageBackfillLines call but not yet committed
+    // to KiroUsageEmittedAnchors. The watcher commits them into the set above only once the batch
+    // carrying their synthetic lines lands; a failed send leaves this list to be recomputed (and
+    // re-staged) fresh on the next drain, so nothing is lost.
+    public List<string> KiroUsagePendingAnchors { get; } = [];
 
     public const int TranscriptThreshold = 10;
 }

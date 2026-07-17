@@ -97,6 +97,10 @@ static class CopilotHookCommand {
             return 0;
         }
 
+        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
@@ -110,7 +114,7 @@ static class CopilotHookCommand {
         }
 
         return eventName switch {
-            "sessionStart" => await HandleSessionStart(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile),
+            "sessionStart" => await HandleSessionStart(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile, spool),
             "sessionEnd"   => await HandleSessionEnd(baseUrl, node, dashedSessionId, sessionId, cwd),
             "agentStop"    => await HandleAgentStop(baseUrl, node, dashedSessionId, sessionId, cwd),
             "notification" => await HandleNotification(baseUrl, node, sessionId, cwd),
@@ -124,7 +128,8 @@ static class CopilotHookCommand {
             string    dashedSessionId,
             string    sessionId,
             string?   cwd,
-            Profile?  activeProfile
+            Profile?  activeProfile,
+            HookSpool spool
         ) {
         var source = TryGetString(node, "source") is { Length: > 0 } s ? s : "startup";
 
@@ -173,11 +178,14 @@ static class CopilotHookCommand {
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/copilot", enriched);
+        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
+        // permanent failure keeps the prior non-zero exit and skips the watcher.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/copilot", enriched, "copilot-hook",
+            spool, sessionId, route: "session-start/copilot");
 
-        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
-        // way skip the watcher — on a lapse its POSTs would 401 too.
-        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         await EnsureWatcherAsync(baseUrl, dashedSessionId, sessionId, node, cwd);
         return 0;
