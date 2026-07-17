@@ -301,6 +301,31 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
 
+    /// <summary>AI-1313 Phase B (D3): clock seam so the reviewer-TTL heartbeat check is testable with a
+    /// fixed time. Production uses the real UTC clock.</summary>
+    internal Func<DateTime> ClockUtc { get; set; } = () => DateTime.UtcNow;
+
+    /// <summary>AI-1313 Phase B (D3): the ReviewFlow agents the heartbeat should reap now — past
+    /// <see cref="DaemonConfig.ReviewerMaxLifetime"/> (reason <c>reviewer_ttl_expired</c>) or
+    /// <see cref="DaemonConfig.ReviewerIdleTimeout"/> (reason <c>reviewer_idle_expired</c>). Only
+    /// Running ReviewFlow agents; a <see cref="TimeSpan.Zero"/> bound disables it; interactive agents
+    /// are never returned. Pure (no side effects) so the heartbeat and tests share one decision.</summary>
+    internal IReadOnlyList<(string Id, string Reason)> FindReviewersToReap() {
+        var now    = ClockUtc();
+        var result = new List<(string, string)>();
+
+        foreach (var a in _agents.Values) {
+            if (a.Kind != LaunchKind.ReviewFlow || a.Status != "Running") continue;
+
+            if (_config.ReviewerMaxLifetime > TimeSpan.Zero && now - a.CreatedAt > _config.ReviewerMaxLifetime)
+                result.Add((a.Id, "reviewer_ttl_expired"));
+            else if (_config.ReviewerIdleTimeout > TimeSpan.Zero && now - a.LastOutputAt > _config.ReviewerIdleTimeout)
+                result.Add((a.Id, "reviewer_idle_expired"));
+        }
+
+        return result;
+    }
+
     /// <summary>AI-1313 Phase B (D2): one <see cref="LiveAgentInfo"/> per currently-live (Starting or
     /// Running), non-private agent, carrying its kind + flow identity. Mirrors the
     /// <see cref="ServerConnection.GetLiveAgentIds"/> filter (private-local agents excluded).</summary>
@@ -1519,6 +1544,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
         while (await _heartbeatTimer.WaitForNextTickAsync(ct)) {
+            // AI-1313 Phase B (D3): reap review-flow reviewers past their lifetime/idle backstop. Done
+            // before the per-agent loop so a reaped reviewer isn't also heartbeated this tick. Reason
+            // stamped on PendingEndReason so the end attribution is correct even if HandleStopAgent's
+            // own end call loses to the read-loop's.
+            foreach (var (id, reason) in FindReviewersToReap()) {
+                if (_agents.TryGetValue(id, out var reviewer)) {
+                    _logger.LogInformation(
+                        "Reaping review-flow reviewer {AgentId} ({Reason}); age {AgeHours:F1}h, idle {IdleHours:F1}h",
+                        id, reason, (ClockUtc() - reviewer.CreatedAt).TotalHours, (ClockUtc() - reviewer.LastOutputAt).TotalHours);
+                    reviewer.PendingEndReason = reason;
+                    _ = HandleStopAgent(id);
+                }
+            }
+
             // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
             // the local user is present and drives them directly).
             foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {

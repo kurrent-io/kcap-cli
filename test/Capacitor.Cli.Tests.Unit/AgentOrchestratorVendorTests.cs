@@ -58,7 +58,8 @@ public partial class AgentOrchestratorVendorTests {
             IPtyProcessFactory                                  ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher>   launchers,
             string?                                             allowedRepoPath        = null,
-            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null
+            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null,
+            Action<DaemonConfig>?                               configure              = null
         ) {
         var config = new DaemonConfig {
             Name                = "test",
@@ -71,6 +72,8 @@ public partial class AgentOrchestratorVendorTests {
         if (allowedRepoPath is not null) {
             config.AllowedRepoPaths = [allowedRepoPath];
         }
+
+        configure?.Invoke(config); // AI-1313 Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);

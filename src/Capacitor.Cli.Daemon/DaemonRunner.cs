@@ -62,6 +62,10 @@ public static partial class DaemonRunner {
             }
         }
 
+        // AI-1313 Phase B (D3): reviewer lifetime/idle backstop overrides from env (seconds; 0 disables).
+        config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
+        config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);
+
         // AI-1155: reopen fds 1/2 onto the capture file BEFORE building the host,
         // so even a crash during construction lands somewhere. On the detached
         // launch path the CLI closed our std pipes; without this a runtime/native
@@ -429,6 +433,15 @@ public static partial class DaemonRunner {
         "none"                         => LogLevel.None,
         _                              => null
     };
+
+    /// <summary>AI-1313 Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
+    /// (<c>0</c> → <see cref="TimeSpan.Zero"/>, which disables the bound). Unset/blank/invalid/negative
+    /// → the supplied <paramref name="fallback"/>.</summary>
+    internal static TimeSpan ParseSecondsEnv(string name, TimeSpan fallback) {
+        var raw = Environment.GetEnvironmentVariable(name);
+
+        return int.TryParse(raw, out var secs) && secs >= 0 ? TimeSpan.FromSeconds(secs) : fallback;
+    }
 
     /// <summary>
     /// Parses <c>KCAP_ACP_DEBUG_FRAMES</c> ("1"/"true", case-insensitive, are On; anything else —
