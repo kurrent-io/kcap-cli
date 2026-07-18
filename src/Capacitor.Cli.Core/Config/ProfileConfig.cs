@@ -26,7 +26,7 @@ public record ProfileConfig {
     [JsonPropertyName("cwd_remap")]
     public CwdRemap[] CwdRemap { get; init; } = [];
 
-    // AI-1134: stable machine identity for machine-tagged memories. Generated once by
+    // stable machine identity for machine-tagged memories. Generated once by
     // MachineIdProvider; never rotated (rotation orphans previously tagged memories).
     [JsonPropertyName("machine_id")]
     public string? MachineId { get; init; }
@@ -54,7 +54,7 @@ public record Profile {
     public bool? DisableSessionGuidelines { get; init; }
 
     /// <summary>
-    /// AI-1165 — when true, kcap skips injecting the team-memory index at SessionStart.
+    /// when true, kcap skips injecting the team-memory index at SessionStart.
     /// Independent of <see cref="DisableSessionGuidelines"/> so the recurring-lessons and
     /// memory-index injections can be toggled separately.
     /// </summary>
@@ -65,7 +65,7 @@ public record Profile {
     /// When true, kcap keeps <c>ANTHROPIC_API_KEY</c> / <c>OPENAI_API_KEY</c>
     /// in the spawn environment for headless agent CLIs (title generation,
     /// summaries, judges). Default <c>false</c> scrubs them so subscription
-    /// auth (claude.ai / ChatGPT account) is used instead — see AI-755.
+    /// auth (claude.ai / ChatGPT account) is used instead.
     /// Override at runtime with <c>KCAP_USE_PROVIDER_API_KEY=1</c>.
     /// </summary>
     [JsonPropertyName("use_provider_api_key")]

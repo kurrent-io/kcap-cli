@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="WatchCommand.ExtractAndPostSubagentLinks"/> (AI-1218 redesign): the
+/// Unit tests for <see cref="WatchCommand.ExtractAndPostSubagentLinks"/> (redesign): the
 /// live-watcher scan that links Antigravity subagents from the parent transcript's
 /// INVOKE_SUBAGENT steps (the spawn-time signal) instead of the child-reports-back
 /// <c>messages/*.json</c> scan. Drives the extraction+POST composition directly since

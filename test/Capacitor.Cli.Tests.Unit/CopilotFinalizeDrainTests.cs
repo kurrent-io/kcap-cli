@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Pure detection logic for the Copilot finalize drain (AI-897): the drainer
+/// Pure detection logic for the Copilot finalize drain: the drainer
 /// treats a terminal <c>session.shutdown</c> line as "the tail is complete".
 /// </summary>
 public class CopilotFinalizeDrainLastLineTests {
@@ -65,7 +65,7 @@ public class CopilotFinalizeDrainLastLineTests {
 }
 
 /// <summary>
-/// End-to-end timing behaviour of the Copilot finalize drain (AI-897), driven
+/// End-to-end timing behaviour of the Copilot finalize drain, driven
 /// through the testable <see cref="CopilotFinalizeDrainCommand.RunAsync"/> seam
 /// against a mock server. Mirrors the existing InlineDrain WireMock harness:
 /// auth discovery degrades to "None" (no live server at the resolved default),
@@ -185,7 +185,7 @@ public class CopilotFinalizeDrainRunTests : IDisposable {
     public async Task TimeoutFallback_DrainsExistingTail_WhenShutdownNeverArrives() {
         // Copilot crash / shutdown never written: the budget elapses but the
         // finalizer must still deliver the final assistant turn it can see
-        // (the secondary AI-897 risk — a dropped final turn).
+        // (the secondary risk — a dropped final turn).
         const string sessionId = "test-finalize-timeout";
         StubServer(sessionId);
 

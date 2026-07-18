@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// between a process that exited before establishing a real session (auth
 /// error, missing config, immediate crash) and a real session that ended.
 ///
-/// Regression for AI-572: a user who types <c>/exit</c> shortly after starting
+/// Regression for: a user who types <c>/exit</c> shortly after starting
 /// the agent was being mislabeled as "failed during startup" because the prior
 /// implementation used wall-clock time since spawn instead of output flow.
 /// </summary>
@@ -57,7 +57,7 @@ public class AgentStartupFailureTests {
 
     [Test]
     public async Task UserExitedAfterShortInteractiveSession_IsNotStartupFailure() {
-        // AI-572 scenario: agent ran for ~27 seconds, user typed /exit. The
+        // scenario: agent ran for ~27 seconds, user typed /exit. The
         // 30-second wall-clock window misclassified this as a startup failure.
         // Output flowed throughout, so the spawn → last-output gap is large.
         var result = AgentOrchestrator.IsStartupFailure(

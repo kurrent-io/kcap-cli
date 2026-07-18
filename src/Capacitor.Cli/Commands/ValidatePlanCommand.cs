@@ -14,7 +14,7 @@ static class ValidatePlanCommand {
 
     /// <summary>
     /// Test-friendly core: caller owns the <see cref="HttpClient"/> (mirrors
-    /// <see cref="ClaudeHookCommand.HandleCore"/>'s seam). Two-call flow (AI-701):
+    /// <see cref="ClaudeHookCommand.HandleCore"/>'s seam). Two-call flow:
     /// <c>GET /api/sessions/{id}/plan-artifacts?chain=true</c> for the discovered plan
     /// artifact set, then the existing <c>GET /api/sessions/{id}/recap?chain=true</c> for
     /// current-session work rows and AI-generated "what's done" summaries. A 404 on the
@@ -22,7 +22,7 @@ static class ValidatePlanCommand {
     /// to <see cref="RenderLegacyAsync"/> — the original recap-only behavior, unchanged.
     /// Exit codes: 0 for a normal render or "no plan found" (absence is a valid answer); 2
     /// when the PRIMARY artifact's content is unavailable (validation genuinely isn't
-    /// possible); 1 for transport/HTTP errors (AI-701 review finding 3).
+    /// possible); 1 for transport/HTTP errors.
     /// </summary>
     internal static async Task<int> HandleCore(HttpClient httpClient, string baseUrl, string sessionId) {
         HttpResponseMessage artifactsResp;
@@ -101,7 +101,7 @@ static class ValidatePlanCommand {
         var primaryUnavailable = await RenderPlanArtifacts(primary, artifacts);
         await RenderWhatsDoneAndInstructions(summaries, work);
 
-        // AI-701 review finding 3: an unavailable PRIMARY means validation genuinely couldn't
+        // review finding 3: an unavailable PRIMARY means validation genuinely couldn't
         // happen — distinct from both success (0, including the "no plan found" case above,
         // where absence of a plan is itself a valid answer) and a generic error (1).
         return primaryUnavailable ? 2 : 0;
@@ -112,7 +112,7 @@ static class ValidatePlanCommand {
     /// exists but hasn't resolved yet, so this is the last known complete text. Single-sourced
     /// here (rather than referenced from the server) because the CLI has no dependency on
     /// <c>Capacitor.Server</c>; text and spacing must stay byte-for-byte identical to the
-    /// server's <c>PlanRowRendering.DegradedText</c> (AI-701 review finding).
+    /// server's <c>PlanRowRendering.DegradedText</c>.
     /// </summary>
     const string DegradedMarker = "[plan state: unresolved newer revision — last known complete text]";
 
@@ -130,7 +130,7 @@ static class ValidatePlanCommand {
     /// <returns>
     /// <c>true</c> when the PRIMARY artifact's content could not be retrieved
     /// (<c>content_state == "unavailable"</c>) — the caller uses this to exit 2 instead of 0
-    /// (AI-701 review finding 3): distinguishable from success (0) and from a generic error (1).
+    /// distinguishable from success (0) and from a generic error (1).
     /// </returns>
     static async Task<bool> RenderPlanArtifacts(PlanArtifactDto? primary, IReadOnlyList<PlanArtifactDto> artifacts) {
         var ordered = primary is null
@@ -151,7 +151,7 @@ static class ValidatePlanCommand {
                 await Console.Out.WriteLineAsync(DegradedMarker);
             }
 
-            // "truncated" with null Content is treated like "unavailable" (AI-701 review
+            // "truncated" with null Content is treated like "unavailable" (review
             // finding 2): the server contract pairs content_state=="truncated" with non-null
             // Content, but a malformed/edge response with Content == null must not render the
             // nonsensical "first 0 of ... bytes" — fall through to the unavailable placeholder.
@@ -164,7 +164,7 @@ static class ValidatePlanCommand {
                     var n = Encoding.UTF8.GetByteCount(artifact.Content!);
                     // OriginalBytes is nullable — a well-formed truncated artifact always
                     // carries it, but fall back to "?" rather than emit "of  bytes" if it's
-                    // ever missing (AI-701 review finding 2).
+                    // ever missing.
                     var total = artifact.OriginalBytes?.ToString() ?? "?";
                     await Console.Out.WriteLineAsync($"[plan truncated: first {n} of {total} bytes]");
                     await Console.Out.WriteLineAsync(artifact.Content!);
@@ -238,7 +238,7 @@ static class ValidatePlanCommand {
     }
 
     /// <summary>
-    /// Original (pre-AI-701) recap-only behavior, preserved byte-for-byte for old servers that
+    /// Original recap-only behavior, preserved byte-for-byte for old servers that
     /// don't yet expose <c>GET /api/sessions/{id}/plan-artifacts</c> (or a session/candidate the
     /// route can't resolve). Plans come from <c>recap</c> entries of type "plan" across the
     /// session chain; work/summaries are filtered exactly as before.

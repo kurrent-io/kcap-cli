@@ -144,7 +144,7 @@ static partial class ProcessHelpers {
     /// the transcript watcher.
     /// </summary>
     /// <remarks>
-    /// Background (AI-820): hooks are invoked by the coding agent (Claude/Codex) with their
+    /// Background: hooks are invoked by the coding agent (Claude/Codex) with their
     /// stdio wired to pipes the agent reads. .NET's <see cref="System.Diagnostics.Process"/>
     /// always passes <c>bInheritHandles: true</c> to <c>CreateProcess</c> when any stream is
     /// redirected, so a watcher spawned from inside a hook inherits the hook process's own
@@ -189,7 +189,7 @@ static partial class ProcessHelpers {
                 return;
             }
 
-            // SetHandleInformation genuinely failed on a valid handle: the AI-820
+            // SetHandleInformation genuinely failed on a valid handle: the
             // mitigation did not apply, so a spawned watcher may still inherit this
             // pipe and reintroduce the hang/leak. Surface one diagnostic per process
             // (don't spam the agent's hook output) and never throw.
@@ -269,7 +269,7 @@ static partial class ProcessHelpers {
             // Walk the ppid ancestry by process name to skip the transient per-hook
             // executor. GetParentPidWindows() alone returns that executor, which has
             // usually already exited by the time the watcher boots — so the parent-PID
-            // watchdog saw a dead PID at startup and silently never armed (AI-822).
+            // watchdog saw a dead PID at startup and silently never armed.
             // Falls back to the immediate parent when no agent is found on the chain
             // (preserving prior behaviour for the no-vendor / unmatched cases). PID reuse
             // is a known Windows hazard for ppid walks, but the by-name match means a
@@ -345,7 +345,7 @@ static partial class ProcessHelpers {
     /// Returns <c>(ppid, comm)</c> for an arbitrary live PID, or null if the process
     /// can't be inspected (gone, access denied, or unsupported platform). Feeds the
     /// ancestry walk in <see cref="ResolveCodingAgentPid"/> on every platform — the
-    /// Windows implementation (AI-822) reads the parent PID via
+    /// Windows implementation reads the parent PID via
     /// <c>NtQueryInformationProcess</c> and the image name via
     /// <c>QueryFullProcessImageName</c>.
     /// </summary>
@@ -585,7 +585,7 @@ static partial class ProcessHelpers {
 
         // Match the vendor token OR `{vendor}-cli`. The bounded `-cli` tolerance fixes the Kiro
         // watchdog, whose durable process image is `kiro-cli` while its vendor token is `kiro`
-        // (AI-1359); the clean-stem gate above keeps it from over-matching unrelated processes.
+        // The clean-stem gate above keeps it from over-matching unrelated processes.
         return stem.Equals(vendor, StringComparison.OrdinalIgnoreCase)
             || stem.Equals($"{vendor}-cli", StringComparison.OrdinalIgnoreCase);
     }

@@ -57,7 +57,7 @@ public class KiroUsageTests {
         await Assert.That(KiroUsage.AnchorMap(json).Count).IsEqualTo(0);
     }
 
-    // ── token-count hedge (AI-1196) ──────────────────────────────────────────
+    // ── token-count hedge ──────────────────────────────────────────
     // Kiro's schema carries input/output_token_count per turn and a session model
     // id, but the CLI persists them as 0 today (upstream aws#2397). When a future
     // release populates them, the CLI must forward the (non-zero) counts + model so

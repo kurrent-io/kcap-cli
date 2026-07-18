@@ -101,9 +101,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <c>session/prompt</c> turn's response, awaiting and recording the connection's reply before
     /// answering the prompt itself with the default <c>end_turn</c> result. This finally wires the
     /// builder helpers <see cref="BuildRequestPermissionFrame"/>/<see cref="PermissionOutcomeSelected"/>/
-    /// <see cref="PermissionOutcomeCancelled"/> into the fake's active dispatch loop — AI-684 Task 8
+    /// <see cref="PermissionOutcomeCancelled"/> into the fake's active dispatch loop — Task 8
     /// built them but deliberately left them unwired (see this file's original remarks), since the
-    /// permission bridge itself was AI-686's job.
+    /// permission bridge itself was Task 9's job.
     /// </summary>
     public void EnqueuePermissionRequestDuringNextPrompt(string toolCallJson, string optionsJson) {
         _pendingServerRequestToolCallJson = toolCallJson;
@@ -162,7 +162,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Overrides the <c>session/new</c> response this fake returns for every subsequent
     /// <c>session/new</c> request (default: <see cref="ProbeConfirmedSessionNewResult"/>, a single
-    /// <c>composer-2.5[fast=true]</c> model) — AI-688 gap 1 model-selection tests use this to script
+    /// <c>composer-2.5[fast=true]</c> model) — gap 1 model-selection tests use this to script
     /// a richer <c>models.availableModels</c> list + <c>currentModelId</c>.
     /// <see cref="BuildSessionNewResult"/> is the easiest way to build a well-formed override.
     /// </summary>
@@ -170,7 +170,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>
     /// Arranges the NEXT <c>session/set_config_option</c> request to be answered with a JSON-RPC
-    /// error instead of a success result (AI-688 gap 1) — models a real agent rejecting the
+    /// error instead of a success result — models a real agent rejecting the
     /// resolved model id, exercising <c>AcpHostedAgentRuntime</c>'s non-fatal "log a warning and
     /// continue with Cursor's default model" handling.
     /// </summary>
@@ -179,7 +179,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Overrides the <c>initialize</c> response this fake returns for every subsequent
     /// <c>initialize</c> request (default: <see cref="ProbeConfirmedInitializeResult"/>, protocol
-    /// version 1 with <c>loadSession: true</c>) — AI-689 protocol-negotiation tests use this to
+    /// version 1 with <c>loadSession: true</c>) — protocol-negotiation tests use this to
     /// script a mismatched <c>protocolVersion</c> or a missing/false <c>agentCapabilities</c>.
     /// <see cref="BuildInitializeResult"/> is the easiest way to build a well-formed override.
     /// </summary>
@@ -187,13 +187,13 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>
     /// Arranges the NEXT <c>initialize</c> request to be answered with a JSON-RPC error instead of
-    /// a success result (AI-689) — models a logged-out/unsubscribed <c>cursor-agent</c> rejecting
+    /// a success result — models a logged-out/unsubscribed <c>cursor-agent</c> rejecting
     /// the handshake, exercising <c>AcpHostedAgentRuntime.StartAsync</c>'s auth/subscription hint.
     /// </summary>
     public void FailNextInitialize(int code, string message) => _failNextInitialize = (code, message);
 
     /// <summary>
-    /// Convenience builder for a caller-controlled <c>initialize</c> result (AI-689) — narrower than
+    /// Convenience builder for a caller-controlled <c>initialize</c> result — narrower than
     /// the full <see cref="ProbeConfirmedInitializeResult"/> fixture, carrying only the two fields
     /// <c>AcpHostedAgentRuntime.StartAsync</c> actually reads: <paramref name="protocolVersion"/>
     /// and, when non-null, an <c>agentCapabilities.loadSession</c> flag. Passing
@@ -217,7 +217,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Convenience builder for a probe-shaped <c>session/new</c> result (AI-688 gap 1) with a
+    /// Convenience builder for a probe-shaped <c>session/new</c> result with a
     /// caller-controlled <c>models.availableModels</c> list + <c>currentModelId</c>.
     /// <paramref name="availableModels"/> entries are <c>(modelId, name)</c> pairs.
     /// </summary>
@@ -252,7 +252,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// When set, every <c>session/prompt</c> request's RESPONSE (not the queued updates, if any) is
     /// held back until <paramref name="gate"/> completes — the fake still records the call
     /// immediately (so <see cref="ReceivedCalls"/> observes it right away), it just doesn't answer.
-    /// Models a real agent mid-turn: used by AI-684 Fix E tests to prove
+    /// Models a real agent mid-turn: used by Fix E tests to prove
     /// <c>AcpHostedAgentRuntime.StartAsync</c>/<c>SendUserInputAsync</c> return promptly WITHOUT
     /// waiting for the turn's <c>stopReason</c> response, instead of the pre-fix behavior where
     /// both awaited the full round trip. Set to <see langword="null"/> (the default) to answer
@@ -280,7 +280,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
-                // AI-686: dispatched as untracked background work rather than awaited in-loop.
+                // dispatched as untracked background work rather than awaited in-loop.
                 // EnqueuePermissionRequestDuringNextPrompt's session/request_permission send-and-await
                 // (SendServerRequestAndAwaitResponseAsync) is itself triggered from a session/prompt's
                 // dispatch — its TaskCompletionSource can only be completed by THIS SAME loop reading
@@ -324,8 +324,8 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         if (!hasMethod) {
             // A frame with no "method" is either the connection's reply to one of THIS fake's own
             // session/request_permission sends (id in _pendingFakeRequests), or an unrelated
-            // response the fake doesn't care about — never expected in AI-684/686's scripts other
-            // than this new path, but guarded defensively.
+            // response the fake doesn't care about — never expected in this fixture's scripts
+            // other than this new path, but guarded defensively.
             if (hasId && idElement.TryGetInt64(out var replyId)) {
                 TaskCompletionSource<(JsonElement?, JsonElement?)>? pending;
                 lock (_sentServerRequestsLock) _pendingFakeRequests.Remove(replyId, out pending);
@@ -406,7 +406,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     }
 
     /// <summary>
-    /// AI-688 gap 1: answers a <c>session/set_config_option</c> request — either the scripted
+    /// gap 1: answers a <c>session/set_config_option</c> request — either the scripted
     /// JSON-RPC error (see <see cref="FailNextSetConfigOption"/>) or a probe-shaped success result
     /// echoing back the requested <c>value</c> as the <c>model</c> config option's
     /// <c>currentValue</c>, mirroring the real agent's confirmed response shape
@@ -579,7 +579,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     // ---- spec-derived (NOT probe-confirmed) helper builders ----
     //
-    // The AI-684 probe account was plan-gated before any tool-call turn completed, so none of the
+    // The probe account was plan-gated before any tool-call turn completed, so none of the
     // variants below were ever observed on the wire (see docs/acp-probe-findings.md, "sessionUpdate
     // variants observed" and "Recommended follow-up"). They are built from the published ACP spec
     // only. Re-verify each against docs/acp-probe-findings.md's "Recommended follow-up" once a
@@ -601,7 +601,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
     /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"...","rawInput":{...}}</c>
-    /// (<c>rawInput</c> only when <paramref name="rawInputJson"/> is non-null — AI-688 task 1's
+    /// (<c>rawInput</c> only when <paramref name="rawInputJson"/> is non-null — task 1's
     /// <c>AcpSessionUpdate.Reduce()</c> extraction target for <c>ToolInputJson</c>).
     /// <paramref name="status"/> is one of <c>pending</c> / <c>in_progress</c> / <c>completed</c> / <c>failed</c>.
     /// </summary>
@@ -630,7 +630,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
     /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"...","content":[{"type":"content","content":{"type":"text","text":"..."}}],"rawOutput":{...}}</c>
     /// — <c>content</c>/<c>rawOutput</c> are included only when <paramref name="resultText"/>/
-    /// <paramref name="rawOutputJson"/> are non-null (AI-688 task 1's
+    /// <paramref name="rawOutputJson"/> are non-null (task 1's
     /// <c>AcpSessionUpdate.Reduce()</c> extraction targets for <c>ToolResultText</c>: the ACP-spec
     /// <c>ToolCallContent</c> text-block shape, falling back to <c>rawOutput</c> verbatim).
     /// </summary>
@@ -685,7 +685,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <paramref name="toolCallJson"/> and <paramref name="optionsJson"/> are raw JSON text for the
     /// nested objects, left as caller-supplied strings since their exact shape is unconfirmed.
     /// Task 8 does not wire this into <see cref="RunAsync"/>'s dispatch loop — a documented builder
-    /// is sufficient for this fixture's scope; Task 9 (AI-686) wires the actual permission bridge.
+    /// is sufficient for this fixture's scope; Task 9 wires the actual permission bridge.
     /// The two possible client response shapes are documented on
     /// <see cref="PermissionOutcomeSelected"/> / <see cref="PermissionOutcomeCancelled"/>.
     /// </summary>

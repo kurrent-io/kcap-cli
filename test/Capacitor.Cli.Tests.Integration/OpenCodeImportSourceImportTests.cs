@@ -192,7 +192,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 
     [Test]
     public async Task ImportSession_imports_a_three_level_chain_flattened_as_direct_subagents_of_root() {
-        // AI-1383 D3: a grandchild (parent_id → child → grandchild) must NOT be silently
+        // a grandchild (parent_id → child → grandchild) must NOT be silently
         // dropped — both descendants import as DIRECT subagents of the top-level root (the
         // existing flatten shape; Model A's stream key can't express deeper nesting).
         _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
@@ -237,7 +237,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 
     [Test]
     public async Task ImportSession_posts_session_end_even_when_a_descendant_subagent_start_fails() {
-        // AI-1383 D3 item 4 (finally-style re-close): a subagent-start posted against this
+        // D3 item 4 (finally-style re-close): a subagent-start posted against this
         // root may reactivate it if it was already Ended — so the session-end re-assertion
         // must run regardless of a descendant lifecycle failure. Previously OpenCode's early
         // `Failed` return here bailed before ever posting session-end.
@@ -303,7 +303,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 
     [Test]
     public async Task ledger_version_bump_invalidates_a_pre_upgrade_direct_only_fingerprint() {
-        // AI-1383 D3: a ledger entry recorded before recursive descendant discovery shipped
+        // a ledger entry recorded before recursive descendant discovery shipped
         // covered only the parent + direct children. Simulate that stale entry directly (any
         // fingerprint computed under the OLD scheme differs from the new one, which always
         // carries the version marker) and confirm re-classification picks up the grandchild
@@ -393,7 +393,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 
     [Test]
     public async Task ImportSession_reasserts_session_end_and_still_propagates_cancellation_after_a_descendant_reactivates_root() {
-        // AI-1383 D3 review fix #1: cancellation arriving AFTER a descendant lifecycle already
+        // cancellation arriving AFTER a descendant lifecycle already
         // reactivated the root must NOT skip the finally-style re-close, or the root is left
         // stuck Active. Two descendants: once the FIRST one's subagent-start/content/stop fully
         // lands (any of which could reactivate an already-Ended root server-side), cancellation
@@ -436,7 +436,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 
     [Test]
     public async Task ImportSession_propagates_cancellation_arriving_during_title_cleanup_and_never_marks_ledger_complete() {
-        // AI-1383 D3 review fix #4: the round-1 fix (above) only recorded a cancellation THROWN
+        // the round-1 fix (above) only recorded a cancellation THROWN
         // BY ImportDescendantsAsync. A cancellation arriving AFTER descendants finish — while
         // step 4's PostSetTitleAsync is awaited, which swallows OperationCanceledException
         // internally — used to be silently lost: session-end always runs with
@@ -492,10 +492,10 @@ public class OpenCodeImportSourceImportTests : IDisposable {
     // NotInParallel with NO group key — globally sequential, mirroring
     // ClaudeHookStdoutTests: this test redirects the process-global Console.Error, and a group
     // key alone wouldn't stop an unrelated test under a different key from writing to stderr
-    // concurrently and leaking into the capture (AI-737).
+    // concurrently and leaking into the capture.
     [Test, NotInParallel]
     public async Task new_depth_9_descendant_invalidates_the_fingerprint_and_reimports_with_omitted_warning() {
-        // AI-1383 D3 review fix #2: the completeness fingerprint used to hash only the IN-CAP
+        // the completeness fingerprint used to hash only the IN-CAP
         // descendant list, so a descendant added BELOW the depth cap (which never changes the
         // in-cap set) left the fingerprint unchanged and the ledger stuck AlreadyLoaded forever
         // — even though the new descendant should at least be surfaced via descendants_omitted.

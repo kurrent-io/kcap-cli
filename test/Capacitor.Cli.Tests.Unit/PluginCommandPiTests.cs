@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.Pi;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Plugin-dispatch tests for the Pi live-ingest extension (AI-886). Pi has no
+/// Plugin-dispatch tests for the Pi live-ingest extension. Pi has no
 /// hook file — its integration is the <c>~/.pi/agent/extensions/kcap.ts</c>
 /// extension, installed by <c>kcap plugin install --pi</c>, refreshed via
 /// <c>--if-installed</c>, removed by <c>kcap plugin remove --pi</c>. The npm

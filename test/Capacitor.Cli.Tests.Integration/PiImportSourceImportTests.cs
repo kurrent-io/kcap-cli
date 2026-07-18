@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Routed-import wire-contract tests for <see cref="PiImportSource"/> (AI-886).
+/// Routed-import wire-contract tests for <see cref="PiImportSource"/>.
 /// Pi classifications carry <c>FilePath = ""</c>, so they run through the
 /// routed phase (<c>ImportSessionAsync</c>) rather than the chain worker. These
 /// drive the full discover → classify → import path against a stub server and

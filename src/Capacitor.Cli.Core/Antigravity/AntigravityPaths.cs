@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Core.Antigravity;
 
 /// <summary>
-/// Filesystem layout for Google Antigravity (AI-1157/AI-1158). Antigravity is a
+/// Filesystem layout for Google Antigravity. Antigravity is a
 /// GUI IDE (VS Code fork, Windsurf/Codeium lineage) whose agent state lives under
 /// the SHARED <c>~/.gemini</c> home in an <c>antigravity</c> subdir (so paths reuse
 /// <see cref="GeminiPaths.Root"/> and honor <c>GEMINI_CLI_HOME</c>). Each conversation
@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Core.Antigravity;
 /// kcap control hooks. Per-workspace installs live under <c>&lt;root&gt;/.agents/plugins/kcap/</c>.
 /// ⚠️ The <c>~/.gemini/antigravity-cli/</c> dir is the <c>agy</c> CLI's config root — the
 /// GUI does NOT read it, so installing hooks there (as #256 originally did) is invisible
-/// to the running IDE (AI-1158 GUI re-test).
+/// to the running IDE (GUI re-test).
 ///
 /// ⚠️ <c>~/.gemini</c> is shared with the Gemini CLI — <see cref="GeminiPaths.IsInstalled"/>
 /// must require a Gemini-specific marker so an Antigravity-only home doesn't read as
@@ -79,7 +79,7 @@ public static class AntigravityPaths {
     public static string? ConversationDbFromTranscript(string transcriptPath) {
         // Require the EXACT shape …/brain/<id>/.system_generated/logs/transcript_full.jsonl —
         // validate each segment so an unexpected path fails open (returns null) instead of
-        // being mapped to a guessed <root>/conversations/<derived>.db (AI-1157 review).
+        // being mapped to a guessed <root>/conversations/<derived>.db.
         if (!string.Equals(Path.GetFileName(transcriptPath), "transcript_full.jsonl", StringComparison.Ordinal))
             return null;
 

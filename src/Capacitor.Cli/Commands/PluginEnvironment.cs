@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 /// Process-state seam for <see cref="PluginCommand"/>. Captures the values that
 /// <c>kcap plugin install/remove</c> would otherwise read from
 /// <see cref="Environment"/> / <see cref="Console"/>, so tests can supply
-/// fakes without mutating shared process state (see AI-741).
+/// fakes without mutating shared process state.
 ///
 /// <see cref="ResolvePluginPath"/> is a delegate (not a string) so the
 /// filesystem probing in <see cref="SetupCommand.ResolvePluginPath(string?)"/>

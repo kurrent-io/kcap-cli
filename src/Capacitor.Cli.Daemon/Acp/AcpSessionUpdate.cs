@@ -24,12 +24,12 @@ internal enum AcpUpdateKind {
 
 /// <summary>
 /// Reduced, AOT-friendly internal DTO for one <c>session/update</c> notification's inner
-/// <c>update</c> object. Flat and non-polymorphic by design (AI-684 scope: reduce the wire shape to
-/// something AI-685's mapper can turn into canonical events, without modeling every field of every
+/// <c>update</c> object. Flat and non-polymorphic by design (scope: reduce the wire shape to
+/// something the mapper can turn into canonical events, without modeling every field of every
 /// variant). <see cref="Raw"/> always carries the full <c>update</c> object (not the outer
 /// notification envelope) so the mapper can reach into fields this DTO doesn't surface yet —
 /// notably the untyped <c>plan</c> entries and any fields on spec-derived variants that drift once
-/// AI-684's probe follow-up re-verifies them against a non-plan-gated account.
+/// a follow-up probe re-verifies them against a non-plan-gated account.
 ///
 /// <see cref="ToolInputJson"/> carries the tool_call's
 /// <c>rawInput</c>, feeding <c>AcpEventEnvelope.ToolInputJson</c>, and

@@ -32,8 +32,8 @@ public static class VendorSelection {
         }
 
         // Reject unknown vendor-prefixed flags. The legacy SQLite-era options
-        // (--cursor-workspace, --cursor-all-workspaces) were dropped in
-        // AI-737; the JSONL walkers don't need workspace filtering since the
+        // (--cursor-workspace, --cursor-all-workspaces) were dropped;
+        // the JSONL walkers don't need workspace filtering since the
         // transcript path already encodes the workspace.
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;

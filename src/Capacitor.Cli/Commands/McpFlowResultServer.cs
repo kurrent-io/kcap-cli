@@ -12,8 +12,8 @@ using Capacitor.Cli.Core.Auth;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// AI-1139: reviewer/participant-side MCP server injected into hosted review-flow launches.
-/// Exposes submit_review_result (POSTs to /api/flows/reviewer/result) and, as of AI-1127 E-c,
+/// reviewer/participant-side MCP server injected into hosted review-flow launches.
+/// Exposes submit_review_result (POSTs to /api/flows/reviewer/result) and, as of E-c,
 /// send_flow_message (POSTs to /api/flows/participant/message) — the only two tools a hosted
 /// participant needs. Deliberately a SEPARATE command from `kcap mcp flows` — a hard security
 /// boundary so no flag regression can ever expose start_review_flow to an unattended reviewer.
@@ -24,7 +24,7 @@ static class McpFlowResultServer {
     const int MaxAttempts = 5;
     static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(3);
 
-    // AI-1127 E-0 (AI-1190): the server no longer reads the transcript — markers deliver
+    // E-0: the server no longer reads the transcript — markers deliver
     // nothing, so the only useful guidance on failure is to retry the tool itself.
     const string FallbackHint =
         "Retry this tool call — it is the ONLY delivery channel. Do NOT fall back to FINDINGS:/NO FINDINGS markers in your reply: the server does not read the transcript, so a marker delivers nothing.";
@@ -204,7 +204,7 @@ static class McpFlowResultServer {
             if (code == "stale_round_token")
                 // Deliberately NO retry hint: a stale round token means this round is already
                 // closed — the result must be discarded, never redelivered (spec-review round 2
-                // finding; the AI-1139 round-token guard).
+                // finding; the round-token guard).
                 return ($"Error: {message}", true);
 
             if (code == "server_catching_up")
@@ -222,7 +222,7 @@ static class McpFlowResultServer {
         }
     }
 
-    /// <summary>AI-1127 E-c: validation + POST + retry policy for the participant's out-of-band
+    /// <summary> E-c: validation + POST + retry policy for the participant's out-of-band
     /// note to the driver. Mirrors SubmitCoreAsync's structure. <paramref name="messageId"/> is
     /// generated ONCE per tool call (by the caller's default) and reused across every retry
     /// attempt below, so the server can dedupe a redelivered POST instead of recording the same
@@ -383,7 +383,7 @@ record SubmitReviewerResultDto(
     [property: JsonPropertyName("text")]        string? Text
 );
 
-/// <summary>CLI-side DTO for POST /api/flows/participant/message — mirrors the server's request shape (AI-1127 E-c).</summary>
+/// <summary>CLI-side DTO for POST /api/flows/participant/message — mirrors the server's request shape (E-c).</summary>
 record SendFlowMessageDto(
     [property: JsonPropertyName("agent_id")]   string AgentId,
     [property: JsonPropertyName("message_id")] string MessageId,

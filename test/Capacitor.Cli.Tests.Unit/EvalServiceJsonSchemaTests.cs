@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Validates that <see cref="EvalService.GetRetrospectiveJsonSchema()"/> encodes
 /// the structured <c>{text, audience}</c> suggestion shape so that the
 /// Claude CLI judge is actually constrained to emit objects — not bare
-/// strings — for every suggestion item. Regression guard for AI-795.
+/// strings — for every suggestion item. Regression guard for.
 /// </summary>
 public class EvalServiceJsonSchemaTests {
     // EvalService is internal; Capacitor.Cli.Core ships InternalsVisibleTo

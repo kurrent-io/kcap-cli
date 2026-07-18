@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Import;
 public class CursorSubagentCorrelatorTests {
     // Cursor runs a subagent as its OWN session/transcript. The only in-data link is that
     // the child's first user_query (minus the <user_query> wrapper) is byte-identical to the
-    // parent's `Task`/`Agent` tool_use `prompt`. The correlator recovers that link (AI-1153).
+    // parent's `Task`/`Agent` tool_use `prompt`. The correlator recovers that link.
 
     static string Line(object o) => JsonSerializer.Serialize(o);
 

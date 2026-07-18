@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-919 (review follow-up): the watcher must read OpenCode's <c>{info,parts}</c> shape for
+/// the watcher must read OpenCode's <c>{info,parts}</c> shape for
 /// title/event extraction (info.role + text parts) rather than falling through to the Claude
 /// <c>type:"user"|"assistant"</c> shape — otherwise OpenCode sessions get no titles. Mirrors
 /// the server normalizer's text rules (joined non-hidden text parts; synthetic/ignored skipped).

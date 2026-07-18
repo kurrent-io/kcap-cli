@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-688 Option B task 3: covers <see cref="ServerConnection"/>'s two new gated ACP hub-invoke
+/// Option B task 3: covers <see cref="ServerConnection"/>'s two new gated ACP hub-invoke
 /// methods (<see cref="ServerConnection.AcpSessionStartedAsync"/>/<see cref="ServerConnection.SendAcpEventsAsync"/>)
 /// and the reconnect re-bind mechanism (<see cref="ServerConnection.RegisterAcpBinding"/>/
 /// <see cref="ServerConnection.UnregisterAcpBinding"/>/<see cref="ServerConnection.ReBindAcpSessionsAsync"/>).
@@ -42,7 +42,7 @@ public class AcpServerConnectionTests {
         /// observe ordering/gating state at the exact moment the (re-)bind call happens.</summary>
         public Action? OnRawSessionStartedInvoked { get; set; }
 
-        /// <summary>AI-688 reliability fix (Codex P1 #1): how many MORE times the raw
+        /// <summary> reliability fix (Codex P1 #1): how many MORE times the raw
         /// AcpSessionStarted invoke should throw for a given agentId before it starts succeeding —
         /// drives <see cref="ReBindAcpSessionsAsyncBoundedRetryTests"/>'s bounded-retry-then-give-up
         /// and transient-failure-then-recover cases. Absent/zero entries always succeed.</summary>

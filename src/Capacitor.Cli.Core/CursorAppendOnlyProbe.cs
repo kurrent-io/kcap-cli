@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// AI-1382 D0. Pure prefix-hash comparison used by both the phase-0 empirical verification harness
+/// D0. Pure prefix-hash comparison used by both the phase-0 empirical verification harness
 /// (<c>kcap cursor-verify-appendonly</c>) and the runtime two-zone rewrite guard
 /// (<see cref="Capacitor.Cli.Commands.CursorRewriteGuard"/>). Append-only ⇔ length is monotonically
 /// non-decreasing AND re-hashing the first L_earlier bytes at the later time reproduces the

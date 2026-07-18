@@ -7,7 +7,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Dispatcher for the Pi (badlogic/pi-mono) live-ingest extension (AI-886). Pi
+/// Dispatcher for the Pi (badlogic/pi-mono) live-ingest extension. Pi
 /// has no shell hooks; the shipped <c>kcap.ts</c> extension invokes this on
 /// Pi's in-process lifecycle events:
 ///   <c>kcap hook --pi --event session-start --file &lt;path&gt; --cwd &lt;cwd&gt; --reason &lt;reason&gt;</c>
@@ -29,7 +29,7 @@ namespace Capacitor.Cli.Commands;
 static class PiHookCommand {
     // Pi's extension shells out with a 10s pi.exec timeout (see kcap.ts), so the
     // session-end drain must finish well inside that or the session-end POST is
-    // starved and the session sticks "Active" (mirror of AI-813).
+    // starved and the session sticks "Active" (mirror of).
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(6);
 
     public static async Task<int> Handle(string baseUrl, string[] args) {
@@ -63,7 +63,7 @@ static class PiHookCommand {
             return 0;
         }
 
-        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
         var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
 
@@ -103,7 +103,7 @@ static class PiHookCommand {
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
 
-            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
         if (startedAt is { } ts) forwarded["started_at"] = ts.ToString("O");
@@ -121,7 +121,7 @@ static class PiHookCommand {
             return 0;
         }
 
-        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
         // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
         // permanent failure keeps the prior non-zero exit and skips the watcher.
         var outcome = await AgentHookPoster.PostOrSpoolAsync(
@@ -141,7 +141,7 @@ static class PiHookCommand {
     static async Task<int> HandleSessionEnd(string baseUrl, string sessionId, string file, string? cwd, string? reason) {
         // Kill watcher + inline-drain BEFORE the POST so the server computes
         // stats over the full transcript — capped so a slow drain can't starve
-        // the session-end POST (mirror of ClaudeHookCommand / AI-813).
+        // the session-end POST (mirror of ClaudeHookCommand /).
         try {
             var drained = await TimeBudget.RunCappedAsync(
                 async () => {

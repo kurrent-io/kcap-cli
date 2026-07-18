@@ -29,7 +29,7 @@ static class McpFlowsServer {
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
         // The authenticated client is created on the first tools/call, not at startup: kcap-flows
-        // auto-registers (AI-1056), so Claude Code spawns `kcap mcp flows` for every session —
+        // auto-registers, so Claude Code spawns `kcap mcp flows` for every session —
         // deferring keeps startup local-only (no GET /auth/config, token load, or stderr re-auth
         // hint) for sessions that never invoke a flows tool. Created on demand into a nullable
         // field (rather than a Lazy<Task>) so a transient creation failure leaves it null and the
@@ -49,7 +49,7 @@ static class McpFlowsServer {
             try {
                 if (client is null) {
                     client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
-                    // AI-1061: the review-flow endpoints long-poll (start_review_flow /
+                    // the review-flow endpoints long-poll (start_review_flow /
                     // submit_review_round block server-side up to ~10 min while the reviewer runs).
                     // The default 100s timeout would abort the POST, which the server sees as a
                     // cancel and tears the reviewer down — so disable the client-side deadline and
@@ -182,13 +182,13 @@ static class McpFlowsServer {
             if (toolName is "get_review_flow_status" or "get_flow_status") {
                 statusPayload = FormatStatusResponse(body, out var pendingIds);
 
-                // AI-1127 E-c: ack exactly the ids that were actually rendered into the text
+                // E-c: ack exactly the ids that were actually rendered into the text
                 // above, after the text is fully built — never before, never a superset.
                 var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
                 if (flowRunId is not null)
                     await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
             } else if (toolName is "close_review_flow" or "close_flow") {
-                // AI-1127 E-c: render pending_messages but never ack them — the server delivers
+                // E-c: render pending_messages but never ack them — the server delivers
                 // them atomically with the close, so there is nothing left to redeliver.
                 statusPayload = FormatCloseResponse(body, out _);
             } else {
@@ -231,7 +231,7 @@ static class McpFlowsServer {
     /// <summary>
     /// Posts to POST /api/flows/review/start. Shared by start_review_flow (reads the flow
     /// kind from the "kind" arg) and its generic alias start_flow (reads it from
-    /// "definition_id" — the server treats kind == definition id, AI-1126 phase C).
+    /// "definition_id" — the server treats kind == definition id, phase C).
     /// start_flow additionally accepts an inline "definition_yaml" (dynamic flows): the MCP
     /// schema can't express the xor, so exactly-one is enforced here, BEFORE any HTTP call;
     /// start_review_flow stays catalog-only (kind remains required there).
@@ -268,7 +268,7 @@ static class McpFlowsServer {
 
         var sessionId = ArgParsing.ResolveSessionIdFromEnv();
 
-        // AI-1207 B2: this machine's stable id, matched server-side against each connected daemon's
+        // B2: this machine's stable id, matched server-side against each connected daemon's
         // registration id to prove the reviewer would run on the SAME host as this requester. Same
         // call the daemon reports at registration (ServerConnection), so the ids are identical — the
         // last piece that lets the server pick the borrow path instead of a mirrored worktree.
@@ -354,7 +354,7 @@ static class McpFlowsServer {
     static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
     static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
     static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
-    // AI-1127 E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
+    // E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
     // review-flow endpoints long-poll), so without a per-attempt bound a hung ack POST would block
     // indefinitely — stalling the tool response the driver is waiting on. Mirrors PerGetTimeout's
     // per-attempt bounding of PollUntilTerminalAsync's GETs.
@@ -369,7 +369,7 @@ static class McpFlowsServer {
     // Maximum consecutive transient failures (5xx / network / TLS) before giving up.
     const int MaxTransientRetries = 5;
 
-    /// <summary>AI-1127 E-c: a multi-participant start records the run only — no round exists to
+    /// <summary> E-c: a multi-participant start records the run only — no round exists to
     /// poll, so the old poll path must not run. Returns null unless the body is exactly that shape
     /// (round-full starts and old servers fall through to the existing logic unchanged). Today's
     /// server never puts pending_messages on a round-less start (a brand-new run has no
@@ -437,7 +437,7 @@ static class McpFlowsServer {
     }
 
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
-    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
+    /// Otherwise poll GET /api/flows/{id} until the started round is terminal.
     /// <paramref name="toolName"/> is the tool that initiated the round (one of
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
@@ -572,7 +572,7 @@ static class McpFlowsServer {
     internal static string FormatPolledRoundResult(JsonObject node, string flowRunId) =>
         FormatPolledRoundResult(node, flowRunId, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatPolledRoundResult(JsonObject node, string flowRunId, out IReadOnlyList<string> pendingIds) {
         var roundNumber = node["round_number"]?.GetValue<int>();
         var resultKind  = node["round_result_kind"]?.GetValue<string>() ?? node["round_status"]?.GetValue<string>() ?? "";
@@ -595,7 +595,7 @@ static class McpFlowsServer {
     /// </summary>
     internal static string FormatRoundResponse(string body) => FormatRoundResponse(body, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatRoundResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
@@ -628,7 +628,7 @@ static class McpFlowsServer {
 
     internal static string FormatStatusResponse(string body) => FormatStatusResponse(body, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatStatusResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
@@ -676,7 +676,7 @@ static class McpFlowsServer {
     /// </summary>
     internal static string FormatCloseResponse(string body) => FormatCloseResponse(body, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatCloseResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
@@ -697,7 +697,7 @@ static class McpFlowsServer {
         }
     }
 
-    /// <summary>AI-1127 E-c: renders the fold-computed undelivered sidecar messages carried on a
+    /// <summary> E-c: renders the fold-computed undelivered sidecar messages carried on a
     /// status/round/close response. Returns the rendered ids so the caller can ack exactly what
     /// the driver will actually see (never more).</summary>
     internal static IReadOnlyList<string> AppendPendingMessages(StringBuilder sb, JsonObject node) {
@@ -705,7 +705,7 @@ static class McpFlowsServer {
 
         // Render entries into a scratch buffer first so the header count reflects what actually
         // got rendered, not the raw array length — a malformed (non-object) entry is skipped
-        // below, and the header must not overcount past what the driver will see (AI-1127 E-c
+        // below, and the header must not overcount past what the driver will see (E-c
         // final review, Minor: header used arr.Count while entries were filtered).
         var ids     = new List<string>();
         var entries = new StringBuilder();
@@ -740,7 +740,7 @@ static class McpFlowsServer {
     static string StringField(JsonObject o, string name) =>
         o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : "";
 
-    /// <summary>AI-1127 E-c: deliver-once ack for pending messages. Callers must invoke this
+    /// <summary> E-c: deliver-once ack for pending messages. Callers must invoke this
     /// AFTER the response text has been fully formatted, passing only the ids that were actually
     /// rendered into that text — never before, never a superset. No-op (no HTTP call at all) when
     /// <paramref name="messageIds"/> is empty, which keeps this byte-compatible with servers that
@@ -762,7 +762,7 @@ static class McpFlowsServer {
 
         async Task<bool> TryPostAsync() {
             try {
-                // AI-1127 E-c final review, Important: bound each attempt — the shared client has
+                // E-c final review, Important: bound each attempt — the shared client has
                 // no client-side deadline (Timeout = InfiniteTimeSpan, needed for the long-polling
                 // round endpoints), so an unbounded ack POST could hang the tool response the
                 // driver is waiting on. A timeout surfaces as OperationCanceledException, which
@@ -994,7 +994,7 @@ record StartReviewFlowDto(
 
 /// <summary>
 /// CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.
-/// Participant is optional (AI-1126 D-b): the review alias (submit_review_round) always leaves it
+/// Participant is optional (D-b): the review alias (submit_review_round) always leaves it
 /// null, which the WhenWritingNull context config omits from the wire entirely, keeping the alias
 /// byte-compatible with servers that predate the field. The generic alias (send_to_participant)
 /// always supplies it; the server validates it against the flow definition.
@@ -1006,7 +1006,7 @@ record SubmitReviewRoundDto(
     [property: JsonPropertyName("participant")]  string? Participant = null
 );
 
-/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — AI-1127 E-c deliver-once ack.</summary>
+/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — E-c deliver-once ack.</summary>
 record AckFlowMessagesDto(
     [property: JsonPropertyName("message_ids")] IReadOnlyList<string> MessageIds
 );

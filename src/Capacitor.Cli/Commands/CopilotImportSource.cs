@@ -189,7 +189,7 @@ internal sealed class CopilotImportSource : IImportSource {
             // workspace.yaml's updated_at is stamped when Copilot assigns the
             // session name (near session START), not at session end. The
             // truthful end time is the session-final `session.shutdown`
-            // record's own timestamp (AI-1358 A3) — read directly off the raw
+            // record's own timestamp — read directly off the raw
             // transcript, NOT through IsImportRelevantLine, which deliberately
             // skips session.* records for a different purpose (watermark
             // comparison against the server's normalized line count above).
@@ -325,7 +325,7 @@ internal sealed class CopilotImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (cwd is not null) payload["cwd"] = cwd;
-        // AI-701 (finding 4): fail-open git-root discovery, mirroring ImportChainsAsync
+        // fail-open git-root discovery, mirroring ImportChainsAsync
         // so routed imports carry the same workspace_root the file-based path does.
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");

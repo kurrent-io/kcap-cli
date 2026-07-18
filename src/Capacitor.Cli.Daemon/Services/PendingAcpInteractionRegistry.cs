@@ -3,7 +3,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Correlates an ACP interaction request (AI-686) with the server's later
+/// Correlates an ACP interaction request with the server's later
 /// <c>AcpInteractionResolved</c> push. Copy-shape of <see cref="PendingPermissionRegistry"/>
 /// parameterized on <see cref="AcpInteractionDecision"/> instead of <see cref="PermissionDecision"/>
 /// — kept as a separate small class (matching this codebase's existing style of small,

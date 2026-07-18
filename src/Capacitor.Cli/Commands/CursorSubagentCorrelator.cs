@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Cursor;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Correlates Cursor subagent sessions to their parent (AI-1153).
+/// Correlates Cursor subagent sessions to their parent.
 ///
 /// Cursor runs a subagent (a <c>Task</c>/<c>Agent</c> tool call) as its OWN
 /// top-level session with its own transcript — and provides NO explicit

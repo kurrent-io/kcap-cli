@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-9 Phase 3: the /api/eval/questions alias returns RAW question text in `prompt`
+/// Phase 3: the /api/eval/questions alias returns RAW question text in `prompt`
 /// (no prompt_version). An old released daemon substitutes that raw text into its OWN
 /// embedded {QUESTION_TEXT} template; a rendered value would double-wrap. This guards
 /// the CLI client's view of the alias contract.

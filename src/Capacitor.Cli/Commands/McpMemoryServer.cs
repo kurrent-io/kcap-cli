@@ -231,7 +231,7 @@ static class McpMemoryServer {
     }
 
     // NOTE: request bodies use snake_case keys (repo_hash, machine_tag, source_session_id) —
-    // the server's global JSON policy is JsonNamingPolicy.SnakeCaseLower (see AI-1134 task 9).
+    // the server's global JSON policy is JsonNamingPolicy.SnakeCaseLower.
     // Responses are passed through as raw text, so only these request-body builders are affected.
     internal static JsonObject BuildSaveBody(JsonObject? args, string? cwdRepoHash, string? machineId) {
         string Req(string name) =>

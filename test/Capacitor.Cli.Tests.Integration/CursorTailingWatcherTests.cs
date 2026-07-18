@@ -8,7 +8,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-1382 Task 13 — end-to-end acceptance tests for the Cursor tailing-watcher promotion,
+/// Task 13 — end-to-end acceptance tests for the Cursor tailing-watcher promotion,
 /// composing the pure/HTTP seams Tasks 7-12 already built (mirroring
 /// <see cref="LiveWatchHardeningAcceptanceTests"/>'s style: thin tests proving the contract from
 /// a fresh vantage point, not re-deriving coverage an earlier task's unit tests already own).
@@ -241,7 +241,7 @@ public class CursorTailingWatcherTests {
     // ── 5. Resume at an unterminated final line, then its terminator arrives → no line drift (r6) ──
 
     /// <summary>
-    /// AI-1382 review fix (r6) — end-to-end regression for the P1 finding: a watcher resumes at a
+    /// end-to-end regression for the P1 finding: a watcher resumes at a
     /// server frontier that lands exactly on a COMPLETE-but-unterminated final record (the r5
     /// scenario — a prior process's shutdown final drain already sent and the server already
     /// acked that record), then Cursor appends the record's own trailing newline before writing

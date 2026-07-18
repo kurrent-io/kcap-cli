@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.Antigravity;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravityGenMetadata"/> (AI-1158): the empirically-pinned
+/// Unit tests for <see cref="AntigravityGenMetadata"/>: the empirically-pinned
 /// protobuf field walk (top.1 → 4 → {2 input, 3 output, 5 cacheRead}; 19 model id, 21
 /// label) and the synthetic USAGE line it produces. Uses hand-built protobuf vectors so
 /// the decoder is verified without a real .db (the shapes match Antigravity 2.2.1 blobs).
@@ -70,7 +70,7 @@ public class AntigravityGenMetadataTests {
         await Assert.That(AntigravityGenMetadata.TryDecode(Blob(0, 0, null, "m", null))).IsNull();
     }
 
-    // AI-1158 review (C4): an over-large varint must not surface as a negative token count
+    // an over-large varint must not surface as a negative token count
     // via an unchecked ulong→long cast.
     [Test]
     public async Task Overlarge_token_varint_does_not_produce_a_negative_count() {

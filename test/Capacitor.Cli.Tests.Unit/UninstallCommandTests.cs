@@ -141,7 +141,7 @@ public class UninstallCommandTests {
 
     [Test]
     public async Task User_level_uninstall_removes_pi_extension() {
-        // AI-886: Pi has no hook file — its live-ingest integration is the
+        // Pi has no hook file — its live-ingest integration is the
         // ~/.pi/agent/extensions/kcap.ts extension. uninstall must delete it
         // (+ the version marker) or pi keeps auto-loading kcap.ts after the user
         // removed kcap. A user-authored sibling extension must survive.

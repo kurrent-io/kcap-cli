@@ -5,7 +5,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1382 Task 9 — the precedence-ordered per-session Cursor watcher spawn.
+/// Task 9 — the precedence-ordered per-session Cursor watcher spawn.
 /// <see cref="CursorHookCommand.ShouldSpawnWatcher"/> is pure (no I/O); the
 /// <see cref="CursorHookCommand.MaybeSpawnWatcherAsync"/> tests use
 /// <see cref="WatcherManager.SpawnOverrideForTesting"/> so no real OS process is ever spawned.
@@ -94,7 +94,7 @@ public class CursorWatcherSpawnTests {
         } finally { WatcherManager.SpawnOverrideForTesting = null; }
     }
 
-    // AI-1382 Task 12 — the child (subagent) watcher must never be spawned before the server
+    // Task 12 — the child (subagent) watcher must never be spawned before the server
     // has acknowledged the diverted subagent-start (2xx). A spooled start (POST failure) defers
     // the spawn entirely; a later invocation whose spool drain finally delivers the start is
     // what performs it. Invariant under test: no child transcript line — and here, no child
@@ -182,7 +182,7 @@ public class CursorWatcherSpawnTests {
         }
     }
 
-    // AI-1382 Task 12 — the deferred half of the acked-start gate: a subagent-start that failed
+    // Task 12 — the deferred half of the acked-start gate: a subagent-start that failed
     // its first live POST (spooled by HandleSubagentChildEventAsync) must still spawn the child
     // watcher once a LATER hook invocation's generic spool drain (HandleCore, top of method —
     // runs before the isSubagentChild divert) finally delivers it. Exercises the real dispatcher
@@ -244,7 +244,7 @@ public class CursorWatcherSpawnTests {
         }
     }
 
-    // AI-1382 review fix #5 — a subagent-start that hits a non-transient 4xx on retry (via
+    // a subagent-start that hits a non-transient 4xx on retry (via
     // HandleCore's generic top-of-method spool drain) is permanently DROPPED — HookSpool removes
     // the entry, so HasBacklog goes false even though no AgentSubsession stream was ever opened
     // server-side. Before the fix, that emptied backlog let the child's own content-less hooks
@@ -323,7 +323,7 @@ public class CursorWatcherSpawnTests {
         }
     }
 
-    // AI-1382 review fix #5 — once subagent-start is acked, every LATER NONTERMINAL hook for the
+    // once subagent-start is acked, every LATER NONTERMINAL hook for the
     // same child must attempt to (re)spawn its watcher — not just the child's own sessionStart.
     // Before the fix, only sessionStart ever called MaybeSpawnChildWatcherAsync, so a child
     // watcher that later exited (the newly-enabled idle ceiling), crashed, or never actually

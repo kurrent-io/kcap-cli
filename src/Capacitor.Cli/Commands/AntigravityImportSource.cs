@@ -9,7 +9,7 @@ using Capacitor.Cli.Core.Antigravity;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Discover + classify + import historical Google Antigravity conversations (AI-1160).
+/// Discover + classify + import historical Google Antigravity conversations.
 /// Each conversation is a brain dir under
 /// <c>~/.gemini/antigravity/brain/&lt;id&gt;/.system_generated/logs/transcript_full.jsonl</c> —
 /// the same lines the live watcher tails — so historical and live import converge on the
@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Commands;
 /// is its DASHLESS canonical form — matching live capture (the Antigravity hook and
 /// <c>kcap watch</c> strip dashes) so a session captured live and later re-imported dedupes to
 /// one stream, and so <c>kcap import --antigravity --session &lt;id&gt;</c> filtering is
-/// format-insensitive (AI-1238). The dashed conversation id is kept only for filesystem paths
+/// format-insensitive. The dashed conversation id is kept only for filesystem paths
 /// (the brain-dir transcript). Subagents are separate conversations linked via
 /// <c>INVOKE_SUBAGENT</c> steps in the parent's transcript (the spawn-time signal;
 /// see <see cref="AntigravitySubagents"/>); roots are conversations
@@ -74,7 +74,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         }
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
-        // AI-1218 drift observability: surface format drift without a messages fallback.
+        // drift observability: surface format drift without a messages fallback.
         // HashSet membership so the counters stay O(n), not O(n²), on large brain trees (qodo #285).
         var allConversationIds = convIds.ToHashSet(StringComparer.Ordinal);
         var linkedChildIds     = parentMap.Values.ToHashSet(StringComparer.Ordinal);
@@ -87,7 +87,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
         // Normalize the --session filter to the dashless canonical form so it matches the
         // dashless session id we surface, whether the user passed a dashed or dashless id
-        // (mirrors GeminiImportSource) (AI-1238).
+        // (mirrors GeminiImportSource).
         var sessionFilter = filters.FilterSession is { } fs ? ImportCommand.NormalizeGuid(fs) : null;
 
         var sinceUtc = filters.Since is { } since
@@ -206,7 +206,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         // once-skipped subagent would otherwise be lost forever), then re-post session-end — all
         // idempotent server-side (deterministic lifecycle ids → no-ops when they already
         // succeeded). If either lifecycle POST fails, return Failed so a re-run retries the repair
-        // instead of reporting a falsely-complete Skipped (mirrors Cursor) (AI-1160 review).
+        // instead of reporting a falsely-complete Skipped (mirrors Cursor).
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) {
             if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
                     BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
@@ -218,7 +218,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             // transcript lines (the content watermark is already at the tip), a session
             // re-imported after this feature shipped may still be missing its USAGE lines
             // (they were never emitted on the original import). Always attempted, always
-            // before session-end (AI-1358 item 7).
+            // before session-end.
             await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
 
             if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
@@ -250,8 +250,8 @@ internal sealed class AntigravityImportSource : IImportSource {
 
         // Explicit gen_metadata usage pass — decodes the sibling conversation .db and posts the
         // synthetic USAGE lines the live watcher would have streamed, so a content-only import
-        // still gains cost. Best-effort (cost is never load-bearing, AI-728); always before
-        // session-end (AI-1358 item 7).
+        // still gains cost. Best-effort (cost is never load-bearing,); always before
+        // session-end.
         await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
 
         // Children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
@@ -279,7 +279,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             // resolves the transcript path. The server-facing agent_id is its DASHLESS canonical
             // form: the server canonicalizes agent_id on both ingest and watermark read, so this
             // matches live routing/correlation and the dashless session ids used everywhere else
-            // (mirrors GeminiImportSource) (AI-1238).
+            // (mirrors GeminiImportSource).
             var childTranscript = AntigravityPaths.TranscriptFullPath(childId, _home, _geminiCliHome);
             if (!File.Exists(childTranscript)) continue;
 
@@ -316,15 +316,14 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // a server restart between the failed stop and this re-import. Re-posting start
                 // restores the active mark (idempotent: deterministic SubagentStarted id, and
                 // already-active is a no-op) so the following stop clears it and appends the
-                // (idempotent, deterministic) SubagentCompleted. Child content is not re-sent
-                // (AI-1160 review).
+                // (idempotent, deterministic) SubagentCompleted. Child content is not re-sent.
                 //
                 // strict=true on BOTH: the server's start endpoint returns a fail-open 200 even
                 // when RecordAgentStartAsync throws and rolls back the active mark, so a non-strict
                 // start would be treated as success and the following stop would silently no-op
                 // (no active agent → no SubagentCompleted). strict surfaces the failure as non-2xx,
                 // so we only post stop when start truly re-marked the agent, and a re-import retries
-                // otherwise (AI-1160 review).
+                // otherwise.
                 if (await PostHookAsync(client, baseUrl, "subagent-start",
                         BuildSubagentStartPayload(rootId, childAgentId, childTranscript, strict: true), ct))
                     await PostHookAsync(client, baseUrl, "subagent-stop",
@@ -364,7 +363,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     static JsonObject BuildSessionStartPayload(string sid, string? cwd, DateTimeOffset? startedAt, bool forcePrivate) {
         var p = new JsonObject { ["hook_event_name"] = "sessionStart", ["session_id"] = sid };
         if (cwd is not null) p["cwd"] = cwd;
-        // AI-701 (finding 4): fail-open git-root discovery, mirroring ImportChainsAsync
+        // fail-open git-root discovery, mirroring ImportChainsAsync
         // so routed imports carry the same workspace_root the file-based path does.
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
@@ -383,7 +382,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
     // strict=true makes the server return non-2xx when the lifecycle write itself fails, rather
     // than a fail-open 200 — so a caller that gates on the POST result learns the server actually
-    // recorded the event (AI-1160 review).
+    // recorded the event.
 
     static JsonObject BuildSubagentStartPayload(string parentSid, string agentId, string transcriptPath, bool strict = false) {
         var p = new JsonObject {
@@ -402,7 +401,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     // agent_transcript_path, and last_assistant_message. Omitting them makes the server reject the
     // body at binding (before HandleSubagentStop runs), so strict is never honored and PostHookAsync
     // returns false — the repair would then loop start→failed-stop forever. Send the full shape,
-    // mirroring GeminiSubagentDiscovery.BuildStopPayload (AI-1160 review).
+    // mirroring GeminiSubagentDiscovery.BuildStopPayload.
     static JsonObject BuildSubagentStopPayload(string parentSid, string agentId, string transcriptPath, bool strict = false) {
         var p = new JsonObject {
             ["hook_event_name"]        = "subagent_stop",
@@ -425,7 +424,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     // three are pinned to the same literal (grepped: WatchCommand.cs:1692,
     // SessionWriter.TranscriptPipeline.cs:21) since the server derives the USAGE event id from
     // line CONTENT (gen_row), not the line number, so the number is only a non-colliding
-    // ordering hint (AI-1358 item 7).
+    // ordering hint.
     const long AntigravityUsageLineBase = 1_000_000_000L;
 
     /// <summary>
@@ -436,8 +435,8 @@ internal sealed class AntigravityImportSource : IImportSource {
     /// band). Deterministic USAGE event ids (keyed on gen_row) dedupe server-side, so re-posting
     /// on every re-import is safe. Called for every classification (New/Partial AND
     /// AlreadyLoaded) so a session imported before this feature shipped — content but no cost —
-    /// gains usage on a bare re-import even though zero physical transcript lines are (re)sent
-    /// (AI-1358 item 7). Best-effort: cost is never load-bearing (AI-728) — a decode/post failure
+    /// gains usage on a bare re-import even though zero physical transcript lines are (re)sent.
+    /// Best-effort: cost is never load-bearing — a decode/post failure
     /// here must never fail the import.
     /// </summary>
     static async Task<bool> PostUsageLinesAsync(
@@ -475,7 +474,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         } catch (OperationCanceledException) {
             throw;
         } catch {
-            return false; // cost is always best-effort (AI-728) — never let a post failure surface
+            return false; // cost is always best-effort — never let a post failure surface
         }
     }
 

@@ -3,14 +3,14 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// Stable per-machine identifier (AI-1207): lets the server prove that a daemon reconnecting
+/// Stable per-machine identifier: lets the server prove that a daemon reconnecting
 /// under a given repo path is actually running on the machine it claims, rather than trusting a
 /// path string alone. Persisted once to <c>machine.json</c> in the CLI's config directory
 /// (<see cref="PathHelpers.ConfigPath"/> — the same resolution <c>Auth.TokenStore</c> uses,
 /// honouring <c>KCAP_CONFIG_DIR</c>) so every process on this machine — hooks, watcher, daemon,
 /// MCP — resolves the same file and reports the same id.
 ///
-/// Distinct from <see cref="MachineIdProvider"/> (AI-1134), which tags memories with a
+/// Distinct from <see cref="MachineIdProvider"/>, which tags memories with a
 /// separately-generated id stored inside the profile config (<c>config.json</c>'s
 /// <c>machine_id</c>); the two are not reconciled. This one is a standalone file so reading/
 /// writing it can never race a concurrent <c>ProfileConfig</c> save.

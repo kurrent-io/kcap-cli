@@ -6,19 +6,19 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <summary>
 /// Serialises hosted-agent terminal output onto a single ordered channel so the
 /// stream the web "Terminal" tab renders is delivered in PTY order and survives a
-/// flapping SignalR connection <em>without losing bytes</em> (AI-842, AI-844).
+/// flapping SignalR connection <em>without losing bytes</em>.
 ///
-/// The pre-AI-842 path fired every PTY chunk at <c>HubConnection.SendAsync</c>
+/// The previous path fired every PTY chunk at <c>HubConnection.SendAsync</c>
 /// with a discarded task. While the hub was disconnected those sends faulted
 /// silently — dropping bytes mid-ANSI-escape-sequence — and the read loop's
 /// concurrent fire-and-forget sends could interleave out of order. A single
 /// consumer draining one channel fixes the ordering and the silent-fault problem.
 ///
-/// AI-842 capped that channel with <c>DropOldest</c>, which re-introduced silent
+/// capped that channel with <c>DropOldest</c>, which re-introduced silent
 /// loss: under back-pressure (a slow/flapping tunnel) it discarded the oldest
 /// queued chunks. Claude Code's TUI is a cursor-addressing redraw stream — a
 /// single dropped or reordered chunk desyncs every later repaint, so the
-/// "Terminal" tab rendered garbled output with lost history (AI-844). The queue
+/// "Terminal" tab rendered garbled output with lost history. The queue
 /// is therefore loss-free:
 /// <list type="bullet">
 ///   <item>The bounded channel uses <see cref="BoundedChannelFullMode.Wait"/>, so

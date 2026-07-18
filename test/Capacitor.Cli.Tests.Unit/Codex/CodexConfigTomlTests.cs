@@ -224,7 +224,7 @@ public class CodexConfigTomlTests {
         await Assert.That(ArgsOf(review)).IsEquivalentTo(new[] { "mcp", "review" });
         await Assert.That((string)sessions["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(sessions)).IsEquivalentTo(new[] { "mcp", "sessions" });
-        // AI-1146: kcap-memory is now auto-registered for Codex too.
+        // kcap-memory is now auto-registered for Codex too.
         await Assert.That((string)memory["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(memory)).IsEquivalentTo(new[] { "mcp", "memory" });
     }

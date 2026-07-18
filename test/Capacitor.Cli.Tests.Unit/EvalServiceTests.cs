@@ -14,7 +14,7 @@ public class EvalServiceTests {
 
     // ── Judge MCP config ───────────────────────────────────────────────────
 
-    // AI-803 follow-up: the inline judge server is named `kcap-judge` (not
+    // follow-up: the inline judge server is named `kcap-judge` (not
     // `kcap-review`) so it never collides with the plugin-registered
     // `kcap-review` (`kcap mcp review`) server, and the allowlist prefix must
     // track that server key exactly — otherwise every judge tool call lands
@@ -382,7 +382,7 @@ public class EvalServiceTests {
         await Assert.That(agg.OverallScore).IsEqualTo(1);
     }
 
-    // ── BuildTextQuestionPrompt (AI-9 Phase 3) ─────────────────────────────
+    // ── BuildTextQuestionPrompt ─────────────────────────────
     //
     // The legacy embedded-template BuildQuestionPrompt was removed in Phase 3.
     // The text path now uses the catalog's server-RENDERED prompt carried on
@@ -554,7 +554,7 @@ public class EvalServiceTests {
 
     [Test]
     public async Task BuildRetrospectivePrompt_substitutes_all_placeholders() {
-        // AI-9 Phase 3: the template now comes from the catalog (passed in) and
+        // Phase 3: the template now comes from the catalog (passed in) and
         // carries a {TRACE_JSON} placeholder the daemon fills with its already-
         // fetched trace (SF#1).
         var template = "meta={SESSION_META} verdicts={VERDICTS_JSON} patterns={KNOWN_PATTERNS} trace={TRACE_JSON}";

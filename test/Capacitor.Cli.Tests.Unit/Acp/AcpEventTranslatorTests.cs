@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-688 Option B task 1: pure unit tests for <see cref="AcpEventTranslator.Translate"/> and its
+/// Option B task 1: pure unit tests for <see cref="AcpEventTranslator.Translate"/> and its
 /// synthesized-lifecycle builders — no ACP wire/process/runtime involved (see
 /// <see cref="AcpHostedAgentRuntimeTests"/> for the <see cref="AcpSessionUpdate"/> reduction this
 /// translator consumes). Every case is constructed directly against a hand-built

@@ -4,11 +4,11 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Live-flow wrapper over <see cref="CursorSubagentCorrelator"/> (AI-1151).
+/// Live-flow wrapper over <see cref="CursorSubagentCorrelator"/>.
 ///
 /// <see cref="CursorSubagentCorrelator"/> only runs on the historical <c>import</c> path
 /// today, so a live Cursor <c>Task</c>/<c>Agent</c> subagent is ingested as its own
-/// top-level session instead of nesting under its parent — the same problem AI-1153 fixed
+/// top-level session instead of nesting under its parent — the same problem fixed
 /// for import. Cursor is NOT watcher-backed (<see cref="CursorHookCommand"/> backfills each
 /// session's transcript over HTTP as hooks arrive), so the correlation has to run inline in
 /// that per-hook dispatcher rather than in a background watcher.
@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Commands;
 /// (<c>agentId = child session id</c>, mirroring <c>CursorImportSource.cs:468</c>) — so a
 /// live-then-import of the same session converges on the same deterministic
 /// <c>AgentSubsession-{parent}-{child}</c> stream instead of duplicating the subagent's
-/// lifecycle/content (ties to AI-1358 A1).
+/// lifecycle/content (ties to A1).
 /// </summary>
 public static class CursorLiveSubagentLinker {
     // Bounds the sibling-transcript scan so a workspace with a very long history can't blow

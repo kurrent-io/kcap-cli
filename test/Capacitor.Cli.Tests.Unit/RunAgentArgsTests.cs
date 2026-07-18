@@ -35,7 +35,7 @@ public class RunAgentArgsTests {
 
     [Test]
     public async Task Share_is_not_a_flag_sharing_is_a_ui_action() {
-        // Sharing is server/UI-authoritative (AI-861 tracks a future `kcap share` command),
+        // Sharing is server/UI-authoritative (tracks a future `kcap share` command),
         // so --share is just an unknown run-agent flag and is rejected.
         await Assert.That(RunAgentArgs.Parse(["claude", "--share"]).Error).IsNotNull();
     }

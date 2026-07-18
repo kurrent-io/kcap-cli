@@ -8,7 +8,7 @@ using Capacitor.Cli.Core.OpenCode;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Plugin-dispatch tests for the OpenCode live-ingest plugin (AI-919): install
+/// Plugin-dispatch tests for the OpenCode live-ingest plugin: install
 /// (+ <c>--if-installed</c> refresh) and remove via <c>kcap plugin --opencode</c>.
 /// The npm refresh path (refresh.js) runs the <c>--if-installed</c> form on every
 /// upgrade, so it MUST no-op for users who never opted in — these tests guard that

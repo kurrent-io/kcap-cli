@@ -70,7 +70,7 @@ public class VendorSelectionTests {
 
     [Test]
     public async Task legacy_cursor_workspace_flag_is_rejected() {
-        // --cursor-workspace and --cursor-all-workspaces were dropped in AI-737
+        // cursor-workspace and --cursor-all-workspaces were dropped in
         // when the SQLite import path was retired. The JSONL walker doesn't need
         // workspace filtering, so these flags now surface as unknown source options.
         var r = VendorSelection.Parse(["--cursor-workspace", "/some/path"]);

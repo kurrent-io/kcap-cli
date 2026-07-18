@@ -90,7 +90,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Mcp_allowlist_round_trips_snake_case() {
-        // AI-1126 D-c: the server sends the flow definition's MCP allowlist so the daemon can
+        // D-c: the server sends the flow definition's MCP allowlist so the daemon can
         // thread it to the launcher (Task 6 materializes it). Appended last after
         // BaseRef so older daemons/servers stay wire-compatible.
         var cmd = new LaunchAgentCommand(
@@ -115,7 +115,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Legacy_payload_without_mcp_allowlist_deserializes_null() {
-        // Version skew: a server predating AI-1126 D-c never sends mcp_allowlist. The daemon
+        // Version skew: a server predating D-c never sends mcp_allowlist. The daemon
         // must still bind the command (positional SignalR binding) and default the field to
         // null — i.e. no allowlist materialization — rather than failing to invoke LaunchAgent.
         const string legacyWire =
@@ -132,7 +132,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Old_reader_ignores_mcp_allowlist() {
-        // AI-1126 D-c: a new server sends mcp_allowlist to an old daemon that predates this
+        // D-c: a new server sends mcp_allowlist to an old daemon that predates this
         // task. The old reader must ignore the unknown field and still bind everything else —
         // launches must not break just because the server got the new field first.
         var cmd = new LaunchAgentCommand(
@@ -157,7 +157,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Borrowed_and_BorrowCwd_round_trip_snake_case() {
-        // AI-1207 Phase A: the server tells the daemon to launch against the user's own checkout
+        // Phase A: the server tells the daemon to launch against the user's own checkout
         // (skip worktree creation) instead of a fresh daemon-owned worktree. Appended last after
         // McpAllowlist, same wire-compat rule as the fields before it.
         var cmd = new LaunchAgentCommand(
@@ -184,7 +184,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Legacy_payload_without_borrowed_fields_deserializes_defaults() {
-        // Version skew: an older server that predates AI-1207 never sends borrowed/borrow_cwd. The
+        // Version skew: an older server that predates never sends borrowed/borrow_cwd. The
         // daemon must still bind the command (positional SignalR binding) and default Borrowed to
         // false / BorrowCwd to null — i.e. behave exactly as an owned-worktree launch.
         const string legacyWire =
@@ -236,7 +236,7 @@ public class LaunchAgentCommandWireFormatTests {
 }
 
 /// <summary>
-/// Frozen snapshot of <see cref="LaunchAgentCommand"/>'s shape from BEFORE AI-1126 D-c added
+/// Frozen snapshot of <see cref="LaunchAgentCommand"/>'s shape from BEFORE D-c added
 /// <c>McpAllowlist</c> — used by <see cref="LaunchAgentCommandWireFormatTests.Old_reader_ignores_mcp_allowlist"/>
 /// to prove an old daemon build tolerates the new wire field rather than failing to bind.
 /// </summary>

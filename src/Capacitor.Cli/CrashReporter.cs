@@ -4,12 +4,12 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// AI-1168: last-resort guard for the CLI's top-level command dispatch. A `kcap`
+/// last-resort guard for the CLI's top-level command dispatch. A `kcap`
 /// invocation — especially a hook or a detached generator the coding agent
 /// spawns — that lets an exception escape its command handler would otherwise
 /// reach the NativeAOT runtime, which <b>aborts the process (SIGABRT) and writes
 /// a macOS crash report</b>. That was happening dozens of times a day in the
-/// wild (same class as AI-848, which fixed two specific <c>Process.Start</c>
+/// wild (same class as, which fixed two specific <c>Process.Start</c>
 /// sites but not the structural gap). This records the exception to a rolling
 /// crash log and maps the command to a fail-open exit, so the abort class
 /// disappears <i>and</i> the exact exception is captured for follow-up.

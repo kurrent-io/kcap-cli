@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core;
 /// (+ needs-import marker) → spooled session-end. Idempotent under repeated/partial passes via
 /// deterministic server ids. Stdout-contract hooks (Codex) run this in the BACKGROUND / AFTER stdout.
 ///
-/// <para>Moved to <c>Capacitor.Cli.Core</c> (AI-1357 Task 12) so the daemon's periodic drain can share
+/// <para>Moved to <c>Capacitor.Cli.Core</c> so the daemon's periodic drain can share
 /// this exact ordering logic without referencing the CLI's exe project.</para>
 /// </summary>
 public static class LifecycleSpoolDrain {
@@ -23,7 +23,7 @@ public static class LifecycleSpoolDrain {
         foreach (var sid in OrderedSessions(lifecycle, transcript, currentSessionId)) {
             if (Expired()) return;
 
-            // AI-1357 Task 12 / BLOCKER-3: a session whose terminal (session-end) route was already
+            // Task 12 / BLOCKER-3: a session whose terminal (session-end) route was already
             // durably delivered by a PRIOR pass must never have a straggler non-terminal entry
             // (e.g. a late subagent-stop) delivered after it — that would be a real ordering
             // violation, reachable now that session-start/subagent-stop/session-end share one spool
@@ -67,7 +67,7 @@ public static class LifecycleSpoolDrain {
     /// Production wrapper: real HTTP posters that map status → DrainOutcome (mirrors ClaudeHookCommand's
     /// ClaudePoster / CursorHookCommand's PostOnce-based poster).
     ///
-    /// <para><b>generate_whats_done (AI-1357 Task 12 / BLOCKER-2).</b> <paramref name="onWhatsDoneRequested"/>
+    /// <para><b>generate_whats_done.</b> <paramref name="onWhatsDoneRequested"/>
     /// is invoked with <c>(sessionId, vendor)</c> whenever a terminal (session-end) entry this drain
     /// delivers comes back with <c>generate_whats_done: true</c> — the exact side effect
     /// <c>ClaudeHookCommand.ClaudePoster</c> performs for Claude's own session-end replay. Without this,
@@ -114,7 +114,7 @@ public static class LifecycleSpoolDrain {
     }
 
     static Task<DrainOutcome> PostTranscript(HttpClient client, string baseUrl, string body, CancellationToken ct) {
-        // AI-1382 review fix #1/#8 — a Cursor batch already quarantined by the runtime rewrite
+        // review fix #1/#8 — a Cursor batch already quarantined by the runtime rewrite
         // guard must never be replayed from the shutdown transcript spool: the tail spooled at
         // shutdown could predate the quarantine (a batch queued before the guard tripped on a
         // later poll), and this is the ONLY delivery-time check the spool-replay path has, since

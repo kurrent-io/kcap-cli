@@ -51,7 +51,7 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, cmd.SessionId, _logger);
 
         try {
-            // AI-9 Phase 3 — fetch the catalog (rendered prompts + raw text +
+            // Phase 3 — fetch the catalog (rendered prompts + raw text +
             // versions) so PrepareAsync reconciles the run question list from it.
             var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _shutdownToken);
             if (catalog is null) return new(false, "catalog load failed", null, 0, 0, 0, 0, 0);
@@ -100,7 +100,7 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger);
 
         try {
-            // AI-9 Phase 3 — the SignalR-supplied cmd.Question carries raw text
+            // Phase 3 — the SignalR-supplied cmd.Question carries raw text
             // and a null prompt version; the RECONCILED question from the cached
             // context (matched by id) carries the catalog's rendered Prompt, RawText,
             // and PromptVersion. Judge the reconciled item, not the wire DTO.
@@ -147,7 +147,7 @@ internal sealed class EvalRunner {
         try {
             // FinalizeAsync signature was updated in Task 6.5 — the taxonomy is
             // carried on ctx.Questions, not passed separately.
-            // AI-9 Phase 3: FinalizeAsync now returns SessionEvalCompletedPayloadV3;
+            // Phase 3: FinalizeAsync now returns SessionEvalCompletedPayloadV3;
             // FinalizeResult.Aggregate is the V1 wire DTO held by the server
             // orchestrator, which only inspects Success on this result so we
             // pass null for Aggregate. The V3 payload is already persisted to

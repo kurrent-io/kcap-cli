@@ -155,7 +155,7 @@ public class ImportDoneBreakdownTests {
         await Assert.That(claudeRow.Errored + cursorRow.Errored).IsEqualTo(2);   // 1 + 1
     }
 
-    // --- IsLifecycleOnlyRoutedReplay (AI-1154 review fix, P2; broadened round-2) ---
+    // IsLifecycleOnlyRoutedReplay (review fix, P2; broadened round-2) ---
     //
     // The routed-phase loop in HandleImport increments routedLoaded/importedSessionIds whenever
     // ImportOutcome is Loaded/Resumed. For an AlreadyLoaded Cursor classification, ImportSessionAsync

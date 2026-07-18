@@ -9,7 +9,7 @@ using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>AI-1264 P2 task 17: MCP tools for the work-items correlation surface — attach the
+/// <summary> P2 task 17: MCP tools for the work-items correlation surface — attach the
 /// current session (and its continuation chain) to a work item, and list what a session is
 /// already attached to. Cloned from <see cref="McpMemoryServer"/>'s stdio JSON-RPC loop; unlike
 /// memory this server has no repo/machine context to resolve — the only per-call input is the
@@ -195,7 +195,7 @@ static class McpWorkItemsServer {
     }
 
     // NOTE: request bodies use snake_case keys — the server's global JSON policy is
-    // JsonNamingPolicy.SnakeCaseLower (see AI-1134 task 9). Responses are passed through as raw
+    // JsonNamingPolicy.SnakeCaseLower. Responses are passed through as raw
     // text, so only this request-body builder is affected. The server enforces "exactly one of
     // issue_key/pr_number/work_item_id/new_title" (400 on violation) — this builder passes
     // through whichever selector(s) were supplied and lets that validation surface as a tool

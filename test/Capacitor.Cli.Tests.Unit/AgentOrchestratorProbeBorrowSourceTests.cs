@@ -4,7 +4,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1207 Phase A (task A3): covers <see cref="AgentOrchestrator.HandleProbeBorrowSourceForTest"/>,
+/// Phase A (task A3): covers <see cref="AgentOrchestrator.HandleProbeBorrowSourceForTest"/>,
 /// the handler behind the server→daemon <c>ProbeBorrowSource</c> hub method. The handler is a thin
 /// mapping from <see cref="BorrowAuthorizer.AuthorizeBorrowAsync"/>'s <see cref="BorrowAuthResult"/>
 /// onto the wire-facing <see cref="BorrowProbeResult"/> — the policy itself (allowlist, git-root,

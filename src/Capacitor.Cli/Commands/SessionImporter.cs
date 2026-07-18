@@ -461,7 +461,7 @@ static class SessionImporter {
     /// <see cref="TranscriptBatch"/> so the server picks the matching normalizer.
     /// </param>
     /// <param name="abortDelivery">
-    /// AI-1382 review fix (r3, finding #4; extended r4, finding #3) — checked immediately BEFORE
+    /// checked immediately BEFORE
     /// every batch POST (including the very first) AND immediately AFTER it. When it returns true,
     /// delivery aborts by throwing <see cref="TranscriptDeliveryAbortedException"/> — a pre-POST trip
     /// skips the pending batch entirely; a post-POST trip has already sent that batch but stops
@@ -526,7 +526,7 @@ static class SessionImporter {
                 batchLines.Clear();
                 batchLineNumbers.Clear();
 
-                // AI-1382 review fix (r4, finding #3) — re-check IMMEDIATELY after the POST too, not
+                // re-check IMMEDIATELY after the POST too, not
                 // only before the NEXT one. Before this, a marker written while THIS batch's POST was
                 // in flight was only ever caught by the pre-POST check ahead of a batch that might
                 // never come (see below) — for a transcript with no further lines to send (this was
@@ -544,7 +544,7 @@ static class SessionImporter {
             totalSent += flushed;
             progress?.Report(new BatchFlushed(agentId, flushed));
 
-            // AI-1382 review fix (r4, finding #3) — same post-POST re-check for the trailing/only
+            // same post-POST re-check for the trailing/only
             // batch (a transcript of <=100 lines never enters the loop branch above at all, so
             // WITHOUT this check here specifically, a marker written while this — the ONLY — POST was
             // in flight was never observed anywhere: SendTranscriptBatches returned normally and the
@@ -556,7 +556,7 @@ static class SessionImporter {
     }
 
     /// <summary>
-    /// AI-1382 review fix (r3, finding #4) — thrown by <see cref="SendTranscriptBatches"/> when its
+    /// thrown by <see cref="SendTranscriptBatches"/> when its
     /// <c>abortDelivery</c> predicate trips mid-delivery (between batches). Distinct from a generic
     /// send failure so a caller that wants to react specially (Cursor's best-effort session-end —
     /// see <see cref="CursorImportSource.ImportSessionAsync"/>) can catch it before a broader

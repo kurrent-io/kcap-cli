@@ -265,7 +265,7 @@ public static class SetupCommand {
             SkipPiMcp: skipPiMcpFlag,
             SkipPiInstructions: skipPiInstructionsFlag);
 
-        // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
+        // allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
         // proxy; self-hosted servers are added as exact hosts. Derived from the active
         // server URL plus every configured profile so switching profiles still works.
@@ -317,7 +317,7 @@ public static class SetupCommand {
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
-            // AI-1264: every non-Claude JSON harness registers the ForCursor subset — kcap-workitems
+            // every non-Claude JSON harness registers the ForCursor subset — kcap-workitems
             // is a Claude Code plugin-only tool (its session-id default rides the Claude hook env).
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
                 CursorPaths.UserMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
@@ -358,7 +358,7 @@ public static class SetupCommand {
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
-        // from headless agent CLI spawns by default (AI-755) so subscription auth
+        // from headless agent CLI spawns by default so subscription auth
         // wins. PAYG users with the keys set in their environment can opt back in
         // here; the rest never see this prompt.
         var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
@@ -440,7 +440,7 @@ public static class SetupCommand {
 
         var finalTokens = await TokenStore.LoadAsync();
 
-        // AI-752: tell the server this user has finished CLI setup, so the dashboard
+        // tell the server this user has finished CLI setup, so the dashboard
         // can flip the new-tenant welcome modal from "Waiting for CLI to register"
         // to "Registered". Best-effort — never block setup completion on this.
         await PingCliSetupAsync(serverUrl);
@@ -464,7 +464,7 @@ public static class SetupCommand {
 
         AnsiConsole.Write(grid);
 
-        // AI-836: hooks only load at coding-agent session start. The common case is a user
+        // hooks only load at coding-agent session start. The common case is a user
         // running `kcap setup` from inside an already-running session, which won't stream
         // live until it restarts — so tell them, but only when something was actually
         // installed (no point promising recording we never wired up).
@@ -592,7 +592,7 @@ public static class SetupCommand {
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
 
-    // AI-752 — best-effort signal to the server that this user has completed CLI setup.
+    // best-effort signal to the server that this user has completed CLI setup.
     // Silently swallows network/auth/server errors: the welcome-modal nudge is a UX
     // affordance, not part of the contract of `kcap setup`.
     //
@@ -661,7 +661,7 @@ public static class SetupCommand {
     }
 
     /// <summary>
-    /// AI-836 — the end-of-setup reminder that live recording only starts on a
+    /// the end-of-setup reminder that live recording only starts on a
     /// <em>new</em> coding-agent session. Claude Code (and the other agents) load hooks
     /// at session start, so a session that was already running when setup installed the
     /// hooks keeps running without them and never streams live. Returns the Spectre-markup

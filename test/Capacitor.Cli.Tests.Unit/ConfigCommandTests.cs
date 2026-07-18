@@ -169,7 +169,7 @@ public class ConfigCommandTests {
         await Assert.That(updated.ServerUrl).IsEqualTo("https://example.com");
     }
 
-    // ── default_visibility (AI-1206: "project" added to the ladder) ────────────
+    // ── default_visibility ("project" added to the ladder) ────────────
 
     [Test]
     [Arguments("private")]

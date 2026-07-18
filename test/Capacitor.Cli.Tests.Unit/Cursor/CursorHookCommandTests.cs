@@ -95,7 +95,7 @@ public class CursorHookCommandTests {
         await Assert.That(fx.RouteOrder).IsEquivalentTo(["session-start/cursor", "session-end/cursor"]);
     }
 
-    // AI-1382 review fix #4 — a telemetry-only mapping (postToolUse, SpoolOnFailure=false) must
+    // a telemetry-only mapping (postToolUse, SpoolOnFailure=false) must
     // NOT let the recovery-spawn watcher start while an EARLIER queued canonical event (here:
     // sessionStart) is still stuck undelivered. Simulate: sessionStart is already spooled from a
     // prior failed invocation; THIS invocation's generic top-of-method drain retries it and hits
@@ -212,7 +212,7 @@ public class CursorHookCommandTests {
 
     [Test]
     public async Task telemetry_only_hook_touches_the_heartbeat_file() {
-        // AI-1382 Task 8: even a telemetry-only hook (never spooled, lossy on failure) must
+        // Task 8: even a telemetry-only hook (never spooled, lossy on failure) must
         // touch the per-session heartbeat — it reflects "Cursor is still firing hooks",
         // independent of whatever the transcript/spool machinery is doing.
         using var fx = new Fixture();
@@ -248,7 +248,7 @@ public class CursorHookCommandTests {
 
     [Test]
     public async Task sessionEnd_drains_the_hook_spool_before_the_pre_end_transcript_drain_and_clears_the_barrier() {
-        // AI-1382 Task 8: a beforeSubmitPrompt whose live POST previously failed left a barrier
+        // Task 8: a beforeSubmitPrompt whose live POST previously failed left a barrier
         // + a spooled user-prompt/cursor entry behind. sessionEnd must deliver that spooled
         // entry (clearing the barrier) BEFORE running its pre-end transcript drain, so a
         // transcript line depending on the attachment is never normalized ahead of it.
@@ -397,7 +397,7 @@ public class CursorHookCommandTests {
         public HttpClient Client                { get; }
         public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
 
-        // AI-1382 Task 10: the backfill now holds a non-newline-terminated final line on every
+        // Task 10: the backfill now holds a non-newline-terminated final line on every
         // mid-session (Hold-policy) call — a real Cursor transcript line is newline-terminated
         // once flushed, so tests write content the same way rather than exercising the
         // holdback edge case incidentally.

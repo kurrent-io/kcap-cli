@@ -24,7 +24,7 @@ internal sealed class AcpRpcException : Exception {
 }
 
 /// <summary>
-/// Newline-delimited JSON-RPC 2.0 stdio transport for <c>cursor-agent acp</c> (AI-684 Task 7).
+/// Newline-delimited JSON-RPC 2.0 stdio transport for <c>cursor-agent acp</c>.
 /// Owns framing (one JSON object per line, UTF-8), outbound request/response correlation, and
 /// routing of inbound notifications and server→client requests. Decoupled from <see cref="System.Diagnostics.Process"/>
 /// — the ctor takes plain <see cref="Stream"/>s so tests can drive it over in-memory pipes; the
@@ -43,7 +43,7 @@ internal sealed class AcpRpcException : Exception {
 ///   exit early on a single bad line (a wire hiccup would otherwise silently wedge every pending
 ///   and future <see cref="RequestAsync"/> call).
 ///
-/// Per the AI-684 probe (<c>docs/acp-probe-findings.md</c>), ACP has no per-request
+/// Per the probe (<c>docs/acp-probe-findings.md</c>), ACP has no per-request
 /// <c>$/cancelRequest</c> frame — cancellation is session-level via the <c>session/cancel</c>
 /// notification, which the runtime sends through <see cref="NotifyAsync"/>. Cancelling the
 /// <see cref="CancellationToken"/> passed to <see cref="RequestAsync"/> only abandons the pending
@@ -82,7 +82,7 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
     /// <c>fs/*</c>, <c>terminal/*</c>). The read loop echoes the request's id verbatim in the
     /// response it writes back, with this delegate's return value as the JSON-RPC <c>result</c>.
     /// If unset, every inbound server request is answered with a method-not-found error — a safe
-    /// default-decline posture. AI-684 leaves this unset; AI-686 wires it to the permission bridge.
+    /// default-decline posture. leaves this unset; wires it to the permission bridge.
     ///
     /// A handler returning <see langword="null"/> signals the method is unhandled: the connection
     /// answers <c>-32601 Method not found</c>, the SAME response a fully unset handler produces —
@@ -340,7 +340,7 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
         }
 
         try {
-            // AI-686: the final response write deliberately uses CancellationToken.None, not `ct` —
+            // the final response write deliberately uses CancellationToken.None, not `ct` —
             // this method's own doc comment guarantees exactly one response frame is written "no
             // matter what happens", and `ct` is the SAME token AcpHostedAgentRuntime.DisposeAsync
             // cancels to unblock a pending OnServerRequest handler (e.g. AcpInteractionBridge

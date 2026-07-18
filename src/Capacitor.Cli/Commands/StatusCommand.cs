@@ -69,8 +69,8 @@ public static class StatusCommand {
 
         await Console.Out.WriteLineAsync(line);
 
-        // Daemon — AI-630: read per-name PID files under
-        // ~/.config/kcap/daemons/ instead of the pre-AI-630 singleton
+        // Daemon: read per-name PID files under
+        // ~/.config/kcap/daemons/ instead of the legacy singleton
         // at ~/.config/kcap/agent.pid. The top-level `kcap status`
         // must agree with `kcap daemon status`; previously this
         // command kept saying "not running" while `daemon status` reported

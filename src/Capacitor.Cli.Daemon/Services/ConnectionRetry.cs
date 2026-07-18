@@ -25,7 +25,7 @@ namespace Capacitor.Cli.Daemon.Services;
 ///
 /// A caller may additionally supply <paramref name="isRetriableServerError"/> +
 /// <paramref name="maxServerErrorRetries"/> to retry a BOUNDED number of times on specific
-/// server-rejection exceptions (AI-864: the "Caller is not the daemon owning session"
+/// server-rejection exceptions (the "Caller is not the daemon owning session"
 /// <c>HubException</c> that can appear briefly after a reconnect, before per-agent
 /// re-registration has restored ownership — retrying past that window avoids a spurious deny).
 /// Unlike transient disconnects, these retries are capped so a genuinely-permanent server error

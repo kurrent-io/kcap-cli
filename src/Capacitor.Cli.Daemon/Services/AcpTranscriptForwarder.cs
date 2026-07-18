@@ -48,7 +48,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// resends that make no progress (with a small backoff) and, once the cap is hit, treats the binding
 /// as terminal (stop + clear + <see cref="IsTerminal"/>) rather than spinning. A legitimate gap
 /// advances its <c>ExpectedNextSeq</c> each round and so never trips the guard. Deeper reconnect
-/// resilience beyond this remains AI-689.
+/// resilience beyond this remains.
 ///
 /// Out of scope here: building/emitting the <c>SessionStarted</c> envelope (it is passed
 /// in pre-built as <paramref name="initialEnvelope"/>) or calling <c>AcpSessionStarted</c> — the bind

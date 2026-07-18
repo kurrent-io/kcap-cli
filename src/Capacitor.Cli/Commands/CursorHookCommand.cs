@@ -134,7 +134,7 @@ public static class CursorHookCommand {
 
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
 
-            // AI-1151 (live): bring CursorSubagentCorrelator into the live hook/backfill
+            // bring CursorSubagentCorrelator into the live hook/backfill
             // path. Cursor is NOT watcher-backed, so the correlation must run right here in
             // the per-hook CLI dispatcher rather than in a background watcher. The decision
             // (linked to a parent, or not) is made once — at the child's own sessionStart —
@@ -168,7 +168,7 @@ public static class CursorHookCommand {
             }
             var isSubagentChild = subagentParentId is not null;
 
-            // AI-1152: attach a `repository` node on sessionStart so the session groups
+            // attach a `repository` node on sessionStart so the session groups
             // under its repo in the sidebar. Cursor payloads carry `workspace_roots`
             // rather than `cwd`, so the generic EnrichWithRepositoryInfo (which reads
             // `cwd`) can't be used — detect from workspace_roots[0] instead. Bounded by
@@ -183,7 +183,7 @@ public static class CursorHookCommand {
                  && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
                     workspaceRoot = wr;
 
-                // AI-1382 Task 9: spawn (or heal) this session's tailing Cursor watcher FIRST —
+                // Task 9: spawn (or heal) this session's tailing Cursor watcher FIRST —
                 // live transcript capture must never be lost even if the repo-enrichment call
                 // below (or the eventual POST) is slow or fails. Idempotent; a no-op once alive.
                 if (sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
@@ -209,11 +209,11 @@ public static class CursorHookCommand {
                         using var content = new StringContent(entryBody, Encoding.UTF8, "application/json");
                         using var resp    = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, HookPostTimeout, ct);
                         if (resp.IsSuccessStatusCode) {
-                            // AI-1382 Task 8: a spooled beforeSubmitPrompt (user-prompt/cursor)
+                            // Task 8: a spooled beforeSubmitPrompt (user-prompt/cursor)
                             // finally being delivered here means the side-effect barrier this
                             // session may be holding on can now be cleared.
                             if (route == "user-prompt/cursor") CursorMarkers.ClearBarrier(sessionId);
-                            // AI-1382 Task 12: this IS "a later invocation whose spool drain
+                            // Task 12: this IS "a later invocation whose spool drain
                             // delivers the start" — a subagent-start that failed its first live
                             // POST (see HandleSubagentChildEventAsync) just got acknowledged here
                             // instead. Perform the deferred child-watcher spawn now.
@@ -226,7 +226,7 @@ public static class CursorHookCommand {
                 }, budgetTotal, ct);
             }
 
-            // AI-1382 review fix #4 — capture whether this session STILL has spool backlog after
+            // capture whether this session STILL has spool backlog after
             // the drain attempt above. A TransientStop mid-drain (or budget expiry) can leave
             // entries undelivered — including an earlier canonical lifecycle event like
             // sessionStart — and the ordering guard below only early-returns for mappings whose
@@ -236,7 +236,7 @@ public static class CursorHookCommand {
             // before the still-backlogged earlier event ever reaches the server.
             var hasRemainingSpoolBacklog = sessionId is not null && spool.HasBacklog(sessionId);
 
-            // AI-1151 (live): a linked subagent child takes over entirely from here — it never
+            // a linked subagent child takes over entirely from here — it never
             // gets the normal mapping.RouteSegment POST (mirroring CursorImportSource.
             // SendSubagentLifecycleAsync, which never gives a correlated child its own top-level
             // lifecycle either). See HandleSubagentChildEventAsync for the divert.
@@ -276,7 +276,7 @@ public static class CursorHookCommand {
                                && !string.IsNullOrEmpty(transcriptPath);
 
             if (drainBeforePost && !BudgetExpired()) {
-                // AI-1382 Task 10 (D2): this IS the sessionEnd pre-end drain — the hook is the
+                // Task 10 (D2): this IS the sessionEnd pre-end drain — the hook is the
                 // last component that will ever observe this transcript, so a valid
                 // newline-less final record must be consumed rather than held forever.
                 await CursorTranscriptBackfill.RunAsync(
@@ -297,18 +297,18 @@ public static class CursorHookCommand {
             if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
                 spool.Append(sessionId, mapping.RouteSegment, normalized);
             }
-            // AI-1382 Task 8: the ordering-sensitive beforeSubmitPrompt's own live POST just
+            // Task 8: the ordering-sensitive beforeSubmitPrompt's own live POST just
             // succeeded — clear the barrier it created above.
             if (posted && eventName == "beforeSubmitPrompt" && sessionId is not null) {
                 CursorMarkers.ClearBarrier(sessionId);
             }
 
-            // AI-1382 Task 9: recovery spawn from a non-start hook — ONLY once this
+            // Task 9: recovery spawn from a non-start hook — ONLY once this
             // invocation's own lifecycle POST has actually landed (never race a fresh watcher
             // ahead of the metadata the server needs to attribute its lines to). sessionStart
             // already spawned before its POST above; ShouldSpawnWatcher is false for sessionEnd
             // regardless, so this is safe to reach unconditionally for every other event.
-            // AI-1382 review fix #4 — additionally require no remaining spool backlog: this
+            // additionally require no remaining spool backlog: this
             // invocation's own POST landing is not enough if an EARLIER queued event for this
             // session is still stuck undelivered (hasRemainingSpoolBacklog, captured above).
             if (posted && eventName != "sessionStart" && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)
@@ -332,7 +332,7 @@ public static class CursorHookCommand {
     }
 
     /// <summary>
-    /// AI-1151 (live): the divert path for a Cursor hook belonging to a subagent child
+    /// the divert path for a Cursor hook belonging to a subagent child
     /// already linked to a parent (<see cref="CursorLiveSubagentLinker"/>). Mirrors
     /// <c>CursorImportSource.SendSubagentLifecycleAsync</c> — only three things ever happen
     /// for a linked child, regardless of which Cursor hook fired: <c>subagent-start</c>
@@ -384,7 +384,7 @@ public static class CursorHookCommand {
             return 0;
         }
 
-        // AI-1382 review fix #5 — a non-start hook for a child whose subagent-start was never
+        // a non-start hook for a child whose subagent-start was never
         // acknowledged (2xx) must not let ANY child transcript flow, nor its own subagent-stop
         // POST. The backlog check above only catches a start that's still PENDING retry; a start
         // that hit a non-transient 4xx is permanently DROPPED by the generic drain (HandleCore's
@@ -401,7 +401,7 @@ public static class CursorHookCommand {
         // replay, so that's all we do (plus a self-heal spawn — see below).
         if (!isLifecycle) {
             if (!string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
-                // AI-1382 review fix #5 — self-heal. HasSubagentStartAck (above) only proves
+                // self-heal. HasSubagentStartAck (above) only proves
                 // subagent-start was acknowledged (2xx) AT SOME POINT — the child watcher process
                 // itself may since have exited (the newly-enabled idle ceiling), crashed, or never
                 // actually spawned at all (e.g. its acked sessionStart hook carried no transcript
@@ -423,7 +423,7 @@ public static class CursorHookCommand {
 
         // sessionEnd: drain the transcript before the terminal hook — same ordering rationale
         // as the top-level path, and mirrors SendSubagentLifecycleAsync (its transcript batch
-        // always precedes subagent-stop too). AI-1382 Task 10 (D2): this is the child's own
+        // always precedes subagent-stop too). Task 10 (D2): this is the child's own
         // pre-end drain, so consume a complete-but-unterminated final line rather than holding it.
         if (isStop && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
             await CursorTranscriptBackfill.RunAsync(
@@ -438,7 +438,7 @@ public static class CursorHookCommand {
 
         var posted = await TryPostHookAsync(client, baseUrl, route, body!, ct);
         if (!posted) {
-            // AI-1382 Task 12 — subagent-start POST failed (spooled): the child watcher must
+            // Task 12 — subagent-start POST failed (spooled): the child watcher must
             // NOT spawn here. Spawning now would let the watcher's own poll deliver child
             // transcript lines before SubagentStarted is ever appended (the server has no
             // AgentSubsession stream open yet to receive them). Spool it and STOP; running the
@@ -450,12 +450,12 @@ public static class CursorHookCommand {
             return 0;
         }
 
-        // AI-1382 review fix #5 — persist the positive ack so HandleSubagentChildEventAsync's
+        // persist the positive ack so HandleSubagentChildEventAsync's
         // no-ack gate (above) is satisfied for every subsequent hook invocation for this child
         // (a fresh process each time, so nothing survives in memory).
         if (isStart) CursorMarkers.MarkSubagentStartAcked(childSessionId);
 
-        // AI-1382 Task 12 — subagent-start is ACKNOWLEDGED (2xx) via this live POST. Only now
+        // Task 12 — subagent-start is ACKNOWLEDGED (2xx) via this live POST. Only now
         // may the child's own tailing watcher be spawned — the invariant this task exists for
         // is that no child transcript line ever reaches the server before SubagentStarted.
         if (isStart && !string.IsNullOrEmpty(transcriptPath)) {
@@ -474,7 +474,7 @@ public static class CursorHookCommand {
     }
 
     /// <summary>
-    /// AI-1382 Task 12 — spawns (or heals) the child (subagent) Cursor watcher, keyed
+    /// Task 12 — spawns (or heals) the child (subagent) Cursor watcher, keyed
     /// <c>{parentSessionId}-{childSessionId}</c> so it never collides with the parent's own
     /// top-level watcher key. Tails the CHILD's own transcript file and routes every batch it
     /// sends under <paramref name="parentSessionId"/> with <c>agentId = childSessionId</c>
@@ -507,7 +507,7 @@ public static class CursorHookCommand {
     }
 
     /// <summary>
-    /// AI-1382 Task 12 — the generic spool-drain callback (<see cref="HandleCore"/>'s top-of-method
+    /// Task 12 — the generic spool-drain callback (<see cref="HandleCore"/>'s top-of-method
     /// drain, which runs for every session BEFORE the <c>isSubagentChild</c> divert) has just
     /// delivered a previously-spooled <c>subagent-start</c> entry. Parses the parent/child/
     /// transcript-path triple back out of its own payload shape
@@ -526,7 +526,7 @@ public static class CursorHookCommand {
             if (parentSessionId is null || childSessionId is null || string.IsNullOrEmpty(transcriptPath)) {
                 return Task.CompletedTask;
             }
-            // AI-1382 review fix #5 — this delivery IS the 2xx ack for a previously-spooled
+            // this delivery IS the 2xx ack for a previously-spooled
             // subagent-start; persist it so the no-ack gate in HandleSubagentChildEventAsync is
             // satisfied for this child from here on.
             CursorMarkers.MarkSubagentStartAcked(childSessionId);
@@ -535,7 +535,7 @@ public static class CursorHookCommand {
     }
 
     /// <summary>
-    /// AI-1382 Task 9 — pure precedence predicate for whether THIS hook invocation should
+    /// Task 9 — pure precedence predicate for whether THIS hook invocation should
     /// spawn (or heal) the per-session top-level Cursor watcher. Precedence, from the D1
     /// design: ① a terminal hook (<c>sessionEnd</c>) never spawns — only the pre-end drain and
     /// the terminal POST matter there, and spawning a watcher moments before killing the
@@ -551,7 +551,7 @@ public static class CursorHookCommand {
     }
 
     /// <summary>
-    /// AI-1382 Task 9 — spawns (or heals, via <see cref="WatcherManager.EnsureWatcherRunning"/>'s
+    /// Task 9 — spawns (or heals, via <see cref="WatcherManager.EnsureWatcherRunning"/>'s
     /// existing idempotent PID+heartbeat check) the per-session top-level Cursor watcher for
     /// <paramref name="sessionId"/>, unless: the session is quarantined (a runtime rewrite-guard
     /// trip — Task 7 — must not keep resurrecting a watcher for a session already given up on),

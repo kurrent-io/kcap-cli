@@ -124,7 +124,7 @@ public class ClaudeCliRunnerTests {
 
     // DEV-1484 contract: when a caller opts into MCP mode, they must name the
     // tools they want exposed. `--strict-mcp-config` already limits which MCP
-    // *servers* load to just the caller's inline config (AI-803), and the
+    // *servers* load to just the caller's inline config, and the
     // built-in lockdown (`--tools ""` / `--disallowedTools LSP`) stays on, so
     // an MCP config with no allowlist would load a server whose tools are never
     // permitted — the judge can't call anything, which is a silent
@@ -153,7 +153,7 @@ public class ClaudeCliRunnerTests {
         await Assert.That(ex?.ParamName).IsEqualTo("allowedTools");
     }
 
-    // AI-803: the tool-using (MCP) judge branch must keep `--strict-mcp-config`
+    // the tool-using (MCP) judge branch must keep `--strict-mcp-config`
     // on so claude loads ONLY the caller's inline session-scoped judge server.
     // Without it, a client machine with the `kcap` Claude Code plugin installed
     // leaks its global `kcap-sessions` server into the headless judge; the judge
@@ -281,7 +281,7 @@ public class ClaudeCliRunnerTests {
         return i >= 0 && i + 1 < args.Count ? args[i + 1] : null;
     }
 
-    // AI-755: the CLI returns is_error:true with the API failure text in
+    // the CLI returns is_error:true with the API failure text in
     // `result` when the upstream call fails (overload, rate limit, auth).
     // Surfacing that text as a title produced session titles like
     // "Claude API error: Overloaded". Treat it as a failure instead.
@@ -332,7 +332,7 @@ public class ClaudeCliRunnerTests {
         await Assert.That(result!.Result).IsEqualTo("ok");
     }
 
-    // AI-755 follow-up: if the envelope says is_error:true, the parser
+    // follow-up: if the envelope says is_error:true, the parser
     // returns null but RunCoreAsync still tries TryReadTranscriptFallback.
     // The transcript's last assistant block on a failed turn can be a
     // partial reply or stale auto-memory content, so converting that into

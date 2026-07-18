@@ -5,14 +5,14 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// <see cref="IHostedAgentRuntimeFactory"/> for Cursor (AI-684 Task 10): spawns
+/// <see cref="IHostedAgentRuntimeFactory"/> for Cursor: spawns
 /// <c>{DaemonConfig.CursorPath} acp</c> as a child process, wraps its stdio in an
 /// <see cref="AcpConnection"/> + <see cref="AcpChildProcess"/>, and drives the ACP handshake via
 /// <see cref="AcpHostedAgentRuntime.StartAsync"/>. Cursor has no unattended mode yet (no permission
-/// bridge until AI-686), so <see cref="SupportsUnattended"/> is <c>false</c> — the orchestrator's
+/// bridge until), so <see cref="SupportsUnattended"/> is <c>false</c> — the orchestrator's
 /// <c>UnattendedLaunchPolicy</c> refuses a review-flow launch for this vendor.
 ///
-/// <b>Spec-review Finding 4 (AI-686):</b> gained a <see cref="ServerConnection"/> constructor
+/// <b>Spec-review Finding 4:</b> gained a <see cref="ServerConnection"/> constructor
 /// dependency so every runtime this factory produces has the real permission/elicitation bridge
 /// wired — <see cref="StartAsync"/> passes <c>ctx.AgentId</c> and
 /// <see cref="ServerConnection.RequestAcpInteractionAsync"/> into <see cref="AcpHostedAgentRuntime"/>'s
@@ -52,7 +52,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         var acpConnection = new AcpConnection(input, output, connLogger, config.DebugFrames);
 
         // Spec-review Finding 4: real production wiring — every Cursor launch now gets the
-        // permission/elicitation bridge, not AI-684's default MethodNotFound/decline.
+        // permission/elicitation bridge, not the default MethodNotFound/decline.
         var runtime = new AcpHostedAgentRuntime(
             acpConnection,
             acpProcess,

@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// <summary>
 /// Bridges ACP server→client interaction requests (<c>session/request_permission</c>, and a
 /// capability-gated, defensive <c>elicitation/create</c>) to the Capacitor server's
-/// <c>AcpRequestInteraction</c> hub method (AI-686), and maps the returned decision back to the
+/// <c>AcpRequestInteraction</c> hub method, and maps the returned decision back to the
 /// ACP JSON-RPC result shape. Wired as (a closure over) <see cref="AcpConnection.OnServerRequest"/>
 /// by <see cref="Capacitor.Cli.Daemon.Services.AcpHostedAgentRuntime"/> (Task B4).
 ///
@@ -35,7 +35,7 @@ internal sealed partial class AcpInteractionBridge(
     /// Handles one inbound <see cref="AcpRequest"/>. Returns <see langword="null"/> for any method
     /// this bridge doesn't recognize (letting <see cref="AcpConnection.HandleServerRequestAsync"/>'s
     /// existing default-decline posture answer with a JSON-RPC "Method not found" error, unchanged
-    /// from AI-684's behavior for every method except the two this bridge now claims).
+    /// from the prior behavior for every method except the two this bridge now claims).
     ///
     /// <b>Qodo daemon-review Q2:</b> takes NO caller-supplied session id — the ACP session id used to
     /// correlate this interaction server-side comes ONLY from the request's OWN

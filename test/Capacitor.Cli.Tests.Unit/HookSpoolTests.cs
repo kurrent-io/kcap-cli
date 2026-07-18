@@ -115,7 +115,7 @@ public class HookSpoolTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1357 Task 12 / BLOCKER-1: the ordered drain (LifecycleSpoolDrain / DrainRoutesAsync) uses a
+    // Task 12 / BLOCKER-1: the ordered drain (LifecycleSpoolDrain / DrainRoutesAsync) uses a
     // distinct ".ordered-*" temp namespace precisely so it can deliberately WITHHOLD a phase's
     // remainder mid-pass (e.g. a session-end held back until the transcript tail is done) without
     // the unrelated route-agnostic FIFO drain (DrainAllAsync, still used by Claude/Cursor) sweeping

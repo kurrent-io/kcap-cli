@@ -82,7 +82,7 @@ static class CodexCliRunner {
         };
         // A globally-set OPENAI_API_KEY overrides ChatGPT subscription auth in `codex exec`.
         // Users on PAYG/API-key auth opt back in via profile flag or
-        // KCAP_USE_PROVIDER_API_KEY=1 (AI-776).
+        // KCAP_USE_PROVIDER_API_KEY=1.
         if (!ProviderApiKeyPolicy.ShouldKeepProviderKey()) {
             psi.Environment.Remove("OPENAI_API_KEY");
         }
@@ -100,7 +100,7 @@ static class CodexCliRunner {
         psi.ArgumentList.Add($"model_reasoning_effort=\"{reasoning}\"");
         // Only pin a model when the caller explicitly asks. Letting codex pick its
         // own default keeps title generation working for ChatGPT-account auth
-        // (which rejects model names like "gpt-5.3-codex" with a 400 — AI-757).
+        // (which rejects model names like "gpt-5.3-codex" with a 400 —).
         // Empty/whitespace is treated the same as null to match CodexLauncher's
         // argv-building behaviour — passing `-m ""` to codex is never useful.
         if (!string.IsNullOrWhiteSpace(model)) {
@@ -155,7 +155,7 @@ static class CodexCliRunner {
             if (process.ExitCode != 0) {
                 // Tail-truncate: codex prints a multi-line session header before any
                 // error message lands on stderr, so head-truncation discarded the
-                // useful part (AI-757). Keep the last 800 chars so 4xx/5xx bodies
+                // useful part. Keep the last 800 chars so 4xx/5xx bodies
                 // and skill-loader warnings further down still make it into the log.
                 var stderrTail = stderr.Length > 800 ? "…" + stderr[^800..] : stderr;
                 log($"Codex exited with code {process.ExitCode}, stderr: {SanitizeForLog(stderrTail)}");

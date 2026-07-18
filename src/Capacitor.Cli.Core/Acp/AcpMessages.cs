@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core.Acp;
 
 /// <summary>
 /// Typed <c>params</c> payloads for the ACP methods <see cref="Daemon.Acp.AcpConnection"/> callers
-/// (<c>AcpHostedAgentRuntime</c>, AI-684 Task 9) send. These exist only so request construction can
+/// (<c>AcpHostedAgentRuntime</c>, Task 9) send. These exist only so request construction can
 /// go through source-gen (<see cref="JsonSerializer.SerializeToElement{T}(T, System.Text.Json.Serialization.Metadata.JsonTypeInfo{T})"/>
 /// against <see cref="CapacitorJsonContext"/>) instead of the reflection-based overloads, which are
 /// unsafe under NativeAOT. Field names/shapes are pinned to the probe-confirmed wire shapes in
@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Core.Acp;
 
 /// <summary>
 /// <c>initialize</c> params. Deliberately advertises MINIMAL client capabilities (no <c>fs</c>, no
-/// <c>terminal</c>) — AI-687 decides those from the AI-688 findings; AI-684 does not implement
+/// <c>terminal</c>) — decides those from the findings; does not implement
 /// either capability.
 /// </summary>
 public sealed record InitializeParams(
@@ -125,8 +125,8 @@ public sealed record AvailableModelDto(
 
 /// <summary>
 /// <c>session/request_permission</c> params sent BY THE AGENT (server-initiated request, handled
-/// via <see cref="Daemon.Acp.AcpConnection.OnServerRequest"/>) — AI-686. Spec-derived, NOT
-/// probe-confirmed: the AI-684 probe never observed a real <c>session/request_permission</c> frame
+/// via <see cref="Daemon.Acp.AcpConnection.OnServerRequest"/>). Spec-derived, NOT
+/// probe-confirmed: the probe never observed a real <c>session/request_permission</c> frame
 /// (the probe account's turn ended before any tool call — see
 /// <c>docs/acp-probe-findings.md</c> §"Permission / elicitation requests"). Mirrors the shape
 /// <see cref="Capacitor.Cli.Tests.Unit.Acp.FakeAcpAgent.BuildRequestPermissionFrame"/> already
@@ -170,7 +170,7 @@ public sealed record PermissionOutcomeDto(
 /// <summary>
 /// Capability-gated, NOT part of the core ACP spec — modeled defensively on the same
 /// request/response shape as <see cref="SessionRequestPermissionParams"/> since no confirmed
-/// elicitation schema exists for Cursor (AI-682 R3's open question: "Does Cursor use the ACP
+/// elicitation schema exists for Cursor (R3's open question: "Does Cursor use the ACP
 /// elicitation RFD shape or a vendor extension?" is unanswered). The daemon never advertises
 /// support for this method in <c>initialize</c> (see <c>AcpHostedAgentRuntime.StartAsync</c>'s
 /// existing minimal-capabilities <c>ClientCapabilities</c>, unchanged by this plan) — if a real

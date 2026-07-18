@@ -228,7 +228,7 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
     }
 
-    // ── Agent skills decoupled from Codex (AI-1285) ──────────────────────────
+    // ── Agent skills decoupled from Codex ──────────────────────────
 
     [Test]
     public async Task Agent_skills_installed_when_only_cursor_detected() {
@@ -479,7 +479,7 @@ public class CodingAgentsStepTests {
         await Assert.That(prompts).DoesNotContain(p => p.Contains("agent skills", StringComparison.OrdinalIgnoreCase) && p.Contains("Codex"));
     }
 
-    // ── Codex sandbox network access (AI-794) ────────────────────────────────
+    // ── Codex sandbox network access ────────────────────────────────
 
     [Test]
     public async Task Codex_network_access_enabled_when_hooks_installed_and_accepted() {
@@ -1994,7 +1994,7 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the Pi extension"));
     }
 
-    // ── OpenCode (SST): a plugin file, like Pi (AI-919) ──────────────────────
+    // ── OpenCode (SST): a plugin file, like Pi ──────────────────────
 
     [Test]
     public async Task OpenCode_detected_and_accepted_installs_plugin() {

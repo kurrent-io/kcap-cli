@@ -65,7 +65,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<FindRepoForRemoteRequest, Task<string[]>>? FindRepoForRemoteHandler { get; set; }
 
     /// <summary>
-    /// Handler for the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A,
+    /// Handler for the server's <c>ProbeBorrowSource</c> client-result invocation (Phase A,
     /// task A3): "can you borrow this path?". Receives a filesystem path and returns the
     /// daemon-computed authorization + canonical paths. Set by <see cref="AgentOrchestrator"/> at
     /// startup; when null, returns <c>BorrowProbeResult(false, null, null, "no handler")</c>.
@@ -167,7 +167,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<FindRepoForRemoteRequest, string[]>("FindRepoForRemote",
             req => FindRepoForRemoteHandler?.Invoke(req) ?? Task.FromResult(Array.Empty<string>()));
 
-        // Client-result invocation: "can you borrow this path?" (AI-1207 Phase A, task A3). Lets the
+        // Client-result invocation: "can you borrow this path?". Lets the
         // server prove co-location before offering a borrow-cwd launch target. "no handler" is
         // returned when the orchestrator hasn't wired the handler yet (e.g. early startup).
         _hub.On<string, BorrowProbeResult>("ProbeBorrowSource",
@@ -175,7 +175,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ?? Task.FromResult(new BorrowProbeResult(false, null, null, "no handler")));
 
         // Server→client push carrying the user's decision for a hosted-agent permission request
-        // (AI-864). Paired with the RequestPermission2 invocation in RequestPermissionAsync: that
+        // Paired with the RequestPermission2 invocation in RequestPermissionAsync: that
         // invocation returns a requestId immediately (so it can't occupy the connection's single
         // parallel-invocation slot and starve DaemonPing), and the decision arrives later via
         // this message. Resolve() completes the awaiting RequestPermissionAsync call, or buffers
@@ -185,7 +185,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             res => _pendingPermissions.Resolve(res.RequestId, res.Decision));
 
         // Server→client push carrying the user's decision for an ACP permission/elicitation
-        // interaction (AI-686). Mirrors the PermissionResolved registration above — a separate
+        // interaction. Mirrors the PermissionResolved registration above — a separate
         // registry (AcpInteractionDecision-typed) rather than reusing _pendingPermissions, since
         // the decision payload shape differs (ACP interactions carry SelectedOptionLabel/
         // SelectedIndex/FreeText that Claude Code's PermissionDecision has no equivalent for).
@@ -207,7 +207,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>
     /// Registers no-op client handlers for the UI-only broadcasts a daemon can
-    /// receive on its hub connection (AI-841). The server adds every
+    /// receive on its hub connection. The server adds every
     /// authenticated connection — daemons included — to its <c>org-members</c>
     /// UI group in <c>CapacitorHub.OnConnectedAsync</c>, and only removes the
     /// daemon again inside <c>DaemonConnect</c>. In the window between the
@@ -252,7 +252,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// connected+registered state. Logged as connection uptime in
     /// <see cref="OnClosed"/> so the daemon log shows how long each connection
     /// survived — the cadence that distinguishes a steady transport from one
-    /// flapping every few seconds (AI-840 diagnostics). Zero until the first
+    /// flapping every few seconds (diagnostics). Zero until the first
     /// successful connect.
     /// </summary>
     long _connectedTimestamp;
@@ -306,7 +306,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 throw;
             } catch (Exception ex) when (IsNameInUse(ex)) {
-                // AI-630: server explicitly rejected this daemon because
+                // server explicitly rejected this daemon because
                 // another live daemon owns the (owner, name) slot. Don't
                 // retry — retrying would just thrash the incumbent.
                 // RegisterDaemon already fired OnNameInUse before re-throwing
@@ -352,7 +352,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// followed by the ACP re-bind (<see cref="ReRegisterAgentsAndAcpBindingsAsync"/>), and only THEN
     /// restores readiness. Folding agent re-registration into the readiness bracket closes the
     /// window where a permission invoke could fire after <c>DaemonConnect</c> but before the server
-    /// re-established per-session ownership (AI-864); folding the ACP re-bind in right after it
+    /// re-established per-session ownership; folding the ACP re-bind in right after it
     /// closes the equivalent window for <see cref="SendAcpEventsAsync"/> — that call is
     /// <see cref="IsReady"/>-gated, so it can never
     /// reach the server before <see cref="ReBindAcpSessionsAsync"/> has re-established every active
@@ -395,7 +395,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 cancellationToken: _ct
             );
         } catch (Exception ex) when (IsNameInUse(ex)) {
-            // AI-630: server refused our (owner, name) slot because another
+            // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
             // so the host can shut down cleanly; the heartbeat loop's
             // SafeReRegisterAsync filters this exception out so we don't
@@ -463,7 +463,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>
-    /// Round-trip liveness probe (AI-566). Calls <c>DaemonPing</c> on the server
+    /// Round-trip liveness probe. Calls <c>DaemonPing</c> on the server
     /// and returns whether this connection is still the registered daemon for
     /// its <c>(owner, name)</c> slot. <c>false</c> means the slot was displaced
     /// — usually by an auto-reconnect Register from a different conn id —
@@ -488,7 +488,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="RegisterDaemon"/>. Used when the heartbeat ping times out
     /// or throws — the WebSocket is hung and only a fresh connection
     /// recovers it. StopAsync is capped at 5 s so a wedged transport
-    /// can't stall the heartbeat loop indefinitely (Qodo AI-642).
+    /// can't stall the heartbeat loop indefinitely (Qodo).
     /// </summary>
     public async Task ForceReconnectAsync() {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
@@ -599,7 +599,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // RequestPermission2 is a SHORT invocation: the server tracks the request, broadcasts the
         // prompt to the UI, and returns a requestId right away — it does NOT stay pending for the
         // whole elicitation wait. That keeps the connection's single parallel-invocation slot free
-        // so DaemonPing isn't starved (the AI-864 reconnect-storm / spurious-deny bug). The user's
+        // so DaemonPing isn't starved (the reconnect-storm / spurious-deny bug). The user's
         // decision arrives later via the "PermissionResolved" push, correlated by requestId.
         //
         // The invoke is still wrapped in ConnectionRetry: a SignalR blip while obtaining the
@@ -631,7 +631,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>
     /// Forwards an ACP permission/elicitation interaction to the server's
-    /// <c>AcpRequestInteraction</c> hub method and returns the user's decision (AI-686). Mirrors
+    /// <c>AcpRequestInteraction</c> hub method and returns the user's decision. Mirrors
     /// <see cref="RequestPermissionAsync"/>'s non-blocking-invoke-then-await-push pattern exactly —
     /// see that method's remarks for why the invoke returns a requestId immediately rather than
     /// blocking the connection's parallel-invocation slot for the whole interaction wait.
@@ -655,7 +655,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>
     /// Max bounded retries for the post-reconnect "Caller is not the daemon owning session"
-    /// HubException (AI-864). ≈ this × <see cref="PermissionRetryPollInterval"/> of grace for
+    /// HubException. ≈ this × <see cref="PermissionRetryPollInterval"/> of grace for
     /// per-agent re-registration to restore ownership before the request falls through to a deny.
     /// </summary>
     const int OwnershipNotReadyMaxRetries = 6;
@@ -835,7 +835,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         ) => _hub.InvokeAsync<AcpBatchAck>("AcpSessionEvents", agentId, acpSessionId, envelopes, cancellationToken: ct);
 
     /// <summary>
-    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror. AI-842/AI-844:
+    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror.:
     /// chunks are drained by <see cref="TerminalOutputSender"/>'s single ordered loop
     /// instead of being fired at <c>SendAsync</c> fire-and-forget, so they reach the
     /// server in PTY order. The enqueue awaits when the queue is full — the caller
@@ -846,7 +846,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// Cancels a blocked (back-pressured) enqueue. The read loop passes a token tied
     /// to BOTH the per-agent stop (<c>ReadCts</c>) and daemon shutdown, so stopping a
     /// single agent releases its read loop even mid-outage — otherwise the loop's
-    /// finally-block finalization/cleanup would stall until daemon shutdown (AI-846).
+    /// finally-block finalization/cleanup would stall until daemon shutdown.
     /// </param>
     public virtual Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) =>
         _terminalSender.EnqueueAsync(agentId, base64Data, ct).AsTask();

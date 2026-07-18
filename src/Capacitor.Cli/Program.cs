@@ -93,7 +93,7 @@ if (baseUrl is null && !offlineCommands.Contains(command)) {
     return 1;
 }
 
-// AI-1168: last-resort guard around the whole command dispatch. Without it, any
+// last-resort guard around the whole command dispatch. Without it, any
 // exception a handler doesn't swallow escapes to the NativeAOT runtime, which
 // aborts the process (SIGABRT + a macOS crash report). For a ~1s hook/generator
 // the agent spawns, that was happening dozens of times a day. Record the
@@ -559,7 +559,7 @@ switch (command) {
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
             : allSources;
 
-        // --- Scope resolution (AI-613) ---
+        // Scope resolution ---
         var profileConfig = await AppConfig.LoadProfileConfig();
         var activeProfile = string.IsNullOrEmpty(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
         var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
@@ -638,7 +638,7 @@ switch (command) {
     }
     // Internal: spawned detached by the Copilot sessionEnd hook to deliver the
     // post-hook `session.shutdown` tail Copilot writes after the hook returns
-    // (AI-897). Not a user-facing command.
+    // Not a user-facing command.
     case "copilot-finalize" when args.Length < 3:
         Console.Error.WriteLine("Usage: kcap copilot-finalize <sessionId> <transcriptPath>");
 
@@ -698,7 +698,7 @@ switch (command) {
         return 0;
     }
     case "hook": {
-        // AI-1357 Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
+        // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
         // added (removed from their Handle methods so this runs exactly once per invocation) and
         // additionally covers Claude/Cursor, which never called it (they only drain their OWN
@@ -748,7 +748,7 @@ switch (command) {
         await Console.Error.WriteLineAsync(
             "kcap cursor import has been removed. Use 'kcap import --cursor' instead.");
         return 2;
-    // Internal: AI-1382 D0 phase-0 empirical append-only verification harness. Hidden —
+    // Internal: D0 phase-0 empirical append-only verification harness. Hidden —
     // not in help-usage.txt — run manually against a live Cursor transcript while gathering
     // the D0 evidence; not part of the normal watch/hook/import surface.
     case "cursor-verify-appendonly":

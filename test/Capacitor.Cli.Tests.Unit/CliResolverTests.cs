@@ -3,7 +3,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the daemon-startup vendor probe (AI-652). The resolver is the
+/// Covers the daemon-startup vendor probe. The resolver is the
 /// only place the daemon decides whether to advertise <c>claude</c> /
 /// <c>codex</c> over <c>DaemonConnect</c>, so the launch dialog's vendor
 /// filter is only ever as accurate as this lookup.
@@ -30,7 +30,7 @@ public class CliResolverTests {
 
     /// <summary>
     /// A non-executable file on disk must NOT be advertised as a spawnable
-    /// CLI. The original AI-652 resolver missed this and would have shipped
+    /// CLI. The original resolver missed this and would have shipped
     /// "claude" as supported on hosts where the binary existed but couldn't
     /// be executed (e.g. wrong owner, stripped exec bit).
     /// </summary>

@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-1358 Task 5.1: Cursor historical import must attach owner/repo but never a stale PR
+/// Task 5.1: Cursor historical import must attach owner/repo but never a stale PR
 /// (importing an old session shouldn't stamp today's PR onto it — an anachronism), and repo
 /// detection for a given workspace must run at most once per <c>import</c> invocation even
 /// when many sessions share the same cwd. Drives the real discover → classify → import path

@@ -6,7 +6,7 @@ using Capacitor.Cli.Core.Acp;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// Round-trip / wire-shape tests for the AI-686 Task B1 ACP permission + elicitation DTOs — proves
+/// Round-trip / wire-shape tests for the Task B1 ACP permission + elicitation DTOs — proves
 /// the source-gen <see cref="CapacitorJsonContext"/> registrations exist and serialize with the
 /// exact camelCase wire vocabulary (<see cref="Acp.PermissionOutcomeDto"/>'s <c>"selected"</c> /
 /// <c>"cancelled"</c> spellings, distinct from the server-internal <c>"cancel"</c>) and snake_case

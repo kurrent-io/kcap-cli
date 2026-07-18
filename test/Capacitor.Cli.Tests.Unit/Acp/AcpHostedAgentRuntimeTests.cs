@@ -18,7 +18,7 @@ public class AcpHostedAgentRuntimeTests {
     /// <summary>
     /// <see cref="IAcpProcess"/> fake whose <see cref="WaitForExitAsync"/> genuinely blocks (like
     /// the real <c>AcpChildProcess</c> over a live child process) until <see cref="SignalExited"/>
-    /// is called or the process is <see cref="TerminateAsync"/>d — needed to exercise AI-684 Fix
+    /// is called or the process is <see cref="TerminateAsync"/>d — needed to exercise Fix
     /// E's "stay open until the process exits" contract on <c>AcpHostedAgentRuntime.ReadOutputAsync</c>.
     /// The un-signalled default (used by every pre-existing test in this file, which never calls
     /// <see cref="SignalExited"/>) matches the OLD <c>Task.CompletedTask</c> behavior closely enough
@@ -95,7 +95,7 @@ public class AcpHostedAgentRuntimeTests {
 
         await h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard);
 
-        // AI-684 Fix E: StartAsync returns once session/new resolves — it fires the initial
+        // Fix E: StartAsync returns once session/new resolves — it fires the initial
         // session/prompt as untracked background work rather than awaiting it, so the fake may not
         // have received (or recorded) it yet at this exact instant. Poll rather than asserting
         // immediately.
@@ -181,7 +181,7 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(received.Raw!.Value.GetProperty("foo").GetString()).IsEqualTo("bar");
     }
 
-    // ── AI-688 Option B task 1: Reduce() tool-call/tool-result field capture ──────────────
+    // ── Option B task 1: Reduce() tool-call/tool-result field capture ──────────────
 
     [Test]
     public async Task ToolCall_update_captures_ToolInputJson_from_rawInput() {
@@ -305,7 +305,7 @@ public class AcpHostedAgentRuntimeTests {
 
         await h.Runtime.StartAsync("/abs/worktree", "", h.Cts.Token).WaitAsync(HangGuard);
 
-        // AI-684 Fix E: SendUserInputAsync fires the session/prompt as untracked background work
+        // Fix E: SendUserInputAsync fires the session/prompt as untracked background work
         // and returns as soon as it's queued, NOT once the fake has received/answered it — so poll
         // for the call to land instead of asserting immediately after the await returns.
         await h.Runtime.SendUserInputAsync("more").WaitAsync(HangGuard);
@@ -346,7 +346,7 @@ public class AcpHostedAgentRuntimeTests {
 
         await Assert.ThrowsAsync<NotSupportedException>(() => h.Runtime.SendRawInputAsync(new byte[] { 1 }));
 
-        // ReadOutputAsync never yields a byte, but (AI-684 Fix E) it also must not complete on its
+        // ReadOutputAsync never yields a byte, but (Fix E) it also must not complete on its
         // own — it stays open until the process exits or ct cancels (see the dedicated
         // ReadOutputAsync_* tests below for that contract). Cancel to end the enumeration here,
         // since this test's focus is "yields nothing", not "when does it end".
@@ -365,7 +365,7 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(any).IsFalse();
     }
 
-    // ── AI-684 Fix E: ReadOutputAsync must stay open (not complete immediately) ──────────
+    // ── Fix E: ReadOutputAsync must stay open (not complete immediately) ──────────
 
     [Test]
     public async Task ReadOutputAsync_stays_open_until_the_process_exits() {
@@ -418,7 +418,7 @@ public class AcpHostedAgentRuntimeTests {
         await readTask.WaitAsync(HangGuard);
     }
 
-    // ── AI-684 Fix E: StartAsync/SendUserInputAsync must not block on turn completion ───────
+    // ── Fix E: StartAsync/SendUserInputAsync must not block on turn completion ───────
 
     [Test]
     public async Task StartAsync_does_not_await_the_initial_prompt_turn_to_completion() {

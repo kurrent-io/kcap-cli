@@ -5,7 +5,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Covers the hook-side staleness probe (AI-1357 task 9): <c>WatcherManager.IsWatcherAlive</c>
+/// Covers the hook-side staleness probe: <c>WatcherManager.IsWatcherAlive</c>
 /// now requires BOTH a live PID and a non-stale heartbeat, and <c>EnsureWatcherRunning</c>
 /// reaps + respawns a wedged (alive-but-stale) watcher under the cross-platform spawn lock so
 /// two concurrent hooks racing the same key can't double-spawn. Mirrors <see cref="WatcherLifecycleTests"/> —
@@ -173,7 +173,7 @@ public class WatcherHeartbeatStalenessTests {
 
     [Test]
     public async Task KillWatcher_RemovesHeartbeatAndStartedFiles() {
-        // AI-1357 task 9 (review issue 2): the new sidecar files must not leak per-session the
+        // task 9 (review issue 2): the new sidecar files must not leak per-session the
         // way the pid file never did. KillWatcher removes the heartbeat + started markers.
         var (key, transcriptPath, pidFile) = NewKey("kill-cleanup");
         using var dummy = StartDummyProcess();

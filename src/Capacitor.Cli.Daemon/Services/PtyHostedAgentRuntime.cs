@@ -28,7 +28,7 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
     /// <summary>
     /// Delivers <paramref name="text"/> as a bracketed paste (ESC[200~ … ESC[201~) so the agent's
     /// TUI treats it as one pasted block and the following Enter is an unambiguous submit
-    /// keypress. Without the paste markers a large multi-line message is mis-handled (AI-30):
+    /// keypress. Without the paste markers a large multi-line message is mis-handled:
     /// Codex never submits it at all, and Claude only submits it ~50% of the time — the CR races
     /// the still-ingesting paste and is folded in as a literal newline, so the text sits in the
     /// composer until a later, isolated keystroke finishes it. Both hosted CLIs enable

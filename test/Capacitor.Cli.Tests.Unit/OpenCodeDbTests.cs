@@ -89,7 +89,7 @@ public class OpenCodeDbTests {
         await Assert.That(string.Join(",", kids.Select(k => k.Id))).IsEqualTo("ses_c1,ses_c2");
     }
 
-    // ── QueryDescendants (AI-1383 D3: recursive grandchild discovery) ──────────────────────
+    // ── QueryDescendants (D3: recursive grandchild discovery) ──────────────────────
 
     [Test]
     public async Task QueryDescendants_walks_a_multi_level_parent_chain() {
@@ -136,7 +136,7 @@ public class OpenCodeDbTests {
         await Assert.That(truncated).IsFalse();
     }
 
-    // AI-1383 D3 review fix #3: the walker used to stop AT the boundary child (depth 9) and
+    // the walker used to stop AT the boundary child (depth 9) and
     // never look below it, so a chain continuing to depth 10 was still counted as ONE omitted
     // descendant — undercounting the true size of the omitted subtree. The walk must now
     // continue (never importing) below the cap to count the WHOLE subtree.
@@ -186,7 +186,7 @@ public class OpenCodeDbTests {
         await Assert.That(truncated).IsFalse();
     }
 
-    // ── MaxCountingNodes scope (AI-1383 D3 review fix #4) ───────────────────────────────────
+    // ── MaxCountingNodes scope (D3 review fix #4) ───────────────────────────────────
     //
     // The counting ceiling used to gate the WHOLE unified traversal via the shared visited-id
     // set's total size, so a root with a wide IN-CAP fan-out (well within MaxDescendantDepth)
@@ -252,7 +252,7 @@ public class OpenCodeDbTests {
         await Assert.That(omittedIds.Count).IsEqualTo(OpenCodeDb.MaxCountingNodes);
     }
 
-    // AI-1383 D3 review fix #5: the ceiling used to bound the RETURNED omitted count/ids, but
+    // the ceiling used to bound the RETURNED omitted count/ids, but
     // not the actual WORK — every below-cap node already enqueued before the ceiling was hit
     // (up to MaxCountingNodes of them) still got individually dequeued and queried afterward.
     // Once truncation is established, the below-cap frontier must be abandoned outright rather
@@ -293,7 +293,7 @@ public class OpenCodeDbTests {
         await Assert.That(ocdb.QueryChildrenCallCount).IsLessThanOrEqualTo(9);
     }
 
-    // AI-1383 D3 review fix #6: a below-cap parent's single QueryChildren call used to
+    // a below-cap parent's single QueryChildren call used to
     // materialize its ENTIRE child row set before CountTruncated could even be detected — a
     // depth-8 parent with (say) a million depth-9 children would read/allocate all million rows
     // in one call. The per-parent fetch must instead be capped to (remaining counting capacity +
@@ -328,7 +328,7 @@ public class OpenCodeDbTests {
         await Assert.That(ocdb.QueryChildrenMaxRowsReturned).IsLessThanOrEqualTo(OpenCodeDb.MaxCountingNodes + 1);
     }
 
-    // AI-1383 D3 review fix #7 (P2): a below-cap parent's bounded row fetch caps RAW SQL rows via
+    // a below-cap parent's bounded row fetch caps RAW SQL rows via
     // `LIMIT`, but QuerySessions's per-row try/catch skip of a malformed row happens AFTER that —
     // so a malformed row landing inside the sentinel window used to silently consume the sole
     // sentinel slot, filling omittedIds to exactly MaxCountingNodes valid ids while CountTruncated

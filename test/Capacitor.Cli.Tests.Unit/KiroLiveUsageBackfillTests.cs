@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the live-watch Kiro usage-backfill synthetic line (AI-1357 task 10):
+/// Covers the live-watch Kiro usage-backfill synthetic line:
 /// <see cref="WatchCommand.BuildKiroUsageBackfillLine"/> builds the JSONL the server
 /// recognizes, and <see cref="WatchCommand.AppendKiroUsageBackfillLines"/> reads the
 /// sidecar <c>{id}.json</c> via <see cref="Capacitor.Cli.Core.Kiro.KiroUsage.AnchorMap"/>

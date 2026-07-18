@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Core.Kiro;
 /// stamps a <c>_kcap_usage</c> object on that transcript line;
 /// <c>KiroTranscriptNormalizer</c> lifts credits/context% onto
 /// <c>extensions.kiro</c> and, when the token counts are non-zero, stamps a
-/// canonical <c>$usage</c> (the AI-1196 hedge: dormant now, auto-lights if a
+/// canonical <c>$usage</c> (the hedge: dormant now, auto-lights if a
 /// future kiro-cli release populates them). The session <c>model_id</c> rides
 /// alongside the token counts so that <c>$usage</c> has a model. Import-only today
 /// (the live path would key off Kiro's per-turn <c>stop</c> hook).
@@ -70,7 +70,7 @@ public static class KiroUsage {
 
                 double? ctx = t["context_usage_percentage"] is JsonValue c && c.TryGetValue<double>(out var cp) ? cp : null;
 
-                // Token-count hedge (AI-1196): Kiro persists these as 0 today (upstream
+                // Token-count hedge: Kiro persists these as 0 today (upstream
                 // aws#2397 — the CLI discards the API's TokenUsage). Carry them ONLY when
                 // non-zero, so the hedge stays dormant now and lights up automatically if
                 // a future kiro-cli release starts populating them.
@@ -112,7 +112,7 @@ public static class KiroUsage {
 
             // bool/int/double/long/string assign to JsonObject is AOT-reflection-free,
             // so no JsonNode.Parse dance. Credits/context% are doubles; token counts are
-            // longs and only present when non-zero (AI-1196 hedge); model rides with them.
+            // longs and only present when non-zero (hedge); model rides with them.
             var usage = new JsonObject { ["credits"] = u.Credits };
             if (u.ContextPct is { } pct)          usage["context_usage_percentage"] = pct;
             if (u.InputTokens is { } inTok)       usage["input_token_count"]        = inTok;

@@ -10,7 +10,7 @@ public class EvalCatalogClientTests {
             Task.FromResult(new HttpResponseMessage(code) { Content = new StringContent(body) });
     }
 
-    // AI-9 Phase 3 (Task 5) — IEvalObserver.OnFinished now takes V3.
+    // Phase 3 (Task 5) — IEvalObserver.OnFinished now takes V3.
     sealed class CapturingObserver : IEvalObserver {
         public string? FailReason;
         public void OnFailed(string reason) => FailReason = reason;

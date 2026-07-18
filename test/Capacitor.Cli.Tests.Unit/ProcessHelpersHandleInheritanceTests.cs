@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the AI-820 fix: <see cref="ProcessHelpers.PreventInheritedStdHandles"/> /
+/// Covers the fix: <see cref="ProcessHelpers.PreventInheritedStdHandles"/> /
 /// <see cref="ProcessHelpers.TryClearInheritFlag"/> stop a hook-spawned watcher from
 /// inheriting the coding agent's std handles on Windows (which otherwise holds the
 /// agent's hook-stdout pipe open, hanging synchronous subagent hooks and orphaning

@@ -223,7 +223,7 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// Handshake probe (AI-1233): clients that send <c>resources/list</c> / <c>prompts/list</c> /
+    /// Handshake probe: clients that send <c>resources/list</c> / <c>prompts/list</c> /
     /// <c>ping</c> before treating the server as ready must get empty-but-successful responses,
     /// not <c>-32601 Method not found</c> — and the negotiated protocolVersion must echo back a
     /// client-requested version we support, not always the hardcoded baseline.
@@ -268,7 +268,7 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// Malformed-initialize survival probe (AI-1233): a client sending a non-string
+    /// Malformed-initialize survival probe: a client sending a non-string
     /// <c>protocolVersion</c> (e.g. a bare JSON number) must not crash <c>McpProtocol.NegotiateVersion</c> —
     /// the initialize dispatch arm has no try/catch, so an uncaught exception there would kill the
     /// whole stdio server. The server must fall back to the baseline version and stay responsive.
@@ -323,7 +323,7 @@ public class McpFlowsServerTests : IDisposable {
     /// <summary>
     /// Pins the four review-tool schemas byte-stably: definition_id/participant/message must
     /// NEVER leak into these schemas — old clients (and old skills) depend on the exact
-    /// property/required sets that shipped before the generic tools were added (AI-1126 D-b).
+    /// property/required sets that shipped before the generic tools were added (D-b).
     /// </summary>
     [Test]
     public async Task Review_tool_schemas_are_unchanged() {
@@ -376,7 +376,7 @@ public class McpFlowsServerTests : IDisposable {
 
     /// <summary>
     /// Generic alias for start_review_flow: definition_id maps onto the wire "kind" field so the
-    /// server (which treats kind == definition id, AI-1126 phase C) doesn't need to know about
+    /// server (which treats kind == definition id, phase C) doesn't need to know about
     /// the generic tool name at all.
     /// </summary>
     [Test]
@@ -544,7 +544,7 @@ public class McpFlowsServerTests : IDisposable {
     /// A non-boolean JSON "async" (e.g. an LLM caller passing the string "yes") must NOT crash
     /// the request with an uncaught GetValue&lt;bool&gt;() exception — it must surface as a clean
     /// isError:true tool result, and the stdio loop must stay alive for the next request (Qodo
-    /// finding, AI-1126 D-b). No WireMock stub is needed: the bad arg is rejected before any HTTP
+    /// finding, D-b). No WireMock stub is needed: the bad arg is rejected before any HTTP
     /// call is made, mirroring Submit_review_round_without_flow_run_id_returns_error above.
     /// </summary>
     [Test]
@@ -735,7 +735,7 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// Regression (AI-1056): kcap-flows auto-registers via the Claude plugin, so Claude Code
+    /// Regression: kcap-flows auto-registers via the Claude plugin, so Claude Code
     /// spawns `kcap mcp flows` for every session. initialize / tools/list must stay local-only —
     /// the authenticated client (and its GET /auth/config round-trip + re-auth stderr hint) is
     /// created lazily on the first tools/call, so sessions that never use a flows tool pay

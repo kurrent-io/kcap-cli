@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Pi;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the Pi extension installer (AI-886): kcap.ts write/remove + the
+/// Covers the Pi extension installer: kcap.ts write/remove + the
 /// version-marker helpers. Pi has no hooks.json — kcap ships a TypeScript
 /// extension Pi auto-loads from <c>~/.pi/agent/extensions/</c>.
 /// </summary>

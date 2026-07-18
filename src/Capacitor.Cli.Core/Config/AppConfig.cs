@@ -226,7 +226,7 @@ public static class AppConfig {
 
     /// <summary>The full set of accepted <c>default_visibility</c> values, server-agnostic
     /// (a server that gates Projects off simply treats <c>project</c> as owner-only — see
-    /// AI-1206). Internal (not private) so other CLI-side surfaces that validate or offer this
+    ///). Internal (not private) so other CLI-side surfaces that validate or offer this
     /// value — e.g. <c>SetupCommand</c>'s <c>--default-visibility</c> flag and interactive
     /// wizard choice list — can't drift out of sync with what config actually accepts.</summary>
     internal static readonly string[] ValidVisibilities = ["private", "project", "org_public", "public"];

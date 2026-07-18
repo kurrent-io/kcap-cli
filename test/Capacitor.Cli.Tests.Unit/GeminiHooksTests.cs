@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-887: kcap merges its command hooks into Gemini's SHARED
+/// kcap merges its command hooks into Gemini's SHARED
 /// <c>~/.gemini/settings.json</c> (nested <c>{hooks:[{command}]}</c> entries),
 /// so the merge must preserve user-authored hooks AND every other settings key.
 /// </summary>

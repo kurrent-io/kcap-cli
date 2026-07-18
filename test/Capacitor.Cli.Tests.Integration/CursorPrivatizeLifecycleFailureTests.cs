@@ -6,7 +6,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-1154 review fix (r6, P1) — a lifecycle failure (subagent-stop/session-end) or a no-new-
+/// a lifecycle failure (subagent-stop/session-end) or a no-new-
 /// content retry AFTER a Cursor session's content has already been posted must not permanently
 /// bypass <c>--private</c>. Drives the real <c>ImportCommand.HandleImport</c> orchestrator (not
 /// just <see cref="CursorImportSource.ImportSessionAsync"/> in isolation) against a stub server,
@@ -28,7 +28,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// The fix adds a separate, outcome-independent tracker
 /// (<c>privateScopeSessionIds</c> in <c>ImportCommand.cs</c>) that captures every Cursor routed
 /// classification touched under <c>--private</c> regardless of outcome, and unions it into the
-/// privatize set — without touching <c>importedSessionIds</c>/the Done-grid counting (AI-1389
+/// privatize set — without touching <c>importedSessionIds</c>/the Done-grid counting (
 /// stays deferred, untouched).
 /// </para>
 /// </summary>

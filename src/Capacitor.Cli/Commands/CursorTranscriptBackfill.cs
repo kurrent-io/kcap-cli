@@ -21,14 +21,14 @@ public static class CursorTranscriptBackfill {
     public readonly record struct Stats(int LinesPosted, bool Failed);
 
     /// <param name="agentId">
-    /// AI-1151 (live subagent linking): when set, <paramref name="sessionId"/> is the
+    /// when set, <paramref name="sessionId"/> is the
     /// PARENT session and the batch is routed to its <c>AgentSubsession-{sessionId}-{agentId}</c>
     /// stream instead of the top-level <c>AgentSession-{sessionId}</c> — mirroring the watermark
     /// probe + transcript POST shape <c>CursorImportSource.SendSubagentLifecycleAsync</c> uses for
     /// historical import, so live and import converge on the same subsession watermark.
     /// </param>
     /// <param name="finalDrain">
-    /// AI-1382 Task 10 (D2) — set ONLY by the <c>sessionEnd</c> pre-end drain. Selects
+    /// Task 10 (D2) — set ONLY by the <c>sessionEnd</c> pre-end drain. Selects
     /// <see cref="WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete"/> instead of the
     /// default <see cref="WatchCommand.IncompleteFinalLinePolicy.Hold"/>: at session end the
     /// hook (not the live watcher) is the last component that can ever observe this transcript,
@@ -48,13 +48,13 @@ public static class CursorTranscriptBackfill {
             return new Stats(0, false);
         }
 
-        // AI-1382 D0 — a session already quarantined by the runtime rewrite guard must never
+        // a session already quarantined by the runtime rewrite guard must never
         // have more transcript lines delivered; the watcher has already given up on it.
         if (CursorMarkers.IsQuarantined(sessionId)) {
             return new Stats(0, false);
         }
 
-        // AI-1382 D1 — an ordering-sensitive hook (beforeSubmitPrompt) may have queued an
+        // an ordering-sensitive hook (beforeSubmitPrompt) may have queued an
         // attachment the Cursor normalizer needs to see BEFORE the matching user transcript line
         // is normalized. While the barrier is pending, hold delivery entirely (retry next
         // invocation) rather than risk normalizing ahead of the attachment.
@@ -93,7 +93,7 @@ public static class CursorTranscriptBackfill {
         } catch { return new Stats(0, Failed: true); }
 
         // Read every line past the watermark into the batch, via the same length-capped,
-        // concurrent-append-safe primitive the live watcher uses (AI-1382 Task 10 — replaces
+        // concurrent-append-safe primitive the live watcher uses (Task 10 — replaces
         // the prior ad-hoc StreamReader loop, which held nothing back for a still-being-written
         // final line and so risked truncating it). Cursor's JSONL is bounded by the agent turn
         // count — practical sizes are dozens of lines, not thousands; the server's
@@ -114,7 +114,7 @@ public static class CursorTranscriptBackfill {
 
         if (lines.Count == 0 || budget()) return new(0, Failed: false);
 
-        // AI-1382 review fix #8 — re-check both markers IMMEDIATELY at the delivery boundary,
+        // re-check both markers IMMEDIATELY at the delivery boundary,
         // not only before the watermark GET + file read above. A concurrent beforeSubmitPrompt
         // (creating its barrier) or a guard trip on the live watcher (quarantining the session)
         // landing in that window — between the early check and this POST — must still be caught

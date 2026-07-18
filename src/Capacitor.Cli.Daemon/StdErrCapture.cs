@@ -3,14 +3,14 @@ using System.Runtime.InteropServices;
 namespace Capacitor.Cli.Daemon;
 
 /// <summary>
-/// AI-1155: redirect the daemon's OS-level stdout/stderr (fds 1 and 2) onto a
+/// redirect the daemon's OS-level stdout/stderr (fds 1 and 2) onto a
 /// file so output that BYPASSES the ILogger pipeline is still captured — the
 /// runtime's "Fatal error." dump on an unhandled native exception, an
 /// <c>abort()</c> message, or a <see cref="Environment.FailFast(string)"/>.
 ///
 /// <para>The detached launch path (<c>kcap daemon start -d</c> / <c>kcap
 /// agent</c>) redirects the child's std streams to a pipe and immediately
-/// closes it (AI-839, to avoid a pipe-leak hang), so without this those fatal
+/// closes it (, to avoid a pipe-leak hang), so without this those fatal
 /// messages are written to a broken pipe and lost — which is exactly why a
 /// hard daemon death currently leaves no trace. The CLI therefore passes
 /// <c>--stderr-file &lt;path&gt;</c> on the detached path; the daemon reopens

@@ -79,7 +79,7 @@ static class ClaudeCliRunner {
     /// on in both modes — strict-mcp-config is what keeps the user's global
     /// or plugin MCP servers (e.g. <c>kcap-sessions</c> from the kcap Claude
     /// Code plugin) from leaking in and getting permission-blocked under
-    /// the allowlist (AI-803). Leaving both null preserves the text-only
+    /// the allowlist. Leaving both null preserves the text-only
     /// behaviour every other caller relies on.
     /// </para>
     ///
@@ -199,9 +199,9 @@ static class ClaudeCliRunner {
         psi.Environment.Remove("CLAUDECODE");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
         // A globally-set ANTHROPIC_API_KEY overrides subscription auth in `claude -p`,
-        // which surfaced as AI-755 (API error text leaking into session titles).
+        // which surfaced as (API error text leaking into session titles).
         // Users on PAYG/API-key auth opt back in via profile flag or
-        // KCAP_USE_PROVIDER_API_KEY=1 (AI-776).
+        // KCAP_USE_PROVIDER_API_KEY=1.
         if (!ProviderApiKeyPolicy.ShouldKeepProviderKey()) {
             psi.Environment.Remove("ANTHROPIC_API_KEY");
         }
@@ -388,7 +388,7 @@ static class ClaudeCliRunner {
         //     others) into the headless judge; the judge then reaches for
         //     those un-allowlisted tools and every call is blocked by
         //     permission restrictions, degrading verdicts to "unable to
-        //     investigate" (AI-803).
+        //     investigate".
         args.Add("--strict-mcp-config");
 
         // Lock down the built-in tool surface in BOTH modes:
@@ -482,7 +482,7 @@ static class ClaudeCliRunner {
     /// Rejects responses with <c>is_error: true</c> — the CLI signals API
     /// failures (overload, rate limit, auth) by setting this flag and writing
     /// the error text into <c>result</c>. Treating that text as a valid title
-    /// caused AI-755, where API error messages surfaced as session titles.
+    /// caused, where API error messages surfaced as session titles.
     /// </para>
     /// </summary>
     static ClaudeCliResult? ParseJsonResponseOnly(string stdout) {
@@ -514,7 +514,7 @@ static class ClaudeCliRunner {
     /// Skipped when the envelope has <c>is_error: true</c>: the transcript's
     /// last assistant text on a failed turn can be a partial reply or stale
     /// auto-memory content, and surfacing that as a successful result is the
-    /// AI-755 regression vector the <see cref="ParseJsonResponseOnly"/>
+    /// regression vector the <see cref="ParseJsonResponseOnly"/>
     /// guard exists to close.
     /// </para>
     /// </summary>

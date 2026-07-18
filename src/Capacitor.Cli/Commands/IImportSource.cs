@@ -47,7 +47,7 @@ internal enum ImportOutcome { Loaded, Resumed, Skipped, Failed }
 
 /// <summary>
 /// Result of <see cref="IImportSource.ImportSessionAsync"/>. <c>SentChildContent</c> is the
-/// real "did new work actually happen" signal (AI-1154 review fix, finding 1): it's true only
+/// real "did new work actually happen" signal: it's true only
 /// when this call POSTed brand-new nested subagent-child transcript bytes (Cursor's inline
 /// child import, under a parent whose own top-level watermark may not have moved at all). The
 /// parent classification/outcome pair alone can't distinguish that from a genuine "nothing to

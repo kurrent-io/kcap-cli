@@ -9,7 +9,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-782 — Codex sessions must honor the active V2 profile's
+/// Codex sessions must honor the active V2 profile's
 /// <c>default_visibility</c> and <c>excluded_repos</c> settings, the
 /// same way the Claude hook does. Without this, Codex sessions
 /// silently default to org-visible (the server treats null as the

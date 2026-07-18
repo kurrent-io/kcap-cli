@@ -12,7 +12,7 @@ public class CodexHookCommandTests : IDisposable {
     // A group key was insufficient: parallel tests in *other* files (e.g.
     // ImportDisplayGridTests / CliResolverTests) still mutate the same
     // process-global state under different group keys, and the cross-group
-    // race nondeterministically corrupted Console captures (AI-737 CI).
+    // race nondeterministically corrupted Console captures (CI).
 
     readonly WireMockServer _server = WireMockServer.Start();
 
@@ -44,7 +44,7 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(root.GetProperty("session_id").GetString()).IsEqualTo("019e032205fc7570be6575719c3ea861");
         await Assert.That(root.GetProperty("home_dir").GetString()).IsNotNull();
 
-        // AI-635: SessionStart also writes Codex's required JSON output to stdout.
+        // SessionStart also writes Codex's required JSON output to stdout.
         // We can't reliably capture stdout here because the test path spawns a
         // real watcher child process via Process.Start, which under TUnit's
         // Console capture corrupts subsequent stdout reads. The Stop test covers
@@ -57,7 +57,7 @@ public class CodexHookCommandTests : IDisposable {
     // POSTs to /hooks/stop so the server can emit the idle-wait marker that
     // clears the chat "working" indicator — but it must NOT POST session-end
     // (that path is reserved for the watcher's parent-exit fallback), and must
-    // still emit {"continue":true} on stdout (AI-635) with no watcher chatter.
+    // still emit {"continue":true} on stdout with no watcher chatter.
     //
     // Globally sequential: captures Console.Out for the duration.
     [Test, NotInParallel]
@@ -98,7 +98,7 @@ public class CodexHookCommandTests : IDisposable {
             var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
             await Assert.That(endRequests.Count).IsEqualTo(0);
 
-            // AI-635 invariant: valid JSON object on stdout, no chatter.
+            // invariant: valid JSON object on stdout, no chatter.
             var stdout = stdoutWriter.ToString();
             var doc    = JsonDocument.Parse(stdout);
             await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
@@ -227,7 +227,7 @@ public class CodexHookCommandTests : IDisposable {
         // the request server-side via /hooks/permission-record (the same
         // fire-and-forget endpoint Claude's terminal path uses) and emits an
         // empty hookSpecificOutput so Codex's normal in-CLI approval prompt
-        // asks the user. Regression for AI-636.
+        // asks the user. Regression for.
         var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
         Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", null);
 
@@ -277,7 +277,7 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(wrong.Count).IsEqualTo(0);
     }
 
-    // AI-636: the hook must return well under Codex's 30 s timeout even when
+    // the hook must return well under Codex's 30 s timeout even when
     // the recording endpoint is slow. We cap the HTTP client at 2 s and
     // swallow the resulting TaskCanceledException — guard against future
     // regressions where someone reintroduces an unbounded await.
@@ -314,12 +314,12 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
-    // AI-636 / Qodo finding: bounding only the POST left auth discovery
+    // / Qodo finding: bounding only the POST left auth discovery
     // (GET /auth/config) running on HttpClient's 100 s default. Stub
     // /auth/config slow and assert the hook still returns under 5 s — the
     // shared 2 s CTS in CodexHookCommand covers discovery too.
     //
-    // AI-628 follow-up: this test redirects Console.Out, so it must share
+    // follow-up: this test redirects Console.Out, so it must share
     // ConsoleSerialGroup with every other Console.Out-redirecting test in
     // the suite. Previously it lived in its own "CodexPermissionRequestStdout"
     // group and raced against the ConsoleSerialGroup tests, occasionally
@@ -422,10 +422,10 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
-    // Fix #3 / AI-648: non-string session_id in a Stop payload must not crash.
+    // Fix #3 /: non-string session_id in a Stop payload must not crash.
     // session_id falls to null via the safe TryGetString helper, so HandleStop
     // short-circuits before EnsureWatcherRunning. No server POST is expected
-    // (AI-648 removed Stop's session-end POST), but we still stub
+    // (removed Stop's session-end POST), but we still stub
     // /hooks/session-end/codex so a regression that reintroduces the POST
     // surfaces as a test failure via the WireMock log assertion below.
     [Test]
@@ -439,12 +439,12 @@ public class CodexHookCommandTests : IDisposable {
 
         await Assert.That(exit).IsEqualTo(0);
 
-        // AI-648: Stop must never POST session-end, even with a malformed payload.
+        // Stop must never POST session-end, even with a malformed payload.
         var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
         await Assert.That(endRequests.Count).IsEqualTo(0);
     }
 
-    // AI-676 P1: when the user runs `kcap disable`, the marker file
+    // when the user runs `kcap disable`, the marker file
     // under PathHelpers.ConfigPath("disabled") must short-circuit the Codex
     // hook the same way it does for Claude. Without this guard, the next
     // Codex Stop hook restarts the watcher (HandleStop calls
@@ -503,11 +503,11 @@ public class CodexHookCommandTests : IDisposable {
 
     // ---- PermissionRequest daemon-bridge tests ----
     //
-    // The no-daemon-URL "stub" branch is covered by the AI-636 regression test
+    // The no-daemon-URL "stub" branch is covered by the regression test
     // PermissionRequest_records_event_and_yields_decision_to_codex above; it
     // asserts the new record-and-yield contract (no in-CLI decision, fall back
     // to Codex's own approval prompt). The tests below cover the new
-    // daemon-bridge branch added in AI-68.
+    // daemon-bridge branch added in.
 
     [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {

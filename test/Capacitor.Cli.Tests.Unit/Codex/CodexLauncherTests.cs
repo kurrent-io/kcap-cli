@@ -114,7 +114,7 @@ public class CodexLauncherTests {
     public async Task BuildArgs_omits_model_when_default_sentinel(string model) {
         // "default" is a vendor-neutral sentinel meaning "use the vendor's own default
         // model". Codex has no such model — `-m default` fails on ChatGPT accounts
-        // (AI-1114). Omit -m so Codex falls back to its configured default.
+        // Omit -m so Codex falls back to its configured default.
         var args = NewLauncher().BuildArgs(NewCtx(model: model)).Args;
         await Assert.That(args).DoesNotContain("-m");
         await Assert.That(args).DoesNotContain(model);
@@ -343,7 +343,7 @@ public class CodexLauncherTests {
             var configToml = File.ReadAllText(Path.Combine(home, ".codex", "config.toml"));
             // The TOML writer emits the path as a basic (double-quoted) key, so
             // backslashes are escaped per spec (\ → \\). Match the escaped form
-            // so the assertion holds on Windows too (no-op on POSIX paths). AI-820.
+            // so the assertion holds on Windows too (no-op on POSIX paths)..
             var escapedWorktree = worktree.Replace("\\", "\\\\");
             await Assert.That(configToml).Contains($"\"{escapedWorktree}\"");
             await Assert.That(configToml).Contains("trust_level = \"trusted\"");
@@ -457,7 +457,7 @@ public class CodexLauncherTests {
         await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
     }
 
-    // === AI-1126 D-c: definition MCP allowlist materialization ===
+    // === D-c: definition MCP allowlist materialization ===
 
     static CodexLauncher NewFlowResultLauncher() =>
         new(new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example" }, NullLogger<CodexLauncher>.Instance);
@@ -552,7 +552,7 @@ public class CodexLauncherTests {
         await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
     }
 
-    // === AI-1207 Phase A: read-only sandbox for a borrowed reviewer ===
+    // === Phase A: read-only sandbox for a borrowed reviewer ===
 
     [Test]
     public async Task BuildArgs_borrowed_cwd_uses_read_only_sandbox() {

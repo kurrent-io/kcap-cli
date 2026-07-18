@@ -132,7 +132,7 @@ public static class PluginCommand {
                     : $"Plugin installed ({scope}: {settingsPath})"
             );
 
-            // AI-836: Claude Code only loads hooks at session start. A fresh install from
+            // Claude Code only loads hooks at session start. A fresh install from
             // inside a running session won't record it live until the user restarts. The
             // refresh path (npm postinstall) is silent — it isn't an interactive moment and
             // existing sessions already had hooks, so the reminder would be noise.
@@ -378,7 +378,7 @@ public static class PluginCommand {
         // Per-skill preflight runs BEFORE writing hooks so a packaging defect
         // (top-level skills/ present but an individual skill folder missing)
         // can't leave the user with hooks installed and skills not. This is the
-        // atomicity guarantee from AI-676 — either everything installs or nothing.
+        // atomicity guarantee from — either everything installs or nothing.
         var missingSkills = AgentsSkillsInstaller.SourceNames
             .Where(name => !Directory.Exists(Path.Combine(skillsSource, name)))
             .ToList();
@@ -418,7 +418,7 @@ public static class PluginCommand {
 
         AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
-        // AI-794 — enable Codex sandbox network access so the skills just installed can
+        // enable Codex sandbox network access so the skills just installed can
         // reach the Capacitor server. Opt out with --skip-codex-network-access. The
         // --if-installed refresh path returns earlier, so npm postinstall never flips this.
         if (!args.Contains("--skip-codex-network-access"))
@@ -427,7 +427,7 @@ public static class PluginCommand {
         // Register the kcap MCP servers in ~/.codex/config.toml so Codex CLI picks them up
         // with no manual TOML edit (the plugin descriptor path alone isn't enough — many
         // users never run `codex plugin add`). Non-destructive + idempotent. `kcap-flows`
-        // stays Claude-only (AI-1056). The --if-installed refresh returns earlier, so npm
+        // stays Claude-only. The --if-installed refresh returns earlier, so npm
         // postinstall never touches config.toml here.
         await RegisterCodexMcpServersAsync(env);
 
@@ -442,7 +442,7 @@ public static class PluginCommand {
     }
 
     /// <summary>
-    /// AI-794 — turn on Codex's <c>workspace-write</c> sandbox network access, constrained
+    /// turn on Codex's <c>workspace-write</c> sandbox network access, constrained
     /// to the Capacitor server(s) of every configured profile, so kcap skills can reach the
     /// server. Never fails the install: a write error is a warning, not an error code.
     /// </summary>
@@ -974,7 +974,7 @@ public static class PluginCommand {
         return failed ? 1 : 0;
     }
 
-    // ── OpenCode (SST): a TypeScript plugin, not a hooks.json (AI-919) ───────
+    // ── OpenCode (SST): a TypeScript plugin, not a hooks.json ───────
 
     static async Task<int> InstallOpenCode(string[] args, PluginEnvironment env) {
         var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.OpenCodeKcapPlugin;
@@ -1119,7 +1119,7 @@ public static class PluginCommand {
         return pluginFailed || mcpFailed || instrFailed ? 1 : 0;
     }
 
-    // ── Antigravity (AI-1158) — a named block in Antigravity's hooks.json ────────
+    // ── Antigravity — a named block in Antigravity's hooks.json ────────
     static async Task<int> InstallAntigravity(string[] args, PluginEnvironment env) {
         var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.AntigravityHooksJson;
 

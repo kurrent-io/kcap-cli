@@ -2,7 +2,7 @@ using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-// AI-1243 ("endless reads in chat"): the live watcher drain must NOT consume a transcript
+// the live watcher drain must NOT consume a transcript
 // line that is not yet newline-terminated — the agent is mid-write of it. Sending the
 // truncated prefix and advancing the position past it permanently drops the completed line
 // (its truncated JSON fails to normalize server-side, and the next drain starts after it).
@@ -32,7 +32,7 @@ public class SplitNewCompleteLinesTests {
 
     [Test]
     public async Task Dropped_read_result_is_delivered_once_complete() {
-        // Reproduces AI-1243: a tool_use line (complete) followed by its tool_result line
+        // Reproduces: a tool_use line (complete) followed by its tool_result line
         // caught mid-write (no trailing newline yet).
         var first = WatchCommand.SplitNewCompleteLines("tool_use_A\ntool_result_A", 0);
 
@@ -84,7 +84,7 @@ public class SplitNewCompleteLinesTests {
 
     [Test]
     public async Task Final_drain_consumes_a_parseable_unterminated_final_line() {
-        // AI-1357 task 7: the shutdown final drain (ConsumeIfComplete) delivers an unterminated
+        // task 7: the shutdown final drain (ConsumeIfComplete) delivers an unterminated
         // final line ONLY when it is a complete JSON record. Here the last line parses, so it is
         // consumed and the position advances past it.
         var r = WatchCommand.SplitNewCompleteLines(

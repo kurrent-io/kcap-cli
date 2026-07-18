@@ -4,7 +4,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit.Services;
 
 /// <summary>
-/// AI-686: <see cref="PendingAcpInteractionRegistry"/> is a straight copy-shape of the already-
+/// <see cref="PendingAcpInteractionRegistry"/> is a straight copy-shape of the already-
 /// tested <see cref="PendingPermissionRegistry"/> parameterized on <see cref="AcpInteractionDecision"/>
 /// — these tests mirror that class's own test coverage for the early-arrival race and cancellation.
 /// </summary>

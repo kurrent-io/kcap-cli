@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Per-vendor `ended_at` resolution (AI-1358 A3). The rule is NOT one blanket helper:
+/// Per-vendor `ended_at` resolution. The rule is NOT one blanket helper:
 /// vendors whose records carry durable timestamps use a tail-scan; Copilot's best end is the
 /// final `session.shutdown` record (which the import-relevance helper deliberately skips —
 /// this resolver must NOT inherit that skip contract); Cursor has no durable record timestamp

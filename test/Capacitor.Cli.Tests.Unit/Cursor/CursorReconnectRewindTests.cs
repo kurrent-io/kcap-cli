@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.SignalR.Client;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1382 review fix #2 — a reconnect that discovers the server's acknowledged line frontier is
+/// a reconnect that discovers the server's acknowledged line frontier is
 /// behind the watcher's own <see cref="WatchState.LinesProcessed"/> must rewind the Cursor byte
 /// guard's checkpoint ATOMICALLY with the line cursor. Before the fix, only
 /// <see cref="WatchState.LinesProcessed"/> rewound — <see cref="WatchState.CursorByteOffset"/> and
@@ -27,7 +27,7 @@ public class CursorReconnectRewindTests {
             var path = Path.Combine(dir, "t.jsonl");
             await File.WriteAllTextAsync(path, "line1\nline2\nline3\n");
 
-            // AI-1382 review fix (r6): the method now returns a (ByteOffset, LineNumber) pair —
+            // the method now returns a (ByteOffset, LineNumber) pair —
             // trivial for a non-positive request, LineNumber just carries the input through.
             var zero = await WatchCommand.ResolveByteOffsetForLineAsync(path, 0, CancellationToken.None);
             await Assert.That(zero!.Value.ByteOffset).IsEqualTo(0L);
@@ -39,7 +39,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #5) — a missing file with a POSITIVE requested line number is
+    // a missing file with a POSITIVE requested line number is
     // exactly "fewer lines on disk than requested" (zero, in this case) — the caller must quarantine
     // rather than clamp to a byte offset of 0, which used to look like a perfectly valid (if empty)
     // resume baseline.
@@ -57,7 +57,7 @@ public class CursorReconnectRewindTests {
             // Deliberately uneven line lengths so a naive "count * avg-length" guess would be wrong.
             await File.WriteAllTextAsync(path, "a\nbbbb\ncc\n"); // offsets: line0 ends at 2, line1 ends at 7, line2 ends at 10
 
-            // AI-1382 review fix (r6): unchanged mid-file case — the returned pair's LineNumber is
+            // unchanged mid-file case — the returned pair's LineNumber is
             // always the requested lineNumber unchanged; only the r5 unterminated-final-record case
             // (covered below) rewinds it.
             var r1 = await WatchCommand.ResolveByteOffsetForLineAsync(path, 1, CancellationToken.None);
@@ -74,7 +74,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #5) — the pre-fix behaviour silently clamped to EOF here; this
+    // the pre-fix behaviour silently clamped to EOF here; this
     // is exactly the truncated-transcript scenario the fix closes, so the method must now signal
     // "cannot resolve exactly" (null) instead of handing back a bogus baseline offset.
     [Test]
@@ -88,7 +88,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r5) — a COMPLETE final record with no trailing newline yet must resolve,
+    // a COMPLETE final record with no trailing newline yet must resolve,
     // not quarantine. This is exactly what the watcher's own shutdown final drain
     // (IncompleteFinalLinePolicy.ConsumeIfComplete) and historical import's StreamReader-based
     // splitting both send as the last line of a file. Before this fix, the round-4 guard treated
@@ -96,7 +96,7 @@ public class CursorReconnectRewindTests {
     // watcher restart resuming at that same final line (server frontier == local line count) would
     // permanently quarantine an otherwise-healthy, append-only session.
     //
-    // AI-1382 review fix (r6) — the r5 fix originally resolved this case at EOF, unchanged
+    // the r5 fix originally resolved this case at EOF, unchanged
     // LineNumber. That seeded CursorByteOffset exactly where Cursor's OWN later-arriving
     // terminator for this SAME already-acked record lands; when it arrived, the bounded reader
     // (seeding its own line index from LinesProcessed, left at the record's line number) misread
@@ -126,7 +126,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r5) — the completeness gate matters: an unterminated tail that ISN'T a
+    // the completeness gate matters: an unterminated tail that ISN'T a
     // parseable JSON record (still being written, or genuinely truncated mid-record) must still
     // quarantine — only a demonstrably COMPLETE trailing record is allowed to resolve at EOF.
     [Test]
@@ -140,7 +140,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #5), preserved under r5 — a request for a line further beyond
+    // review fix (r4, finding #5), preserved under r5 — a request for a line further beyond
     // the local file than "the final unterminated record" is a genuine shortfall (truncation/rewrite)
     // and must still quarantine, never resolve. (No trailing content at all here — both requested
     // lines are already accounted for by the two newlines, and line 5 is nowhere close.)
@@ -179,7 +179,7 @@ public class CursorReconnectRewindTests {
         await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
     }
 
-    // ---- AI-1382 review fix (r3, finding #2) — WatchCommand.SeedCursorByteOffsetAsync ----
+    // review fix (r3, finding #2) — WatchCommand.SeedCursorByteOffsetAsync ----
     //
     // Shared by ApplyReconnectRewindAsync (already covered above) and RunWatch's INITIAL
     // WatcherConnect registration, which — before this fix — left CursorByteOffset at its default
@@ -215,13 +215,13 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r5) — reproduces the actual failure scenario: a final drain
+    // reproduces the actual failure scenario: a final drain
     // (IncompleteFinalLinePolicy.ConsumeIfComplete) sends a complete but unterminated final record,
     // the watcher exits (idle), and a LATER hook restarts the watcher with the server resuming it at
     // that exact same final line (server frontier == local line count, file STILL lacks the trailing
     // newline). SeedCursorByteOffsetAsync must seed a valid byte offset and NOT quarantine.
     //
-    // AI-1382 review fix (r6) — reproduces the P1 finding this seeds against: the r5 fix seeded
+    // reproduces the P1 finding this seeds against: the r5 fix seeded
     // CursorByteOffset at EOF while leaving LinesProcessed at the (already-acked) final record's own
     // line number. That put the byte cursor exactly where Cursor's OWN later-arriving terminator
     // for this SAME record lands; when it arrived, the bounded reader — seeding its line index from
@@ -260,7 +260,7 @@ public class CursorReconnectRewindTests {
 
     [Test]
     public async Task SeedCursorByteOffsetAsync_is_a_byte_only_no_op_for_non_cursor_vendors() {
-        // AI-1382 review fix (r6): SeedCursorByteOffsetAsync now sets state.LinesProcessed for
+        // SeedCursorByteOffsetAsync now sets state.LinesProcessed for
         // EVERY vendor (previously only its callers did) — the "no-op" is byte-side only.
         var dir = Directory.CreateTempSubdirectory("kcap-seed-initial-resume-noncursor").FullName;
         try {
@@ -311,7 +311,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #5) — the server-acknowledged resume frontier can legitimately
+    // the server-acknowledged resume frontier can legitimately
     // exceed the local transcript's line count (truncated/replaced while the watcher was offline).
     // SeedCursorByteOffsetAsync must quarantine and refuse to seed rather than clamp to EOF.
     [Test]
@@ -438,7 +438,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // ---- AI-1382 review fix (r3, finding #1) — GatedApplyReconnectRewindAsync/GatedDrainNewLinesAsync ----
+    // review fix (r3, finding #1) — GatedApplyReconnectRewindAsync/GatedDrainNewLinesAsync ----
     //
     // RunWatch's own cursorRewindGate/Reconnected handler can't be driven without a live SignalR
     // reconnect (same constraint CursorGuardWiringTests' class doc states), so these tests drive
@@ -546,7 +546,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // ---- AI-1382 review fix (r4, finding #5) — GatedApplyReconnectRewindAsync propagates a refused rewind ----
+    // review fix (r4, finding #5) — GatedApplyReconnectRewindAsync propagates a refused rewind ----
 
     [Test]
     public async Task GatedApplyReconnectRewindAsync_returns_false_and_leaves_state_untouched_when_the_server_frontier_exceeds_local_lines() {

@@ -28,7 +28,7 @@ public static class AntigravityHooksInstaller {
         // plugin.json is REQUIRED for the GUI to load the dir — write it FIRST and let a
         // failure propagate so the install aborts (it is NOT best-effort like the version
         // marker). Otherwise a written hooks.json is dead weight the GUI ignores — the exact
-        // AI-1158 false-success mode this fix exists to prevent.
+        // false-success mode this fix exists to prevent.
         WritePluginManifest(hooksPath);
 
         var root = LoadOrBackup(hooksPath);
@@ -100,7 +100,7 @@ public static class AntigravityHooksInstaller {
 
     /// <summary>Writes the REQUIRED plugin.json manifest. Unlike the version marker this is
     /// deliberately NOT best-effort: a failure propagates so <see cref="Install"/> fails
-    /// rather than leaving a hooks.json the GUI can never load (AI-1158).</summary>
+    /// rather than leaving a hooks.json the GUI can never load.</summary>
     static void WritePluginManifest(string hooksPath) {
         var dir = Path.GetDirectoryName(hooksPath);
         if (string.IsNullOrEmpty(dir))

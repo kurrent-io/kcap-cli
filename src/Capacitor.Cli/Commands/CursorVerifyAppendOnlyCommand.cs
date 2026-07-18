@@ -3,7 +3,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// AI-1382 D0 — hidden diagnostic: the phase-0 empirical verification harness. Samples
+/// hidden diagnostic: the phase-0 empirical verification harness. Samples
 /// <c>(length, sha256(prefix))</c> off a live Cursor transcript file at ~1s cadence for a bounded
 /// duration and checks every earlier/later sample pair with
 /// <see cref="CursorAppendOnlyProbe.PrefixStable"/>, printing a PASS/FAIL report.

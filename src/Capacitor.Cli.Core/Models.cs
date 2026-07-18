@@ -139,7 +139,7 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
-    // AI-1357 task 7: set by the shutdown final drain (isFinalDrain) when it held back an
+    // task 7: set by the shutdown final drain (isFinalDrain) when it held back an
     // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
     // the final drain to flag the session needs-import (never drop a truncated tail).
     public bool FinalDrainHeldIncompleteLine { get; set; }
@@ -149,7 +149,7 @@ class WatchState {
     // Initialized when the watcher starts; updated in DrainNewLines on new lines.
     public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
 
-    // AI-1359: idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
+    // idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
     // connection drops and cleared when it returns; AccumulatedDisconnected sums the disconnected
     // durations SINCE the last transcript activity (reset to zero when LastActivityAt advances).
     // ShouldEndOnIdle subtracts it so a transient outage isn't counted as idleness, while a
@@ -183,12 +183,12 @@ class WatchState {
     // the Codex PendingCodexToolCalls guard).
     public int PendingAntigravityToolCalls { get; set; }
 
-    // Antigravity live subagent nesting (AI-1218): child conversation ids already POSTed to
+    // Antigravity live subagent nesting: child conversation ids already POSTed to
     // /hooks/antigravity/subagent-link for this parent watcher. A child stays OUT of this set
     // until its link POST succeeds, so a failed POST retries on the next scan (fail-open).
     public HashSet<string> PostedSubagentLinks { get; } = new(StringComparer.Ordinal);
 
-    // AI-1357 task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
+    // task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
     // synthetic KiroUsageBackfilled line, so a later drain never re-emits the same anchor. Mirrors
     // LastAntigravityGenIdx above, but keyed on the anchor string rather than a row index because
     // Kiro's sidecar has no stable ordinal — committed ONLY after a successful send (see
@@ -201,7 +201,7 @@ class WatchState {
     // re-staged) fresh on the next drain, so nothing is lost.
     public List<string> KiroUsagePendingAnchors { get; } = [];
 
-    // AI-1382 Task 11 (D0/D3) — byte offset (end of the last batch the runtime rewrite guard
+    // Task 11 (D0/D3) — byte offset (end of the last batch the runtime rewrite guard
     // verified and the server acked) the Cursor watcher's guard checks resume from each poll.
     // Distinct from LinesProcessed (a LINE-number cursor set from the server's acked frontier,
     // which can differ from the raw count of lines sent when a line was disposed differently
@@ -209,7 +209,7 @@ class WatchState {
     // range it last verified. Only ever set for vendor == "cursor".
     public long CursorByteOffset { get; set; }
 
-    // AI-1382 review fix #2 — poll counter driving the periodic full-prefix re-hash cadence
+    // poll counter driving the periodic full-prefix re-hash cadence
     // (WatchCommand.CursorFullPrefixVerifyEveryNPolls). Incremented once per poll for vendor ==
     // "cursor" only; a plain counter (not wall-clock time) so the cadence is exact regardless of
     // how long any individual poll takes.
@@ -349,13 +349,13 @@ public record EvalQuestionDto {
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
 
-    // AI-9 Phase 3 — the catalog prompt version this question's rendered prompt
+    // Phase 3 — the catalog prompt version this question's rendered prompt
     // ran against. Null on the back-compat /api/eval/questions alias (which does
     // not emit it) and on older servers; populated only by /api/eval/catalog.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
 
-    // AI-9 Phase 3 — RAW question text from the catalog, used by the tools path
+    // Phase 3 — RAW question text from the catalog, used by the tools path
     // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
     // the alias / older servers. Distinct from Prompt, which on a reconciled
     // text-path question holds the server-RENDERED prompt.
@@ -364,7 +364,7 @@ public record EvalQuestionDto {
 }
 
 /// <summary>
-/// Wire-format DTO for <c>GET /api/eval/catalog</c> (AI-9 Phase 3). Carries the
+/// Wire-format DTO for <c>GET /api/eval/catalog</c>. Carries the
 /// server-rendered retrospective prompt + its version, and the active questions
 /// with raw text + server-rendered prompt + per-question prompt version +
 /// needs_tools. There is NO top-level question template — the daemon uses each
@@ -444,7 +444,7 @@ public record EvalQuestionVerdict {
     [JsonPropertyName("tools_used")]
     public int? ToolsUsed { get; init; }
 
-    // AI-9 Phase 3 — catalog prompt version stamped at aggregation time before
+    // Phase 3 — catalog prompt version stamped at aggregation time before
     // POSTing the V3 payload. Null until Aggregate fills it from the catalog.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
@@ -625,7 +625,7 @@ public record SessionEvalCompletedPayloadV2 {
     public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
 }
 
-// Posted to POST /api/sessions/{id}/evals/v3 (AI-9 Phase 3). Differs from V2 by
+// Posted to POST /api/sessions/{id}/evals/v3. Differs from V2 by
 // adding retrospective_prompt_version; the per-question version rides on each
 // EvalQuestionVerdict.PromptVersion. Wire shape must stay 1:1 with the server's
 // SessionEvalCompletedPayloadV3 in Capacitor.Server.
@@ -692,7 +692,7 @@ static partial class GitUrlParser {
     }
 
     // owner is greedy (`.+`) so a nested GitLab namespace (group/subgroup/...) is
-    // captured whole, with repo as the final path segment. AI-1121 / §6b.
+    // captured whole, with repo as the final path segment. / §6b.
     [GeneratedRegex(@"https?://[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex HttpsRegex();
 
@@ -832,7 +832,7 @@ public sealed record CliProjectError {
 
 /// <summary>
 /// One discovered plan/spec/design/checklist artifact returned by
-/// <c>GET /api/sessions/{id}/plan-artifacts</c> (AI-701). Mirrors the server's
+/// <c>GET /api/sessions/{id}/plan-artifacts</c>. Mirrors the server's
 /// <c>Capacitor.Plans.PlanArtifact</c> record field-for-field; string fields
 /// (<see cref="Kind"/>, <see cref="Source"/>, <see cref="ContentState"/>,
 /// <see cref="Confidence"/>) carry the server's snake_case enum values verbatim
@@ -869,7 +869,7 @@ public sealed record PlanArtifactDto {
     [JsonPropertyName("is_primary")]      public bool IsPrimary { get; init; }
 }
 
-/// <summary>Body of <c>GET /api/sessions/{id}/plan-artifacts</c> (AI-701).</summary>
+/// <summary>Body of <c>GET /api/sessions/{id}/plan-artifacts</c>.</summary>
 public sealed record PlanArtifactsResponseDto {
     [JsonPropertyName("primary")]     public PlanArtifactDto? Primary { get; init; }
     [JsonPropertyName("artifacts")]   public List<PlanArtifactDto> Artifacts { get; init; } = [];
@@ -1043,7 +1043,7 @@ public readonly record struct PermissionDecision(
     );
 
 /// <summary>
-/// Single-argument payload for the <c>RequestPermission2</c> hub invocation (AI-864). SignalR
+/// Single-argument payload for the <c>RequestPermission2</c> hub invocation. SignalR
 /// binds hub-method arguments by count, so a record keeps the arity fixed at 1 and lets the wire
 /// contract gain fields without breaking mixed-version servers. Mirrors the server-side record of
 /// the same name in Capacitor.Server; property names must stay in sync (snake_case on the wire).
@@ -1056,7 +1056,7 @@ public readonly record struct HostedPermissionRequest(
     );
 
 /// <summary>
-/// Payload of the <c>PermissionResolved</c> server→client push (AI-864): the user's decision for a
+/// Payload of the <c>PermissionResolved</c> server→client push: the user's decision for a
 /// hosted-agent permission request, correlated by <see cref="RequestId"/>. A single record (not
 /// positional args) so the push contract can gain fields without breaking mixed-version daemons —
 /// SignalR binds by argument count. Mirrors the server-side record of the same name.
@@ -1067,7 +1067,7 @@ public readonly record struct PermissionResolution(
     );
 
 /// <summary>
-/// Single-argument payload for the <c>AcpRequestInteraction</c> hub invocation (AI-686). Mirrors
+/// Single-argument payload for the <c>AcpRequestInteraction</c> hub invocation. Mirrors
 /// the server-side record of the same name in <c>Capacitor.Server.Core</c> (<c>src/Capacitor.Server.Core/AcpInteraction.cs</c>);
 /// property names must stay in sync (snake_case on the wire via this context's naming policy).
 /// <b>Spec-review Finding 1:</b> <see cref="RequestedSchema"/> is a new OPTIONAL trailing field,
@@ -1090,14 +1090,14 @@ public readonly record struct AcpInteractionRequest(
     );
 
 /// <summary>
-/// One selectable option for an ACP permission or elicitation interaction (AI-686). Spec-review
+/// One selectable option for an ACP permission or elicitation interaction. Spec-review
 /// Finding 6: <see cref="OptionId"/> is the stable resolution key (mirrors
 /// <c>Acp.PermissionOptionDto.OptionId</c>) — <see cref="Label"/> is display-only.
 /// </summary>
 public readonly record struct AcpInteractionOption(string OptionId, string Label, string? Description, string? Kind = null);
 
 /// <summary>
-/// Decision for an ACP interaction (AI-686), pushed from the server. Mirrors the server-side
+/// Decision for an ACP interaction, pushed from the server. Mirrors the server-side
 /// record of the same name. Spec-review Finding 6: <see cref="SelectedOptionId"/> is what
 /// <c>AcpInteractionBridge.MapPermissionDecision</c> (Task B3) matches against — never
 /// <see cref="SelectedOptionLabel"/>, which is retained for display/attribution only.
@@ -1112,7 +1112,7 @@ public readonly record struct AcpInteractionDecision(
     );
 
 /// <summary>
-/// Payload of the <c>AcpInteractionResolved</c> server→client push (AI-686), correlated by
+/// Payload of the <c>AcpInteractionResolved</c> server→client push, correlated by
 /// <see cref="RequestId"/>. Mirrors the server-side record of the same name.
 /// </summary>
 public readonly record struct AcpInteractionResolution(
@@ -1194,7 +1194,7 @@ public readonly record struct AcpEventEnvelope(
 public readonly record struct AcpBatchAck(long AcceptedSeq, long PersistedSeq, long? ExpectedNextSeq = null);
 
 /// <summary>
-/// Ack returned from the server's <c>SendTranscriptBatchAcked</c> hub method (AI-1382 D3).
+/// Ack returned from the server's <c>SendTranscriptBatchAcked</c> hub method (D3).
 /// Field-for-field mirror of the server-side <c>Capacitor.TranscriptBatchAck</c> record.
 /// <see cref="NextLineNumber"/> is the source-acknowledgement frontier — the first line number
 /// the server has NOT fully disposed of (emitted or deliberately ignored). The Cursor watcher
@@ -1218,13 +1218,13 @@ public readonly record struct LaunchAgentCommand(
         LaunchKind        Kind            = LaunchKind.Default,
         ReviewLaunchInfo? Review          = null,
         string?           BaseRef         = null,
-        // AI-1126 D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
+        // D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
         // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
         // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
         // last as an optional field so the SignalR positional binding stays wire-compatible with
         // older daemons/servers.
         string[]?         McpAllowlist = null,
-        // AI-1207 Phase A: launch against the user's own checkout instead of a fresh daemon-owned
+        // Phase A: launch against the user's own checkout instead of a fresh daemon-owned
         // worktree. A bool on the wire (not the WorkLocation enum) — WorkLocation's numeric values
         // are BorrowedCwd=0/OwnedWorktree=1, the reverse of what you'd guess, so a raw enum int
         // would be a footgun; the daemon maps Borrowed -> WorkLocation internally. BorrowCwd is the
@@ -1244,7 +1244,7 @@ public readonly record struct LaunchAgentCommand(
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves
 /// the existing prompt-driven launch; <see cref="Review"/> uses
 /// <see cref="ReviewLaunchInfo"/> + <c>BaseRef</c> to drive a hosted PR review;
-/// <see cref="ReviewFlow"/> (AI-1089) marks a durable agent-review-flow reviewer, which the
+/// <see cref="ReviewFlow"/> marks a durable agent-review-flow reviewer, which the
 /// daemon runs unattended (never approval + no MCP). The value crosses the CLI↔server wire, so
 /// it MUST stay Default=0, Review=1, ReviewFlow=2.
 /// </summary>
@@ -1329,7 +1329,7 @@ public readonly record struct FindRepoForRemoteRequest(
     );
 
 /// <summary>
-/// Daemon reply to the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A,
+/// Daemon reply to the server's <c>ProbeBorrowSource</c> client-result invocation (Phase A,
 /// task A3): "can you borrow this path?". <see cref="CanBorrow"/> mirrors
 /// <c>BorrowAuthResult.Allowed</c>; <see cref="CanonicalCwd"/>/<see cref="CanonicalGitRoot"/> are the
 /// daemon-computed canonical paths (non-null only when the path exists), and <see cref="Reason"/>
@@ -1363,7 +1363,7 @@ public readonly record struct ResizeTerminalCommand(
 /// file content for diagnostics). The server uses it to distinguish a
 /// legitimate reconnect of the same daemon (new SignalR connectionId, same
 /// instance) from a different daemon process claiming the same
-/// <c>(owner, name)</c> slot. Pre-AI-630 daemons sent no <c>InstanceId</c>;
+/// <c>(owner, name)</c> slot. Legacy daemons sent no <c>InstanceId</c>;
 /// the server still accepts them under a legacy-displacement fallback.</para>
 ///
 /// <para><c>Version</c> is the daemon binary's
@@ -1371,7 +1371,7 @@ public readonly record struct ResizeTerminalCommand(
 /// the server's <c>DaemonInfo</c> so the dashboard can show what version
 /// each connected daemon is running.</para>
 ///
-/// <para><c>MachineId</c> (AI-1207) is this machine's stable id (see
+/// <para><c>MachineId</c> is this machine's stable id (see
 /// <see cref="MachineId"/>), reported so the server can later prove a daemon
 /// claiming a given repo path is actually running on the requester's
 /// machine. Trailing/optional so an older daemon that doesn't send it (or a

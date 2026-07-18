@@ -5,7 +5,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1207 Phase A (tasks A5 + A6): the borrowed-launch branch in
+/// Phase A (tasks A5 + A6): the borrowed-launch branch in
 /// <see cref="AgentOrchestrator.HandleLaunchAgent"/> and — the reason A5 and A6 ship together —
 /// the failed-launch cleanup guard.
 ///

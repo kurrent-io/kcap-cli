@@ -461,7 +461,7 @@ public static class OAuthLoginFlow {
 
     /// <summary>
     /// Builds OidcClient options for the WorkOS AuthKit authorization-code-with-PKCE flow.
-    /// Authorize + token both on the API domain (AI-958 — never the AuthKit UI domain). WorkOS is a
+    /// Authorize + token both on the API domain (never the AuthKit UI domain). WorkOS is a
     /// public client (no secret) with non-standard endpoints, no discovery, and no id_token, so
     /// discovery/keyset/userinfo are disabled and the response is mapped by hand.
     /// </summary>
@@ -475,7 +475,7 @@ public static class OAuthLoginFlow {
             DisablePushedAuthorization = true,
             ProviderInformation = new ProviderInformation {
                 IssuerName        = apiBase,
-                AuthorizeEndpoint = $"{apiBase}/user_management/authorize",     // AI-958: always the API domain
+                AuthorizeEndpoint = $"{apiBase}/user_management/authorize",     // always the API domain
                 TokenEndpoint     = $"{apiBase}/user_management/authenticate",
             },
         };

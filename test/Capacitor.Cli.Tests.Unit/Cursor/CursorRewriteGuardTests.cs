@@ -5,7 +5,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1382 D0 — the runtime two-zone rewrite guard. Each test uses a fresh GUID session id (see
+/// the runtime two-zone rewrite guard. Each test uses a fresh GUID session id (see
 /// CursorMarkersTests) so asserting CursorMarkers.IsQuarantined after a detected rewrite doesn't
 /// collide with the other marker/guard tests sharing the same KCAP_CONFIG_DIR temp dir.
 /// </summary>
@@ -114,7 +114,7 @@ public class CursorRewriteGuardTests {
         await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
     }
 
-    // AI-1382 review fix #2 — a shrink is unambiguous evidence of a rewrite on its own; the
+    // a shrink is unambiguous evidence of a rewrite on its own; the
     // watcher's original wiring gated the whole zone check behind "did the file grow", so a
     // shrink slipped through entirely undetected.
     [Test]

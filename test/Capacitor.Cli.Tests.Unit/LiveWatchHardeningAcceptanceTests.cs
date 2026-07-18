@@ -6,7 +6,7 @@ using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-// AI-1357 Task 15 — acceptance tests encoding the spec's Testing section (Step 1), reusing the
+// Task 15 — acceptance tests encoding the spec's Testing section (Step 1), reusing the
 // pure/HTTP seams Tasks 1-14 already built. Where a criterion is already fully covered by an
 // existing unit test from an earlier task, the test below is deliberately THIN — it asserts the
 // end-to-end contract from a different vantage point (a real HTTP round trip, a combined
@@ -46,7 +46,7 @@ public class LiveWatchHardeningAcceptanceTests {
     /// watcher-backed non-Claude vendor's lifecycle POST reports <see cref="HookPostOutcome.Spooled"/>
     /// (never the legacy <see cref="HookPostOutcome.AuthLapsed"/>, which spools nothing) — and
     /// <see cref="AgentHookPoster.ShouldSpawnAfter"/> says the watcher should STILL spawn.
-    /// Capture must never depend on lifecycle-POST delivery (AI-1357 Tasks 4-6).
+    /// Capture must never depend on lifecycle-POST delivery.
     ///
     /// <para>Exercises the real per-vendor route strings (not just the generic outcome), so a
     /// wrong/missing route on any one vendor's call site would show up here. Antigravity and

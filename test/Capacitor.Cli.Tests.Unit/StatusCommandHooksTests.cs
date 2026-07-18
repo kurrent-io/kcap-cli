@@ -104,7 +104,7 @@ public class StatusCommandHooksTests {
         // status must surface every supported agent so an install of any one can be
         // verified from `kcap status`. Gemini and Kiro were each previously absent
         // from the line entirely (added in PR #169); OpenCode was likewise missing
-        // until the AI-919 status surface was wired up.
+        // until the status surface was wired up.
         var line = StatusCommand.BuildHooksStatusLine(
             claude: true, codex: false, cursor: false, copilot: false, gemini: true, kiro: true, pi: true, opencode: true);
 

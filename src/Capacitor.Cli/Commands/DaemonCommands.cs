@@ -121,7 +121,7 @@ public static class DaemonCommands {
             return 1;
         }
 
-        // The daemon owns its PID file end to end (AI-1155): it writes it inside
+        // The daemon owns its PID file end to end: it writes it inside
         // the flock during startup (DaemonLock.TryAcquire) and deletes it under
         // the flock in Dispose. The supervisor neither writes nor deletes it.
         //
@@ -173,13 +173,13 @@ public static class DaemonCommands {
         }
 
         // Redirect ALL three standard streams so the detached daemon does not
-        // inherit our stdout/stderr (AI-839). Left un-redirected, the daemon
+        // inherit our stdout/stderr. Left un-redirected, the daemon
         // keeps the terminal — or a capturing parent's pipe — open for its
         // whole lifetime, so `kcap daemon start -d` appears to hang: it returns
         // and the daemon reparents to init, but anything reading our piped
         // output blocks on EOF that never comes. The daemon logs to --log-file,
         // so it has no use for these streams. (Same pipe-leak hazard and fix as
-        // the AI-820 watcher / what's-done spawns.)
+        // the watcher / what's-done spawns.)
         var psi = new ProcessStartInfo {
             FileName               = daemonPath,
             UseShellExecute        = false,
@@ -191,7 +191,7 @@ public static class DaemonCommands {
         psi.ArgumentList.Add("--log-file");
         psi.ArgumentList.Add(LogPath);
 
-        // AI-1155: we close the daemon's std pipes just below (anti-hang), which
+        // we close the daemon's std pipes just below (anti-hang), which
         // means a runtime/native fatal message written straight to fd 2 would be
         // lost — the reason hard daemon deaths currently leave no trace. Point the
         // daemon's fds at a sibling capture file so those messages survive. Same
@@ -204,7 +204,7 @@ public static class DaemonCommands {
         }
 
         // Windows: clear HANDLE_FLAG_INHERIT on our own std handles so the child
-        // doesn't inherit a capturing parent's pipe handles (AI-820). No-op on Unix.
+        // doesn't inherit a capturing parent's pipe handles. No-op on Unix.
         ProcessHelpers.PreventInheritedStdHandles();
 
         var process = new Process { StartInfo = psi };
@@ -216,7 +216,7 @@ public static class DaemonCommands {
         process.StandardOutput.Close();
         process.StandardError.Close();
 
-        // AI-630: the daemon binary acquires its own per-name flock at
+        // the daemon binary acquires its own per-name flock at
         // startup and exits with code 2 if another live daemon already
         // holds it (the race we couldn't catch via the PID-file guard
         // alone, e.g. when the previous daemon's PID file got wiped but
@@ -238,7 +238,7 @@ public static class DaemonCommands {
             return process.ExitCode == 0 ? 1 : process.ExitCode;
         }
 
-        // No supervisor PID-file write here (AI-1155): the daemon wrote its own
+        // No supervisor PID-file write here: the daemon wrote its own
         // inside the flock during startup — which the readiness wait above just
         // confirmed it survived — and owns its deletion. A redundant out-of-flock
         // write could recreate the file after a clean daemon exit and trip the
@@ -320,7 +320,7 @@ public static class DaemonCommands {
         if (ReadPidFile(name) is not { } entry) {
             // ReadPidFile returns null for BOTH an absent file and a present-but-
             // unparseable one (empty/partial — e.g. a mid-write SIGKILL; it no
-            // longer unlinks the latter, AI-1155).
+            // longer unlinks the latter,).
             if (!File.Exists(DaemonLockPaths.PidPath(name))) {
                 Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
 
@@ -385,8 +385,8 @@ public static class DaemonCommands {
     /// PID afterward. Every daemon (supervisor-started, foreground, or
     /// self-respawned) takes this flock before writing its PID, so this is the
     /// race-free way for the CLI to clean up markers without unlinking a live
-    /// daemon's PID file (AI-1155). The lock file itself is never deleted
-    /// (AI-630); <c>doctor --clean</c> owns that. Returns false if a live daemon
+    /// daemon's PID file. The lock file itself is never deleted;
+    /// <c>doctor --clean</c> owns that. Returns false if a live daemon
     /// holds the flock (caller should treat the name as running).
     /// </summary>
     static bool TryCleanupMarkersUnderLock(string name) {
@@ -521,7 +521,7 @@ public static class DaemonCommands {
                 if (DaemonRestartMarker.TryRead(name) is { } marker)
                     await Console.Out.WriteLineAsync($"  {marker.Describe()}");
             } else {
-                // AI-1155: report the stale PID file but do NOT delete it. Its
+                // report the stale PID file but do NOT delete it. Its
                 // presence is now the durable hard-death signal the next daemon
                 // reads to log the unclean-exit breadcrumb (DaemonLock); a passive
                 // `status` read that removed it would give that breadcrumb a false
@@ -644,12 +644,12 @@ public static class DaemonCommands {
 
                     if (clean) {
                         // Delete the daemon-owned markers WHILE still holding the
-                        // probe's flock (AI-1155): a concurrent `daemon start` must
+                        // probe's flock: a concurrent `daemon start` must
                         // take this same flock, so it can't slip a live daemon in
                         // and have us unlink its fresh PID. Do NOT delete the lock
                         // file — unlinking it (even while holding it) lets a later
                         // start create a new lock inode and acquire a SECOND
-                        // independent flock at the same path (AI-630). Leave it;
+                        // independent flock at the same path. Leave it;
                         // it's inert and the next start reuses it.
                         try { File.Delete(pidPath); } catch {
                             /* best-effort */
@@ -693,7 +693,7 @@ public static class DaemonCommands {
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (lines.Length == 0 || !int.TryParse(lines[0], out var pid)) {
-            // AI-1155: report "no usable PID" but do NOT delete the file. The
+            // report "no usable PID" but do NOT delete the file. The
             // daemon writes it with File.WriteAllText (truncate+write) under the
             // flock, so a SIGKILL/native abort mid-write can leave a present but
             // empty/partial/unparseable file — which is itself a hard-death
@@ -720,7 +720,7 @@ public static class DaemonCommands {
     ///
     /// The name fallback applies only when the token can't be compared at all:
     /// no token recorded, the live token is unreadable, or the recorded token is
-    /// a legacy/foreign scheme — notably a pre-AI-839 PID file that stored bare
+    /// a legacy/foreign scheme — notably a PID file that stored bare
     /// <c>Process.StartTime</c> ticks. Falling back there keeps a still-running
     /// old daemon manageable across an upgrade instead of stranding it.
     /// </summary>

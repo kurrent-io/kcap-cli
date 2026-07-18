@@ -328,7 +328,7 @@ public class AcpConnectionTests {
         using var       cts     = new CancellationTokenSource();
         var              runTask = harness.Connection.RunAsync(cts.Token);
 
-        // OnServerRequest intentionally left unset (AI-684 default-decline posture).
+        // OnServerRequest intentionally left unset (default-decline posture).
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{}}"""
         );

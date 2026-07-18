@@ -432,7 +432,7 @@ public class LocalPermissionBridgeTests {
         }
     }
 
-    // AI-1139 follow-up: a review-flow reviewer's own result-submission tool must be auto-approved
+    // follow-up: a review-flow reviewer's own result-submission tool must be auto-approved
     // by the bridge WITHOUT surfacing a user prompt. Codex fires a PermissionRequest for the MCP
     // tool call even under `--ask-for-approval never`, and its hook bridges here; without this the
     // unattended reviewer blocks on a decision it can never get.

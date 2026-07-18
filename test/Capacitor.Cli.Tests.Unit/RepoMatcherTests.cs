@@ -155,7 +155,7 @@ public class RepoMatcherTests {
 
     [Test]
     public async Task FindAsync_MatchingNestedGitlabGroupOrigin_ReturnsRoot() {
-        // AI-1121: a nested namespace owner ("group/sub") must match the full
+        // a nested namespace owner ("group/sub") must match the full
         // owner/repo suffix of the normalized remote.
         var repo = MakeTempRepo("git@gitlab.com:group/sub/project.git");
         try {

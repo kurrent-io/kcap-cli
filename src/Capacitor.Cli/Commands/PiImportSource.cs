@@ -165,7 +165,7 @@ internal sealed class PiImportSource : IImportSource {
                 continue;
             }
 
-            // Pi transcript records carry a per-record "timestamp" field (AI-1358 A3);
+            // Pi transcript records carry a per-record "timestamp" field;
             // prefer the tail-scanned last one over file mtime, which can be skewed
             // by unrelated later writes to the same session-scoped file.
             meta.LastTimestamp = EndedAtResolvers.LastTimestampFromJsonl(transcriptPath) ?? TryGetLastWriteUtc(transcriptPath);
@@ -282,7 +282,7 @@ internal sealed class PiImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (cwd is not null) payload["cwd"] = cwd;
-        // AI-701 (finding 4): fail-open git-root discovery, mirroring ImportChainsAsync
+        // fail-open git-root discovery, mirroring ImportChainsAsync
         // so routed imports carry the same workspace_root the file-based path does.
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
@@ -375,9 +375,9 @@ internal sealed class PiImportSource : IImportSource {
     /// <summary>
     /// True when the line maps to at least one canonical event under the
     /// server's <c>PiTranscriptNormalizer</c>: the <c>session</c> header always
-    /// emits; <c>compaction</c> emits a <c>ContextCompacted</c> (AI-892);
+    /// emits; <c>compaction</c> emits a <c>ContextCompacted</c>;
     /// <c>branch_summary</c> emits an <c>AssistantTextGenerated</c> with Pi metadata
-    /// (AI-892);
+    ///;
     /// <c>message</c> emits for roles user/assistant (non-empty content),
     /// toolResult (has toolCallId), bashExecution (has command). Everything else
     /// (model_change / thinking_level_change / label / session_info / custom*) is

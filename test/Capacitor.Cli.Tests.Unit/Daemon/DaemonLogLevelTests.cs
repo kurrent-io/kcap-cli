@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// Covers the daemon log-verbosity toggle (AI-840 diagnostics): the
+/// Covers the daemon log-verbosity toggle (diagnostics): the
 /// <c>--log-level</c> / <c>KCAP_DAEMON_LOG_LEVEL</c> string parse, and that the
 /// rolling file logger actually honours the configured minimum level — the
 /// per-tick DaemonPing RTT line logs at Debug, which the pre-toggle hardcoded

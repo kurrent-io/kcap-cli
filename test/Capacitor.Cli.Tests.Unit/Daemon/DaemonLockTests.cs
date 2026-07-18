@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Tests for <see cref="DaemonLock"/> — the per-name flock the daemon binary
-/// holds for its lifetime. Verifies the AI-630 protection: a second daemon
+/// holds for its lifetime. Verifies the protection: a second daemon
 /// acquiring the same name on the same machine fails fast.
 ///
 /// All tests redirect <see cref="DaemonLockPaths"/> to a temp directory so
@@ -113,7 +113,7 @@ public class DaemonLockTests {
     }
 
     /// <summary>
-    /// AI-630 review fix: <see cref="DaemonLock.Dispose"/> must not delete the
+    /// <see cref="DaemonLock.Dispose"/> must not delete the
     /// lock file on disk. If it did, a daemon B that acquired the path between
     /// our flock release and the unlink would have its inode unlinked under
     /// it, and a daemon C could then create a fresh file and acquire a SECOND
@@ -139,7 +139,7 @@ public class DaemonLockTests {
     }
 
     /// <summary>
-    /// AI-630 review fix: when a successor daemon has already overwritten
+    /// when a successor daemon has already overwritten
     /// the PID file with its own PID, the disposing daemon must not delete
     /// it — that would orphan the successor's entry and `agent stop` would
     /// no longer find the live daemon.
@@ -168,7 +168,7 @@ public class DaemonLockTests {
     }
 
     /// <summary>
-    /// AI-839: the daemon must write a PID file whose first line is its PID and
+    /// the daemon must write a PID file whose first line is its PID and
     /// whose second line is the cross-process-stable start token, so the CLI's
     /// <c>status</c>/<c>stop</c>/<c>doctor</c> (separate processes) can confirm
     /// the live daemon instead of misreading it as a stale entry. The PID file
@@ -304,7 +304,7 @@ public class DaemonLockTests {
     }
 
     /// <summary>
-    /// AI-1155: a daemon that is SIGKILLed (macOS jetsam/OOM, `kill -9`), loses
+    /// a daemon that is SIGKILLed (macOS jetsam/OOM, `kill -9`), loses
     /// power, or crashes natively never runs <see cref="DaemonLock.Dispose"/>, so
     /// its PID file is left on disk. Once we hold the exclusive flock (proving the
     /// prior holder is gone), a leftover PID file is the signature of that unclean

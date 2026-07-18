@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Tests for the shared agent-hook recording POST (AI-993). This is the seam the non-Claude
+/// Tests for the shared agent-hook recording POST. This is the seam the non-Claude
 /// hooks (Codex, Gemini, Copilot, Pi, Kiro, OpenCode) delegate to. Its job is to SKIP a POST
 /// that would 401 because auth has lapsed — reporting <see cref="HookPostOutcome.AuthLapsed"/>
 /// without touching stderr or the server — while leaving the authenticated success path and

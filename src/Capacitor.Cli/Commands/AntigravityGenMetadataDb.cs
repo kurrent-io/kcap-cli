@@ -6,15 +6,15 @@ namespace Capacitor.Cli.Commands;
 /// <summary>
 /// Read-only reader over an Antigravity conversation's SQLite db
 /// (<c>~/.gemini/antigravity/conversations/&lt;id&gt;.db</c>), yielding the synthetic
-/// <c>USAGE</c> transcript lines the server maps to <c>AntigravityUsageBackfilledEvent</c>
-/// (AI-1158). Antigravity keeps per-generation tokens/model in the <c>gen_metadata</c>
+/// <c>USAGE</c> transcript lines the server maps to <c>AntigravityUsageBackfilledEvent</c>.
+/// Antigravity keeps per-generation tokens/model in the <c>gen_metadata</c>
 /// table's protobuf <c>data</c> blob, not the JSONL transcript, so the watcher polls this
 /// alongside tailing <c>transcript_full.jsonl</c> and streams the decoded rows.
 ///
 /// Lives in the CLI project (not Core) so the Microsoft.Data.Sqlite native bundle never
 /// reaches the AOT-published daemon — same rationale as <see cref="OpenCodeDb"/>. Opened
 /// read-only, WAL-tolerant. Every step is best-effort: a missing db / table / undecodable
-/// row is skipped, never thrown (cost is always fail-open — see AI-728).
+/// row is skipped, never thrown (cost is always fail-open —).
 /// </summary>
 internal sealed class AntigravityGenMetadataDb : IDisposable {
     readonly SqliteConnection _conn;

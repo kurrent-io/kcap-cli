@@ -56,7 +56,7 @@ public class SessionImporterProgressTests : IDisposable {
         }
     }
 
-    // AI-1382 review fix (r4, finding #3) — abortDelivery must be re-checked immediately AFTER a
+    // abortDelivery must be re-checked immediately AFTER a
     // POST too, not only before the next one. A transcript small enough to be a SINGLE (final and
     // only) batch never reaches a "next" pre-POST check at all, so before this fix a quarantine
     // marker that appeared while that one-and-only POST was "in flight" was never observed anywhere
@@ -96,7 +96,7 @@ public class SessionImporterProgressTests : IDisposable {
 
     [Test]
     public async Task CountSendableLines_counts_non_blank_lines_from_start() {
-        // The per-session progress denominator (AI-907): must equal the number of
+        // The per-session progress denominator: must equal the number of
         // lines SendTranscriptBatches/ImportSessionAsync actually POST — non-blank
         // lines from startLine to EOF.
         var path = Path.GetTempFileName();

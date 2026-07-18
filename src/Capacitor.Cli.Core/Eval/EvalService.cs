@@ -33,7 +33,7 @@ public static class EvalService {
     // level keeps retrospectives cheap and prevents the model from padding
     // lists with low-signal bullets just because the schema would let it.
     //
-    // AI-795: suggestions.items is an object with {text, audience} — NOT a
+    // suggestions.items is an object with {text, audience} — NOT a
     // bare string. The previous string-items schema forced the model to
     // ignore the prompt's {text, audience} instruction, which meant every
     // suggestion landed as audience="human" and no agent_guidance was ever
@@ -87,7 +87,7 @@ public static class EvalService {
     // --mcp-config we pass to claude; the key becomes the `mcp__<key>__<tool>`
     // prefix claude uses. Named after `kcap mcp judge`'s own serverInfo so it
     // never collides with the plugin-registered `kcap-review` (`kcap mcp
-    // review`) server when both load (AI-803).
+    // review`) server when both load.
     internal const string JudgeMcpServerName = "kcap-judge";
 
     // Shared between RunRetrospectiveAsync and the tools-enabled per-question
@@ -278,7 +278,7 @@ public static class EvalService {
                 return null;
             }
 
-            // AI-9 Phase 3 — fetch the full catalog (rendered prompts + raw text +
+            // Phase 3 — fetch the full catalog (rendered prompts + raw text +
             // versions) so PrepareAsync can reconcile the run question list from it.
             var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, ct);
             if (catalog is null) return null;   // FetchAsync already emitted OnFailed
@@ -394,7 +394,7 @@ public static class EvalService {
         // session through the tools path (no embedded trace) instead of the
         // text-only path. See ShouldForceTools / DefaultTraceTokenBudget.
         //
-        // Known limitation (AI-966 review): the judge MCP tools for
+        // Known limitation: the judge MCP tools for
         // summary/search/transcript/tool-result are single-session — only
         // recap/errors follow the continuation chain (and the server endpoints
         // they back have no chain support). So a chained eval (`--chain`) whose
@@ -403,7 +403,7 @@ public static class EvalService {
         // chain. Accepted here because the alternative for an oversized chained
         // trace is the embed path's hard 400 (no verdict at all). Full
         // chain-aware tools require server-side chain support on
-        // eval-summary/search/transcript — tracked in AI-968.
+        // eval-summary/search/transcript — tracked in.
         var tokenBudget = TraceTokenBudget();
         var forceTools  = ShouldForceTools(traceJson.Length, tokenBudget);
         if (forceTools) {
@@ -420,7 +420,7 @@ public static class EvalService {
         // "stable" trends). FactsUsed snapshots persist as empty for new
         // evals; the read-side projection + UI panel stay in place so
         // historical eval audit views keep working.
-        // AI-9 Phase 3 — reconcile the run question list FROM the catalog (rendered
+        // Phase 3 — reconcile the run question list FROM the catalog (rendered
         // prompts + raw text + versions). The text path uses each question's rendered
         // Prompt directly; the tools path keeps the embedded wrapper + raw text.
         var selectedIds = questions.Select(q => q.Id).ToList();
@@ -486,7 +486,7 @@ public static class EvalService {
             // on demand. ctx.ForceTools additionally routes EVERY question
             // here (not just the NeedsTools four) when the session's trace is
             // too large to embed — see PrepareAsync's size gate.
-            // AI-9 Phase 3 — the reconciled question's Prompt is the RENDERED
+            // Phase 3 — the reconciled question's Prompt is the RENDERED
             // text-path prompt; the tools template substitutes {QUESTION_TEXT}
             // from question.Prompt, so feed it the RAW catalog text instead.
             var prompt = BuildToolsQuestionPrompt(
@@ -510,7 +510,7 @@ public static class EvalService {
                 ct:             ct
             );
         } else {
-            // Text-only path (default). AI-9 Phase 3: the prompt is the catalog's
+            // Text-only path (default). Phase 3: the prompt is the catalog's
             // server-RENDERED prompt carried on the reconciled question — fill the
             // runtime placeholders and strip any residual {CACHE_BOUNDARY}.
             var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson);
@@ -591,7 +591,7 @@ public static class EvalService {
             return null;
         }
 
-        // 4. Aggregate per-category + overall scores. AI-9 Phase 3: V3 payload —
+        // 4. Aggregate per-category + overall scores. Phase 3: V3 payload —
         //    each verdict is stamped with its catalog prompt version; the
         //    retrospective prompt version is stamped below from ctx.
         var aggregate = Aggregate(verdicts, ctx.EvalRunId, model, ctx.Questions);
@@ -626,7 +626,7 @@ public static class EvalService {
         );
         aggregate = aggregate with { Retrospective = retrospective };
 
-        // AI-9 Phase 3 — stamp the catalog retrospective prompt version.
+        // Phase 3 — stamp the catalog retrospective prompt version.
         aggregate = aggregate with { RetrospectivePromptVersion = ctx.RetrospectivePromptVersion };
 
         // 6. Persist the aggregate to the server via the V3 route.
@@ -682,7 +682,7 @@ public static class EvalService {
 
     /// <summary>
     /// Persists a V3 aggregate to <c>POST /api/sessions/{id}/evals/v3</c>
-    /// (AI-9 Phase 3 — carries per-question + retrospective prompt versions).
+    /// (Phase 3 — carries per-question + retrospective prompt versions).
     /// Public seam for the daemon's wire-format contract test, mirroring
     /// <see cref="PersistAggregateV2Async"/>.
     /// </summary>
@@ -715,7 +715,7 @@ public static class EvalService {
     // ── Prompt construction ────────────────────────────────────────────────
 
     /// <summary>
-    /// AI-9 Phase 3 — build the run question list FROM the catalog, preserving the
+    /// Phase 3 — build the run question list FROM the catalog, preserving the
     /// order of <paramref name="selectedIds"/>. Each result carries the catalog's
     /// rendered <see cref="EvalQuestionDto.Prompt"/> (text path), raw
     /// <see cref="EvalQuestionDto.RawText"/> (tools path), <see cref="EvalQuestionDto.PromptVersion"/>,
@@ -781,7 +781,7 @@ public static class EvalService {
 
     /// <summary>
     /// Builds the retrospective synthesis prompt from the catalog-rendered
-    /// template (AI-9 Phase 3 — was a static embedded field) and the
+    /// template (Phase 3 — was a static embedded field) and the
     /// placeholders the judge needs: session metadata, per-question verdicts,
     /// retained patterns from prior evals in this repo, and the compacted trace.
     ///
@@ -794,7 +794,7 @@ public static class EvalService {
     /// </para>
     /// </summary>
     public static string BuildRetrospectivePrompt(
-            string template,           // AI-9 Phase 3 — from catalog (was static embedded field)
+            string template,           // Phase 3 — from catalog (was static embedded field)
             string sessionMeta,
             string verdictsJson,
             string knownPatterns,
@@ -1109,7 +1109,7 @@ public static class EvalService {
             string                             model,
             IReadOnlyList<EvalQuestionDto>     questions
         ) {
-        // AI-9 Phase 3 — stamp each verdict with its catalog prompt version
+        // Phase 3 — stamp each verdict with its catalog prompt version
         // (from the reconciled questions) before grouping, so the V3 payload
         // carries per-question prompt provenance.
         var versionByQuestion = questions
@@ -1208,7 +1208,7 @@ public static class EvalService {
         // Soft-drop of {KNOWN_PATTERNS}: template no longer has the
         // placeholder, so the retrospective prompt builder receives an
         // empty knownPatterns string and the replace becomes a no-op.
-        // AI-9 Phase 3: template comes from the catalog and {TRACE_JSON} is
+        // Phase 3: template comes from the catalog and {TRACE_JSON} is
         // filled with the daemon's already-fetched trace (SF#1).
         var prompt = BuildRetrospectivePrompt(
             retrospectivePrompt, sessionMeta, verdictsJson, knownPatterns: "", traceJson);
@@ -1242,7 +1242,7 @@ public static class EvalService {
                 return null;
             }
 
-            // AI-795 T18: V2 parser — tolerant of bare-string suggestion items
+            // T18: V2 parser — tolerant of bare-string suggestion items
             // and missing audience field (coerces to "human"). Server-side V2
             // route accepts both shapes.
             var retrospective = ParseRetrospectiveV2(result.Result);

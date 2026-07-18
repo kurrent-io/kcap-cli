@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-9 Phase 3: locks the daemon's V3 wire-format migration. The persistence
+/// Phase 3: locks the daemon's V3 wire-format migration. The persistence
 /// step must POST to /api/sessions/{id}/evals/v3 (not v2) and the body must
 /// carry per-question prompt_version and retrospective_prompt_version.
 /// Drives PersistAggregateV3Async directly (same seam as EvalRunnerV2PostTests).

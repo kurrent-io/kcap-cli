@@ -1,6 +1,6 @@
 namespace Capacitor.Cli.Core;
 
-/// <summary>AI-1126 D-c: the kcap-owned MCP server registry — the ONLY source a flow
+/// <summary> D-c: the kcap-owned MCP server registry — the ONLY source a flow
 /// definition's mcp: allowlist resolves against (never user config). StartsFlows marks
 /// servers that can start flows; they are stripped from every allowlist regardless of
 /// listing (the recursion guard — the server strips too, this is the authoritative layer).

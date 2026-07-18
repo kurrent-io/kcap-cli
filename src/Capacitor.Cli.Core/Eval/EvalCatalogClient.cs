@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
 /// Fetches the full eval catalog (server-rendered per-question prompts +
-/// retrospective prompt + versions) from <c>GET /api/eval/catalog</c> (AI-9
+/// retrospective prompt + versions) from <c>GET /api/eval/catalog</c> (
 /// Phase 3). Returns <c>null</c> on HTTP failure, deserialization error, or a
 /// failed integrity check so callers abort the run BEFORE expensive judge work
 /// (SF#4) -- the catalog is non-optional, so there is no safe fallback. Fetched

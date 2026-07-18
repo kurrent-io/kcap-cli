@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.OpenCode;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the OpenCode plugin installer (AI-919): kcap.ts write/remove + the
+/// Covers the OpenCode plugin installer: kcap.ts write/remove + the
 /// version-marker helpers. OpenCode has no hooks.json — kcap ships a dependency-free
 /// TypeScript plugin OpenCode auto-loads from <c>~/.config/opencode/plugins/</c>.
 /// </summary>

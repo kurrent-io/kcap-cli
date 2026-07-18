@@ -5,12 +5,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-842 / AI-844: the hosted-agent terminal mirror must reach the server in PTY
+/// the hosted-agent terminal mirror must reach the server in PTY
 /// order and survive a flapping SignalR connection <em>without dropping bytes</em>.
-/// AI-842 routed the stream through a single ordered drain loop but capped it with a
+/// routed the stream through a single ordered drain loop but capped it with a
 /// <c>DropOldest</c> channel — under back-pressure that silently discarded the
 /// oldest chunks, severing a redraw-TUI stream mid-escape-sequence (the garbled
-/// "Terminal" tab). AI-844 makes the queue loss-free: a full channel back-pressures
+/// "Terminal" tab). makes the queue loss-free: a full channel back-pressures
 /// the producer instead of dropping, and the only remaining drop — a send that keeps
 /// throwing while the hub reports Connected — is bounded-retried, then counted and
 /// logged rather than silently lost. These tests pin those guarantees without

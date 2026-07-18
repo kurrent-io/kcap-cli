@@ -34,7 +34,7 @@ internal sealed class RegistrationGate {
     /// returned — before the server re-established per-session ownership via the separate agent
     /// re-registration path. A permission invoke gated on <see cref="IsReady"/> could then fire
     /// into that gap and get a "Caller is not the daemon owning session" HubException, which the
-    /// retry layer treats as fatal → a spurious deny (the residual half of the AI-864 bug).
+    /// retry layer treats as fatal → a spurious deny (the residual half of the bug).
     ///
     /// If <paramref name="daemonConnect"/> throws (e.g. name-in-use), the exception propagates
     /// and readiness stays cleared — re-registration is skipped and MarkRegistered never runs.

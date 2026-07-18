@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
 /// Unit tests for <see cref="AntigravityHooksInstaller"/> / <see cref="AntigravityHooks"/>
-/// (AI-1158): the kcap block is installed with the two shape variants, user blocks are
+/// the kcap block is installed with the two shape variants, user blocks are
 /// preserved, remove strips only kcap's block, and malformed JSON is backed up (never
 /// silently clobbered).
 /// </summary>
@@ -44,7 +44,7 @@ public class AntigravityHooksInstallerTests {
         } finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // AI-1158 GUI re-test: the GUI only loads a plugin dir that contains a plugin.json
+    // GUI re-test: the GUI only loads a plugin dir that contains a plugin.json
     // manifest — without it, hooks.json is never read. Install must write it; Remove must
     // clean it up.
     [Test]
@@ -65,7 +65,7 @@ public class AntigravityHooksInstallerTests {
         } finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // AI-1158 review (F1): plugin.json is load-bearing, so a failure to write it must fail the
+    // plugin.json is load-bearing, so a failure to write it must fail the
     // install rather than silently leaving a hooks.json the GUI ignores. Simulate the failure by
     // making the manifest PATH an existing directory (WriteAllText can't overwrite a dir).
     [Test]
@@ -81,7 +81,7 @@ public class AntigravityHooksInstallerTests {
         } finally { Directory.Delete(dir, recursive: true); }
     }
 
-    // AI-1158 review (F2): removing kcap must not neuter user-authored blocks by deleting the
+    // removing kcap must not neuter user-authored blocks by deleting the
     // manifest — while a hooks.json remains for the GUI to load, plugin.json is kept.
     [Test]
     public async Task Remove_keeps_plugin_manifest_when_user_blocks_remain() {

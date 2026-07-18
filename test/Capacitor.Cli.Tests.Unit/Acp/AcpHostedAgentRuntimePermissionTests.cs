@@ -8,12 +8,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-686 end-to-end: <see cref="FakeAcpAgent"/> sends a real
+/// end-to-end: <see cref="FakeAcpAgent"/> sends a real
 /// <c>session/request_permission</c> server→client request mid-turn; the runtime's wired
 /// <see cref="AcpInteractionBridge"/> forwards it to an injected "ask the server" delegate and
 /// writes the JSON-RPC response back to the wire only once that delegate resolves — proving the
 /// agent's request genuinely blocks on the human decision rather than getting an immediate
-/// default-decline (AI-684's prior behavior, since <c>OnServerRequest</c> was unset).
+/// default-decline ('s prior behavior, since <c>OnServerRequest</c> was unset).
 /// </summary>
 public class AcpHostedAgentRuntimePermissionTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
@@ -91,7 +91,7 @@ public class AcpHostedAgentRuntimePermissionTests {
     [Test]
     public async Task PermissionRequest_NoInteractionDelegateWired_DefaultsToMethodNotFound() {
         // Backward-compat: a runtime constructed WITHOUT the new optional delegate (matching every
-        // pre-AI-686 call site) keeps AI-684's exact default-decline posture — OnServerRequest
+        // call site before this change) keeps the original exact default-decline posture — OnServerRequest
         // stays effectively unset for permission requests, so AcpConnection answers with a
         // JSON-RPC "Method not found" error, not a crash or hang.
         var fake    = new FakeAcpAgent();

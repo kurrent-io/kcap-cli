@@ -216,15 +216,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // reports these dims to the server right after the agent registers (and on
     // reconnect) so the read-only viewers (web/desktop xterm) lock to exactly the
     // width Claude drew for — otherwise the viewer auto-fits its panel and the
-    // mismatched columns garble the TUI (AI-884). PtyDefaults is the single source
+    // mismatched columns garble the TUI. PtyDefaults is the single source
     // of truth, shared with IPtyProcessFactory.Spawn's defaults so they can't drift.
     const ushort HostedPtyCols = PtyDefaults.Cols;
     const ushort HostedPtyRows = PtyDefaults.Rows;
 
     readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromSeconds(30));
 
-    // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
-    // AI-642: tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
+    // heartbeat tightened from 60 s SendAsync to round-trip Ping.
+    // tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
     // displaced-slot mismatch or a hung transport is caught within ~10 s
     // instead of ~25 s. This is independent of SignalR's transport timeout
     // (which stays at the 30 s default) — the heartbeat is the daemon's
@@ -233,7 +233,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
 
-    // AI-992: proactively refresh the active profile's auth token ahead of expiry so a
+    // proactively refresh the active profile's auth token ahead of expiry so a
     // continuously-running daemon keeps a WorkOS sliding-inactivity session alive (up to its
     // absolute lifetime) rather than forcing a `kcap login` after an idle period. The tick is
     // cheap (a token-file read + expiry compare) and only calls the refresh endpoint when the
@@ -242,7 +242,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // even for a failing refresh or a short-lived token that keeps re-entering the window.
     readonly PeriodicTimer _tokenRefresh = new(TimeSpan.FromSeconds(60));
 
-    // AI-1357 Task 12: periodic sweep of the cross-vendor lifecycle + transcript spools. Covers
+    // Task 12: periodic sweep of the cross-vendor lifecycle + transcript spools. Covers
     // backlogs left behind by vendors whose session-end never fires another `kcap` hook process
     // (Kiro/OpenCode watcher-owned session-end, Antigravity/Codex-desktop GUI idle/parent-exit) —
     // see SpoolDrainLoop's doc comment. 60s mirrors the reaper-style cadence of the other timers;
@@ -548,7 +548,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        // AI-1124: fail an unattended (review-flow) launch fast when the selected vendor's
+        // fail an unattended (review-flow) launch fast when the selected vendor's
         // runtime can't run unattended — before creating a worktree, so there's nothing to
         // clean up. Both shipped PTY launchers support it; this guards future vendors (and the
         // ACP/Cursor runtime, which does not).
@@ -774,7 +774,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
             // a runtime, so without this the agent would sit in "Starting" until the heartbeat's
-            // StartupTimeout auto-stops it as stuck (AI-684 Fix B/E). Flip to Running immediately:
+            // StartupTimeout auto-stops it as stuck (Fix B/E). Flip to Running immediately:
             // the runtime factory's StartAsync already completed the ACP initialize/session-new
             // handshake by the time we get here, so the session really is established. PTY
             // runtimes are unaffected — they keep the existing on-first-chunk flip in
@@ -958,7 +958,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // full. Tie that await to BOTH this agent's stop (ReadCts) and daemon shutdown
         // so HandleStopAgent releasing ReadCts unblocks the read loop — otherwise a
         // stop mid-outage would leave the finally-block finalization/cleanup stalled
-        // until the whole daemon exits (AI-846).
+        // until the whole daemon exits.
         using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
 
         try {
@@ -994,8 +994,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     } else {
                         // Hosted: the server is the only consumer, so back-pressure here when the
                         // queue is full (slow/down transport) — a chunk is never dropped, since
-                        // losing one byte garbles the whole redraw-TUI mirror (AI-844). sendCts
-                        // releases this await on agent stop or daemon shutdown (AI-846).
+                        // losing one byte garbles the whole redraw-TUI mirror. sendCts
+                        // releases this await on agent stop or daemon shutdown.
                         await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
                     }
                 }
@@ -1047,7 +1047,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // whose ReadOutputAsync yields real terminal bytes (PTY). A no-terminal runtime
                 // (ACP/cursor) never has output to key off, so gate the check on
                 // EmitsTerminalOutput — such a runtime is Completed/Failed purely by exit code
-                // (AI-684 Fix B/E), never misclassified as a startup failure just for having
+                // (Fix B/E), never misclassified as a startup failure just for having
                 // produced no output.
                 if (agent.Runtime.EmitsTerminalOutput && IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
                     var output = ExtractTerminalText(agent.OutputBuffer);
@@ -1313,7 +1313,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        // AI-30: PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
+        // PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
         // the CLI's TUI treats it as one pasted block and the following Enter is an unambiguous
         // submit keypress (see its doc comment for why a naive text-then-CR write mishandles
         // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
@@ -1417,7 +1417,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         => _repoMatcher.FindAsync(req.Owner, req.Repo, req.CandidatePaths ?? [], _shutdownCts.Token);
 
     /// <summary>
-    /// Handles the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A, task
+    /// Handles the server's <c>ProbeBorrowSource</c> client-result invocation (Phase A, task
     /// A3): "can you borrow this path?". Delegates the actual policy (allowlist, git-root resolution,
     /// symlink canonicalization) to <see cref="BorrowAuthorizer"/> — constructed fresh over the
     /// daemon's current <see cref="DaemonConfig"/> so a config reload is picked up on the next probe —
@@ -1662,7 +1662,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// AgentStatusChanged) so per-session ownership is restored after a (re-)connect. Wired into
     /// <see cref="ServerConnection.ReRegisterAgentsHook"/> and awaited inside
     /// <see cref="ServerConnection.RegisterDaemon"/> BEFORE readiness is restored — so a
-    /// permission invoke gated on <c>IsReady</c> can't fire before ownership recovery (AI-864).
+    /// permission invoke gated on <c>IsReady</c> can't fire before ownership recovery.
     ///
     /// Each agent's re-registration is retried a bounded number of times before giving up, so a
     /// transient blip doesn't leave that agent's ownership unrestored while the daemon still
@@ -1683,7 +1683,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // Re-send the fixed PTY dims. The server stores them in memory, so a
                     // server restart (not just a daemon blip) wipes them — without this
                     // resend the read-only viewers never re-lock and the TUI garbles
-                    // again exactly as before the fix (AI-884). Best-effort: its own
+                    // again exactly as before the fix. Best-effort: its own
                     // catch keeps a dims-send failure from escaping to the retry handler
                     // (which would re-register the agent) or withholding readiness.
                     try {
@@ -1692,7 +1692,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         LogTerminalDimsSendFailed(ex, agent.Id);
                     }
 
-                    // AI-842: do NOT replay the full output buffer here. The old
+                    // do NOT replay the full output buffer here. The old
                     // replay re-sent the entire 2 MB ring on every reconnect, which
                     // the server appended to its own buffer and live-broadcast on
                     // top of the current screen — duplicated, and interleaved with
@@ -2084,10 +2084,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
 
-    /// <summary>Test-only entry point to the private send-input handler (AI-30 bracketed-paste submit).</summary>
+    /// <summary>Test-only entry point to the private send-input handler (bracketed-paste submit).</summary>
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
 
-    /// <summary>Test-only entry point to the private probe-borrow-source handler (AI-1207 task A3).</summary>
+    /// <summary>Test-only entry point to the private probe-borrow-source handler.</summary>
     internal Task<BorrowProbeResult> HandleProbeBorrowSourceForTest(string path) => HandleProbeBorrowSource(path);
 
     internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);

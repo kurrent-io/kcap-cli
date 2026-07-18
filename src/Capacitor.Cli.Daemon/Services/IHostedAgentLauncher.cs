@@ -19,7 +19,7 @@ internal interface IHostedAgentLauncher {
 
     /// <summary>
     /// Reports whether <see cref="CliPath"/> resolves to an executable that
-    /// looks installed. Used at daemon startup (AI-652) to build the list of
+    /// looks installed. Used at daemon startup to build the list of
     /// supported vendors advertised over <c>DaemonConnect</c>, so the launch
     /// dialog only offers vendors the daemon can actually spawn.
     /// </summary>
@@ -30,8 +30,8 @@ internal interface IHostedAgentLauncher {
     /// (LaunchKind.ReviewFlow): one that runs to completion with no human in
     /// the loop — no tool-permission prompts — and cannot recursively invoke
     /// flow-starting MCP tools. The orchestrator refuses an unattended launch
-    /// for a vendor that returns <c>false</c> (AI-1124). Both shipped launchers
-    /// support it; a future vendor (e.g. Gemini, AI-899) may not.
+    /// for a vendor that returns <c>false</c>. Both shipped launchers
+    /// support it; a future vendor (e.g. Gemini,) may not.
     /// </summary>
     bool SupportsUnattended { get; }
 
@@ -82,7 +82,7 @@ internal sealed record LauncherContext(
     /// Borrowed-cwd launches skip repo-mutating <c>Prepare()</c> steps.</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
 
-    /// <summary>AI-1126 D-c: the review-flow definition's MCP allowlist, carried verbatim from
+    /// <summary> D-c: the review-flow definition's MCP allowlist, carried verbatim from
     /// <see cref="Capacitor.Cli.Core.LaunchAgentCommand.McpAllowlist"/>. Launchers resolve each
     /// name against the kcap-owned MCP registry and materialize matching servers into the vendor's
     /// MCP config, stripping any flow-starting server regardless of listing. Null/local-spawn

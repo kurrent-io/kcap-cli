@@ -37,7 +37,7 @@ public class CodexImportTests {
 
     [Test]
     public async Task ExtractCodexSessionMetadata_prefers_turn_context_model_over_model_provider() {
-        // AI-194 (CLI half): session_meta only carries model_provider ("openai"),
+        // session_meta only carries model_provider ("openai"),
         // not the actual model. The real model name lives on turn_context.payload.model
         // (e.g. "gpt-5.5"). Prefer that over the provider so the session card and
         // details show "gpt-5.5" instead of "openai".

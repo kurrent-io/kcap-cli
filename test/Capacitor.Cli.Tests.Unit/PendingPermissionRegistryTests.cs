@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// hosted-agent permission request (the daemon gets a requestId back from RequestPermission2)
 /// and the server's later "PermissionResolved" push carrying the user's decision. Replaces the
 /// old model where the decision was the return value of a hub invocation held open for the whole
-/// wait (which starved DaemonPing — see AI-864). The registry must:
+/// wait (which starved DaemonPing —). The registry must:
 ///   - complete the awaiting call when the matching push arrives,
 ///   - handle a push that races ahead of the await (buffered, returned on registration),
 ///   - propagate cancellation (daemon shutdown) and not leak the pending entry,

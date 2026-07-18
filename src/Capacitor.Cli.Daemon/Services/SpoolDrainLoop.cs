@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Daemon-side periodic drain of the cross-vendor lifecycle + transcript spools (AI-1357 Task 12).
+/// Daemon-side periodic drain of the cross-vendor lifecycle + transcript spools.
 ///
 /// <para>Complements the per-invocation drain wired into the CLI's <c>case "hook":</c> entry point
 /// (<c>AgentHookPoster.DrainSpoolsAsync</c>): that only runs when a `kcap` process is invoked at all.
