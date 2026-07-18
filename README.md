@@ -809,6 +809,18 @@ verbatim, exactly like every other agent, with no Cursor/ACP-specific redaction.
 | `KCAP_PARENT_DEAD_CEILING_MINUTES` | `360` | Staged recovery ceiling for a watcher whose parent coding-agent PID was already dead at startup (a resolution glitch) and can't be re-resolved. The watcher first periodically re-resolves and re-arms the parent-exit watchdog; only if that keeps failing AND the transcript makes no progress for this long does it post `session-end` (`reason: parent_dead_ceiling`). Deliberately far above the idle timeout so a user parked at a Kiro/OpenCode prompt is never ended prematurely. Invalid or non-positive values fall back to 360 minutes (6h). |
 | `KCAP_CURSOR_IDLE_CEILING_MINUTES` | `60` | How long a Cursor session's transcript watcher may go idle before it exits (AI-1382). Unlike Codex/Antigravity, this exit does NOT itself POST `session-end` — Cursor's end-of-session synthesis stays owned by the `sessionEnd` hook or, as a backstop, a server-side lease-gated sweep; the next hook for that session reactivates a fresh watcher. Invalid or non-positive values fall back to the 60-minute default. |
 
+#### Review-flow reviewer backstops & crash-survivor reaping
+
+Hosted review-flow reviewers are *unattended* and count against the daemon's `--max-agents` budget. To keep a stuck or abandoned reviewer from holding a slot forever, the daemon defends its own capacity:
+
+- **Lifetime / idle backstop.** The heartbeat reaps a review-flow reviewer that has run past a maximum lifetime or gone idle too long (the driver vanished, or its run went terminal on the server without the daemon hearing about it). Interactive agents are never touched by these bounds.
+- **Crash-survivor reaping.** Each hosted child's pid + an exact OS-native start-identity is written to a durable per-daemon record under `{state-dir}/{name}/agents/` at spawn, and every child is stamped with `KCAP_AGENT_ID` / `KCAP_DAEMON_ID` / `KCAP_DAEMON_EPOCH` env markers. On the next boot (and on the heartbeat) the daemon reaps any child that outlived a **prior** incarnation of itself — matched by exact `(pid, start-identity)` from the record, or, for a recordless survivor, by the env markers (same daemon id, older epoch). A process is killed only when its identity is *proven*; anything ambiguous is spared (never a wrong kill). On Linux the env checks read `/proc/{pid}/environ`; on macOS 26 process env is redacted from other processes, so the record-based path is the effective mechanism there (production runs on Linux).
+
+| Environment variable | Default | Description |
+|----------------------|---------|-------------|
+| `KCAP_REVIEWER_MAX_LIFETIME` | `6h` (`21600`) | Max wall-clock lifetime, **in seconds**, for a hosted review-flow reviewer before the heartbeat reaps it. `0` disables the bound. |
+| `KCAP_REVIEWER_IDLE_TIMEOUT` | `2h` (`7200`)  | Max time, **in seconds**, a reviewer may go without output before the heartbeat reaps it. `0` disables the bound. |
+
 #### Daemon log verbosity
 
 The daemon logs at `Information` by default. Raise the level for transport diagnostics — for example, per-tick `DaemonPing` round-trip times (logged at `Debug`) are useful for telling whether SignalR reconnects are caused by network/proxy latency. Set it either way:

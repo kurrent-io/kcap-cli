@@ -81,6 +81,20 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public Func<string[]>? GetLiveAgentIds { get; set; }
 
+    /// <summary>Phase B (D2): richer live-agent metadata (kind + flow identity) sent alongside
+    /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
+    public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
+
+    /// <summary>Phase B (D2): send the periodic daemon self-report ONE-WAY (never
+    /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
+    /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
+    /// Virtual so tests can capture the report without a live hub.</summary>
+    public virtual async Task DaemonStatusReportAsync(DaemonStatusReport report) {
+        if (!IsReady) return;
+        try { await _hub.SendAsync("DaemonStatusReport", report, cancellationToken: _ct); }
+        catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed (old server or transient)"); }
+    }
+
     public ServerConnection(DaemonConfig config, ILoggerFactory loggerFactory, ILogger<ServerConnection> logger) {
         _config = config;
         _logger = logger;
@@ -369,13 +383,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
+        var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
 
         try {
             await _hub.InvokeAsync(
                 "DaemonConnect",
                 new DaemonConnect(
                     _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
-                    _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get()
+                    _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get(), liveAgents
                 ),
                 cancellationToken: _ct
             );

@@ -58,19 +58,25 @@ public partial class AgentOrchestratorVendorTests {
             IPtyProcessFactory                                  ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher>   launchers,
             string?                                             allowedRepoPath        = null,
-            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null
+            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null,
+            Action<DaemonConfig>?                               configure              = null
         ) {
         var config = new DaemonConfig {
             Name                = "test",
             ServerUrl           = "http://127.0.0.1:1",
             ClaudePath          = "claude",
             MaxConcurrentAgents = 5,
-            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8])
+            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8]),
+            // Phase B (D4): isolate the PID-record store to a temp dir so tests never touch the
+            // real ~/.config/kcap/daemons.
+            StateDir            = Path.Combine(Path.GetTempPath(), "kcap-orch-state-" + Guid.NewGuid().ToString("N")[..8])
         };
 
         if (allowedRepoPath is not null) {
             config.AllowedRepoPaths = [allowedRepoPath];
         }
+
+        configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
@@ -890,8 +896,9 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     sealed class SpyPtyProcessFactory : IPtyProcessFactory {
-        public int     SpawnCalls  { get; private set; }
-        public string? LastCommand { get; private set; }
+        public int                         SpawnCalls  { get; private set; }
+        public string?                     LastCommand { get; private set; }
+        public Dictionary<string, string>? LastEnv     { get; private set; }
 
         public IPtyProcess Spawn(
                 string                      command,
@@ -903,6 +910,7 @@ public partial class AgentOrchestratorVendorTests {
             ) {
             SpawnCalls++;
             LastCommand = command;
+            LastEnv     = extraEnv;
 
             return new StubPtyProcess();
         }
@@ -1085,7 +1093,13 @@ public partial class AgentOrchestratorVendorTests {
         /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>
         public Action? OnAgentUnregistered { get; init; }
 
+        /// <summary>Every agent id passed to AgentUnregisteredAsync, in call order. Phase B
+        /// (D1): a single-flight teardown must unregister an agent exactly once even under a racing
+        /// launch-catch + read-loop cleanup.</summary>
+        public List<string> AgentUnregisteredCalls { get; } = [];
+
         public override Task AgentUnregisteredAsync(string agentId) {
+            lock (AgentUnregisteredCalls) AgentUnregisteredCalls.Add(agentId);
             OnAgentUnregistered?.Invoke();
 
             return Task.CompletedTask;
