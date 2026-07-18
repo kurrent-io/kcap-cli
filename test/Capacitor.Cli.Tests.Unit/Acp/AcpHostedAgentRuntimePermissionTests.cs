@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Tests.Unit.Acp;
 /// <see cref="AcpInteractionBridge"/> forwards it to an injected "ask the server" delegate and
 /// writes the JSON-RPC response back to the wire only once that delegate resolves — proving the
 /// agent's request genuinely blocks on the human decision rather than getting an immediate
-/// default-decline ('s prior behavior, since <c>OnServerRequest</c> was unset).
+/// default-decline (the runtime's prior behavior, since <c>OnServerRequest</c> was unset).
 /// </summary>
 public class AcpHostedAgentRuntimePermissionTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);

@@ -179,7 +179,7 @@ public class CursorReconnectRewindTests {
         await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
     }
 
-    // review fix (r3, finding #2) — WatchCommand.SeedCursorByteOffsetAsync ----
+    // ---- review fix (r3, finding #2) — WatchCommand.SeedCursorByteOffsetAsync ----
     //
     // Shared by ApplyReconnectRewindAsync (already covered above) and RunWatch's INITIAL
     // WatcherConnect registration, which — before this fix — left CursorByteOffset at its default
@@ -438,7 +438,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // review fix (r3, finding #1) — GatedApplyReconnectRewindAsync/GatedDrainNewLinesAsync ----
+    // ---- review fix (r3, finding #1) — GatedApplyReconnectRewindAsync/GatedDrainNewLinesAsync ----
     //
     // RunWatch's own cursorRewindGate/Reconnected handler can't be driven without a live SignalR
     // reconnect (same constraint CursorGuardWiringTests' class doc states), so these tests drive
@@ -546,7 +546,7 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // review fix (r4, finding #5) — GatedApplyReconnectRewindAsync propagates a refused rewind ----
+    // ---- review fix (r4, finding #5) — GatedApplyReconnectRewindAsync propagates a refused rewind ----
 
     [Test]
     public async Task GatedApplyReconnectRewindAsync_returns_false_and_leaves_state_untouched_when_the_server_frontier_exceeds_local_lines() {

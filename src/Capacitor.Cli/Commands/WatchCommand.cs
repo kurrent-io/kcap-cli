@@ -2395,7 +2395,7 @@ static partial class WatchCommand {
     }
 
     /// <summary>
-    /// redesign: link subagents from the parent transcript's INVOKE_SUBAGENT steps (the
+    /// Links subagents from the parent transcript's INVOKE_SUBAGENT steps (the
     /// spawn-time signal), replacing the messages/*.json scan. For each child id not already
     /// posted, POST the link once via <paramref name="post"/> (returns true on success); a failed
     /// POST is left un-posted so a later scan retries. Pure over its inputs for unit testing.

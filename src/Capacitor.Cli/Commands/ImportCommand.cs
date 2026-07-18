@@ -358,7 +358,7 @@ static class ImportCommand {
     }
 
     /// <summary>
-    /// a routed-phase
+    /// A routed-phase
     /// <c>AlreadyLoaded</c> classification (Cursor) is included in `routed` solely so its
     /// <c>ImportSessionAsync</c> call can re-assert lifecycle hooks and backfill the
     /// <c>repository</c> node on an already-fully-ingested session (the C2 suppressed-repo-import
@@ -992,7 +992,7 @@ static class ImportCommand {
         // contract was New/Partial only — but if a previous import advanced
         // the transcript watermark while a lifecycle POST failed, the session
         // is forever lifecycle-less under the old filter. Server-side
-        // idempotency (canonical event ids per) makes re-emission safe;
+        // idempotency (canonical event ids) makes re-emission safe;
         // CursorImportSource.ImportSessionAsync short-circuits the transcript
         // batch when there's nothing past the watermark and just fires the
         // lifecycle hooks.

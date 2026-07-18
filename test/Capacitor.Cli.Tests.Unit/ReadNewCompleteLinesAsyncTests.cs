@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-// / Qodo #291: the streaming drain reader (ReadNewCompleteLinesAsync) replaces
+// Qodo #291: the streaming drain reader (ReadNewCompleteLinesAsync) replaces
 // File.ReadAllTextAsync in DrainNewLines. It must (1) open with FileShare.ReadWrite so a
 // concurrently-writing agent is never blocked (#291 #1), (2) NOT materialize the whole file
 // (#291 #2), and (3) stay byte-for-byte behaviour-equivalent to the string helper

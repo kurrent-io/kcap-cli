@@ -740,7 +740,7 @@ public class CodexTranscriptExtractionTests {
     }
 }
 
-// / PR #162: Pi emits type:"message" with message.role (not Claude's
+// PR #162: Pi emits type:"message" with message.role (not Claude's
 // top-level user/assistant), so the watcher title helpers need a Pi branch —
 // otherwise live Pi sessions never get the initial/LLM title.
 public class PiTitleHelperTests {

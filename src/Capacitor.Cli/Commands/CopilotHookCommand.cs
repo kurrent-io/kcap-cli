@@ -216,7 +216,7 @@ static class CopilotHookCommand {
 
         // Kill watcher + inline-drain BEFORE the POST so the server computes
         // stats over the full transcript — capped so a slow drain can't starve
-        // the session-end POST (mirror of ClaudeHookCommand /).
+        // the session-end POST (mirror of ClaudeHookCommand's pre-drain cap).
         try {
             var drained = await TimeBudget.RunCappedAsync(
                 async () => {

@@ -643,7 +643,7 @@ public class CursorImportSourceTests {
         await Assert.That(posted).DoesNotContain("/hooks/transcript");
     }
 
-    // round-2 review fix (finding 1): SentChildContent signal ---
+    // --- round-2 review fix (finding 1): SentChildContent signal ---
 
     [Test]
     public async Task already_loaded_parent_reports_sent_child_content_when_attaching_a_new_child() {
@@ -735,7 +735,7 @@ public class CursorImportSourceTests {
         await Assert.That(result.SentChildContent).IsFalse();
     }
 
-    // round-4 review fix (P1): probe failure is indeterminate, defaults privacy-safe ---
+    // --- round-4 review fix (P1): probe failure is indeterminate, defaults privacy-safe ---
 
     [Test]
     public async Task already_loaded_parent_with_failing_child_watermark_probe_conservatively_reports_sent_child_content_to_preserve_privacy() {

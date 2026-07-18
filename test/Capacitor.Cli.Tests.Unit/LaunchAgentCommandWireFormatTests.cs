@@ -184,7 +184,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Legacy_payload_without_borrowed_fields_deserializes_defaults() {
-        // Version skew: an older server that predates never sends borrowed/borrow_cwd. The
+        // Version skew: an older server that predates the borrow feature never sends borrowed/borrow_cwd. The
         // daemon must still bind the command (positional SignalR binding) and default Borrowed to
         // false / BorrowCwd to null — i.e. behave exactly as an owned-worktree launch.
         const string legacyWire =

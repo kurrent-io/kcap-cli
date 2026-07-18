@@ -106,7 +106,7 @@ public static class AntigravitySubagents {
     }
 
     /// <summary>
-    /// redesign — the authoritative spawn-time parent→child signal. A parent's transcript
+    /// The authoritative spawn-time parent→child signal. A parent's transcript
     /// records an INVOKE_SUBAGENT step whose <c>content</c> embeds JSON listing the child
     /// conversation(s) it spawned (<c>{ "conversationId": "&lt;child&gt;", … }</c>, one object or an
     /// array). Returns the child ids for a single transcript line — empty for any non-INVOKE_SUBAGENT,

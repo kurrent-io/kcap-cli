@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core;
 /// A machine-local token identifying a specific process <i>incarnation</i>,
 /// stable across separate reader processes. Stored on the second line of the
 /// daemon PID file and compared to tell a live daemon apart from a recycled
-/// PID (liveness check, fix).
+/// PID.
 ///
 /// <para><b>Why not just <see cref="Process.StartTime"/>?</b> On Linux that
 /// value is NOT stable across processes: .NET derives it from a per-call

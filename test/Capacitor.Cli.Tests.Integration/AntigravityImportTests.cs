@@ -186,7 +186,7 @@ public class AntigravityImportTests : IDisposable {
         // server's stop no-ops without an active mark, and that mark is lost on a restart, so the
         // start re-establishes it before the stop appends the completion event. Without this a
         // prior run's stop that failed after content leaves the subagent uncompleted forever
-        // (review, findings at :240 / :249).
+        // (see the resume-from-line-position tests below for the exact edge cases).
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
         foreach (var route in new[] {

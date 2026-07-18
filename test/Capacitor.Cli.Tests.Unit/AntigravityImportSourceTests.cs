@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravityImportSource"/> discovery. redesign: roots are
+/// Unit tests for <see cref="AntigravityImportSource"/> discovery: roots are
 /// conversations that are never invoked as a child (per the parent transcript's
 /// INVOKE_SUBAGENT steps — see <c>AntigravitySubagents.BuildParentMap</c>), children are
 /// attached for subagent import, and IsImportRelevantLine matches the normalizer's

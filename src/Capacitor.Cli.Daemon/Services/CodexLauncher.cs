@@ -120,7 +120,7 @@ internal sealed partial class CodexLauncher(
         return new([.. args], McpConfigPath: null);
     }
 
-    /// <summary>: registers the reviewer-side result-submission server. Skipped (zero
+    /// <summary>Registers the reviewer-side result-submission server. Skipped (zero
     /// servers — the recursion-safe default) when the daemon has no server URL or kcap path;
     /// the reviewer then falls back to the transcript marker per the prompt contract.</summary>
     void AddFlowResultServer(List<string> args, LauncherContext ctx) {

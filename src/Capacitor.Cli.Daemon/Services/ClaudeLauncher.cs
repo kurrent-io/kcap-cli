@@ -143,7 +143,7 @@ internal sealed partial class ClaudeLauncher(
         return new LaunchArgs(args.ToArray(), mcpConfigPath);
     }
 
-    /// <summary>: strict whitelist for review-flow reviewers — exactly the
+    /// <summary>Strict whitelist for review-flow reviewers — exactly the
     /// kcap-flow-result submission server, or the empty map when the daemon has no server
     /// URL / kcap path (zero servers is the recursion-safe default). Built via JsonNode
     /// string casts — JsonValue.Create / collection expressions lower to generic Add&lt;T&gt;

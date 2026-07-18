@@ -9,7 +9,7 @@ namespace Capacitor.Cli;
 /// spawns — that lets an exception escape its command handler would otherwise
 /// reach the NativeAOT runtime, which <b>aborts the process (SIGABRT) and writes
 /// a macOS crash report</b>. That was happening dozens of times a day in the
-/// wild (same class as, which fixed two specific <c>Process.Start</c>
+/// wild (the same class as a prior fix that patched two specific <c>Process.Start</c>
 /// sites but not the structural gap). This records the exception to a rolling
 /// crash log and maps the command to a fail-open exit, so the abort class
 /// disappears <i>and</i> the exact exception is captured for follow-up.

@@ -559,7 +559,7 @@ switch (command) {
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
             : allSources;
 
-        // Scope resolution ---
+        // --- Scope resolution ---
         var profileConfig = await AppConfig.LoadProfileConfig();
         var activeProfile = string.IsNullOrEmpty(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
         var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;

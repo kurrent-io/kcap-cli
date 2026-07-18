@@ -170,7 +170,7 @@ public class ConfigMigrationTests {
         await Assert.That(config.DisableSessionGuidelines).IsNull();
     }
 
-    // update_check migration-default quirk ---
+    // --- update_check migration-default quirk ---
     //
     // STJ source-gen does not apply a record member-initializer default (`= true`)
     // for a JSON property absent from the payload, so deserializing a v1 config

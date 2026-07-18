@@ -777,7 +777,7 @@ public static class ClaudeHookCommand {
         }
     }
 
-    // ──: SessionStart team-memory index injection ────────────────────────
+    // ── SessionStart team-memory index injection ────────────────────────
     //
     // Best-effort fetch of GET /api/memories/index for the current repo + machine.
     // Fail-open on a failure / non-2xx / timeout → null, and
