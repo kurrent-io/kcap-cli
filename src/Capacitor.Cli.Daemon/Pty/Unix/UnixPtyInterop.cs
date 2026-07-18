@@ -67,6 +67,25 @@ internal static partial class UnixPtyInterop {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int pty_set_winsize_shim(int fd, ushort rows, ushort cols);
 
+    [LibraryImport("libpty_shim", EntryPoint = "pty_probe_execveat")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_probe_execveat();
+
+    // argv/envp are NULL-terminated string arrays; a `string?[]` with a trailing `null` element
+    // marshals correctly via LibraryImport's array marshaller (mirrors the existing execvp import).
+    [LibraryImport("libpty_shim", EntryPoint = "pty_preflight", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_preflight(
+        string exeAbsPath, string?[] origArgv, string?[] envp, int execveatSupported, out IntPtr outPlan);
+
+    [LibraryImport("libpty_shim", EntryPoint = "pty_plan_contained")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_plan_contained(IntPtr plan);
+
+    [LibraryImport("libpty_shim", EntryPoint = "pty_plan_free")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void pty_plan_free(ref IntPtr plan);
+
     public static void SetWinSize(int fd, ushort rows, ushort cols) {
         if (IsMacOS && RuntimeInformation.OSArchitecture == Architecture.Arm64) {
             // Use C shim on macOS ARM64 (ioctl variadic ABI issue)
