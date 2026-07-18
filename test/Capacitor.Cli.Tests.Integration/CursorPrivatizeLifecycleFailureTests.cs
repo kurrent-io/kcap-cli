@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text.Json;
 using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -185,5 +187,107 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
 
         var (putPaths, _) = VisibilityPuts();
         await Assert.That(putPaths.Length).IsEqualTo(0);
+    }
+
+    // --- The 2-attempt cap on the child watermark probe must never regress the privacy fix
+    // above, even though the cap changes WHEN the fail-open triggers (after 2 attempts instead
+    // of 1). ---
+
+    static string Line(object o) => JsonSerializer.Serialize(o);
+
+    static string ParentTranscriptWithTask(string prompt) => string.Join("\n",
+        Line(new { role = "user", message = new { content = new object[] { new { type = "text", text = "do the thing" } } } }),
+        Line(new {
+            role    = "assistant",
+            message = new {
+                content = new object[] {
+                    new { type = "tool_use", name = "Task", input = new { description = "explore", prompt, subagent_type = "generalPurpose" } }
+                }
+            }
+        })
+    );
+
+    static string ChildTranscriptFromPrompt(string prompt) => string.Join("\n",
+        Line(new { role = "user", message = new { content = new object[] { new { type = "text", text = "<user_query>\n" + prompt + "\n</user_query>" } } } }),
+        Line(new { role = "assistant", message = new { content = new object[] { new { type = "text", text = "exploring" } } } })
+    );
+
+    const string ParentDirSessionId = "33333333-3333-3333-3333-333333333333";
+    const string ChildDirSessionId  = "44444444-4444-4444-4444-444444444444";
+    static readonly string ParentSessionId = CursorImportSource.NormalizeCursorSessionId(ParentDirSessionId);
+    static readonly string ChildSessionId  = CursorImportSource.NormalizeCursorSessionId(ChildDirSessionId);
+
+    /// <summary>
+    /// Writes a real parent+correlated-child pair (same sanitized workspace dir, so
+    /// <see cref="CursorSubagentCorrelator"/> links them) — the only shape that actually
+    /// exercises <c>SendSubagentLifecycleAsync</c>'s watermark probe end-to-end via
+    /// <see cref="ImportCommand.HandleImport"/>.
+    /// </summary>
+    string WriteParentWithCorrelatedChild() {
+        Directory.CreateDirectory(ProjectsDir);
+        const string prompt = "You are exploring the LoanApplicationDemo project. Return an overview.";
+
+        var parentDir = Path.Combine(ProjectsDir, "no-workspace-match", "agent-transcripts", ParentDirSessionId);
+        Directory.CreateDirectory(parentDir);
+        File.WriteAllText(Path.Combine(parentDir, ParentDirSessionId + ".jsonl"), ParentTranscriptWithTask(prompt));
+
+        var childDir = Path.Combine(ProjectsDir, "no-workspace-match", "agent-transcripts", ChildDirSessionId);
+        Directory.CreateDirectory(childDir);
+        File.WriteAllText(Path.Combine(childDir, ChildDirSessionId + ".jsonl"), ChildTranscriptFromPrompt(prompt));
+
+        return ProjectsDir;
+    }
+
+    [Test]
+    public async Task private_run_privatizes_when_child_watermark_probe_fails_both_of_its_2_attempts() {
+        // The child's own SUBSESSION watermark probe (/api/sessions/{parent}/last-line?agentId=
+        // {child}) fails on EVERY call — D3's fixed 2-attempt cap exhausts both attempts, then
+        // falls open (full resend). This must not regress the r6 privacy fix: the parent still
+        // gets privatized, independent of whichever Done-grid bucket the run's outcome lands in.
+        // The classify-time TOP-LEVEL probe (no agentId param) is a separate call shape and must
+        // keep succeeding (404 = fresh) so both sessions actually reach the routed import phase
+        // instead of failing classification outright.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", ChildSessionId).UsingGet())
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.InternalServerError));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .AtPriority(10)
+            .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.NotFound));
+        foreach (var route in new[] {
+            "/hooks/session-start/cursor", "/hooks/transcript",
+            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/cursor"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+        _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        var source = new CursorImportSource(WriteParentWithCorrelatedChild(), WorkspaceStorageDir);
+
+        var exitCode = await ImportCommand.HandleImport(
+            baseUrl: _server.Url!,
+            filterCwd: null,
+            minLines: 0,
+            sources: [source],
+            scope: new ImportScope.All(),
+            skipConfirmation: true,
+            forcePrivate: true
+        );
+
+        await Assert.That(exitCode).IsEqualTo(0);
+
+        // The child's own subsession watermark probe was actually invoked twice (the fixed
+        // 2-attempt cap engaging), not zero and not more — distinct from the classify-time
+        // top-level probes (no agentId param), which succeed on the first attempt.
+        var childProbeCalls = _server.LogEntries.Count(e =>
+            e.RequestMessage.Method == "GET"
+         && e.RequestMessage.Path.EndsWith("/last-line", StringComparison.Ordinal)
+         && e.RequestMessage.Url!.Contains($"agentId={ChildSessionId}", StringComparison.Ordinal));
+        await Assert.That(childProbeCalls).IsEqualTo(2);
+
+        var (putPaths, putBodies) = VisibilityPuts();
+        await Assert.That(putPaths).Contains($"/api/sessions/{ParentSessionId}/visibility");
+        await Assert.That(putBodies.Any(b => b == """{"visibility":"none"}""")).IsTrue();
     }
 }

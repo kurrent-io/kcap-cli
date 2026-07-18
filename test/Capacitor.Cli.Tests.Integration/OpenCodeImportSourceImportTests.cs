@@ -184,10 +184,27 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         var c2 = await s2.ClassifyAsync(
             await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
         await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
-        await Assert.That(await s2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Skipped);
+
+        var result = await s2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Skipped);
 
         await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/transcript"))
             .IsEqualTo(transcriptCountAfterRun1);
+
+        // OpenCode's AlreadyLoaded path short-circuits before touching any child/subagent
+        // stream (not even a lifecycle POST), so SentChildContent stays at its safe default
+        // false — trivially correct. This real (AlreadyLoaded, Skipped, false) shape must be
+        // correctly SUPPRESSED by the vendor-neutral gate (a genuine no-op replay), the mirror
+        // case of the Antigravity override — not something newly let through.
+        await Assert.That(result.SentChildContent).IsFalse();
+
+        var isSuppressed = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            c2[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(isSuppressed).IsTrue();
+
+        var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
+            c2[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(resolved).IsNull();
     }
 
     [Test]

@@ -800,10 +800,22 @@ internal sealed class CursorImportSource : IImportSource {
         // new child content would leak on a public session. So probe failure alone is no longer
         // tracked as a reason to suppress SentContent below — the safe default when content was
         // actually posted is to count it, whether or not the watermark was known.
+        //
+        // Before falling open, give a status-bearing 5xx/408 one extra local re-attempt (2
+        // attempts total, fixed, no added backoff) via FetchServerLastLineWithCappedRetryAsync —
+        // a single transient 500 no longer skips straight to fail-open on the first failure.
+        // Statusless transport failures (already retried inside GetWithRetryAsync) and 429 (a
+        // rate-limit signal) are excluded from this outer retry and still fail open on the
+        // first attempt. Cancellation is never treated as a transient failure — it propagates
+        // immediately.
         var startLine = 0;
         try {
-            if (await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, ct, agentId) is { } last)
+            if (await FetchServerLastLineWithCappedRetryAsync(
+                    probeCt => FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, probeCt, agentId), ct
+                ) is { } last)
                 startLine = last + 1;
+        } catch (OperationCanceledException) {
+            throw;
         } catch {
             startLine = 0;
         }
@@ -988,7 +1000,10 @@ internal sealed class CursorImportSource : IImportSource {
         using var resp = await http.GetWithRetryAsync(url, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
-        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
+        // Construct via the (string?, Exception?, HttpStatusCode?) overload so .StatusCode is
+        // inspectable by FetchServerLastLineWithCappedRetryAsync's status check, rather than
+        // message-string parsing.
+        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}", null, resp.StatusCode);
 
         var       body = await resp.Content.ReadAsStringAsync(ct);
         using var doc  = JsonDocument.Parse(body);
@@ -997,6 +1012,43 @@ internal sealed class CursorImportSource : IImportSource {
             ? ln.GetInt32()
             : null;
     }
+
+    /// <summary>
+    /// A small, fixed 2-attempt cap around a watermark-probe call. Retries ONLY a
+    /// status-bearing 5xx or 408 (Request Timeout) response — a single transient 500 no longer
+    /// skips straight to the caller's fail-open path on the first failure. Two categories are
+    /// explicitly excluded from this outer re-attempt: statusless transport failures (a
+    /// network-level <see cref="HttpRequestException"/> with no <c>.StatusCode</c> — these
+    /// already had their own exponential-backoff retry inside <c>GetWithRetryAsync</c>'s inner
+    /// loop, so a second full retry cycle would double an already-exhausted budget for no
+    /// reason to expect a different outcome), and 429 (Too Many Requests — a rate-limit signal,
+    /// not a transient blip; immediately retrying it is the wrong response). No additional
+    /// backoff is added beyond <c>GetWithRetryAsync</c>'s own per-attempt retry loop. Cancellation
+    /// propagates immediately and is never treated as a transient failure to retry. After both
+    /// attempts are exhausted (or on a non-retryable failure), the exception propagates to the
+    /// caller's existing fail-open handling, unchanged by this cap.
+    ///
+    /// <paramref name="probe"/> is a delegate (rather than concrete HttpClient/url parameters) so
+    /// this pure retry-decision shell is directly, deterministically unit-testable.
+    /// </summary>
+    internal static async Task<int?> FetchServerLastLineWithCappedRetryAsync(
+            Func<CancellationToken, Task<int?>> probe, CancellationToken ct
+        ) {
+        try {
+            return await probe(ct);
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (HttpRequestException ex) when (IsRetryableWatermarkProbeStatus(ex.StatusCode)) {
+            return await probe(ct);
+        }
+    }
+
+    /// <summary>
+    /// True for a status-bearing 5xx or 408 — the only categories the 2-attempt cap retries.
+    /// A null status (statusless transport failure) and 429 both return false.
+    /// </summary>
+    internal static bool IsRetryableWatermarkProbeStatus(HttpStatusCode? statusCode) =>
+        statusCode is { } code && ((int)code >= 500 && (int)code <= 599 || code == HttpStatusCode.RequestTimeout);
 
     static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
         string? cwd, string? repoKey, ClassifyContext ctx

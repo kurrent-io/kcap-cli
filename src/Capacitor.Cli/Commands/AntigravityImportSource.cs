@@ -212,7 +212,12 @@ internal sealed class AntigravityImportSource : IImportSource {
                     BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
                 return ImportOutcome.Failed;
 
-            await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
+            // Capture whether the repair actually attached new nested-child content — true
+            // iff any child's SendTranscriptBatches sent >0 server-accepted lines. The
+            // lifecycle-only repair path (subagent-start+stop, no content resend) contributes
+            // false. This outcome stays hardcoded Skipped — only SentChildContent is threaded
+            // through below.
+            var sentChildContent = await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
 
             // Explicit gen_metadata usage pass — even though AlreadyLoaded sends zero real
             // transcript lines (the content watermark is already at the tip), a session
@@ -225,7 +230,7 @@ internal sealed class AntigravityImportSource : IImportSource {
                     BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
                 return ImportOutcome.Failed;
 
-            return ImportOutcome.Skipped;
+            return new ImportSessionResult(ImportOutcome.Skipped, sentChildContent);
         }
 
         // Lifecycle-before-transcript (mirrors Gemini): a transcript that advances the
@@ -266,11 +271,20 @@ internal sealed class AntigravityImportSource : IImportSource {
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    async Task ImportChildrenAsync(
+    /// <summary>
+    /// Returns <c>true</c> iff any child's <see cref="SessionImporter.SendTranscriptBatches"/>
+    /// call sent &gt;0 server-accepted lines during this pass — the <c>SentChildContent</c>
+    /// signal threaded onto the <c>AlreadyLoaded</c> caller's <see cref="ImportSessionResult"/>.
+    /// The lifecycle-only repair branch below (subagent-start+stop, no content resend)
+    /// contributes <c>false</c> — it's a repair, not new content.
+    /// </summary>
+    async Task<bool> ImportChildrenAsync(
             HttpClient client, string baseUrl, string rootId,
             IReadOnlyDictionary<string, object?> sourceMeta, CancellationToken ct) {
         if (!sourceMeta.TryGetValue("Children", out var kidsObj) || kidsObj is not List<string> { Count: > 0 } children)
-            return;
+            return false;
+
+        var anyChildContentSent = false;
 
         foreach (var childId in children) {
             ct.ThrowIfCancellationRequested();
@@ -343,19 +357,28 @@ internal sealed class AntigravityImportSource : IImportSource {
                     BuildSubagentStartPayload(rootId, childAgentId, childTranscript), ct))
                 continue;
 
+            int childSent;
             try {
-                await SessionImporter.SendTranscriptBatches(
+                // failOnError: true — SentChildContent must reflect only server-ACCEPTED
+                // batches; a non-2xx now throws and is caught below, so a rejected batch
+                // never flips the signal (Qodo finding 3).
+                childSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: childTranscript, agentId: childAgentId, startLine: childStartLine, vendor: Vendor);
+                    filePath: childTranscript, agentId: childAgentId, startLine: childStartLine, vendor: Vendor,
+                    failOnError: true);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
             }
 
+            if (childSent > 0) anyChildContentSent = true;
+
             await PostHookAsync(client, baseUrl, "subagent-stop",
                 BuildSubagentStopPayload(rootId, childAgentId, childTranscript), ct);
         }
+
+        return anyChildContentSent;
     }
 
     // ── payload builders ────────────────────────────────────────────────────────
