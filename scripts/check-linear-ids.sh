@@ -30,13 +30,42 @@ rc=$?
 [ "$rc" -gt 1 ] && { echo "::error::git grep failed (exit $rc) — treating as failure." >&2; exit 2; }
 [ "$rc" -eq 1 ] && exit 0   # no AI-\d+ tokens anywhere in scope
 
-# grep -v exit codes: 0 = something remains (violation), 1 = all filtered
-# (every hit was correctly suppressed), >1 = error.
-violations="$(printf '%s\n' "$matches" | grep -vE "$SUPPRESS_RE")"
-grc=$?
-[ "$grc" -gt 1 ] && { echo "::error::grep failed (exit $grc) applying the suppression filter — treating as failure." >&2; exit 2; }
-[ "$grc" -eq 1 ] && exit 0  # every hit was on a correctly-suppressed line
+# Suppression (// linear-id-ok: <reason>) may ONLY drop a test/ hit — it exists
+# for synthetic ID-shaped test data, never for a genuine internal reference.
+# Any hit under src/ is ALWAYS a violation, suppression marker or not: partition
+# matches by path first, then apply the suppression filter to the test/ half
+# only. (git grep prefixes each hit with the pathspec-relative path, so a
+# leading `src/` / `test/` on the match line is exactly the partition key.)
+# grep exit codes throughout: 0 = something matched, 1 = nothing matched
+# (not an error — just an empty partition/empty remainder), >1 = error.
+src_matches="$(printf '%s\n' "$matches" | grep -E '^src/')"
+src_rc=$?
+[ "$src_rc" -gt 1 ] && { echo "::error::grep failed (exit $src_rc) partitioning src/ matches — treating as failure." >&2; exit 2; }
+
+test_matches="$(printf '%s\n' "$matches" | grep -E '^test/')"
+test_rc=$?
+[ "$test_rc" -gt 1 ] && { echo "::error::grep failed (exit $test_rc) partitioning test/ matches — treating as failure." >&2; exit 2; }
+
+test_violations=""
+if [ "$test_rc" -eq 0 ]; then
+    test_violations="$(printf '%s\n' "$test_matches" | grep -vE "$SUPPRESS_RE")"
+    tv_rc=$?
+    [ "$tv_rc" -gt 1 ] && { echo "::error::grep failed (exit $tv_rc) applying the suppression filter — treating as failure." >&2; exit 2; }
+    [ "$tv_rc" -eq 1 ] && test_violations=""  # every test/ hit was correctly suppressed
+fi
+
+# src/ hits are unconditional violations (no suppression filter applied above);
+# test/ hits only survive if grep -v didn't strip them as suppressed.
+if [ "$src_rc" -eq 0 ] && [ -n "$test_violations" ]; then
+    violations="$(printf '%s\n%s' "$src_matches" "$test_violations")"
+elif [ "$src_rc" -eq 0 ]; then
+    violations="$src_matches"
+else
+    violations="$test_violations"
+fi
+
+[ -z "$violations" ] && exit 0
 
 echo "$violations"
-echo "::error::Linear issue ID token found in tracked C# source. Rewrite per docs/superpowers/specs/2026-07-17-ai1392-linear-id-comment-sweep-design.md. Suppression (// linear-id-ok: <reason>) is for synthetic ID-shaped test data ONLY — a genuine internal reference must be escalated to an owner before merge, never suppressed."
+echo "::error::Linear issue ID token found in tracked C# source. Rewrite per docs/superpowers/specs/2026-07-17-ai1392-linear-id-comment-sweep-design.md. Suppression (// linear-id-ok: <reason>) is for synthetic ID-shaped test data under test/ ONLY — any hit under src/ is always a violation regardless of the marker, and a genuine internal reference must be escalated to an owner before merge, never suppressed."
 exit 1
