@@ -46,6 +46,21 @@ internal sealed record ImportContext(
 internal enum ImportOutcome { Loaded, Resumed, Skipped, Failed }
 
 /// <summary>
+/// Result of <see cref="IImportSource.ImportSessionAsync"/>. <c>SentChildContent</c> is the
+/// real "did new work actually happen" signal (AI-1154 review fix, finding 1): it's true only
+/// when this call POSTed brand-new nested subagent-child transcript bytes (Cursor's inline
+/// child import, under a parent whose own top-level watermark may not have moved at all). The
+/// parent classification/outcome pair alone can't distinguish that from a genuine "nothing to
+/// do" lifecycle/repo-backfill replay — <c>ImportOutcome</c> has no line-0 signal for it, so
+/// this is carried out-of-band instead of inferred. Every non-Cursor source (and Cursor itself
+/// outside the nested-child path) leaves this false via the implicit <c>ImportOutcome</c>
+/// conversion below.
+/// </summary>
+internal readonly record struct ImportSessionResult(ImportOutcome Outcome, bool SentChildContent = false) {
+    public static implicit operator ImportSessionResult(ImportOutcome outcome) => new(outcome);
+}
+
+/// <summary>
 /// Per-vendor import pipeline: discover candidate sessions on the local
 /// machine, classify them against the server's existing state, then import
 /// the ones that need work. Three implementations: ClaudeImportSource,
@@ -75,7 +90,7 @@ internal interface IImportSource {
         ClassifyContext                   ctx,
         CancellationToken                 ct);
 
-    Task<ImportOutcome> ImportSessionAsync(
+    Task<ImportSessionResult> ImportSessionAsync(
         ImportCommand.SessionClassification classification,
         ImportContext                       ctx,
         CancellationToken                   ct);

@@ -295,6 +295,115 @@ static class ImportCommand {
         public IReadOnlyDictionary<string, object?>? SourceMeta { get; init; }
     }
 
+    /// <summary>
+    /// Reconciles Cursor subagent correlation against this run's actual routed plan, which may be
+    /// narrower than the same-workspace scan <see cref="CursorImportSource.ClassifyAsync"/> used
+    /// to discover links. An orphaned child — correlated to a parent that isn't itself in
+    /// <paramref name="routed"/> — has its child flags cleared so it imports standalone instead
+    /// of being silently skipped by <see cref="CursorImportSource.ImportSessionAsync"/>'s
+    /// nested-child skip (the server-side adoption sweep attaches it to its real parent later).
+    /// Conversely, a routed parent's <c>SubagentChildren</c> is pruned to children that are
+    /// actually in <paramref name="routed"/> — the wider discovery scan may only be used to
+    /// DISCOVER links, never to WIDEN the import plan with a session the caller filtered out.
+    /// Children whose parent IS in <paramref name="routed"/> are left untouched.
+    /// </summary>
+    internal static List<SessionClassification> ReconcileOrphanedCursorSubagentChildren(
+        List<SessionClassification> routed
+    ) {
+        var routedIds = routed.Select(c => c.SessionId).ToHashSet(StringComparer.Ordinal);
+
+        return [
+            .. routed.Select(c => {
+                if (c.SourceMeta is not { } meta) return c;
+
+                var reconciled = meta;
+                var changed    = false;
+
+                // Child side: an orphan whose parent isn't part of this run's routed plan must
+                // import standalone rather than being silently skipped by ImportSessionAsync.
+                if (meta.TryGetValue("IsSubagentChild", out var isChildObj) && isChildObj is true) {
+                    var parentId = meta.TryGetValue("ParentSessionId", out var parentIdObj) ? parentIdObj as string : null;
+
+                    // Parent is (or will be) imported in this same run — leave the nested-child
+                    // flags in place so CursorImportSource keeps skipping this child's own routed
+                    // import in favor of the parent importing it inline.
+                    if (parentId is null || !routedIds.Contains(parentId)) {
+                        var d = new Dictionary<string, object?>(reconciled);
+                        d.Remove("IsSubagentChild");
+                        d.Remove("ParentSessionId");
+                        reconciled = d;
+                        changed    = true;
+                    }
+                }
+
+                // Parent side: prune SubagentChildren down to children that are actually part of
+                // this run's routed plan. A child excluded from `routed` must never be attached
+                // and imported here.
+                if (reconciled.TryGetValue("SubagentChildren", out var kidsObj)
+                 && kidsObj is List<CursorImportSource.CursorSubagentChild> kids) {
+                    var keptKids = kids.Where(k => routedIds.Contains(k.SessionId)).ToList();
+
+                    if (keptKids.Count != kids.Count) {
+                        var d = new Dictionary<string, object?>(reconciled);
+                        if (keptKids.Count > 0) d["SubagentChildren"] = keptKids;
+                        else                     d.Remove("SubagentChildren");
+                        reconciled = d;
+                        changed    = true;
+                    }
+                }
+
+                return changed ? c with { SourceMeta = reconciled } : c;
+            })
+        ];
+    }
+
+    /// <summary>
+    /// AI-1154 review fix (P2, broadened by the round-2 follow-up findings): a routed-phase
+    /// <c>AlreadyLoaded</c> classification (Cursor) is included in `routed` solely so its
+    /// <c>ImportSessionAsync</c> call can re-assert lifecycle hooks and backfill the
+    /// <c>repository</c> node on an already-fully-ingested session (the C2 suppressed-repo-import
+    /// contract), or — for a correlated nested child — because its parent needs it present in
+    /// `routed` to import it inline; neither case is "new work" on its own. Because nothing past
+    /// the parent's own watermark exists, its own call still returns <see cref="ImportOutcome.Loaded"/>
+    /// or <see cref="ImportOutcome.Resumed"/> (no line 0 to distinguish "nothing sent" from "brand
+    /// new"), and a nested child's own call always short-circuits to <see cref="ImportOutcome.Skipped"/>
+    /// (its content is sent inline by the parent, not by its own call). Without this check either
+    /// success would double-count on top of the classify-time <c>AlreadyLoaded</c> bucket the same
+    /// session already contributes to (as both Loaded/Already-loaded, or as both Excluded/Already-
+    /// loaded), and a parent replay would wrongly join <c>importedSessionIds</c> so a later
+    /// <c>--private</c> pass re-privates a session this run never actually (re)imported.
+    ///
+    /// <para>
+    /// Round-2 finding 1: an <c>AlreadyLoaded</c> parent can still ship brand-new content by
+    /// attaching a previously-unloaded nested child — real work that must NOT be suppressed just
+    /// because the parent's OWN outcome looks like a no-op replay. <c>sentChildContent</c> is the
+    /// out-of-band signal (see <see cref="ImportSessionResult"/>) that lets this distinguish the
+    /// two: only a replay that sent no child content either is truly lifecycle-only.
+    /// </para>
+    ///
+    /// <para>
+    /// Round-3 finding 2: this gate is CURSOR-ONLY. <c>SentChildContent</c> is populated only by
+    /// <see cref="CursorImportSource"/> — every other routed vendor's <c>ImportSessionResult</c>
+    /// leaves it at its default <c>false</c> via the implicit <c>ImportOutcome</c> conversion,
+    /// including cases (e.g. Antigravity's <c>AlreadyLoaded</c> repair path, which can legitimately
+    /// POST new nested-child content via <c>ImportChildrenAsync</c> before returning
+    /// <see cref="ImportOutcome.Skipped"/>) where that default does NOT mean "no new work". The
+    /// lifecycle-only-replay behavior this models — repo-backfill <c>AlreadyLoaded</c> replays with
+    /// no new content — is specific to Cursor's repo-backfill contract, so gating the whole check on
+    /// the Cursor vendor is what keeps a real import on another vendor from being wrongly suppressed.
+    /// </para>
+    /// </summary>
+    internal static bool IsLifecycleOnlyRoutedReplay(
+            string                vendor,
+            ClassificationStatus  status,
+            ImportOutcome         outcome,
+            bool                  sentChildContent
+        ) =>
+        vendor == "cursor"
+     && status == ClassificationStatus.AlreadyLoaded
+     && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed or ImportOutcome.Skipped
+     && !sentChildContent;
+
     internal sealed record ClassificationCounts(
             int New,
             int Partial,
@@ -894,6 +1003,13 @@ static class ImportCommand {
             )
             .ToList();
 
+        // AI-1156 (D5): a Cursor subagent child whose correlated parent isn't itself among
+        // `routed` (e.g. `--session <child>` excluded the parent from this run's classify slice,
+        // or the parent was classified but excluded from import for any other reason) must import
+        // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
+        // nested-child skip.
+        routed = ReconcileOrphanedCursorSubagentChildren(routed);
+
         var chains = BuildImportChains(fileBased);
 
         // --- Import ---
@@ -1010,6 +1126,26 @@ static class ImportCommand {
         // for the totals row; this tracker is what feeds doneBySource so the
         // sub-grid attributes Skipped-at-import to Excluded (not Errored).
         var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
+
+        // AI-1154 review fix (r6, P1): a SEPARATE tracker from `importedSessionIds`, used
+        // ONLY to decide what gets privatized under --private — never fed into the Done-grid
+        // counting (`importedSessionIds`/`doneBySource` stay exactly as they were; the AI-1389
+        // cosmetic double-count concern is intentionally left alone). `importedSessionIds`
+        // only gains a Cursor session id when this run did "real new work" by the
+        // Loaded/Failed/AlreadyLoaded + SentChildContent accounting — but privacy must NOT
+        // depend on that classification: a lifecycle POST (subagent-stop/session-end) can fail
+        // AFTER a child transcript has already persisted new content (this run's own
+        // ImportSessionAsync then returns Failed), or a later retry can see the child read as
+        // already-complete (SentChildContent=false) even though a PRIOR run attached new
+        // content that was never privatized. Either way `importedSessionIds` would exclude the
+        // session and a public session would stay public. So every Cursor routed classification
+        // this run touches — regardless of its outcome — is unconditionally captured here when
+        // --private is requested, and privatized at the end independent of Loaded/Failed/
+        // AlreadyLoaded/SentChildContent. Scoped to Cursor (vendor == "cursor") because
+        // SentChildContent/this lifecycle-after-content-persisted shape is Cursor-specific;
+        // every other routed vendor's own default_visibility-on-session-start stamp already
+        // privatizes atomically and isn't exposed to this gap.
+        var privateScopeSessionIds = new ConcurrentBag<string>();
 
         static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
                 (int Loaded, int Skipped, int Failed) prev,
@@ -1163,7 +1299,7 @@ static class ImportCommand {
                 ForcePrivate: forcePrivate
             );
 
-            async Task<ImportOutcome> ImportOne(SessionClassification c) {
+            async Task<ImportSessionResult> ImportOne(SessionClassification c) {
                 if (!byVendor.TryGetValue(c.Vendor, out var src)) {
                     return ImportOutcome.Failed;
                 }
@@ -1187,31 +1323,73 @@ static class ImportCommand {
                                 routed,
                                 new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                                 async (c, _) => {
-                                    var outcome = await ImportOne(c);
+                                    var result  = await ImportOne(c);
+                                    var outcome = result.Outcome;
 
-                                    routedOutcomesByVendor.AddOrUpdate(
-                                        c.Vendor,
-                                        addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
-                                        updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
-                                    );
+                                    // AI-1154 review fix (r6, P1): capture for privatization BEFORE
+                                    // any Loaded/Failed/AlreadyLoaded classification below — see the
+                                    // declaration comment on privateScopeSessionIds. Deliberately
+                                    // unconditional: even a Failed outcome (lifecycle POST failed
+                                    // after content already persisted) must still get privatized.
+                                    if (forcePrivate && c.Vendor == "cursor") {
+                                        privateScopeSessionIds.Add(c.SessionId);
+                                    }
+
+                                    // AI-1154 review fix (P2, broadened by the round-2 follow-up):
+                                    // an AlreadyLoaded session's routed call is a lifecycle/repo-
+                                    // backfill replay (or, for a nested child, an inline-handled
+                                    // no-op), not a new import — it must not double-count on top
+                                    // of the classify-time AlreadyLoaded bucket, nor join
+                                    // importedSessionIds (which --private later re-privates).
+                                    // sentChildContent overrides this for an AlreadyLoaded parent
+                                    // that attached a brand-new nested child (round-2 finding 1) —
+                                    // that IS real new work.
+                                    var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Vendor, c.Status, outcome, result.SentChildContent);
+
+                                    if (!isLifecycleOnlyReplay) {
+                                        routedOutcomesByVendor.AddOrUpdate(
+                                            c.Vendor,
+                                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
+                                        );
+                                    }
 
                                     switch (outcome) {
                                         case ImportOutcome.Loaded:
                                         case ImportOutcome.Resumed:
-                                            Interlocked.Increment(ref routedLoaded);
-                                            importedSessionIds.Add(c.SessionId);
+                                            if (isLifecycleOnlyReplay) {
+                                                AnsiConsole.MarkupLine(
+                                                    $"[grey]·[/] Refreshed [cyan]{Markup.Escape(c.SessionId)}[/] (repository backfill, already loaded)"
+                                                );
+                                            } else {
+                                                Interlocked.Increment(ref routedLoaded);
+                                                importedSessionIds.Add(c.SessionId);
 
-                                            AnsiConsole.MarkupLine(
-                                                $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
-                                            );
+                                                AnsiConsole.MarkupLine(
+                                                    $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
+                                                );
+                                            }
 
                                             break;
                                         case ImportOutcome.Skipped:
-                                            Interlocked.Increment(ref routedExcluded);
+                                            if (isLifecycleOnlyReplay) {
+                                                // Round-2 finding 2: a correlated nested child whose
+                                                // own classification is AlreadyLoaded and whose own
+                                                // routed call short-circuited to Skipped (handled
+                                                // inline by its parent) is NOT excluded work — it
+                                                // already contributes to the classify-time
+                                                // Already-loaded bucket and must not also land in
+                                                // Excluded.
+                                                AnsiConsole.MarkupLine(
+                                                    $"[grey]·[/] Already loaded [cyan]{Markup.Escape(c.SessionId)}[/] (nested under parent)"
+                                                );
+                                            } else {
+                                                Interlocked.Increment(ref routedExcluded);
 
-                                            AnsiConsole.MarkupLine(
-                                                $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
-                                            );
+                                                AnsiConsole.MarkupLine(
+                                                    $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
+                                                );
+                                            }
 
                                             break;
                                         case ImportOutcome.Failed:
@@ -1234,25 +1412,49 @@ static class ImportCommand {
                     routed,
                     new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                     async (c, _) => {
-                        var outcome = await ImportOne(c);
+                        var result  = await ImportOne(c);
+                        var outcome = result.Outcome;
 
-                        routedOutcomesByVendor.AddOrUpdate(
-                            c.Vendor,
-                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
-                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
-                        );
+                        // AI-1154 review fix (r6, P1): see the Tty branch above — unconditional
+                        // privatization capture, independent of the outcome classification below.
+                        if (forcePrivate && c.Vendor == "cursor") {
+                            privateScopeSessionIds.Add(c.SessionId);
+                        }
+
+                        // AI-1154 review fix (P2, broadened by the round-2 follow-up): see the
+                        // Tty branch above for why an AlreadyLoaded lifecycle-only replay must
+                        // not count as Loaded/Excluded, and why sentChildContent overrides that
+                        // for a parent that attached brand-new nested-child content.
+                        var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Vendor, c.Status, outcome, result.SentChildContent);
+
+                        if (!isLifecycleOnlyReplay) {
+                            routedOutcomesByVendor.AddOrUpdate(
+                                c.Vendor,
+                                addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
+                            );
+                        }
 
                         switch (outcome) {
                             case ImportOutcome.Loaded:
                             case ImportOutcome.Resumed:
-                                Interlocked.Increment(ref routedLoaded);
-                                importedSessionIds.Add(c.SessionId);
-                                display.Line($"Loading {c.SessionId} ({c.Vendor})");
+                                if (isLifecycleOnlyReplay) {
+                                    display.Line($"Refreshed {c.SessionId} (repository backfill, already loaded)");
+                                } else {
+                                    Interlocked.Increment(ref routedLoaded);
+                                    importedSessionIds.Add(c.SessionId);
+                                    display.Line($"Loading {c.SessionId} ({c.Vendor})");
+                                }
 
                                 break;
                             case ImportOutcome.Skipped:
-                                Interlocked.Increment(ref routedExcluded);
-                                display.Line($"Skipping {c.SessionId} (already current)");
+                                if (isLifecycleOnlyReplay) {
+                                    // Round-2 finding 2: see the Tty branch above.
+                                    display.Line($"Already loaded {c.SessionId} (nested under parent)");
+                                } else {
+                                    Interlocked.Increment(ref routedExcluded);
+                                    display.Line($"Skipping {c.SessionId} (already current)");
+                                }
 
                                 break;
                             case ImportOutcome.Failed:
@@ -1267,9 +1469,22 @@ static class ImportCommand {
         }
 
         // --- --private: mark all imported sessions owner-only ---
-        if (forcePrivate && !importedSessionIds.IsEmpty) {
-            display.BeginPhase("Marking imported sessions private");
-            await SetVisibilityNoneForAll(httpClient, baseUrl, [.. importedSessionIds]);
+        //
+        // AI-1154 review fix (r6, P1): the privatize set is importedSessionIds (chain-phase +
+        // routed-phase "real new work") UNIONED with privateScopeSessionIds (every Cursor
+        // routed classification touched this run under --private, regardless of outcome — see
+        // its declaration above). The union — not a replacement — keeps chain-phase and
+        // non-Cursor routed privatization exactly as before; it only widens what Cursor
+        // contributes so privacy no longer depends on the Loaded/Failed/AlreadyLoaded/
+        // SentChildContent accounting used for import counts.
+        if (forcePrivate) {
+            var toPrivatize = new HashSet<string>(importedSessionIds, StringComparer.Ordinal);
+            toPrivatize.UnionWith(privateScopeSessionIds);
+
+            if (toPrivatize.Count > 0) {
+                display.BeginPhase("Marking imported sessions private");
+                await SetVisibilityNoneForAll(httpClient, baseUrl, [.. toPrivatize]);
+            }
         }
 
         // --- Background phase (titles / summaries) ---

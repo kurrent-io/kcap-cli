@@ -232,11 +232,65 @@ internal sealed class CursorImportSource : IImportSource {
         // session. Doing it inside the parent import guarantees the parent's SessionEnded stays
         // the last event on its stream — a subagent-start posted after a parallel parent's
         // session-end would reactivate the ended parent (SubagentStarted is a reactivation event).
-        var pathBySession = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var s in sessions)
-            pathBySession[s.SessionId] = s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) && tp is string p ? p : "";
+        //
+        // AI-1156 (D5): the correlator's INPUT is widened to every session under the SAME
+        // workspace's agent-transcripts/ dir — ignoring --session/--cwd/--since/scope for this
+        // internal step (cheap local file reads only). Without this, a `--session <child>`
+        // (or --cwd/--since-narrowed) import only ever sees the child in `sessions`, so it can
+        // never discover the parent's Task prompt and the child would wrongly import top-level.
+        // Repo detection below still runs ONLY on the filtered `sessions` slice — this widening
+        // is purely a same-workspace file scan, no git/network work.
+        // Qodo fix: same-workspace discovery below is only meant to ensure a filtered/scoped
+        // import can still SEE a parent for visibility purposes — it must also CONSTRAIN
+        // correlation. Correlating across the union of every workspace touched by this classify
+        // call let a child in workspace A link to a parent in workspace B whenever their
+        // canonical prompt hashes happened to match, corrupting nesting/attribution. Each
+        // workspace gets its own path map and its own Correlate() call; the resulting links are
+        // merged (session ids are unique across workspaces, so no collisions).
+        var pathBySession      = new Dictionary<string, string>(StringComparer.Ordinal); // flat, for child-path lookups only
+        var pathsByWorkspace   = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
 
-        var subagentLinks    = CursorSubagentCorrelator.Correlate(pathBySession.Select(kv => (kv.Key, kv.Value)));
+        Dictionary<string, string> WorkspaceMap(string key) {
+            if (!pathsByWorkspace.TryGetValue(key, out var map))
+                pathsByWorkspace[key] = map = new Dictionary<string, string>(StringComparer.Ordinal);
+            return map;
+        }
+
+        var sanitizedDirs = sessions
+            .Select(s => s.SourceMeta!.TryGetValue("SanitizedDir", out var sd) ? sd as string : null)
+            .Where(sd => sd is not null)
+            .Select(sd => sd!)
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var sanitizedDir in sanitizedDirs) {
+            var workspaceMap = WorkspaceMap(sanitizedDir);
+            foreach (var (sid, path) in DiscoverSameWorkspaceSessionPaths(sanitizedDir, ct)) {
+                workspaceMap[sid] = path;
+                pathBySession[sid] = path;
+            }
+        }
+
+        // Ensure every session actually being classified in this run is present even if its own
+        // workspace directory couldn't be (re-)walked above (e.g. injected SourceMeta without a
+        // SanitizedDir in a test double) — this run's own slice must never be lost. Keyed by the
+        // session's own SanitizedDir so correlation stays workspace-scoped; a session with no
+        // SanitizedDir gets an isolated per-session bucket since its true peer set is unknown.
+        foreach (var s in sessions) {
+            if (!s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) || tp is not string p || p.Length == 0)
+                continue;
+
+            var workspaceKey = s.SourceMeta!.TryGetValue("SanitizedDir", out var sd) && sd is string sdStr
+                ? sdStr
+                : $" single:{s.SessionId}";
+
+            WorkspaceMap(workspaceKey)[s.SessionId] = p;
+            pathBySession[s.SessionId] = p;
+        }
+
+        var subagentLinks = new Dictionary<string, CursorSubagentCorrelator.SubagentLink>(StringComparer.Ordinal);
+        foreach (var workspaceMap in pathsByWorkspace.Values)
+            foreach (var (childId, lnk) in CursorSubagentCorrelator.Correlate(workspaceMap.Select(kv => (kv.Key, kv.Value))))
+                subagentLinks[childId] = lnk;
         var childrenByParent = new Dictionary<string, List<CursorSubagentChild>>(StringComparer.Ordinal);
         foreach (var (childId, lnk) in subagentLinks) {
             if (!childrenByParent.TryGetValue(lnk.ParentSessionId, out var kids)) {
@@ -369,13 +423,20 @@ internal sealed class CursorImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
         // AI-1153: a correlated subagent child is imported by its parent (below), under the
         // parent's AgentSubsession stream — never as a standalone top-level session.
+        //
+        // AI-1156 (D5): this flag is no longer unconditional. ImportCommand reconciles `routed`
+        // right after building it — an ORPHANED child (its correlated parent isn't itself part
+        // of this run's plan) has IsSubagentChild/ParentSessionId cleared before reaching here,
+        // so this check only still fires for a child whose parent IS about to run its own
+        // ImportSessionAsync (and will import this child inline, below in that parent's call).
+        // An orphan instead falls through to the ordinary standalone start→transcript→end path.
         if (classification.SourceMeta!.TryGetValue("IsSubagentChild", out var scObj) && scObj is true) {
             return ImportOutcome.Skipped;
         }
@@ -517,6 +578,11 @@ internal sealed class CursorImportSource : IImportSource {
         // ended parent back to Active. Hard-fail on child failure (same contract as the
         // parent lifecycle) so a re-run — idempotent via deterministic ids — repairs it.
         //
+        // AI-1154 review fix (P1): track whether any child ACTUALLY sent new transcript bytes,
+        // independent of the parent's own `sent`/`startLine`. An AlreadyLoaded parent (nothing
+        // past its own watermark) can still attach a previously-unloaded child here — that's
+        // real new work, and ImportCommand's IsLifecycleOnlyRoutedReplay must not suppress it.
+        //
         // AI-1382 review fix (r4, finding #2) — a child-transcript quarantine trip is surfaced as
         // the SAME typed TranscriptDeliveryAbortedException the parent's own delivery throws (see
         // SendSubagentLifecycleAsync below); catching it here routes it through CloseAndFailAsync
@@ -525,12 +591,14 @@ internal sealed class CursorImportSource : IImportSource {
         // even though this child's subagent-start had already landed (leaving the parent/subsession
         // stuck Active forever, since the quarantine marker makes the NEXT run Skip at preflight
         // rather than repair it).
+        var sentChildContent = false;
         if (classification.SourceMeta!.TryGetValue("SubagentChildren", out var kidsObj)
          && kidsObj is List<CursorSubagentChild> children) {
             try {
                 foreach (var child in children) {
-                    if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, quarantineIdentity, ct))
-                        return ImportOutcome.Failed;
+                    var (childOk, childSent) = await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, quarantineIdentity, ct);
+                    if (!childOk) return ImportOutcome.Failed;
+                    sentChildContent |= childSent;
                 }
             } catch (SessionImporter.TranscriptDeliveryAbortedException) {
                 return await CloseAndFailAsync();
@@ -548,9 +616,13 @@ internal sealed class CursorImportSource : IImportSource {
             ct);
         if (!endOk) return ImportOutcome.Failed;
 
-        if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+        if (sent == 0) {
+            var noOwnContentOutcome = startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+            return new ImportSessionResult(noOwnContentOutcome, SentChildContent: sentChildContent);
+        }
 
-        return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        var outcome = startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        return new ImportSessionResult(outcome, SentChildContent: sentChildContent);
     }
 
     /// <summary>A Cursor subagent child correlated to a parent: its own session id (used as the
@@ -559,9 +631,11 @@ internal sealed class CursorImportSource : IImportSource {
 
     /// <summary>
     /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so every
-    /// session gets a fresh copy). Children carry <c>IsSubagentChild</c> so their own import
-    /// no-ops; parents carry <c>SubagentChildren</c> so they import them inline. Every
-    /// classification also carries <c>QuarantineIdentity</c> — AI-1382 review fix #6 — so
+    /// session gets a fresh copy). Children carry <c>IsSubagentChild</c> + <c>ParentSessionId</c>
+    /// (AI-1156 D5 — the parent id lets <see cref="ImportCommand"/> reconcile an orphaned child
+    /// to standalone when the parent isn't itself part of this run's plan) so their own import
+    /// no-ops (unless reconciled); parents carry <c>SubagentChildren</c> so they import them inline.
+    /// Every classification also carries <c>QuarantineIdentity</c> — AI-1382 review fix #6 — so
     /// <see cref="ImportSessionAsync"/> can re-check <see cref="CursorMarkers.IsQuarantined"/>
     /// FRESH immediately before any lifecycle/transcript delivery (the family identity itself is
     /// stable for the run; only the quarantine STATE needs a live re-check, since the live
@@ -575,9 +649,48 @@ internal sealed class CursorImportSource : IImportSource {
         Dictionary<string, List<CursorSubagentChild>>              childrenByParent
     ) {
         var d = new Dictionary<string, object?>(src) { ["QuarantineIdentity"] = quarantineIdentity };
-        if (links.ContainsKey(sessionId)) d["IsSubagentChild"] = true;
+        if (links.TryGetValue(sessionId, out var link)) {
+            d["IsSubagentChild"] = true;
+            d["ParentSessionId"] = link.ParentSessionId;
+        }
         if (childrenByParent.TryGetValue(sessionId, out var kids)) d["SubagentChildren"] = kids;
         return d;
+    }
+
+    /// <summary>
+    /// Every session id → transcript path found directly under ONE workspace's
+    /// <c>agent-transcripts/</c> directory — no <c>--session</c>/<c>--cwd</c>/<c>--since</c>/scope
+    /// filtering, cheap local file reads only. Widens the subagent correlator's input so a
+    /// filtered/scoped import still sees a session's parent/siblings for correlation even when
+    /// they fall outside this run's classify slice. Mirrors the per-workspace walk in
+    /// <see cref="DiscoverAsync"/> minus the filters.
+    /// </summary>
+    IReadOnlyDictionary<string, string> DiscoverSameWorkspaceSessionPaths(string sanitizedDir, CancellationToken ct) {
+        var map            = new Dictionary<string, string>(StringComparer.Ordinal);
+        var transcriptsDir = Path.Combine(_projectsDir, sanitizedDir, "agent-transcripts");
+
+        if (!Directory.Exists(transcriptsDir)) return map;
+
+        try {
+            foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                ct.ThrowIfCancellationRequested();
+                try {
+                    var sessionDirName = Path.GetFileName(sessionDir);
+                    var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
+
+                    if (!File.Exists(jsonl)) continue;
+
+                    map[NormalizeCursorSessionId(sessionDirName)] = jsonl;
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
+                    // A hostile/inaccessible session subtree must not abort the whole scan.
+                    continue;
+                }
+            }
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // A hostile/inaccessible workspace subtree must not abort the whole scan.
+        }
+
+        return map;
     }
 
     /// <summary>
@@ -609,11 +722,36 @@ internal sealed class CursorImportSource : IImportSource {
     /// (session_id=parent, agent_id=child) → transcript batches routed with <c>agent_id</c>=child
     /// (resumed from the subsession watermark so re-imports don't repost the whole child) →
     /// <c>subagent-stop</c>. Called from the parent's <see cref="ImportSessionAsync"/> BEFORE the
-    /// parent's session-end. Returns false on a hard failure (start/transcript/stop POST failed);
-    /// a missing child transcript is skipped non-fatally. No standalone session lifecycle is
-    /// emitted for the child, so it never becomes a top-level session card.
+    /// parent's session-end. Returns <c>(false, _)</c> on a hard failure (start/transcript/stop
+    /// POST failed); a missing child transcript is skipped non-fatally (<c>(true, false)</c>). No
+    /// standalone session lifecycle is emitted for the child, so it never becomes a top-level
+    /// session card.
+    ///
+    /// <para>
+    /// AI-1154 review fix (P1): also reports whether this call actually POSTed new transcript
+    /// bytes for the child (<c>SentContent</c>) — the caller needs that to know real new work
+    /// happened even when the PARENT's own <c>sent</c> count is zero (e.g. an AlreadyLoaded
+    /// parent attaching a previously-unloaded child).
+    /// </para>
+    ///
+    /// <para>
+    /// AI-1154 review fix (P1, round-4): a fail-open resend — the child subsession watermark
+    /// probe itself threw, so <c>startLine</c> resets to 0 and the whole child is reposted — is
+    /// INDETERMINATE, not proof of "no new content". The round-3 fix treated a probe failure as
+    /// "definitely a duplicate resend" and forced <c>SentContent = false</c>; but when the child
+    /// is genuinely NEW and the watermark endpoint merely 500s transiently, that full resend
+    /// really does POST new content — yet the caller was told nothing new happened. For an
+    /// AlreadyLoaded parent, that meant a newly-attached child's content could stay on a public
+    /// parent under <c>--private</c>: a privacy leak. So a probe failure must NOT be treated as
+    /// "no new content"; it's indeterminate, and the safe default is to treat a posted resend as
+    /// content that MAY be new (<c>SentContent = true</c>), same as the probe-succeeded path.
+    /// This can cause a cosmetic double-count for an already-complete child that gets
+    /// fail-open-resent (its AlreadyLoaded parent counted in both Loaded and AlreadyLoaded) —
+    /// that's a known, separately-tracked follow-up (deferred P2); privacy correctness wins over
+    /// count precision.
+    /// </para>
     /// </summary>
-    async Task<bool> SendSubagentLifecycleAsync(
+    async Task<(bool Success, bool SentContent)> SendSubagentLifecycleAsync(
             string            parentSessionId,
             CursorSubagentChild child,
             ImportContext     ctx,
@@ -621,7 +759,7 @@ internal sealed class CursorImportSource : IImportSource {
             CancellationToken ct
         ) {
         if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
-            return true; // missing child transcript — skip, non-fatal
+            return (true, false); // missing child transcript — skip, non-fatal
 
         // AI-1382 review fix (r4, finding #2a) — never start a NEW child under a family that is
         // ALREADY quarantined by the time its turn comes up in the parent's loop. Without this, a
@@ -647,10 +785,21 @@ internal sealed class CursorImportSource : IImportSource {
             ["cwd"]             = "",                    // required by HookBase
             ["strict"]          = true,                  // fail-closed: 500 if SubagentStarted isn't persisted
         }, ct);
-        if (!startOk) return false;
+        if (!startOk) return (false, false);
 
         // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
         // doesn't repost the full child transcript every time. Fail-open to a full send.
+        //
+        // AI-1154 review fix (P1, round-4): a fail-open resend (the probe itself threw — e.g. a
+        // transient 5xx) resets startLine to 0 and reposts the WHOLE child. That resend is
+        // INDETERMINATE — it MAY be a duplicate of an already-complete child, or it MAY be
+        // genuinely new content that a transient probe failure prevented us from resuming
+        // correctly. Treating probe failure as proof of "no new content" (the round-3 fix) is a
+        // privacy regression: a real new child attached to an AlreadyLoaded parent would then be
+        // reported as no content sent, the parent would be excluded from `--private`, and its
+        // new child content would leak on a public session. So probe failure alone is no longer
+        // tracked as a reason to suppress SentContent below — the safe default when content was
+        // actually posted is to count it, whether or not the watermark was known.
         var startLine = 0;
         try {
             if (await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, ct, agentId) is { } last)
@@ -659,6 +808,7 @@ internal sealed class CursorImportSource : IImportSource {
             startLine = 0;
         }
 
+        int childSent;
         try {
             // failOnError: fail-closed like the parent lifecycle — a rejected/failed child
             // transcript POST must abort so the parent import fails and a re-run repairs it,
@@ -668,7 +818,7 @@ internal sealed class CursorImportSource : IImportSource {
             // already-resolved quarantineIdentity as the parent's own send (no extra correlator
             // work), so a quarantine tripping mid-child-transcript also aborts the remaining
             // child batches, not just the parent's.
-            await SessionImporter.SendTranscriptBatches(
+            childSent = await SessionImporter.SendTranscriptBatches(
                 httpClient:    ctx.HttpClient,
                 baseUrl:       ctx.BaseUrl,
                 sessionId:     parentSessionId,
@@ -688,12 +838,12 @@ internal sealed class CursorImportSource : IImportSource {
             // at preflight instead of repairing it).
             throw;
         } catch {
-            return false;
+            return (false, false);
         }
 
         // Full SubagentStopHook shape (mirrors the Gemini/OpenCode builders) — the server
         // binds all fields, so an incomplete body can be rejected before HandleSubagentStop.
-        return await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
+        var stopOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
             ["hook_event_name"]        = "subagent_stop",
             ["session_id"]             = parentSessionId,
             ["agent_id"]               = agentId,
@@ -705,6 +855,15 @@ internal sealed class CursorImportSource : IImportSource {
             ["last_assistant_message"] = "",
             ["strict"]                 = true,                 // fail-closed: 500 if SubagentCompleted isn't persisted
         }, ct);
+
+        // Privacy-safe by construction: whether the probe succeeded (known watermark) or failed
+        // (fail-open full resend), any lines actually POSTED count as SentContent. A probe
+        // failure is indeterminate, never a "definitely no new content" verdict — see the
+        // fail-open comment above. Known trade-off: an already-complete child that gets
+        // fail-open-resent will also report SentContent=true, which can cosmetically double-count
+        // its AlreadyLoaded parent (Loaded + AlreadyLoaded buckets) — deferred, separately
+        // tracked follow-up; privacy correctness wins over count precision.
+        return (stopOk, stopOk && childSent > 0);
     }
 
     internal static JsonObject BuildSessionStartPayload(
