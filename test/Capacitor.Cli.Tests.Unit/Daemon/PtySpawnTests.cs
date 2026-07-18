@@ -123,18 +123,20 @@ public class PtySpawnTests {
     public async Task Capture_binding_a_fast_exiting_child_never_yields_a_recycled_identity() {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
-        // Spawn something that exits IMMEDIATELY — the captured identity must describe the
-        // ORIGINAL incarnation. This is exactly what the capture-binding rule (capture
-        // pre-reap, inside pty_spawn) is supposed to guarantee: nothing has waited on the
-        // child before pty_spawn captured its identity, so a well-formed, non-empty token
-        // always comes back even though /bin/true may have already exited by the time we
-        // read it back out.
-        var plan = Preflight("/bin/true", ["true"]);
+        // Spawn something that exits IMMEDIATELY (`sleep 0` — used instead of /bin/true so
+        // this runs identically on both platforms: this environment's macOS has no /bin/true
+        // at all, only /usr/bin/true, while /bin/sleep is present on both). The captured
+        // identity must describe the ORIGINAL incarnation. This is exactly what the
+        // capture-binding rule (capture pre-reap, inside pty_spawn) is supposed to guarantee:
+        // nothing has waited on the child before pty_spawn captured its identity, so a
+        // well-formed, non-empty token always comes back even though the child may have
+        // already exited by the time we read it back out.
+        var plan = Preflight("/bin/sleep", ["sleep", "0"]);
         try {
             var rc = Spawn(plan, out var result);
             await Assert.That(rc).IsEqualTo(0);
             await Assert.That(result.StartIdentityString).IsNotEmpty();
-            UnixPtyInterop.waitpid(result.Pid, out _, 0); // reap the exited /bin/true
+            UnixPtyInterop.waitpid(result.Pid, out _, 0); // reap the exited child
         } finally { Free(plan); }
     }
 

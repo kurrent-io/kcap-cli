@@ -4,12 +4,26 @@
 #include <sys/stat.h>
 #include <sys/xattr.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <poll.h>
+#include <time.h>
+#include <signal.h>
+
+#ifdef __APPLE__
+#include <util.h> // forkpty
+#else
+#include <pty.h> // forkpty (glibc/musl)
+#endif
+
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 // ── existing (unchanged) ────────────────────────────────────────────────────────────────
 int pty_set_winsize(int fd, unsigned short rows, unsigned short cols) {
@@ -344,4 +358,314 @@ void pty_plan_free(pty_exec_plan **plan) {
     free_argv(p->argv);
     free(p);
     *plan = NULL;
+}
+
+// ── L1-shim(b): spawn ────────────────────────────────────────────────────────────────────
+//
+// Native start-identity capture. Both helpers are called ONLY from the parent, immediately
+// after forkpty() returns (the capture-binding rule, see pty_spawn below) — never from the
+// child, and never after anything may have waitpid()'d the child.
+
+#ifdef __linux__
+static int capture_lx_identity(pid_t pid, char *out, size_t outlen) {
+    char statpath[64];
+    snprintf(statpath, sizeof(statpath), "/proc/%d/stat", (int)pid);
+    int fd = open(statpath, O_RDONLY);
+    if (fd < 0) return 0;
+
+    char buf[512];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+
+    // Fields after the (possibly space/paren-containing) comm begin after the LAST ')'.
+    char *after = strrchr(buf, ')');
+    if (!after || !after[1]) return 0;
+    after += 2; // skip ") "
+
+    char *tok, *save = NULL;
+    int field = 0; // 0-indexed from "state" (field 3 overall == index 0 here)
+    char *starttime = NULL;
+    for (tok = strtok_r(after, " ", &save); tok; tok = strtok_r(NULL, " ", &save), field++) {
+        if (field == 19) { starttime = tok; break; } // starttime is field 22 overall, index 19 here
+    }
+    if (!starttime) return 0;
+
+    int bfd = open("/proc/sys/kernel/random/boot_id", O_RDONLY);
+    char boot[64] = "?";
+    if (bfd >= 0) {
+        ssize_t bn = read(bfd, boot, sizeof(boot) - 1);
+        close(bfd);
+        if (bn > 0) { boot[bn] = '\0'; char *nl = strchr(boot, '\n'); if (nl) *nl = '\0'; }
+    }
+
+    snprintf(out, outlen, "lx:%s:%s", boot, starttime);
+    return 1;
+}
+#endif
+
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#include <libproc.h>
+
+// PROC_PIDUNIQIDENTIFIERINFO (flavor 17) and its struct are #ifdef PRIVATE in the xnu source
+// and ABSENT from the shipped SDK's sys/proc_info.h entirely on this toolchain (grepping the
+// installed SDK header for "uniqidentifier"/"PIDUNIQIDENTIFIERINFO" finds nothing) —
+// proc_pidinfo() itself IS public, only the flavor constant and struct are undeclared.
+//
+// The struct's TOTAL size is not a stable, documented ABI, and differs from every commonly
+// cited historical layout: empirically probing THIS kernel's proc_pidinfo(pid, 17, buf, n)
+// directly (varying the requested buffer size, then comparing getpid() vs a freshly forked
+// child vs pid 1) shows (a) any requested size below 56 bytes is refused outright (returns 0,
+// never a truncated fill) while 56+ all return exactly 56, and (b) the leading 16 bytes look
+// like a per-process UUID, the next 8 bytes (offset 16) increment by exactly 1 from a live
+// process to its immediately-forked child (a monotonic unique-id counter), and the following
+// 8 bytes (offset 24) in the CHILD exactly equal the PARENT's offset-16 value — including the
+// pid-1 sentinel case (uniqueid=1, puniqueid=0). That is strong confirmation of the
+// historically-cited PREFIX layout (p_uuid[16], p_uniqueid, p_puniqueid) for the three fields
+// that matter, even though the trailing reserved region's exact size varies by OS version (a
+// hardcoded 40-byte total, as an earlier draft of this file assumed, made every call here
+// return 0/uncapturable — the kernel refuses anything under its actual current size). Rather
+// than assert an exact total size that has ALREADY been observed to vary, this reads only the
+// fixed-offset prefix out of a buffer sized generously larger than any known/plausible total,
+// so a future OS growing the reserved tail further keeps working without a code change.
+// Verified on this dev box (macOS, arm64) only — flagging to the requester that the exact
+// prefix offsets should be cross-checked against whatever OS version the release macOS
+// runner actually uses, since this call degrades to "uncapturable" (never a false proof) but
+// is not yet confirmed correct there.
+#define PTY_PROC_PIDUNIQIDENTIFIERINFO 17
+#define PTY_UNIQIDENTIFIERINFO_BUFSIZE 256 // comfortably larger than any known/plausible layout
+
+struct pty_proc_uniqidentifierinfo_prefix {
+    uint8_t  p_uuid[16];
+    uint64_t p_uniqueid;
+    uint64_t p_puniqueid;
+    // The real kernel struct continues with additional reserved fields whose count/size vary
+    // by OS version (see note above); we never read them, so their shape doesn't matter here.
+};
+
+int pty_capture_mac_identity(pid_t pid, char *out, size_t outlen) {
+    unsigned char raw[PTY_UNIQIDENTIFIERINFO_BUFSIZE];
+    int n = proc_pidinfo(pid, PTY_PROC_PIDUNIQIDENTIFIERINFO, 0, raw, sizeof(raw));
+    if (n < (int)sizeof(struct pty_proc_uniqidentifierinfo_prefix)) return 0; // anomaly → uncapturable, never a false proof
+
+    struct pty_proc_uniqidentifierinfo_prefix info;
+    memcpy(&info, raw, sizeof(info)); // avoids any alignment/strict-aliasing assumption on `raw`
+    if (info.p_uniqueid == 0) return 0;
+
+    char uuid_str[64];
+    size_t uuid_size = sizeof(uuid_str);
+    if (sysctlbyname("kern.bootsessionuuid", uuid_str, &uuid_size, NULL, 0) != 0) return 0;
+
+    snprintf(out, outlen, "mac:%s:%llu", uuid_str, (unsigned long long)info.p_uniqueid);
+    return 1;
+}
+#endif
+
+static int capture_start_identity(pid_t pid, char *out, size_t outlen) {
+    out[0] = '\0';
+#ifdef __linux__
+    if (capture_lx_identity(pid, out, outlen)) return 1;
+#elif defined(__APPLE__)
+    if (pty_capture_mac_identity(pid, out, outlen)) return 1;
+#endif
+    return 0; // uncapturable — out stays "" (identity_unavailable), never a launch failure
+}
+
+// Async-signal-safe: writes {step, err} to the error pipe and _exit(127)s. Never returns.
+// A top-level function (not nested inside pty_spawn) — GCC/Clang nested functions require
+// executable-stack trampolines and are NOT universally available (Apple clang rejects them
+// without a non-default -fnested-functions flag the build does not pass), so this must not
+// depend on that extension to compile with the project's plain `cc -shared` invocation.
+static void child_fail_and_die(int errpipe_write_fd, int step, int err) {
+    struct { int step; int err; } msg = { step, err };
+    write(errpipe_write_fd, &msg, sizeof(msg));
+    _exit(127);
+}
+
+// Blocking waitpid retrying across EINTR — every cleanup path below must actually reap the
+// child before returning (never leave a live-but-unobserved process behind), and a signal
+// landing on the parent mid-wait must not be mistaken for "the child is gone".
+static void reap_blocking(pid_t pid) {
+    int status;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) { /* retry */ }
+}
+
+int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
+              unsigned short rows, unsigned short cols,
+              pid_t expected_parent, int cancel_fd, pty_spawn_result *out) {
+#ifndef __linux__
+    (void)expected_parent; // only re-checked post-PDEATHSIG on Linux — see the child sequence below
+#endif
+    memset(out, 0, sizeof(*out));
+    out->master_fd = -1;
+
+    // Self-pipe for child-failure reporting — BOTH ends CLOEXEC-flagged BEFORE the fork so a
+    // successful exec closes the child's copy of the write end automatically (EOF => success).
+    int errpipe[2];
+    if (pipe(errpipe) != 0) { out->err_no = errno; out->failed_step = PTY_STEP_FORK; return -1; }
+    fcntl(errpipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(errpipe[1], F_SETFD, FD_CLOEXEC);
+
+    struct winsize ws = {0};
+    ws.ws_row = rows; ws.ws_col = cols;
+
+    int master_fd;
+    pid_t pid = forkpty(&master_fd, NULL, NULL, &ws);
+
+    if (pid < 0) {
+        out->err_no = errno; out->failed_step = PTY_STEP_FORK;
+        close(errpipe[0]); close(errpipe[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        // ── CHILD ── async-signal-safe calls only from here to exec (or _exit): no malloc,
+        // no stdio, no non-reentrant libc — only the syscalls/functions on the POSIX
+        // async-signal-safe list (close, write, _exit, chdir, execve, raise, prctl, getppid).
+        close(errpipe[0]);
+        // cancel_fd is caller-owned and only meaningful to the PARENT's poll loop; close our
+        // inherited copy defensively (in case the caller didn't mark it CLOEXEC) rather than
+        // leak an extra fd into whatever this plan execs into.
+        if (cancel_fd >= 0) close(cancel_fd);
+
+#ifdef __linux__
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0) {
+            child_fail_and_die(errpipe[1], PTY_STEP_PRCTL, errno);
+        }
+        // Re-check parentage AFTER arming PDEATHSIG: if the real parent had already died
+        // between fork() and this line, we'd have been reparented (getppid() !=
+        // expected_parent) and PDEATHSIG for the NEW parent will never fire for the OLD
+        // one's death — so self-kill explicitly rather than trust a signal that may never
+        // come. errno is irrelevant here (not a syscall failure), so report err=0.
+        if (getppid() != expected_parent) {
+            struct { int step; int err; } msg = { PTY_STEP_PARENT_DIED, 0 };
+            write(errpipe[1], &msg, sizeof(msg));
+            raise(SIGKILL);
+            _exit(127); // unreachable unless SIGKILL is somehow blocked
+        }
+#endif
+
+        if (chdir(cwd) != 0) { child_fail_and_die(errpipe[1], PTY_STEP_CHDIR, errno); }
+
+        if (plan->mode == PTY_EXEC_FD) {
+#ifdef __linux__
+            syscall(SYS_execveat, plan->exec_fd, "", plan->argv, envp, AT_EMPTY_PATH);
+#else
+            // No portable fd-exec primitive off Linux. pty_preflight should never hand back
+            // an EXEC_FD plan here in practice (callers gate plan construction on
+            // pty_probe_execveat(), which is unconditionally 0 off Linux — see pty_shim.h),
+            // but fail deterministically rather than report a stale/garbage errno if it ever
+            // does.
+            errno = ENOSYS;
+#endif
+        } else {
+            execve(plan->exec_path, plan->argv, envp);
+        }
+
+        child_fail_and_die(errpipe[1], PTY_STEP_EXEC, errno);
+    }
+
+    // ── PARENT ──
+    close(errpipe[1]);
+
+    // CAPTURE-BINDING RULE: identity is captured HERE, immediately after forkpty returns,
+    // before anything (including the rest of this very function) waitpid()s the child. A
+    // fast-exiting child cannot be reaped-and-replaced (its pid recycled onto an unrelated
+    // process) before this line runs, so the token always describes THIS incarnation.
+    capture_start_identity(pid, out->start_identity, sizeof(out->start_identity));
+
+    // Bounded handshake: poll the error pipe (+ cancel_fd) against an absolute ~30s
+    // deadline, computed via a monotonic clock so a signal that interrupts poll() (EINTR)
+    // shrinks the remaining wait instead of resetting a fresh 30s window on every retry.
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += 30;
+
+    struct pollfd fds[2];
+    fds[0].fd = errpipe[0]; fds[0].events = POLLIN;
+    int nfds = 1;
+    if (cancel_fd >= 0) { fds[1].fd = cancel_fd; fds[1].events = POLLIN; nfds = 2; }
+
+    int poll_rc;
+    for (;;) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long remaining_ms = (long)(deadline.tv_sec - now.tv_sec) * 1000
+                          + (deadline.tv_nsec - now.tv_nsec) / 1000000;
+        if (remaining_ms < 0) remaining_ms = 0;
+
+        poll_rc = poll(fds, (nfds_t)nfds, (int)remaining_ms);
+        if (poll_rc >= 0) break;
+        if (errno == EINTR) continue;
+        break; // some other poll() failure — treated like a timeout below, not left hanging
+    }
+
+    if (poll_rc <= 0) {
+        // Deadline reached, or an unrecoverable poll() error: either way we can no longer
+        // trust the handshake, so kill + reap and report a bounded failure rather than
+        // block indefinitely or return success for an unobserved child.
+        kill(pid, SIGKILL);
+        reap_blocking(pid);
+        close(errpipe[0]);
+        close(master_fd);
+        out->failed_step = PTY_STEP_HANDSHAKE_TIMEOUT;
+        return -1;
+    }
+
+    if (nfds == 2 && (fds[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+        // Shutdown cancellation — either a byte was written or the write end was closed.
+        kill(pid, SIGKILL);
+        reap_blocking(pid);
+        close(errpipe[0]);
+        close(master_fd);
+        out->failed_step = PTY_STEP_CANCELLED;
+        return -1;
+    }
+
+    struct { int step; int err; } msg;
+    ssize_t n;
+    for (;;) {
+        n = read(errpipe[0], &msg, sizeof(msg));
+        if (n >= 0 || errno != EINTR) break;
+    }
+    int read_errno = errno;
+    close(errpipe[0]);
+
+    if (n < 0) {
+        // Unexpected read() failure (not EINTR) — the outcome is indeterminate; fail closed
+        // rather than assume success, and still guarantee no live-but-unobserved child.
+        kill(pid, SIGKILL);
+        reap_blocking(pid);
+        close(master_fd);
+        out->err_no = read_errno;
+        out->failed_step = PTY_STEP_HANDSHAKE_TIMEOUT;
+        return -1;
+    }
+
+    if (n == sizeof(msg)) {
+        // Child reported a failure at a shim-controlled step.
+        reap_blocking(pid);
+        close(master_fd);
+        out->err_no = msg.err;
+        out->failed_step = msg.step;
+        return -1;
+    }
+
+    if (n != 0) {
+        // A partial message — should be impossible (writes this small are atomic on a pipe
+        // per POSIX, well under PIPE_BUF), but fail closed rather than guess at intent.
+        kill(pid, SIGKILL);
+        reap_blocking(pid);
+        close(master_fd);
+        out->failed_step = PTY_STEP_HANDSHAKE_TIMEOUT;
+        return -1;
+    }
+
+    // EOF (n == 0): the exec replaced the image, closing the CLOEXEC write end. Success.
+    out->pid = pid;
+    out->master_fd = master_fd;
+    out->failed_step = PTY_STEP_NONE;
+    return 0;
 }
