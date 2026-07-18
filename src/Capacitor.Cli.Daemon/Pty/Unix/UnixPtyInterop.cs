@@ -86,6 +86,44 @@ internal static partial class UnixPtyInterop {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void pty_plan_free(ref IntPtr plan);
 
+    [LibraryImport("libc", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pipe(int[] fds);
+
+    // forkpty + child sequence + error-pipe handshake (L1-shim(b)). `plan` is the opaque
+    // pty_exec_plan* from pty_preflight; envp/cwd cross the boundary the same way argv does
+    // for pty_preflight — a NULL-terminated `string?[]`/UTF-8 string, no length prefix.
+    [LibraryImport("libpty_shim", EntryPoint = "pty_spawn", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_spawn(
+        IntPtr plan, string?[] envp, string cwd, ushort rows, ushort cols,
+        int expectedParent, int cancelFd, out PtySpawnResult result);
+
+    // macOS-only export (see pty_shim.h) — no compile-time guard needed on the C# side, since
+    // LibraryImport resolution is lazy/per-call; callers must gate with OperatingSystem.IsMacOS().
+    [LibraryImport("libpty_shim", EntryPoint = "pty_capture_mac_identity", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial int pty_capture_mac_identity(int pid, byte* out_, nuint outlen);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct PtySpawnResult {
+        public int  Pid;
+        public int  MasterFd;
+        public int  ErrNo;
+        public int  FailedStep;
+        public fixed byte StartIdentity[128];
+
+        public readonly string StartIdentityString {
+            get {
+                fixed (byte* p = StartIdentity) {
+                    var len = 0;
+                    while (len < 128 && p[len] != 0) len++;
+                    return System.Text.Encoding.UTF8.GetString(p, len);
+                }
+            }
+        }
+    }
+
     public static void SetWinSize(int fd, ushort rows, ushort cols) {
         if (IsMacOS && RuntimeInformation.OSArchitecture == Architecture.Arm64) {
             // Use C shim on macOS ARM64 (ioctl variadic ABI issue)
