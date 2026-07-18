@@ -95,6 +95,53 @@ public class CursorHookCommandTests {
         await Assert.That(fx.RouteOrder).IsEquivalentTo(["session-start/cursor", "session-end/cursor"]);
     }
 
+    // AI-1382 review fix #4 — a telemetry-only mapping (postToolUse, SpoolOnFailure=false) must
+    // NOT let the recovery-spawn watcher start while an EARLIER queued canonical event (here:
+    // sessionStart) is still stuck undelivered. Simulate: sessionStart is already spooled from a
+    // prior failed invocation; THIS invocation's generic top-of-method drain retries it and hits
+    // a TRANSIENT failure (503) so it stays queued, while postToolUse's OWN POST succeeds. Before
+    // the fix, postToolUse's SpoolOnFailure=false meant the ordering guard never even looked at
+    // the backlog, and the recovery spawn ran regardless.
+    [Test]
+    public async Task telemetry_hook_does_not_recovery_spawn_while_an_earlier_canonical_event_is_still_stuck() {
+        var sid = Guid.NewGuid().ToString("N");
+        var dir = Path.Combine(Path.GetTempPath(), $"kcap-cursor-fix4-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", dir);
+
+        var spool = new HookSpool(Path.Combine(dir, "spool"));
+        spool.Append(sid, "session-start/cursor", $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+
+        var spawned = new List<string>();
+        WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+
+        try {
+            using var handler = new StubHandler(req => {
+                var path = req.RequestUri!.AbsolutePath;
+                if (path == "/hooks/session-start/cursor") {
+                    // Transient failure on retry — the entry stays queued (NOT delivered, NOT dropped).
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+                }
+                if (req.Method == HttpMethod.Get) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)); // postToolUse's own POST succeeds
+            });
+            using var client = new HttpClient(handler);
+
+            var exit = await CursorHookCommand.HandleCore(
+                client, "http://localhost",
+                new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash","transcript_path":"/tmp/{{sid}}.jsonl"}"""),
+                spool, TimeSpan.FromSeconds(2));
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(spawned).IsEmpty(); // must NOT spawn while sessionStart is still stuck
+            await Assert.That(spool.HasBacklog(sid)).IsTrue(); // confirms the premise: still queued, not delivered
+        } finally {
+            WatcherManager.SpawnOverrideForTesting = null;
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     [Test]
     public async Task afterAgentThought_canonical_id_is_stable_across_replays() {
         using var fx   = new Fixture();
@@ -161,6 +208,77 @@ public class CursorHookCommandTests {
         await Assert.That(promptIdx).IsGreaterThanOrEqualTo(0);
         await Assert.That(transcriptIdx).IsGreaterThanOrEqualTo(0);
         await Assert.That(promptIdx).IsLessThan(transcriptIdx);
+    }
+
+    [Test]
+    public async Task telemetry_only_hook_touches_the_heartbeat_file() {
+        // AI-1382 Task 8: even a telemetry-only hook (never spooled, lossy on failure) must
+        // touch the per-session heartbeat — it reflects "Cursor is still firing hooks",
+        // independent of whatever the transcript/spool machinery is doing.
+        using var fx = new Fixture();
+        var       sid = Guid.NewGuid().ToString("N");
+        var       before = DateTimeOffset.UtcNow;
+
+        await fx.HandleAsync($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash"}""");
+
+        var heartbeat = WatcherHeartbeat.Read(CursorMarkers.HeartbeatPath(sid));
+        await Assert.That(heartbeat).IsNotNull();
+        await Assert.That(heartbeat!.Value).IsGreaterThanOrEqualTo(before);
+    }
+
+    [Test]
+    public async Task beforeSubmitPrompt_clears_its_barrier_once_the_live_POST_succeeds() {
+        using var fx  = new Fixture(); // defaults to HttpStatusCode.OK
+        var       sid = Guid.NewGuid().ToString("N");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}","prompt":"hi"}""");
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+    }
+
+    [Test]
+    public async Task beforeSubmitPrompt_barrier_stays_pending_when_the_live_POST_fails() {
+        using var fx  = new Fixture(postStatus: HttpStatusCode.InternalServerError);
+        var       sid = Guid.NewGuid().ToString("N");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}","prompt":"hi"}""");
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsTrue();
+    }
+
+    [Test]
+    public async Task sessionEnd_drains_the_hook_spool_before_the_pre_end_transcript_drain_and_clears_the_barrier() {
+        // AI-1382 Task 8: a beforeSubmitPrompt whose live POST previously failed left a barrier
+        // + a spooled user-prompt/cursor entry behind. sessionEnd must deliver that spooled
+        // entry (clearing the barrier) BEFORE running its pre-end transcript drain, so a
+        // transcript line depending on the attachment is never normalized ahead of it.
+        using var fx  = new Fixture();
+        var       sid = Guid.NewGuid().ToString("N");
+
+        CursorMarkers.CreateBarrier(sid, DateTimeOffset.UtcNow);
+        fx.Spool.Append(sid, "user-prompt/cursor", $$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}"}""");
+
+        await fx.WriteTranscript(
+            """{"role":"user","message":{"content":[{"type":"text","text":"final prompt"}]}}"""
+        );
+
+        await fx.HandleAsync(
+            $$"""
+               {"hook_event_name":"sessionEnd","session_id":"{{sid}}","transcript_path":"{{fx.TranscriptPathEscaped}}"}
+               """
+        );
+
+        var promptIdx     = fx.RouteOrder.FindIndex(r => r == "user-prompt/cursor");
+        var transcriptIdx = fx.RouteOrder.FindIndex(r => r == "transcript");
+        var sessionEndIdx = fx.RouteOrder.FindIndex(r => r == "session-end/cursor");
+
+        await Assert.That(promptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(transcriptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(sessionEndIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(promptIdx).IsLessThan(transcriptIdx);
+        await Assert.That(transcriptIdx).IsLessThan(sessionEndIdx);
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
     }
 
     [Test]
@@ -279,8 +397,12 @@ public class CursorHookCommandTests {
         public HttpClient Client                { get; }
         public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
 
+        // AI-1382 Task 10: the backfill now holds a non-newline-terminated final line on every
+        // mid-session (Hold-policy) call — a real Cursor transcript line is newline-terminated
+        // once flushed, so tests write content the same way rather than exercising the
+        // holdback edge case incidentally.
         public Task WriteTranscript(string content) =>
-            File.WriteAllTextAsync(_transcriptPath, content);
+            File.WriteAllTextAsync(_transcriptPath, content.EndsWith('\n') ? content : content + "\n");
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath, "*.jsonl") : [];

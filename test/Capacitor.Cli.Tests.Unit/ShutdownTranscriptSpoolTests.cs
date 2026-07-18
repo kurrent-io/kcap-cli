@@ -136,6 +136,67 @@ public class ShutdownTranscriptSpoolTests {
         }
     }
 
+    /// <summary>
+    /// AI-1382 review fix #1: a Cursor session already quarantined by the runtime rewrite guard
+    /// must never have its tail re-read and spooled here — the bytes past `linesProcessed` ARE
+    /// the exact corrupted batch the guard just discarded (the discard never advances
+    /// LinesProcessed), so without this check the shutdown path would re-read and spool
+    /// precisely what the guard existed to block, for a later drain to replay.
+    /// </summary>
+    [Test]
+    public async Task shutdown_skips_spooling_when_the_cursor_session_is_quarantined() {
+        var sid            = Guid.NewGuid().ToString("N");
+        var dir            = TmpDir("shut-quarantine");
+        var spoolDir       = TmpDir("shut-quarantine-spool");
+        var transcriptPath = Path.Combine(dir, "transcript.jsonl");
+
+        try {
+            Directory.CreateDirectory(dir);
+            // Lines beyond `linesProcessed` exist on disk — exactly what a rejected/discarded
+            // batch left behind when the guard tripped mid-poll.
+            await File.WriteAllTextAsync(transcriptPath, "{\"line\":0}\n{\"line\":1}\n{\"line\":2}\n");
+            CursorMarkers.Quarantine(sid, "rewrite detected");
+
+            var spool  = new TranscriptSpool(spoolDir);
+            var result = await WatchCommand.SpoolUndeliveredTranscriptTailAsync(
+                spool, transcriptPath, sid, agentId: null, vendor: "cursor", linesProcessed: 0, CancellationToken.None);
+
+            await Assert.That(result).IsNull();
+            await Assert.That(spool.HasBacklog(sid)).IsFalse();
+            await Assert.That(spool.NeedsImport(sid)).IsFalse();
+        } finally {
+            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(spoolDir, true); } catch { }
+        }
+    }
+
+    /// <summary>Regression guard: the quarantine check is Cursor-scoped only — every other vendor's
+    /// shutdown tail must still spool normally.</summary>
+    [Test]
+    public async Task shutdown_still_spools_for_non_cursor_vendors_when_a_cursor_marker_exists_for_a_different_session() {
+        var quarantinedSid = Guid.NewGuid().ToString("N");
+        CursorMarkers.Quarantine(quarantinedSid, "unrelated");
+
+        var dir            = TmpDir("shut-nonCursor");
+        var spoolDir       = TmpDir("shut-nonCursor-spool");
+        var transcriptPath = Path.Combine(dir, "transcript.jsonl");
+
+        try {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(transcriptPath, "{\"line\":0}\n");
+
+            var spool  = new TranscriptSpool(spoolDir);
+            var result = await WatchCommand.SpoolUndeliveredTranscriptTailAsync(
+                spool, transcriptPath, Sid, agentId: null, vendor: "kiro", linesProcessed: 0, CancellationToken.None);
+
+            await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.Appended);
+            await Assert.That(spool.HasBacklog(Sid)).IsTrue();
+        } finally {
+            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(spoolDir, true); } catch { }
+        }
+    }
+
     [Test]
     public async Task shutdown_missing_transcript_file_is_a_noop() {
         var spoolDir = TmpDir("shut-missing-spool");

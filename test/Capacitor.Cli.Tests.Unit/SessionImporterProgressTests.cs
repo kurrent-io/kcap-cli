@@ -56,6 +56,44 @@ public class SessionImporterProgressTests : IDisposable {
         }
     }
 
+    // AI-1382 review fix (r4, finding #3) — abortDelivery must be re-checked immediately AFTER a
+    // POST too, not only before the next one. A transcript small enough to be a SINGLE (final and
+    // only) batch never reaches a "next" pre-POST check at all, so before this fix a quarantine
+    // marker that appeared while that one-and-only POST was "in flight" was never observed anywhere
+    // — the method returned normally with the caller none the wiser.
+    [Test]
+    public async Task SendTranscriptBatches_observes_quarantine_written_during_the_only_batch_post() {
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        // 30 non-blank lines — a single batch, well under the 100-line flush threshold.
+        var path = Path.GetTempFileName();
+        try {
+            await File.WriteAllLinesAsync(path, Enumerable.Range(0, 30).Select(i =>
+                $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","message":{"content":"line-{{{i}}}"}}"""
+            ));
+
+            using var client = new HttpClient();
+            var quarantined = false;
+
+            await Assert.ThrowsAsync<SessionImporter.TranscriptDeliveryAbortedException>(async () => {
+                await SessionImporter.SendTranscriptBatches(
+                    client, _server.Url!, sessionId: "test", filePath: path,
+                    agentId: null, startLine: 0,
+                    // Not quarantined for the pre-POST check (nothing has posted yet), but flips
+                    // true the moment it is consulted a SECOND time — simulating a marker written
+                    // while the one-and-only POST above was "in flight".
+                    abortDelivery: () => {
+                        var wasQuarantined = quarantined;
+                        quarantined = true;
+                        return wasQuarantined;
+                    });
+            });
+        } finally {
+            File.Delete(path);
+        }
+    }
+
     [Test]
     public async Task CountSendableLines_counts_non_blank_lines_from_start() {
         // The per-session progress denominator (AI-907): must equal the number of

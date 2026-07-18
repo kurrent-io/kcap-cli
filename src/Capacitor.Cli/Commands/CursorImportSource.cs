@@ -255,6 +255,24 @@ internal sealed class CursorImportSource : IImportSource {
                 FirstTimestamp = s.FirstTimestamp,
             };
 
+            // A session already quarantined by the live watcher's runtime rewrite guard must never
+            // be fed back through `kcap import` either: that's exactly the corrupted line-number
+            // source D0's quarantine exists to shut off. Quarantine is always keyed on the FAMILY
+            // identity — the top-level (parent) session id — since CursorRewriteGuard is
+            // constructed from the watcher process's own `sessionId` argument, which for a
+            // spawned CHILD watcher is the parent id (WatcherManager.BuildSpawnArgs:
+            // sessionIdOverride ?? key). ResolveQuarantineIdentity resolves that mapping — see its
+            // doc for round-2 review fix #7's fallback when `--session <child>` (or an
+            // inaccessible/omitted parent transcript) filters the parent out of `subagentLinks`
+            // entirely.
+            var quarantineIdentity = ResolveQuarantineIdentity(s.SessionId, subagentLinks);
+
+            if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "cursor session quarantined (transcript rewrite detected) — not imported"));
+                continue;
+            }
+
             int? lastNonBlankIndex;
             int  nonBlankCount;
             try {
@@ -344,7 +362,7 @@ internal sealed class CursorImportSource : IImportSource {
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
-                SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, subagentLinks, childrenByParent),
+                SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, quarantineIdentity, subagentLinks, childrenByParent),
             });
         }
 
@@ -359,6 +377,22 @@ internal sealed class CursorImportSource : IImportSource {
         // AI-1153: a correlated subagent child is imported by its parent (below), under the
         // parent's AgentSubsession stream — never as a standalone top-level session.
         if (classification.SourceMeta!.TryGetValue("IsSubagentChild", out var scObj) && scObj is true) {
+            return ImportOutcome.Skipped;
+        }
+
+        // AI-1382 review fix #6 — re-check quarantine FRESH, before ANY lifecycle/transcript
+        // delivery. ClassifyAsync's own check (at classification time, above in this file) can be
+        // stale by the time this runs: repo probing, an interactive confirmation prompt, or simply
+        // queueing behind other sessions in the same import run all give the live watcher's
+        // runtime rewrite guard time to trip and write the quarantine marker AFTER this session
+        // was already classified clean. QuarantineIdentity (the family/parent id) was resolved
+        // once at classify time via ResolveQuarantineIdentity and is stable for the run — only the
+        // quarantine STATE needs a fresh disk read here.
+        var quarantineIdentity = classification.SourceMeta!.TryGetValue("QuarantineIdentity", out var qiObj) && qiObj is string qi
+            ? qi
+            : classification.SessionId;
+
+        if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
             return ImportOutcome.Skipped;
         }
 
@@ -417,16 +451,62 @@ internal sealed class CursorImportSource : IImportSource {
             _                                                => 0,
         };
 
+        // AI-1382 review fix #6 — re-check again at the transcript boundary: the sessionStart POST
+        // that just landed gave the runtime guard another window to trip. Unlike the pre-flight
+        // check above (nothing posted yet, so Skipped there is exactly right), the session now
+        // legitimately exists server-side — best-effort close it with session-end so it doesn't
+        // hang open "active" forever, but send NO transcript content (skip the children too — the
+        // same corrupted-source concern applies to them) and surface Failed so a re-run is
+        // attempted, which will hit the pre-flight check above and cleanly Skip from then on.
+        if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+            var abortDurationMs = createdUtc is { } ac && modifiedUtc is { } am && am >= ac
+                ? (long?)(am - ac).TotalMilliseconds
+                : null;
+            await PostSyntheticHookAsync(
+                ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
+                BuildSessionEndPayload(classification.SessionId, transcriptPath, abortDurationMs, modifiedUtc),
+                ct);
+            return ImportOutcome.Failed;
+        }
+
+        // AI-1382 review fix (r4, finding #2) — the best-effort close-and-fail contract shared by
+        // EVERY quarantine-abort seam below (the parent's own mid-transcript trip AND a child's):
+        // best-effort session-end so the session doesn't hang open "active" forever (subagent-start
+        // may already have posted for a child — this closes the parent/subsession the SAME way
+        // regardless of which delivery aborted), and Failed so a re-run hits the pre-flight check
+        // above and cleanly Skips from then on. Factored out so the child loop's catch (below) can
+        // share it instead of duplicating the parent-batch catch's logic.
+        async Task<ImportOutcome> CloseAndFailAsync() {
+            var abortDurationMs = createdUtc is { } midAc && modifiedUtc is { } midAm && midAm >= midAc
+                ? (long?)(midAm - midAc).TotalMilliseconds
+                : null;
+            await PostSyntheticHookAsync(
+                ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
+                BuildSessionEndPayload(classification.SessionId, transcriptPath, abortDurationMs, modifiedUtc),
+                ct);
+            return ImportOutcome.Failed;
+        }
+
         int sent;
         try {
+            // AI-1382 review fix (r3, finding #4) — abortDelivery re-checks the ALREADY-resolved
+            // quarantineIdentity (a cheap marker-file read, no correlator re-run) before every
+            // 100-line batch. Without this, a quarantine written by the live watcher's runtime
+            // rewrite guard between batch 1 and batch 2 (or later) still let every remaining batch
+            // post — this closes that window by aborting delivery mid-flight.
             sent = await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient,
-                baseUrl:    ctx.BaseUrl,
-                sessionId:  classification.SessionId,
-                filePath:   transcriptPath,
-                agentId:    null,
-                startLine:  startLine,
-                vendor:     Vendor);
+                httpClient:    ctx.HttpClient,
+                baseUrl:       ctx.BaseUrl,
+                sessionId:     classification.SessionId,
+                filePath:      transcriptPath,
+                agentId:       null,
+                startLine:     startLine,
+                vendor:        Vendor,
+                abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
+        } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+            // Quarantine tripped mid-delivery — no children/remaining batches (we return before
+            // reaching them).
+            return await CloseAndFailAsync();
         } catch {
             return ImportOutcome.Failed;
         }
@@ -436,11 +516,24 @@ internal sealed class CursorImportSource : IImportSource {
         // (reactivation event) appended after the parent's SessionEnded would flip the
         // ended parent back to Active. Hard-fail on child failure (same contract as the
         // parent lifecycle) so a re-run — idempotent via deterministic ids — repairs it.
+        //
+        // AI-1382 review fix (r4, finding #2) — a child-transcript quarantine trip is surfaced as
+        // the SAME typed TranscriptDeliveryAbortedException the parent's own delivery throws (see
+        // SendSubagentLifecycleAsync below); catching it here routes it through CloseAndFailAsync
+        // instead of letting SendSubagentLifecycleAsync's old catch-all swallow it into a bare
+        // `false` — which returned Failed WITHOUT ever posting the parent's best-effort session-end,
+        // even though this child's subagent-start had already landed (leaving the parent/subsession
+        // stuck Active forever, since the quarantine marker makes the NEXT run Skip at preflight
+        // rather than repair it).
         if (classification.SourceMeta!.TryGetValue("SubagentChildren", out var kidsObj)
          && kidsObj is List<CursorSubagentChild> children) {
-            foreach (var child in children) {
-                if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, ct))
-                    return ImportOutcome.Failed;
+            try {
+                foreach (var child in children) {
+                    if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, quarantineIdentity, ct))
+                        return ImportOutcome.Failed;
+                }
+            } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+                return await CloseAndFailAsync();
             }
         }
 
@@ -465,24 +558,49 @@ internal sealed class CursorImportSource : IImportSource {
     internal sealed record CursorSubagentChild(string SessionId, string TranscriptPath, string? SubagentType);
 
     /// <summary>
-    /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so a
-    /// child/parent gets a fresh copy). Children carry <c>IsSubagentChild</c> so their own
-    /// import no-ops; parents carry <c>SubagentChildren</c> so they import them inline.
+    /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so every
+    /// session gets a fresh copy). Children carry <c>IsSubagentChild</c> so their own import
+    /// no-ops; parents carry <c>SubagentChildren</c> so they import them inline. Every
+    /// classification also carries <c>QuarantineIdentity</c> — AI-1382 review fix #6 — so
+    /// <see cref="ImportSessionAsync"/> can re-check <see cref="CursorMarkers.IsQuarantined"/>
+    /// FRESH immediately before any lifecycle/transcript delivery (the family identity itself is
+    /// stable for the run; only the quarantine STATE needs a live re-check, since the live
+    /// watcher's runtime rewrite guard can trip at any moment between classification and import).
     /// </summary>
     static IReadOnlyDictionary<string, object?> StampSubagentMeta(
         IReadOnlyDictionary<string, object?>                       src,
         string                                                     sessionId,
+        string                                                     quarantineIdentity,
         Dictionary<string, CursorSubagentCorrelator.SubagentLink>  links,
         Dictionary<string, List<CursorSubagentChild>>              childrenByParent
     ) {
-        var isChild = links.ContainsKey(sessionId);
-        var hasKids = childrenByParent.TryGetValue(sessionId, out var kids);
-        if (!isChild && !hasKids) return src;
-
-        var d = new Dictionary<string, object?>(src);
-        if (isChild) d["IsSubagentChild"]  = true;
-        if (hasKids) d["SubagentChildren"] = kids;
+        var d = new Dictionary<string, object?>(src) { ["QuarantineIdentity"] = quarantineIdentity };
+        if (links.ContainsKey(sessionId)) d["IsSubagentChild"] = true;
+        if (childrenByParent.TryGetValue(sessionId, out var kids)) d["SubagentChildren"] = kids;
         return d;
+    }
+
+    /// <summary>
+    /// AI-1382 review fix #7 — resolves the FAMILY (quarantine) identity for <paramref name="sessionId"/>:
+    /// its correlated parent's id when <paramref name="subagentLinks"/> (computed from THIS batch's
+    /// discovered sessions) has a link, falling back to the persisted
+    /// <see cref="CursorLiveSubagentLinker"/> marker — written independently by the LIVE hook
+    /// dispatcher at the child's own <c>sessionStart</c>, so it resolves the same parent even when
+    /// a <c>--session &lt;child&gt;</c> filter (or an inaccessible/omitted parent transcript)
+    /// excludes the parent from this batch entirely and the in-batch correlator has nothing to
+    /// correlate against. Falls back to the session's own id when neither source has a link
+    /// (a genuine top-level session, or one never seen live and whose parent transcript isn't in
+    /// this batch either — an inherent limitation the marker fallback can't close).
+    /// </summary>
+    internal static string ResolveQuarantineIdentity(
+        string                                                     sessionId,
+        IReadOnlyDictionary<string, CursorSubagentCorrelator.SubagentLink> subagentLinks
+    ) {
+        if (subagentLinks.TryGetValue(sessionId, out var ownLink)) return ownLink.ParentSessionId;
+
+        return CursorLiveSubagentLinker.TryLoadLink(sessionId) is { } marker
+            ? marker.ParentSessionId
+            : sessionId;
     }
 
     /// <summary>
@@ -499,10 +617,22 @@ internal sealed class CursorImportSource : IImportSource {
             string            parentSessionId,
             CursorSubagentChild child,
             ImportContext     ctx,
+            string            quarantineIdentity,
             CancellationToken ct
         ) {
         if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
             return true; // missing child transcript — skip, non-fatal
+
+        // AI-1382 review fix (r4, finding #2a) — never start a NEW child under a family that is
+        // ALREADY quarantined by the time its turn comes up in the parent's loop. Without this, a
+        // quarantine tripped by some earlier child's own delivery (or any other concurrent trip —
+        // the live watcher runs alongside this import) still let every LATER child's subagent-start
+        // post, since nothing here re-checked the marker before that first POST. Throwing the same
+        // typed exception the transcript-delivery abort below throws lets the caller's loop (in
+        // ImportSessionAsync) route this through the identical best-effort close-and-fail contract.
+        if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+            throw new SessionImporter.TranscriptDeliveryAbortedException();
+        }
 
         var agentId      = child.SessionId; // the child session id doubles as the subagent id
         var subagentType = string.IsNullOrEmpty(child.SubagentType) ? "task" : child.SubagentType!;
@@ -533,15 +663,30 @@ internal sealed class CursorImportSource : IImportSource {
             // failOnError: fail-closed like the parent lifecycle — a rejected/failed child
             // transcript POST must abort so the parent import fails and a re-run repairs it,
             // rather than leaving an empty completed subagent while reporting success.
+            //
+            // AI-1382 review fix (r3, finding #4) — abortDelivery closes over the SAME
+            // already-resolved quarantineIdentity as the parent's own send (no extra correlator
+            // work), so a quarantine tripping mid-child-transcript also aborts the remaining
+            // child batches, not just the parent's.
             await SessionImporter.SendTranscriptBatches(
-                httpClient:  ctx.HttpClient,
-                baseUrl:     ctx.BaseUrl,
-                sessionId:   parentSessionId,
-                filePath:    child.TranscriptPath,
-                agentId:     agentId,
-                startLine:   startLine,
-                vendor:      Vendor,
-                failOnError: true);
+                httpClient:    ctx.HttpClient,
+                baseUrl:       ctx.BaseUrl,
+                sessionId:     parentSessionId,
+                filePath:      child.TranscriptPath,
+                agentId:       agentId,
+                startLine:     startLine,
+                vendor:        Vendor,
+                failOnError:   true,
+                abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
+        } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+            // AI-1382 review fix (r4, finding #2b) — a quarantine trip during THIS child's own
+            // transcript delivery must propagate to the caller's close-and-fail path, not collapse
+            // into the same bare `false` an ordinary POST failure returns below. A `false` here
+            // returned Failed from ImportSessionAsync WITHOUT ever posting the parent's best-effort
+            // session-end, even though this child's subagent-start had already landed — leaving the
+            // parent/subsession stuck Active forever (the quarantine marker makes the next run Skip
+            // at preflight instead of repairing it).
+            throw;
         } catch {
             return false;
         }

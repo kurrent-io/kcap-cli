@@ -27,6 +27,13 @@ public static class CursorTranscriptBackfill {
     /// probe + transcript POST shape <c>CursorImportSource.SendSubagentLifecycleAsync</c> uses for
     /// historical import, so live and import converge on the same subsession watermark.
     /// </param>
+    /// <param name="finalDrain">
+    /// AI-1382 Task 10 (D2) — set ONLY by the <c>sessionEnd</c> pre-end drain. Selects
+    /// <see cref="WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete"/> instead of the
+    /// default <see cref="WatchCommand.IncompleteFinalLinePolicy.Hold"/>: at session end the
+    /// hook (not the live watcher) is the last component that can ever observe this transcript,
+    /// so a valid newline-less final record must be consumed rather than permanently stranded.
+    /// </param>
     public static async Task<Stats> RunAsync(
             HttpClient        client,
             string            baseUrl,
@@ -34,9 +41,24 @@ public static class CursorTranscriptBackfill {
             string?           transcriptPath,
             Func<bool>        budget,
             CancellationToken ct,
-            string?           agentId = null
+            string?           agentId    = null,
+            bool              finalDrain = false
         ) {
         if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath)) {
+            return new Stats(0, false);
+        }
+
+        // AI-1382 D0 — a session already quarantined by the runtime rewrite guard must never
+        // have more transcript lines delivered; the watcher has already given up on it.
+        if (CursorMarkers.IsQuarantined(sessionId)) {
+            return new Stats(0, false);
+        }
+
+        // AI-1382 D1 — an ordering-sensitive hook (beforeSubmitPrompt) may have queued an
+        // attachment the Cursor normalizer needs to see BEFORE the matching user transcript line
+        // is normalized. While the barrier is pending, hold delivery entirely (retry next
+        // invocation) rather than risk normalizing ahead of the attachment.
+        if (CursorMarkers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
             return new Stats(0, false);
         }
 
@@ -70,29 +92,38 @@ public static class CursorTranscriptBackfill {
             }
         } catch { return new Stats(0, Failed: true); }
 
-        // Read every line past the watermark into the batch. Cursor's JSONL
-        // is bounded by the agent turn count — practical sizes are dozens of
-        // lines, not thousands; the server's HandleTranscript ingests them
-        // in one shot.
-        var lines       = new List<string>();
-        var lineNumbers = new List<int>();
+        // Read every line past the watermark into the batch, via the same length-capped,
+        // concurrent-append-safe primitive the live watcher uses (AI-1382 Task 10 — replaces
+        // the prior ad-hoc StreamReader loop, which held nothing back for a still-being-written
+        // final line and so risked truncating it). Cursor's JSONL is bounded by the agent turn
+        // count — practical sizes are dozens of lines, not thousands; the server's
+        // HandleTranscript ingests them in one shot.
+        List<string> lines;
+        List<int>    lineNumbers;
 
         try {
-            await using var stream    = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var       reader    = new StreamReader(stream);
-            var             lineIndex = 0;
+            await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var policy = finalDrain
+                ? WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete
+                : WatchCommand.IncompleteFinalLinePolicy.Hold;
+            var read = await WatchCommand.ReadNewCompleteLinesAsync(stream, resumeFrom, policy, ct);
 
-            while (await reader.ReadLineAsync(ct) is { } line) {
-                if (lineIndex >= resumeFrom && !string.IsNullOrWhiteSpace(line)) {
-                    lines.Add(line);
-                    lineNumbers.Add(lineIndex);
-                }
-
-                lineIndex++;
-            }
+            lines       = read.Lines.Select(SecretRedactor.RedactLine).ToList();
+            lineNumbers = read.LineNumbers;
         } catch { return new(0, Failed: true); }
 
         if (lines.Count == 0 || budget()) return new(0, Failed: false);
+
+        // AI-1382 review fix #8 — re-check both markers IMMEDIATELY at the delivery boundary,
+        // not only before the watermark GET + file read above. A concurrent beforeSubmitPrompt
+        // (creating its barrier) or a guard trip on the live watcher (quarantining the session)
+        // landing in that window — between the early check and this POST — must still be caught
+        // here rather than let the transcript line overtake the attachment it depends on, or
+        // escape the quarantine the watcher just imposed.
+        if (CursorMarkers.IsQuarantined(sessionId)
+         || CursorMarkers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+            return new Stats(0, false);
+        }
 
         var batch = new TranscriptBatch {
             SessionId   = sessionId,

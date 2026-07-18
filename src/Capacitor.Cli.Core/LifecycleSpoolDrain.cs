@@ -113,6 +113,32 @@ public static class LifecycleSpoolDrain {
         return slash >= 0 ? route[(slash + 1)..] : "claude";
     }
 
-    static Task<DrainOutcome> PostTranscript(HttpClient client, string baseUrl, string body, CancellationToken ct)
-        => PostOnce(client, baseUrl, "transcript", body, ct, onWhatsDoneRequested: null);
+    static Task<DrainOutcome> PostTranscript(HttpClient client, string baseUrl, string body, CancellationToken ct) {
+        // AI-1382 review fix #1/#8 — a Cursor batch already quarantined by the runtime rewrite
+        // guard must never be replayed from the shutdown transcript spool: the tail spooled at
+        // shutdown could predate the quarantine (a batch queued before the guard tripped on a
+        // later poll), and this is the ONLY delivery-time check the spool-replay path has, since
+        // the live watcher's own checks never see a batch once it's on disk here. Drop it
+        // permanently (D0's quarantine is a deliberate, non-retracted stop — see
+        // CursorRewriteGuard) rather than post the corrupted tail behind the watcher's back. A
+        // pending side-effect barrier is treated as transient (retry the whole pass later) since
+        // it self-clears/expires.
+        try {
+            var node   = System.Text.Json.Nodes.JsonNode.Parse(body);
+            var vendor = node?["vendor"]?.GetValue<string>();
+            var sid    = node?["session_id"]?.GetValue<string>();
+
+            if (vendor == "cursor" && sid is not null) {
+                if (CursorMarkers.IsQuarantined(sid)) return Task.FromResult(DrainOutcome.Drop);
+                if (CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound))
+                    return Task.FromResult(DrainOutcome.TransientStop);
+            }
+        } catch {
+            // Malformed body (shouldn't happen — this is always our own serialized
+            // TranscriptBatch) — fall through to the normal post rather than risk stalling the
+            // drain over a marker check.
+        }
+
+        return PostOnce(client, baseUrl, "transcript", body, ct, onWhatsDoneRequested: null);
+    }
 }

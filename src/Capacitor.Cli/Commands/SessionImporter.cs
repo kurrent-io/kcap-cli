@@ -460,6 +460,23 @@ static class SessionImporter {
     /// "claude" (default) or "codex" — stamped on the outgoing
     /// <see cref="TranscriptBatch"/> so the server picks the matching normalizer.
     /// </param>
+    /// <param name="abortDelivery">
+    /// AI-1382 review fix (r3, finding #4; extended r4, finding #3) — checked immediately BEFORE
+    /// every batch POST (including the very first) AND immediately AFTER it. When it returns true,
+    /// delivery aborts by throwing <see cref="TranscriptDeliveryAbortedException"/> — a pre-POST trip
+    /// skips the pending batch entirely; a post-POST trip has already sent that batch but stops
+    /// before any further one. No remaining batches (or, for the Cursor caller, the child
+    /// lifecycle/transcript POSTs that follow this call) are ever sent past a trip either way.
+    /// Cursor's live rewrite guard can quarantine a session AFTER this method's caller last checked
+    /// (its own check only runs once, before the first byte of this multi-batch send), and without a
+    /// check re-run inside the loop every remaining 100-line batch would still be posted. The
+    /// post-POST check specifically closes the window a pre-POST-only check leaves open when a
+    /// marker appears WHILE a batch is in flight and there is no NEXT batch to gate — e.g. a
+    /// transcript of &lt;=100 lines (a single, final batch) — where the method would otherwise return
+    /// normally with the caller none the wiser. The predicate should be cheap (a marker-file check,
+    /// not a re-run of any correlator) — the caller is expected to close over an already-resolved
+    /// identity rather than recompute it per batch.
+    /// </param>
     internal static async Task<int> SendTranscriptBatches(
             HttpClient                 httpClient,
             string                     baseUrl,
@@ -470,7 +487,8 @@ static class SessionImporter {
             IProgress<ImportProgress>? progress          = null,
             string                     vendor            = "claude",
             int                        lineNumberOffset  = 0,
-            bool                       failOnError       = false
+            bool                       failOnError       = false,
+            Func<bool>?                abortDelivery     = null
         ) {
         if (!File.Exists(filePath)) return 0;
 
@@ -499,24 +517,52 @@ static class SessionImporter {
             lineIndex++;
 
             if (batchLines.Count >= batchSize) {
+                if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
+
                 await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
                 progress?.Report(new BatchFlushed(agentId, flushed));
                 batchLines.Clear();
                 batchLineNumbers.Clear();
+
+                // AI-1382 review fix (r4, finding #3) — re-check IMMEDIATELY after the POST too, not
+                // only before the NEXT one. Before this, a marker written while THIS batch's POST was
+                // in flight was only ever caught by the pre-POST check ahead of a batch that might
+                // never come (see below) — for a transcript with no further lines to send (this was
+                // the LAST batch, e.g. exactly 100/200/... lines), there IS no next predicate
+                // invocation at all, and the method returned normally with the caller none the wiser.
+                if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
             }
         }
 
         if (batchLines.Count > 0) {
+            if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
+
             await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
             var flushed = batchLines.Count;
             totalSent += flushed;
             progress?.Report(new BatchFlushed(agentId, flushed));
+
+            // AI-1382 review fix (r4, finding #3) — same post-POST re-check for the trailing/only
+            // batch (a transcript of <=100 lines never enters the loop branch above at all, so
+            // WITHOUT this check here specifically, a marker written while this — the ONLY — POST was
+            // in flight was never observed anywhere: SendTranscriptBatches returned normally and the
+            // caller (CursorImportSource) proceeded straight into child lifecycle / normal completion.
+            if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
         }
 
         return totalSent;
     }
+
+    /// <summary>
+    /// AI-1382 review fix (r3, finding #4) — thrown by <see cref="SendTranscriptBatches"/> when its
+    /// <c>abortDelivery</c> predicate trips mid-delivery (between batches). Distinct from a generic
+    /// send failure so a caller that wants to react specially (Cursor's best-effort session-end —
+    /// see <see cref="CursorImportSource.ImportSessionAsync"/>) can catch it before a broader
+    /// catch-all.
+    /// </summary>
+    internal sealed class TranscriptDeliveryAbortedException : Exception;
 
     static async Task PostTranscriptBatch(
             HttpClient   httpClient,
