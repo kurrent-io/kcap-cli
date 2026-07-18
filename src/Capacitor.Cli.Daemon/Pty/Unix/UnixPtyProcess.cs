@@ -124,8 +124,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
 
             return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString);
         } finally {
-            var p = plan;
-            UnixPtyInterop.pty_plan_free(ref p); // the plan is spent whether spawn succeeded or failed
+            UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
         }
     }
 

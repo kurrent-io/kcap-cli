@@ -214,10 +214,14 @@ public static partial class DaemonRunner {
             // L1-managed(a)/(b): one dedicated, daemon-lifetime native thread runs EVERY Unix
             // pty_spawn call (never a thread-pool thread — see UnixSpawnerThread's own doc
             // comment for why). Registered with no factory delegate so DI resolves it via its
-            // parameterless constructor, which already starts the thread; the generic host
-            // disposes registered IDisposable singletons during host.StopAsync(), which (per the
-            // shutdown sequence below, ~:401-415) runs after every hosted agent is already
-            // stopped — so normal shutdown retires the thread only once nothing needs it.
+            // parameterless constructor, which already starts the thread. host.StopAsync() only
+            // stops registered IHostedServices — it does NOT dispose the ServiceProvider, so a
+            // plain AddSingleton<T>() IDisposable like this one is NOT disposed by StopAsync
+            // alone. Disposal (and therefore the thread's retirement, via UnixSpawnerThread.Dispose
+            // completing its queue) happens when disposing the host disposes the ServiceProvider —
+            // which is why the shutdown sequence below awaits host.StopAsync() and THEN
+            // DisposeHostAsync(host) on every exit path, after every hosted agent is already
+            // stopped, so normal shutdown retires the thread only once nothing needs it.
             builder.Services.AddSingleton<UnixSpawnerThread>();
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
@@ -414,6 +418,7 @@ public static partial class DaemonRunner {
             _ = ex;
             daemonLock.Dispose();
             await host.StopAsync();
+            await DisposeHostAsync(host);
 
             return 3;
         }
@@ -440,6 +445,16 @@ public static partial class DaemonRunner {
             await orchestrator.DisposeAsync();
             await connection.DisposeAsync();
             await host.StopAsync();
+
+            // host.StopAsync() only STOPS IHostedServices — it does NOT dispose the
+            // ServiceProvider, so a plain AddSingleton<T>() IDisposable (e.g.
+            // UnixSpawnerThread, whose foreground, non-background OS thread parks
+            // forever on its queue until Dispose() completes it) is never released by
+            // StopAsync alone. Disposing the host is what disposes the ServiceProvider —
+            // and therefore every registered IDisposable singleton — so it must run
+            // after StopAsync on every shutdown path or the spawner thread's foreground
+            // thread keeps the process alive past WaitForShutdownAsync forever.
+            await DisposeHostAsync(host);
             LogCleanupCompleted(logger);
         }
 
@@ -452,6 +467,27 @@ public static partial class DaemonRunner {
         // path), exit with code 3 so wrappers (systemd, npm, CI) can tell
         // this apart from a normal Ctrl+C exit.
         return nameInUse ? 3 : 0;
+    }
+
+    /// <summary>
+    /// Disposes the host so its ServiceProvider — and therefore every registered
+    /// <see cref="IDisposable"/> singleton (e.g. <see cref="UnixSpawnerThread"/>) — is released.
+    /// <see cref="IHost"/> only surfaces <see cref="IDisposable"/>, but the concrete host built by
+    /// <see cref="HostApplicationBuilder"/> also implements <see cref="IAsyncDisposable"/>; prefer
+    /// that when present so any <c>IAsyncDisposable</c> singletons get their async path too, and
+    /// fall back to the synchronous <see cref="IDisposable.Dispose"/> otherwise. Must be called
+    /// AFTER <c>host.StopAsync()</c> on every shutdown path — <c>StopAsync()</c> only stops
+    /// <see cref="IHostedService"/>s, it never disposes the ServiceProvider. <c>internal</c> (not
+    /// <c>private</c>) so the regression test can drive the exact StopAsync-then-dispose sequence
+    /// against a minimal host and prove the ordering is what actually retires a DI-owned
+    /// <see cref="UnixSpawnerThread"/>.
+    /// </summary>
+    internal static async Task DisposeHostAsync(IHost host) {
+        if (host is IAsyncDisposable asyncDisposableHost) {
+            await asyncDisposableHost.DisposeAsync();
+        } else {
+            host.Dispose();
+        }
     }
 
     /// <summary>

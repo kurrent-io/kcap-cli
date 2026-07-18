@@ -35,6 +35,13 @@ public sealed class UnixSpawnerThread : IDisposable {
         _thread.Start();
     }
 
+    /// <summary>Test-only seam (regression coverage for the "DI disposes this on host shutdown"
+    /// contract — see <c>DaemonRunner.DisposeHostAsync</c>): true until the dedicated OS thread
+    /// started in the constructor has actually exited. <see cref="Dispose"/> is what retires it
+    /// (via <c>CompleteAdding</c> + <c>Join</c>); a bare <c>host.StopAsync()</c> with no matching
+    /// host disposal never calls it, so this stays <c>true</c> forever in that bug's repro.</summary>
+    internal bool IsThreadAlive => _thread.IsAlive;
+
     /// <summary>Submit a spawn request to the dedicated thread and block until it completes.
     /// Throws <see cref="InvalidOperationException"/> if called after <see cref="Dispose"/> —
     /// normal shutdown stops agents first, so no in-flight spawn should ever race disposal.
