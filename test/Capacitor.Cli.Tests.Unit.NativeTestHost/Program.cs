@@ -10,7 +10,10 @@ switch (mode) {
         // Exercises the REAL production entry point end-to-end (not a shortcut into pty_spawn
         // directly) so this proves the actual daemon spawn path, including the spawner thread
         // Task 5 wires UnixPtyProcessFactory through.
-        var factory = new UnixPtyProcessFactory();
+        // No disposal of the spawner thread here — this whole process is a disposable one-shot
+        // the outer test kills (SIGKILL) to observe PDEATHSIG, so a graceful Dispose() never runs
+        // and never needs to.
+        var factory = new UnixPtyProcessFactory(new UnixSpawnerThread());
         var proc    = factory.Spawn("sleep", ["30"], Directory.GetCurrentDirectory());
         Console.WriteLine($"PID={proc.Pid}");
         Console.Out.Flush();

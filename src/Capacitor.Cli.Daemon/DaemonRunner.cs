@@ -211,6 +211,14 @@ public static partial class DaemonRunner {
         if (OperatingSystem.IsWindows()) {
             builder.Services.AddSingleton<IPtyProcessFactory, WinPtyProcessFactory>();
         } else {
+            // L1-managed(a)/(b): one dedicated, daemon-lifetime native thread runs EVERY Unix
+            // pty_spawn call (never a thread-pool thread — see UnixSpawnerThread's own doc
+            // comment for why). Registered with no factory delegate so DI resolves it via its
+            // parameterless constructor, which already starts the thread; the generic host
+            // disposes registered IDisposable singletons during host.StopAsync(), which (per the
+            // shutdown sequence below, ~:401-415) runs after every hosted agent is already
+            // stopped — so normal shutdown retires the thread only once nothing needs it.
+            builder.Services.AddSingleton<UnixSpawnerThread>();
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 

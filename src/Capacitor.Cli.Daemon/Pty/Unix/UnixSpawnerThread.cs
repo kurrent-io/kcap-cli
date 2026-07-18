@@ -17,7 +17,14 @@ namespace Capacitor.Cli.Daemon.Pty.Unix;
 /// (no PDEATHSIG dependency there, but one native child-sequence code path on both Unixes is
 /// simpler than two).
 /// </summary>
-internal sealed class UnixSpawnerThread : IDisposable {
+/// <remarks>Public (not internal, despite Task 4's original design intent): <see cref="UnixPtyProcessFactory"/>'s
+/// constructor takes this type as a DI-injected dependency, and constructor-injection resolution
+/// (<c>Microsoft.Extensions.DependencyInjection</c>) only ever considers a PUBLIC constructor on
+/// the implementation type — which in turn (CS0051) requires every one of that constructor's
+/// parameter types to be at least as accessible as the constructor itself. Individual members
+/// (e.g. <see cref="CrashForTest"/>) stay <c>internal</c> — only the type itself needed to
+/// widen.</remarks>
+public sealed class UnixSpawnerThread : IDisposable {
     readonly BlockingCollection<SpawnRequest> _queue = new();
     readonly Thread                           _thread;
     volatile bool                             _stopping;
@@ -30,8 +37,12 @@ internal sealed class UnixSpawnerThread : IDisposable {
 
     /// <summary>Submit a spawn request to the dedicated thread and block until it completes.
     /// Throws <see cref="InvalidOperationException"/> if called after <see cref="Dispose"/> —
-    /// normal shutdown stops agents first, so no in-flight spawn should ever race disposal.</summary>
-    public UnixPtyInterop.PtySpawnResult SpawnOn(
+    /// normal shutdown stops agents first, so no in-flight spawn should ever race disposal.
+    /// <c>internal</c> (not <c>public</c>, even though the class itself is): its return type
+    /// (<see cref="UnixPtyInterop.PtySpawnResult"/>) is an internal native-interop detail that has
+    /// no reason to become a public surface — only <see cref="UnixPtyProcess.Spawn"/> (same
+    /// assembly) and tests (via <c>InternalsVisibleTo</c>) call this.</summary>
+    internal UnixPtyInterop.PtySpawnResult SpawnOn(
             IntPtr plan, string?[] envp, string cwd, ushort rows, ushort cols, int expectedParent, int cancelFd) {
         var request = new SpawnRequest(plan, envp, cwd, rows, cols, expectedParent, cancelFd);
         _queue.Add(request);
