@@ -392,15 +392,50 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name ?? "")))
         [..16].ToLowerInvariant();
 
-    /// <summary>Phase B (D4 §6.4(2)/(2a)): capture the child's EXACT start-identity ONCE, store it
-    /// on the agent (teardown reuses it — never re-captures a possibly-recycled pid), and persist the
-    /// durable PID record FAIL-CLOSED. A write failure (I/O) or a live-but-unidentifiable child THROWS —
-    /// caught by the post-insert single-flight cleanup, so a spawned child we cannot durably track never
-    /// stays admitted holding capacity. A non-live/degenerate pid (already gone, or pid&lt;=0) has nothing
-    /// to track, so it returns cleanly rather than failing an already-doomed launch.</summary>
-    void PersistPidRecordOrThrow(AgentInstance agent, int pid) {
+    /// <summary>Phase B (D4 §6.4(2)/(2a)); L1-managed(b) extends this for Unix: capture the child's
+    /// EXACT start-identity ONCE, store it on the agent (teardown reuses it — never re-captures a
+    /// possibly-recycled pid), and persist the durable PID record FAIL-CLOSED. A write failure (I/O)
+    /// or a live-but-unidentifiable child THROWS — caught by the post-insert single-flight cleanup, so
+    /// a spawned child we cannot durably track never stays admitted holding capacity. A non-live/
+    /// degenerate pid (already gone, or pid&lt;=0) has nothing to track, so it returns cleanly rather
+    /// than failing an already-doomed launch.
+    ///
+    /// <paramref name="capturedStartIdentity"/> is the runtime's own natively-captured identity
+    /// (<see cref="IHostedAgentRuntime.StartIdentity"/>) — non-null on Unix (post-L1): the shim
+    /// captures (or definitively fails to capture) identity INSIDE pty_spawn, immediately post-fork,
+    /// which is the ONLY correct place to read it (the capture-binding rule — a post-hoc re-capture
+    /// here could adopt an unrelated process if the pid was already recycled by the time we get here).
+    /// Null means the runtime never captures this way (Windows; the ACP runtime has no PTY at all) —
+    /// that path falls back to the ORIGINAL post-hoc <see cref="ProcessIdentity.Capture"/>, unchanged
+    /// from before this task.</summary>
+    void PersistPidRecordOrThrow(AgentInstance agent, int pid, string? capturedStartIdentity) {
         if (_pidRecords is null) return;
 
+        if (capturedStartIdentity is not null) {
+            // Unix (post-L1): NEVER re-capture — capturedStartIdentity is already the exact token
+            // read by the shim immediately after the child existed. "" is a deliberate,
+            // well-formed "identity_unavailable" record (capture was attempted and failed), NOT a
+            // launch failure — see UnixPtyProcess's design note for why agent.StartIdentity is set
+            // to "" rather than left null: CleanupAgentAsync's teardown check
+            // (`agent.StartIdentity is { } startIdentity && ... MatchesTri(pid, startIdentity) != false`)
+            // treats "" as permanently uncomparable (MatchesTri returns null — no ':' scheme
+            // separator), which is exactly "ambiguity never kills": a still-alive
+            // identity-unavailable agent gets quarantined and retried, never silently dropped.
+            //
+            // NOTE: the record shape here is UNCHANGED from before this task — an explicit
+            // identity_kind classification (distinguishing "" == identity_unavailable from a real
+            // captured token in the persisted record itself, not just inferred from an empty
+            // string) is a follow-up concern, not added by this task.
+            agent.StartIdentity = capturedStartIdentity; // "" is intentional, not a bug
+
+            _pidRecords.Write(new AgentPidRecord(
+                agent.Id, pid, capturedStartIdentity, agent.Kind.ToString(), agent.Vendor,
+                agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+
+            return;
+        }
+
+        // Legacy path (Windows / ACP runtimes with no shim-based capture): unchanged behavior.
         var identity = ProcessIdentity.Capture(pid);
         if (identity is null) {
             if (ProcessIdentity.IsAlive(pid))
@@ -767,7 +802,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // immediately after the process exists (before registration) so a daemon crash right after
             // this leaves a reapable record. FAIL-CLOSED: a write/identity failure throws → the catch
             // routes it through the single-flight cleanup (the agent is already in _agents).
-            PersistPidRecordOrThrow(agent, runtime.Pid);
+            PersistPidRecordOrThrow(agent, runtime.Pid, runtime.StartIdentity);
 
             await RegisterAgentAsync(agent);
 
