@@ -47,14 +47,25 @@ internal enum ImportOutcome { Loaded, Resumed, Skipped, Failed }
 
 /// <summary>
 /// Result of <see cref="IImportSource.ImportSessionAsync"/>. <c>SentChildContent</c> is the
-/// real "did new work actually happen" signal (AI-1154 review fix, finding 1): it's true only
-/// when this call POSTed brand-new nested subagent-child transcript bytes (Cursor's inline
-/// child import, under a parent whose own top-level watermark may not have moved at all). The
-/// parent classification/outcome pair alone can't distinguish that from a genuine "nothing to
-/// do" lifecycle/repo-backfill replay — <c>ImportOutcome</c> has no line-0 signal for it, so
-/// this is carried out-of-band instead of inferred. Every non-Cursor source (and Cursor itself
-/// outside the nested-child path) leaves this false via the implicit <c>ImportOutcome</c>
-/// conversion below.
+/// real "did new work actually happen" signal for nested child/subagent streams.
+///
+/// This field concerns ONLY nested child/subagent streams — never the call's own root stream
+/// (an <c>AlreadyLoaded</c> root's own content is by definition already caught up, so
+/// root-level work is always fully conveyed by <c>ImportOutcome</c> alone). It is <c>true</c>
+/// iff, during this call, transcript lines were POSTed to a nested child stream. Where a
+/// reliable per-child watermark is known, <c>true</c> means lines beyond that watermark were
+/// sent. Where the watermark probe fails or no reliable watermark exists, the conservative
+/// default is to attempt a full resend and report <c>true</c> whenever that resend actually
+/// posts lines — this signal deliberately ERRS TOWARD permitting a possibly-duplicate resend
+/// rather than silently suppressing genuinely-new content; it is NOT a claim that the server
+/// was verified to lack that content beforehand.
+///
+/// <para>
+/// <b>This field is meaningful ONLY when the call's own result is non-<c>Failed</c>.</b> On a
+/// <c>Failed</c> result the field's value is UNSPECIFIED and MUST NOT be consulted for any
+/// purpose — see <see cref="ImportCommand.ResolveRoutedOutcomeForCounting"/>, whose resolver
+/// never consults <c>sentChildContent</c> on a <c>Failed</c> outcome.
+/// </para>
 /// </summary>
 internal readonly record struct ImportSessionResult(ImportOutcome Outcome, bool SentChildContent = false) {
     public static implicit operator ImportSessionResult(ImportOutcome outcome) => new(outcome);

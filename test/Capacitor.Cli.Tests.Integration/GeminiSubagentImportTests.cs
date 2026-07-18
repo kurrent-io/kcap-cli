@@ -78,12 +78,14 @@ public class GeminiSubagentImportTests : IDisposable {
             new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
             CancellationToken.None);
 
-        var outcome = await source.ImportSessionAsync(
+        var result = await source.ImportSessionAsync(
             classified[0],
             new ImportContext(client, _server.Url!, ForcePrivate: false),
             CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
+        // The subagent DID send real content, so SentChildContent is threaded through as true.
+        await Assert.That(result.SentChildContent).IsTrue();
 
         var posts = _server.LogEntries
             .Where(e => e.RequestMessage.Method == "POST")
@@ -114,6 +116,160 @@ public class GeminiSubagentImportTests : IDisposable {
         var stopBody = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-stop").RequestMessage.Body!;
         await Assert.That(stopBody).Contains($"\"agent_id\":\"{DashlessSub}\"");
     }
+
+    // --- Gemini's SentChildContent signal, partial-plumbing with a documented residual (no
+    // per-child watermark — see ImportSubagentsAsync's doc comment). ---
+
+    [Test]
+    public async Task ImportSession_AlreadyLoaded_without_a_subagent_reports_no_sent_child_content() {
+        // A subagent-free session's AlreadyLoaded replay never touches a child/subagent stream
+        // at all — SentChildContent correctly reports false.
+        var chats = Path.Combine(_tempDir, "proj", "chats");
+        Directory.CreateDirectory(chats);
+        File.WriteAllLines(Path.Combine(chats, "session-2026-06-22T14-31-0a900001.jsonl"), new[] {
+            $$"""{"sessionId":"{{DashedParent}}","projectHash":"h","startTime":"2026-06-22T14:31:00.000Z","lastUpdated":"2026-06-22T14:31:00.000Z","kind":"main"}""",
+            """{"id":"u1","timestamp":"2026-06-22T14:31:01.000Z","type":"user","content":[{"text":"hi"}]}""",
+            """{"id":"m1","timestamp":"2026-06-22T14:31:05.000Z","type":"gemini","content":"hello"}"""
+        });
+
+        // High watermark → AlreadyLoaded.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] { "/hooks/session-start/gemini", "/hooks/session-end/gemini" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new GeminiImportSource(tmpDirOverride: _tempDir);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var result = await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsFalse();
+
+        var isSuppressed = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(isSuppressed).IsTrue();
+    }
+
+    [Test]
+    public async Task ImportSession_AlreadyLoaded_with_a_subagent_reports_sent_child_content_true() {
+        // Documented residual (D1): ImportSubagentsAsync has no per-child watermark, so it
+        // resends the whole subagent transcript on every re-run — an AlreadyLoaded parent whose
+        // subagent is still present reports SentChildContent=true, whether or not the subagent
+        // content is actually new. That's the accepted, conservative trade-off: this reads true
+        // on essentially every re-run of a subagent-bearing session, closing the common
+        // subagent-free case for free while leaving the subagent-bearing case genuinely
+        // uncounted-as-suppressed (never proven no-work) rather than risking a silently dropped
+        // real subagent update.
+        WriteFixture();
+
+        // High watermark for BOTH the parent and the subagent → AlreadyLoaded, but
+        // ImportSubagentsAsync always resends the subagent transcript regardless.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] {
+            "/hooks/session-start/gemini", "/hooks/transcript",
+            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/gemini"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new GeminiImportSource(tmpDirOverride: _tempDir);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var result = await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsTrue();
+
+        // No override needed for Gemini — Resumed never engages IsSkippedChildContentOverride
+        // (it requires outcome == Skipped exactly), so this is NOT suppressed: it resolves via
+        // the ordinary outcome path.
+        var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(resolved).IsEqualTo(ImportOutcome.Resumed);
+    }
+
+    [Test]
+    public async Task ImportSession_AlreadyLoaded_with_a_subagent_whose_transcript_post_is_rejected_reports_no_sent_child_content() {
+        // Regression for a Qodo-flagged false positive: SendTranscriptBatches returns a
+        // positive line count even when the server REJECTS the batch (failOnError defaults
+        // false), so without failOnError:true here SentChildContent would flip true for a
+        // batch the server never accepted. Mirrors
+        // ImportSession_AlreadyLoaded_with_a_subagent_reports_sent_child_content_true, except
+        // the subagent's /hooks/transcript POST now returns 500.
+        WriteFixture();
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] { "/hooks/session-start/gemini", "/hooks/subagent-start", "/hooks/session-end/gemini" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+        // The server rejects the subagent's content batch (the parent, AlreadyLoaded, never
+        // reaches /hooks/transcript at all — its startLine already sits at TotalLines).
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500));
+
+        using var client = new HttpClient();
+        var source = new GeminiImportSource(tmpDirOverride: _tempDir);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var result = await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        // The rejected batch must NOT be reported as having sent child content — the exact
+        // bug under test.
+        await Assert.That(result.SentChildContent).IsFalse();
+
+        // The walk continues non-fatally past the rejected batch (caught by the surrounding
+        // try/catch): subagent-start was posted, but subagent-stop is left unsent (a
+        // re-import retries), and the parent's own lifecycle still completes.
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
+            .Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/subagent-stop")).IsFalse();
+        await Assert.That(posts.Contains("/hooks/session-start/gemini")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/session-end/gemini")).IsTrue();
+
+        // A routed AlreadyLoaded replay with a false signal is SUPPRESSED for counting, not
+        // counted Loaded — the false positive Qodo flagged.
+        var isSuppressed = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(isSuppressed).IsTrue();
+
+        var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(resolved).IsNull();
+    }
+
+    // --- AI-1383 D3: recursive grandchild/descendant discovery. ---
 
     const string DashedGrandsub   = "8c1a2222-3333-4444-5555-666677778888";
     const string DashlessGrandsub = "8c1a2222333344445555666677778888";
@@ -180,12 +336,15 @@ public class GeminiSubagentImportTests : IDisposable {
             new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
             CancellationToken.None);
 
-        var outcome = await source.ImportSessionAsync(
+        var result = await source.ImportSessionAsync(
             classified[0],
             new ImportContext(client, _server.Url!, ForcePrivate: false),
             CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
+        // Both descendants (Sub + Grandsub) sent real content, aggregated up through the
+        // recursive walk in ImportSubagentsAsync.
+        await Assert.That(result.SentChildContent).IsTrue();
 
         var starts = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/subagent-start")
             .Select(e => e.RequestMessage.Body!).ToList();
