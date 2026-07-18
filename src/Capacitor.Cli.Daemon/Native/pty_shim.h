@@ -37,7 +37,44 @@ int pty_plan_contained(const pty_exec_plan* plan);
 // call with *plan == NULL is a documented no-op (never double-frees).
 void pty_plan_free(pty_exec_plan** plan);
 
-// pty_spawn_result / pty_spawn are declared in Task 3's addition to this header.
+// ── L1-shim(b): spawn ────────────────────────────────────────────────────────────────────
+typedef struct {
+    pid_t pid;
+    int   master_fd;
+    int   err_no;
+    int   failed_step; // 0=none, 1=fork, 2=prctl, 3=parent_died, 4=chdir, 5=exec, 6=handshake_timeout, 7=cancelled
+    char  start_identity[128]; // "mac:{bootsessionuuid}:{p_uniqueid}" / "lx:{boot_id}:{starttime}"; "" = uncapturable
+} pty_spawn_result;
+
+enum {
+    PTY_STEP_NONE = 0,
+    PTY_STEP_FORK,
+    PTY_STEP_PRCTL,
+    PTY_STEP_PARENT_DIED,
+    PTY_STEP_CHDIR,
+    PTY_STEP_EXEC,
+    PTY_STEP_HANDSHAKE_TIMEOUT,
+    PTY_STEP_CANCELLED
+};
+
+// forkpty + child sequence + error-pipe handshake. 0 on success (out populated, out->pid > 0,
+// out->master_fd valid), -1 on failure (out->err_no/out->failed_step set, no live unobserved
+// child left behind — see pty_shim.c for the full contract). start_identity is captured
+// IN THE PARENT, immediately after forkpty returns, before the child can be reaped by
+// anything (the capture-binding rule) — an empty string means uncapturable, NOT a failure.
+int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
+              unsigned short rows, unsigned short cols,
+              pid_t expected_parent, int cancel_fd, pty_spawn_result *out);
+
+#ifdef __APPLE__
+// Captures `mac:{kern.bootsessionuuid}:{p_uniqueid}` for `pid` into `out` (>= 128 bytes),
+// NUL-terminated. Returns 1 on success, 0 if the private-ABI call is unavailable/anomalous
+// (short read, EINVAL, zero id) — spare-shaped, never a false proof. Exported so it can be
+// called BOTH from pty_spawn's internal post-forkpty capture and (via a separate P/Invoke)
+// from the managed ProcessStartToken.ForPid comparison path for an arbitrary already-running
+// pid — see this task's design note for why there are still two independent call sites.
+int pty_capture_mac_identity(pid_t pid, char *out, size_t outlen);
+#endif
 
 #ifdef __cplusplus
 }
