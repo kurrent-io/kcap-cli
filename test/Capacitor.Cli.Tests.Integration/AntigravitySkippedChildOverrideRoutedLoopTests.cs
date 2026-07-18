@@ -75,7 +75,7 @@ public class AntigravitySkippedChildOverrideRoutedLoopTests : IDisposable {
     }
 
     // Appends an INVOKE_SUBAGENT step to Root's transcript naming Child as the spawned
-    // conversation — the AI-1218 spawn-time linkage AntigravitySubagents.BuildParentMap reads.
+    // conversation — the spawn-time linkage AntigravitySubagents.BuildParentMap reads.
     void WriteLinkage() {
         var dir = Path.Combine(BrainDir(RootConvId), ".system_generated", "logs");
         Directory.CreateDirectory(dir);

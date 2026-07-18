@@ -269,7 +269,7 @@ public class GeminiSubagentImportTests : IDisposable {
         await Assert.That(resolved).IsNull();
     }
 
-    // --- AI-1383 D3: recursive grandchild/descendant discovery. ---
+    // --- D3: recursive grandchild/descendant discovery. ---
 
     const string DashedGrandsub   = "8c1a2222-3333-4444-5555-666677778888";
     const string DashlessGrandsub = "8c1a2222333344445555666677778888";
