@@ -19,47 +19,89 @@ set -u
 ID_RE='(^|[^A-Za-z0-9_])AI-[0-9]+($|[^A-Za-z0-9_])'
 SUPPRESS_RE='//[[:space:]]*linear-id-ok:[[:space:]]*[^[:space:]]'
 
-# Pathspecs need `:(glob)` magic: git's default (non-magic) pathspec matching
-# for a `**` pattern only matches files nested at least one directory below
-# the anchor and silently excludes files sitting directly in src/ or test/
-# (verified empirically -- 'src/**/*.cs' misses a top-level src/Foo.cs but
-# finds src/Commands/Nested.cs; ':(glob)src/**/*.cs' finds both).
-# git grep exit codes: 0 = matches, 1 = no matches, >1 = error.
-matches="$(git grep -n -E "$ID_RE" -- ':(glob)src/**/*.cs' ':(glob)test/**/*.cs')"
-rc=$?
-[ "$rc" -gt 1 ] && { echo "::error::git grep failed (exit $rc) — treating as failure." >&2; exit 2; }
-[ "$rc" -eq 1 ] && exit 0   # no AI-\d+ tokens anywhere in scope
+# src/ and test/ are each checked with their OWN pathspec-scoped `git grep`
+# invocation, rather than one combined grep whose DISPLAY output is then
+# reparsed for a leading `src/`/`test/` prefix to decide which hits may be
+# suppressed. `git grep`'s presentation output is not a stable data format
+# to reparse: it can carry ANSI color escapes (if color leaks in from
+# user/CI config, e.g. a `color.grep=always` in a global gitconfig) and,
+# independent of color, git C-quotes any path containing whitespace or
+# non-ASCII bytes in double quotes with backslash escapes (e.g. a file
+# literally named `src/weird name.cs` prints as `"src/weird name.cs"`). A
+# genuine src/ violation living at such a path could therefore begin with
+# an escape byte or a literal `"` rather than `s`, matching NEITHER a
+# `^src/` nor a `^test/` regex against the combined display text — silently
+# dropped from both partitions, and the checker would exit 0 despite an
+# in-scope violation. This was a real fail-open bug in an earlier revision
+# of this script (see Guard design below for the empirical regression case
+# that proves it and the fix).
+#
+# Scoping by pathspec instead means git itself resolves which tree a match
+# came from — no path string is ever parsed, quoted or not, to make the
+# src-vs-test decision, so this class of bug cannot recur.
+#
+# Pathspecs need `:(glob)` magic (unchanged from before): git's default
+# (non-magic) pathspec matching for a `**` pattern only matches files
+# nested at least one directory below the anchor and silently excludes
+# files sitting directly in src/ or test/ (verified empirically —
+# 'src/**/*.cs' misses a top-level src/Foo.cs but finds
+# src/Commands/Nested.cs; ':(glob)src/**/*.cs' finds both).
+#
+# `--no-color` on both invocations forecloses the ANSI-escape half of the
+# bug outright (belt-and-braces — pathspec scoping already means neither
+# invocation's output is reparsed for a path prefix, so nothing depends on
+# `--no-color`, but it costs nothing and removes the escape-sequence risk
+# from the picture entirely rather than relying solely on "we don't parse
+# this anyway").
+#
+# git grep exit codes throughout: 0 = matches, 1 = no matches (not an
+# error — just an empty result for that tree), >1 = error. Each invocation
+# reports and is checked against its OWN status; a failure in either one
+# fails closed (exit 2), never falls through to "clean".
 
-# Suppression (// linear-id-ok: <reason>) may ONLY drop a test/ hit — it exists
-# for synthetic ID-shaped test data, never for a genuine internal reference.
-# Any hit under src/ is ALWAYS a violation, suppression marker or not: partition
-# matches by path first, then apply the suppression filter to the test/ half
-# only. (git grep prefixes each hit with the pathspec-relative path, so a
-# leading `src/` / `test/` on the match line is exactly the partition key.)
-# grep exit codes throughout: 0 = something matched, 1 = nothing matched
-# (not an error — just an empty partition/empty remainder), >1 = error.
-src_matches="$(printf '%s\n' "$matches" | grep -E '^src/')"
+src_matches="$(git grep --no-color -nE "$ID_RE" -- ':(glob)src/**/*.cs')"
 src_rc=$?
-[ "$src_rc" -gt 1 ] && { echo "::error::grep failed (exit $src_rc) partitioning src/ matches — treating as failure." >&2; exit 2; }
+[ "$src_rc" -gt 1 ] && { echo "::error::git grep failed (exit $src_rc) scanning src/ — treating as failure." >&2; exit 2; }
 
-test_matches="$(printf '%s\n' "$matches" | grep -E '^test/')"
+test_matches="$(git grep --no-color -nE "$ID_RE" -- ':(glob)test/**/*.cs')"
 test_rc=$?
-[ "$test_rc" -gt 1 ] && { echo "::error::grep failed (exit $test_rc) partitioning test/ matches — treating as failure." >&2; exit 2; }
+[ "$test_rc" -gt 1 ] && { echo "::error::git grep failed (exit $test_rc) scanning test/ — treating as failure." >&2; exit 2; }
 
+# src/ hits are UNCONDITIONAL violations: suppression may NEVER apply there,
+# so there is no filter to run — a match in src/ is a violation, full stop.
+src_violations=""
+[ "$src_rc" -eq 0 ] && src_violations="$src_matches"
+
+# test/ hits are eligible for suppression: a line matching SUPPRESS_RE (the
+# `// linear-id-ok: <reason>` marker) is dropped; whatever remains is a
+# violation. The marker match is against line CONTENT only — the src-vs-test
+# decision was already made above by which pathspec-scoped grep produced the
+# line, not by inspecting the line's leading path text.
+#
+# The filter only runs when test_rc is 0 (i.e. test_matches is guaranteed
+# non-empty — at least one real match line). This sidesteps a genuine
+# empty-input edge case in `grep -v`: piping a truly empty (0-byte) stream
+# into `grep -vE` exits 1 with no output (verified empirically — see Guard
+# design), which already reads as "no violations" and is NOT an error, but
+# gating on test_rc means production behavior never has to depend on that
+# nuance in the first place — when there's nothing to filter, we simply
+# don't invoke the filter.
 test_violations=""
 if [ "$test_rc" -eq 0 ]; then
-    test_violations="$(printf '%s\n' "$test_matches" | grep -vE "$SUPPRESS_RE")"
+    test_violations="$(printf '%s' "$test_matches" | grep -vE "$SUPPRESS_RE")"
     tv_rc=$?
-    [ "$tv_rc" -gt 1 ] && { echo "::error::grep failed (exit $tv_rc) applying the suppression filter — treating as failure." >&2; exit 2; }
+    [ "$tv_rc" -gt 1 ] && { echo "::error::grep failed (exit $tv_rc) applying the suppression filter to test/ matches — treating as failure." >&2; exit 2; }
     [ "$tv_rc" -eq 1 ] && test_violations=""  # every test/ hit was correctly suppressed
 fi
 
-# src/ hits are unconditional violations (no suppression filter applied above);
-# test/ hits only survive if grep -v didn't strip them as suppressed.
-if [ "$src_rc" -eq 0 ] && [ -n "$test_violations" ]; then
-    violations="$(printf '%s\n%s' "$src_matches" "$test_violations")"
-elif [ "$src_rc" -eq 0 ]; then
-    violations="$src_matches"
+# Aggregate: any src/ hit (always a violation) plus any unsuppressed test/
+# hit. Both are independently gathered above by pathspec, not by reparsing
+# combined output — the two invocations' results are simply concatenated
+# here for reporting.
+if [ -n "$src_violations" ] && [ -n "$test_violations" ]; then
+    violations="$(printf '%s\n%s' "$src_violations" "$test_violations")"
+elif [ -n "$src_violations" ]; then
+    violations="$src_violations"
 else
     violations="$test_violations"
 fi
