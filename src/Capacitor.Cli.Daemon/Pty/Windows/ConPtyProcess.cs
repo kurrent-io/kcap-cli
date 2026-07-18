@@ -14,6 +14,7 @@ public sealed class ConPtyProcess : IPtyProcess {
     readonly IntPtr                  _hOutputPipe;
     readonly FileStream              _outputStream;
     readonly FileStream              _inputStream;
+    readonly SafeFileHandle          _jobHandle; // SafeHandle so a thrown exception before the ctor still gets cleaned up by the caller's catch path
     readonly CancellationTokenSource _cts = new();
     bool                             _disposed;
     int                              _pcClosed;
@@ -22,12 +23,18 @@ public sealed class ConPtyProcess : IPtyProcess {
     public bool HasExited { get; private set; }
     public int? ExitCode  { get; private set; }
 
-    ConPtyProcess(IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream) {
+    // Test-only seam (§4.1): exposes the raw job handle value so tests can join the same job
+    // to exercise the breakaway-denial path. Does not transfer ownership — the job is still
+    // torn down exclusively via _jobHandle.Dispose() in DisposeAsync.
+    internal IntPtr JobHandleForTests => _jobHandle.DangerousGetHandle();
+
+    ConPtyProcess(IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream, SafeFileHandle jobHandle) {
         _hPC          = hPC;
         _hProcess     = hProcess;
         _hOutputPipe  = hOutputPipe;
         _outputStream = outputStream;
         _inputStream  = inputStream;
+        _jobHandle    = jobHandle;
     }
 
     static (string command, bool isCmd) ResolveCommand(string command) {
@@ -168,12 +175,39 @@ public sealed class ConPtyProcess : IPtyProcess {
         CloseHandle(ptyInputRead);
         CloseHandle(ptyOutputWrite);
 
+        // §4.1: bind the child to a KILL_ON_JOB_CLOSE job at creation time (via the
+        // PROC_THREAD_ATTRIBUTE_JOB_LIST attribute below), not by AssignProcessToJobObject
+        // after the fact — there is no window where the child exists uncontained.
+        var hJob = CreateJobObjectW(IntPtr.Zero, null);
+
+        if (hJob == IntPtr.Zero) {
+            throw new InvalidOperationException($"CreateJobObjectW failed: {Marshal.GetLastWin32Error()}");
+        }
+
+        var limitInfo = new ConPtyInterop.JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation = new ConPtyInterop.JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            }
+        };
+
+        if (!SetInformationJobObject(
+                hJob, JobObjectExtendedLimitInformation, ref limitInfo,
+                (uint)Marshal.SizeOf<ConPtyInterop.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())) {
+            var err = Marshal.GetLastWin32Error();
+            CloseHandle(hJob);
+
+            throw new InvalidOperationException($"SetInformationJobObject failed: {err}");
+        }
+
+        var jobHandle = new SafeFileHandle(hJob, ownsHandle: true);
+
         var attrListSize = IntPtr.Zero;
-        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attrListSize);
+        InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref attrListSize);
         var attrList = Marshal.AllocHGlobal(attrListSize);
 
-        if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref attrListSize)) {
+        if (!InitializeProcThreadAttributeList(attrList, 2, 0, ref attrListSize)) {
             Marshal.FreeHGlobal(attrList);
+            jobHandle.Dispose();
 
             throw new InvalidOperationException($"InitializeProcThreadAttributeList failed: {Marshal.GetLastWin32Error()}");
         }
@@ -189,8 +223,34 @@ public sealed class ConPtyProcess : IPtyProcess {
             )) {
             DeleteProcThreadAttributeList(attrList);
             Marshal.FreeHGlobal(attrList);
+            jobHandle.Dispose();
 
             throw new InvalidOperationException($"UpdateProcThreadAttribute failed: {Marshal.GetLastWin32Error()}");
+        }
+
+        // PROC_THREAD_ATTRIBUTE_JOB_LIST's value is a pointer to an ARRAY of job handles — one
+        // element here. The child becomes a job member at the instant CreateProcessW succeeds:
+        // there is no suspended-then-assign window (AssignProcessToJobObject after the fact
+        // would have one).
+        var jobArray = Marshal.AllocHGlobal(IntPtr.Size);
+        Marshal.WriteIntPtr(jobArray, 0, hJob);
+
+        if (!UpdateProcThreadAttribute(
+                attrList,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                jobArray,
+                IntPtr.Size,
+                IntPtr.Zero,
+                IntPtr.Zero
+            )) {
+            var err = Marshal.GetLastWin32Error();
+            Marshal.FreeHGlobal(jobArray);
+            DeleteProcThreadAttributeList(attrList);
+            Marshal.FreeHGlobal(attrList);
+            jobHandle.Dispose();
+
+            throw new InvalidOperationException($"UpdateProcThreadAttribute(JOB_LIST) failed: {err}");
         }
 
         var si = new ConPtyInterop.STARTUPINFOEXW();
@@ -218,15 +278,36 @@ public sealed class ConPtyProcess : IPtyProcess {
                 throw new InvalidOperationException($"CreateProcessW failed: {Marshal.GetLastWin32Error()}");
             }
 
-            CloseHandle(pi.hThread);
+            try {
+                CloseHandle(pi.hThread);
 
-            var outputSafeHandle = new SafeFileHandle(ptyOutputRead, ownsHandle: true);
-            var inputSafeHandle  = new SafeFileHandle(ptyInputWrite, ownsHandle: true);
-            var outputStream     = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
-            var inputStream      = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
+                var outputSafeHandle = new SafeFileHandle(ptyOutputRead, ownsHandle: true);
+                var inputSafeHandle  = new SafeFileHandle(ptyInputWrite, ownsHandle: true);
+                var outputStream     = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
+                var inputStream      = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
 
-            return new(hPC, pi.hProcess, ptyOutputRead, outputStream, inputStream) { Pid = pi.dwProcessId };
+                return new(hPC, pi.hProcess, ptyOutputRead, outputStream, inputStream, jobHandle) { Pid = pi.dwProcessId };
+            } catch {
+                // Post-create failure: the child exists but we can't finish wiring it up. Kill
+                // it via the job (closes over descendants too) and confirm death before
+                // propagating — the caller's teardown/quarantine machinery must never see an
+                // ambiguous "maybe spawned".
+                TerminateJobObject(hJob, 1);
+
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+
+                while (DateTime.UtcNow < deadline) {
+                    if (GetExitCodeProcess(pi.hProcess, out var code) && code != STILL_ACTIVE) break;
+                    Thread.Sleep(50);
+                }
+
+                CloseHandle(pi.hProcess);
+                jobHandle.Dispose();
+
+                throw;
+            }
         } finally {
+            Marshal.FreeHGlobal(jobArray);
             DeleteProcThreadAttributeList(attrList);
             Marshal.FreeHGlobal(attrList);
             Marshal.FreeHGlobal(envBlock);
@@ -390,6 +471,7 @@ public sealed class ConPtyProcess : IPtyProcess {
         }
 
         CloseHandle(_hProcess);
+        _jobHandle.Dispose(); // last handle to the job closes here → OS kills leader + all descendants
         _cts.Dispose();
     }
 
