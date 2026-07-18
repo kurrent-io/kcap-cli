@@ -56,6 +56,14 @@ jobs:
         if: runner.os == 'Linux'
         run: dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj
 
+  lint-linear-ids:
+    name: No Linear issue IDs in C# source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check for Linear issue ID tokens in src/**/*.cs and test/**/*.cs
+        run: bash scripts/check-linear-ids.sh
+
   aot-check:
     name: AOT publish check
     runs-on: ubuntu-latest
