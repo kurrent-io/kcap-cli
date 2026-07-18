@@ -41,9 +41,6 @@ struct pty_exec_plan {
     int    contained;  // 1 = EXEC_FD + proven non-privileged; 0 = uncontained.
 };
 
-// Test seam: force the probe result without a legacy kernel. 0 = unset (use the real probe).
-static int forced_execveat_supported = -1; // -1 = not forced
-
 int pty_probe_execveat(void) {
 #ifdef __linux__
     errno = 0;
@@ -128,31 +125,50 @@ static int build_execfd_plan(int fd, char *const argv[], int contained, pty_exec
     return 0;
 }
 
-// Resolves `name` against `path_env` (colon-separated). Returns a strdup'd absolute path or
-// NULL if not found / path_env has any empty/relative element (caller then classifies
-// uncontained rather than risk resolving against the wrong cwd — see the PATH rule below).
+// Resolves `name` against `path_env` (colon-separated). Returns a malloc'd absolute path or
+// NULL if not found. Sets *saw_relative_component whenever ANY field is empty (a leading/
+// trailing ':' or an internal '::' — POSIX treats an empty field as the current directory) or
+// relative (does not begin with '/'), so the caller can classify uncontained rather than risk
+// resolving against the wrong cwd (spec §4.2 risk #4).
+//
+// Deliberately a MANUAL ':' scan, NOT strtok: strtok collapses adjacent/leading/trailing
+// delimiters, so it silently HIDES exactly the empty (cwd) field we must detect — and it is
+// non-reentrant (mutates a hidden static), unsafe on the daemon threadpool threads that call
+// this library. The scan detects relative components across the WHOLE PATH even after an
+// absolute match, since the kernel would still try the cwd component at runtime.
 static char *resolve_in_absolute_path(const char *name, const char *path_env, int *saw_relative_component) {
     *saw_relative_component = 0;
-    if (!path_env || !*path_env) return NULL;
+    if (!path_env) return NULL;
 
-    char *copy = strdup(path_env);
-    if (!copy) return NULL;
-
+    size_t name_len = strlen(name);
     char *result = NULL;
-    for (char *dir = strtok(copy, ":"); dir; dir = strtok(NULL, ":")) {
-        if (dir[0] != '/') { *saw_relative_component = 1; continue; }
-        size_t need = strlen(dir) + 1 + strlen(name) + 1;
-        char *candidate = malloc(need);
-        if (!candidate) break;
-        snprintf(candidate, need, "%s/%s", dir, name);
-        struct stat st;
-        if (!result && access(candidate, X_OK) == 0 && stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
-            result = candidate;
-        } else {
-            free(candidate);
+    const char *p = path_env;
+    for (;;) {
+        const char *colon = strchr(p, ':');
+        size_t len = colon ? (size_t)(colon - p) : strlen(p);
+
+        if (len == 0 || p[0] != '/') {
+            // Empty field (cwd) or a relative dir → cwd-dependent resolution → uncontained.
+            *saw_relative_component = 1;
+        } else if (!result) {
+            size_t need = len + 1 + name_len + 1;
+            char *candidate = malloc(need);
+            if (candidate) {
+                memcpy(candidate, p, len);
+                candidate[len] = '/';
+                memcpy(candidate + len + 1, name, name_len + 1); // includes the NUL
+                struct stat st;
+                if (access(candidate, X_OK) == 0 && stat(candidate, &st) == 0 && S_ISREG(st.st_mode)) {
+                    result = candidate;
+                } else {
+                    free(candidate);
+                }
+            }
         }
+
+        if (!colon) break;
+        p = colon + 1;
     }
-    free(copy);
     return result;
 }
 
@@ -195,21 +211,30 @@ static int build_shebang_plan(
         int fd = open(tok0, O_RDONLY | O_CLOEXEC);
         if (fd < 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
 
-        // Rewritten argv: [interp, optarg?, script_abs_path, orig_argv[1:]...]
+        // Rewritten argv: [interp, optarg?, script_abs_path, orig_argv[1:]...]. Guard n == 0
+        // (empty orig_argv) so the (n - 1) arithmetic can't under-size the array by a slot.
         int n = 0; while (orig_argv[n]) n++;
+        if (n < 1) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
+
+        // Assemble a BORROWED (non-owning) NULL-terminated view, then let build_execfd_plan
+        // deep-copy it with per-element NULL checks — no unchecked strdup/calloc on this path,
+        // and any allocation failure funnels through to the uncontained EXEC_PATH fallback.
         int extra = tok1 ? 3 : 2; // interp (+ optarg) + script
-        char **argv = calloc((size_t)(extra + (n - 1) + 1), sizeof(char*));
+        const char **view = calloc((size_t)(extra + (n - 1)) + 1, sizeof(char*));
+        if (!view) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
         int k = 0;
-        argv[k++] = strdup(tok0);
-        if (tok1) argv[k++] = strdup(tok1);
-        argv[k++] = strdup(script_abs_path);
-        for (int i = 1; i < n; i++) argv[k++] = strdup(orig_argv[i]);
-        argv[k] = NULL;
+        view[k++] = tok0;
+        if (tok1) view[k++] = tok1;
+        view[k++] = script_abs_path;
+        for (int i = 1; i < n; i++) view[k++] = orig_argv[i];
+        view[k] = NULL;
 
         int contained = execveat_supported ? fd_is_non_privileged(fd) : 0;
-        pty_exec_plan *plan = calloc(1, sizeof(*plan));
-        plan->mode = PTY_EXEC_FD; plan->exec_fd = fd; plan->argv = argv; plan->contained = contained;
-        *out_plan = plan;
+        int rc = build_execfd_plan(fd, (char *const *)view, contained, out_plan);
+        free(view);
+        // build_execfd_plan owns fd on success AND failure (it closes fd on any error), so a
+        // failed contained plan degrades to the uncontained EXEC_PATH plan (fd already closed).
+        if (rc != 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
         return 0;
     }
 
@@ -228,8 +253,11 @@ static int build_shebang_plan(
         resolved = resolve_in_absolute_path(name, child_path, &saw_relative);
     } else {
         // Unset child PATH → confstr(_CS_PATH) verbatim, at runtime, preserving its order.
+        // A 0 return (unsupported/failed) or a malloc failure → can't resolve → uncontained.
         size_t need = confstr(_CS_PATH, NULL, 0);
+        if (need == 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
         char *cs = malloc(need);
+        if (!cs) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
         confstr(_CS_PATH, cs, need);
         resolved = resolve_in_absolute_path(name, cs, &saw_relative);
         free(cs);
@@ -238,7 +266,10 @@ static int build_shebang_plan(
     if (saw_relative || !resolved) {
         // Empty/relative PATH component, or NAME simply not found in an absolute-only PATH →
         // uncontained either way (the kernel/env resolves it correctly at runtime; we just
-        // forgo containment rather than risk preflighting the wrong inode).
+        // forgo containment rather than risk preflighting the wrong inode). `resolved` can be
+        // non-NULL here when an absolute component matched but an empty/relative SIBLING tripped
+        // saw_relative — free it (free(NULL) is a no-op for the not-found case).
+        free(resolved);
         return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
     }
 
@@ -246,28 +277,31 @@ static int build_shebang_plan(
     free(resolved);
     if (fd < 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
 
+    // Guard n == 0 (empty orig_argv) before the [name, script, orig_argv[1:]...] layout.
     int n = 0; while (orig_argv[n]) n++;
-    char **argv = calloc((size_t)(n + 2), sizeof(char*)); // [resolved, script, orig_argv[1:]..., NULL]
+    if (n < 1) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
+
+    // Borrowed NULL-terminated view. argv[0] is the resolved interpreter name (env's target IS
+    // the interpreter); the fd is what actually execs. build_execfd_plan deep-copies it with
+    // per-element NULL checks — no unchecked strdup/calloc, allocation failure → uncontained.
+    const char **view = calloc((size_t)(n + 2), sizeof(char*)); // [name, script, orig_argv[1:]..., NULL]
+    if (!view) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
     int k = 0;
-    // NB: argv[0] is the resolved interpreter path (not re-derived from fd) — matches spec's
-    // "argv[0] = the resolved interpreter absolute path" rule for the direct-shebang case,
-    // generalized here since env's target IS the interpreter.
-    argv[k++] = strdup(name); // display/basename form is fine for argv[0]; the fd IS what execs
-    argv[k++] = strdup(script_abs_path);
-    for (int i = 1; i < n; i++) argv[k++] = strdup(orig_argv[i]);
-    argv[k] = NULL;
+    view[k++] = name;
+    view[k++] = script_abs_path;
+    for (int i = 1; i < n; i++) view[k++] = orig_argv[i];
+    view[k] = NULL;
 
     int contained = execveat_supported ? fd_is_non_privileged(fd) : 0;
-    pty_exec_plan *plan = calloc(1, sizeof(*plan));
-    plan->mode = PTY_EXEC_FD; plan->exec_fd = fd; plan->argv = argv; plan->contained = contained;
-    *out_plan = plan;
+    int rc = build_execfd_plan(fd, (char *const *)view, contained, out_plan);
+    free(view);
+    if (rc != 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
     return 0;
 }
 
 int pty_preflight(const char *exe_abs_path, char *const orig_argv[], char *const envp[],
                    int execveat_supported, pty_exec_plan **out_plan) {
     *out_plan = NULL;
-    if (forced_execveat_supported >= 0) execveat_supported = forced_execveat_supported;
 
     if (!execveat_supported) {
         return build_execpath_plan(exe_abs_path, orig_argv, 0, out_plan);

@@ -8,8 +8,17 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// execs (that's Task 3's pty_spawn); these tests only inspect the classification decision.
 /// </summary>
 public class PtyShimNativeTests {
-    static string[] EmptyEnvp() => [];
-    static string   Env(string key, string value) => $"{key}={value}";
+    // A NULL-terminated (empty) envp. argv/envp cross into the shim as a bare `char* const[]`
+    // with NO length prefix and NO auto NULL terminator (mirrors execvp/execve): the native
+    // code walks to a NULL sentinel, so EVERY array must carry a trailing null element or the
+    // walk reads out of bounds. `[]` would marshal to a zero-length array whose one-past read
+    // is undefined — use an explicit `[null]` sentinel instead.
+    static string?[] EmptyEnvp() => [null];
+    static string    Env(string key, string value) => $"{key}={value}";
+
+    // Ensure the array handed to the shim ends in the NULL sentinel the native walk expects
+    // (production honors this too — UnixPtyProcess sets argv[^1] = null before forkpty).
+    static string?[] NullTerm(string?[] a) => a.Length > 0 && a[^1] is null ? a : [.. a, null];
 
     [Test]
     public async Task Probe_execveat_reports_supported_on_a_35_plus_kernel() {
@@ -58,7 +67,7 @@ public class PtyShimNativeTests {
         if (!OperatingSystem.IsLinux()) return;
 
         var rc = UnixPtyInterop.pty_preflight(
-            "/definitely/does/not/exist/" + Guid.NewGuid(), ["x", null], EmptyEnvp(), 1, out var plan);
+            "/definitely/does/not/exist/" + Guid.NewGuid(), NullTerm(["x", null]), NullTerm(EmptyEnvp()), 1, out var plan);
 
         await Assert.That(rc).IsEqualTo(-1);
         await Assert.That(plan).IsEqualTo(IntPtr.Zero);
@@ -118,17 +127,29 @@ public class PtyShimNativeTests {
         }
     }
 
+    // `{0}` = a temp dir that DOES contain a resolvable `probe-target`, so the ONLY reason each
+    // case is uncontained is the empty/relative sibling element — proving the manual ':' scan
+    // detects it. strtok would silently collapse a true empty field (`::`, leading/trailing `:`)
+    // and mis-classify these as contained.
     [Test]
-    public async Task Empty_or_relative_child_path_component_is_uncontained() {
+    [Arguments(".:{0}")]   // leading RELATIVE element
+    [Arguments(":{0}")]    // leading EMPTY element (== cwd)
+    [Arguments("{0}:")]    // trailing EMPTY element
+    [Arguments("{0}::{0}")] // internal EMPTY element (`::`)
+    public async Task Empty_or_relative_child_path_component_is_uncontained(string pathTemplate) {
         if (!OperatingSystem.IsLinux()) return;
 
+        var dir    = DummyProcess.PathDirWithTarget("probe-target");
         var script = DummyProcess.WriteShebangScript("/usr/bin/env", "probe-target", "true\n");
         try {
-            var childEnvp = new[] { Env("PATH", ".:/usr/bin") }; // leading empty/relative element
+            var childEnvp = new[] { Env("PATH", string.Format(pathTemplate, dir)) };
             var plan = Preflight(script, [script], childEnvp, execveatSupported: 1);
             try { await Assert.That(UnixPtyInterop.pty_plan_contained(plan)).IsEqualTo(0); }
             finally { Free(plan); }
-        } finally { File.Delete(script); }
+        } finally {
+            File.Delete(script);
+            Directory.Delete(dir, true);
+        }
     }
 
     [Test]
@@ -172,8 +193,8 @@ public class PtyShimNativeTests {
         } finally { File.Delete(path); }
     }
 
-    static IntPtr Preflight(string exePath, string?[] argv, string[] envp, int execveatSupported) {
-        var rc = UnixPtyInterop.pty_preflight(exePath, argv, envp, execveatSupported, out var plan);
+    static IntPtr Preflight(string exePath, string?[] argv, string?[] envp, int execveatSupported) {
+        var rc = UnixPtyInterop.pty_preflight(exePath, NullTerm(argv), NullTerm(envp), execveatSupported, out var plan);
         if (rc != 0) throw new InvalidOperationException($"pty_preflight unexpectedly failed for {exePath}");
         return plan;
     }

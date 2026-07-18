@@ -83,6 +83,19 @@ internal sealed partial class DummyProcess : IDisposable {
         return (daemonDir, childDir);
     }
 
+    /// <summary>A temp directory containing a single real, non-privileged executable named
+    /// <paramref name="name"/> (a +x copy of /bin/true) — so an ABSOLUTE PATH component actually
+    /// resolves the target. Used to prove that an empty/relative SIBLING element (not a missing
+    /// target) is what forces uncontained; without a resolvable absolute component the test would
+    /// pass on `!resolved` alone and never exercise the empty-field detection.</summary>
+    public static string PathDirWithTarget(string name) {
+        var dir    = Directory.CreateTempSubdirectory("kcap-path-").FullName;
+        var target = Path.Combine(dir, name);
+        File.Copy("/bin/true", target);
+        MakeExecutable(target);
+        return dir;
+    }
+
     public static void MakeExecutablePublic(string path) => MakeExecutable(path);
 
     static void MakeExecutable(string path) => Chmod(path, 0b111_101_101 /* 0755 */);
