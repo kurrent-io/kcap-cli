@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// AI-1124: gate for unattended (LaunchKind.ReviewFlow) launches. A vendor whose
+/// gate for unattended (LaunchKind.ReviewFlow) launches. A vendor whose
 /// launcher can't run without a human in the loop must be refused BEFORE a worktree
 /// is created — otherwise the agent spawns and hangs forever on a permission prompt
 /// no one will answer. Pure so it's unit-testable without the full orchestrator.
@@ -13,7 +13,7 @@ internal static class UnattendedLaunchPolicy {
         RejectionReason(launcher.Vendor, launcher.SupportsUnattended, isReviewFlow);
 
     /// <summary>
-    /// Vendor-agnostic overload (AI-684 Task 10): the orchestrator now selects by
+    /// Vendor-agnostic overload: the orchestrator now selects by
     /// <see cref="IHostedAgentRuntimeFactory"/> rather than <see cref="IHostedAgentLauncher"/>, so
     /// this takes the vendor token and its <c>SupportsUnattended</c> flag directly instead of a
     /// launcher instance.

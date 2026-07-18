@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Core.OpenCode;
 
 /// <summary>
-/// Installs / removes kcap's live-ingest plugin for SST OpenCode (AI-919).
+/// Installs / removes kcap's live-ingest plugin for SST OpenCode.
 /// OpenCode has no shell hooks, so — like Pi — kcap ships a TypeScript plugin
 /// file (<c>~/.config/opencode/plugins/kcap.ts</c>) that OpenCode auto-discovers
 /// and loads in-process. The plugin bridges OpenCode's event bus to the kcap CLI:
@@ -28,7 +28,7 @@ public static class OpenCodeExtensionInstaller {
     /// </summary>
     public const string ExtensionContent =
         """
-        // kcap.ts — Kurrent Capacitor live-ingest plugin for SST OpenCode (AI-919).
+        // kcap.ts — Kurrent Capacitor live-ingest plugin for SST OpenCode.
         //
         // Installed by `kcap setup` / `kcap plugin install --opencode` into
         // ~/.config/opencode/plugins/kcap.ts, which OpenCode auto-loads in-process.
@@ -54,7 +54,7 @@ public static class OpenCodeExtensionInstaller {
           const file = (sid: string) => join(dir, sid + ".jsonl")
           // Subagents run as child sessions; their {info,parts} go in a nested dir beside
           // the parent file (<dir>/<parent>/<child>.jsonl) that the kcap watcher scans and
-          // streams with the child's agent_id → AgentSubsession-* (AI-919 phase 2).
+          // streams with the child's agent_id → AgentSubsession-*.
           const childFile = (parent: string, child: string) => join(dir, parent, child + ".jsonl")
           const started = new Set<string>()
           const children = new Set<string>()           // known subagent (child) session ids — skip top-level

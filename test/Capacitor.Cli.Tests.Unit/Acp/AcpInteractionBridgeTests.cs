@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-686: <see cref="AcpInteractionBridge"/> parses an inbound <c>session/request_permission</c>
+/// <see cref="AcpInteractionBridge"/> parses an inbound <c>session/request_permission</c>
 /// (spec-derived shape, NOT probe-confirmed — see <c>docs/acp-probe-findings.md</c>) or capability-
 /// gated <c>elicitation/create</c> server request, forwards it to an injected
 /// "ask the server" delegate (standing in for <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync"/>),

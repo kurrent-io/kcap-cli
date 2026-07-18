@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// daemon's proactive-refresh tick makes each time it wakes. It answers "should we
 /// refresh the active profile's token ahead of expiry, and via which provider path?"
 /// without touching the network or the filesystem, so every branch is unit-testable
-/// in isolation (AI-992).
+/// in isolation.
 /// </summary>
 public class ProactiveTokenRefreshDecisionTests {
     static readonly TimeSpan Window = TimeSpan.FromMinutes(5);

@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravityImportSource"/> discovery. AI-1218 redesign: roots are
+/// Unit tests for <see cref="AntigravityImportSource"/> discovery: roots are
 /// conversations that are never invoked as a child (per the parent transcript's
 /// INVOKE_SUBAGENT steps — see <c>AntigravitySubagents.BuildParentMap</c>), children are
 /// attached for subagent import, and IsImportRelevantLine matches the normalizer's
@@ -18,7 +18,7 @@ public class AntigravityImportSourceTests {
     const string SessB = "bbbbbbbb-0000-0000-0000-00000000b00b";
 
     // The brain-dir conversation id is dashed on disk, but the surfaced session id is the
-    // dashless canonical form (matching live capture — AI-1238). Children stay dashed because
+    // dashless canonical form (matching live capture). Children stay dashed because
     // they resolve on-disk brain-dir transcript paths.
     static string Dashless(string id) => Guid.Parse(id).ToString("N");
 
@@ -38,7 +38,7 @@ public class AntigravityImportSourceTests {
     }
 
     // Appends an INVOKE_SUBAGENT step to convId's transcript naming childId as the spawned
-    // conversation — the AI-1218 spawn-time linkage BuildParentMap now reads instead of
+    // conversation — the spawn-time linkage BuildParentMap now reads instead of
     // messages/*.json.
     static void AppendInvoke(string home, string convId, string childId) {
         var dir = Path.Combine(BrainDir(home, convId), ".system_generated", "logs");
@@ -124,7 +124,7 @@ public class AntigravityImportSourceTests {
         // discovered session id must be the DASHLESS canonical form — matching live capture
         // (the Antigravity hook + `kcap watch` strip dashes) so a session captured live and
         // later re-imported dedupes to one stream, and so `--session` filtering is
-        // format-insensitive (AI-1238).
+        // format-insensitive.
         const string dashed = "11110000-0000-4000-8000-000000000001";
         var dashless = Guid.Parse(dashed).ToString("N");
 

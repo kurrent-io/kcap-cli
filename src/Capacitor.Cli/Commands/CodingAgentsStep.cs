@@ -12,9 +12,8 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 internal static class CodingAgentsStep {
     // New-vendor fields are appended with defaults so existing (named-arg) call
-    // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
-    // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
-    // four vendors.
+    // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini,
+    // Kiro, and Pi were all added after the original four vendors.
     internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false, bool SkipPiMcp = false, bool SkipPiInstructions = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
@@ -168,7 +167,7 @@ internal static class CodingAgentsStep {
         var antigravityInstructionsInstalled = HandleAntigravityInstructions(options, paths, installers, writeLine, antigravitySelected);
         var antigravitySkillsInstalled = HandleAntigravitySkills(options, paths, installers, writeLine, antigravitySelected);
 
-        // AI-1285 — the shared ~/.agents/skills/ install is decoupled from Codex: run it
+        // the shared ~/.agents/skills/ install is decoupled from Codex: run it
         // once when any non-Claude agent is detected, independent of that agent's hook
         // install. Placed last so the single skills prompt follows the per-agent steps.
         var agentSkillsInstalled  = HandleAgentSkills(options, detected, paths, installers, prompt, writeLine);
@@ -820,7 +819,7 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
-    /// AI-1285 — installs the agent-agnostic kcap skills to <c>~/.agents/skills/</c>,
+    /// installs the agent-agnostic kcap skills to <c>~/.agents/skills/</c>,
     /// decoupled from Codex. Every non-Claude coding agent reads (or may read) the
     /// cross-agent skills tree, so install once when any is detected — independent of
     /// whether that agent's hooks were installed. Claude is excluded: it gets skills
@@ -894,7 +893,7 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
-    /// AI-1285 — Codex-specific: removes the legacy <c>~/.codex/skills/kcap-*</c> folders
+    /// Codex-specific: removes the legacy <c>~/.codex/skills/kcap-*</c> folders
     /// left by pre-migration installer versions (Codex reads <c>~/.agents/skills</c> now).
     /// Runs only when Codex is detected <em>and</em> the shared skills are in place this
     /// run (freshly installed or already current) — never on the declined / copy-failed /
@@ -950,7 +949,7 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
-    /// AI-794 — Codex runs the agent's shell tool in a network-blocked sandbox, so kcap
+    /// Codex runs the agent's shell tool in a network-blocked sandbox, so kcap
     /// skills (which shell out to <c>kcap …</c>) can't reach the Capacitor server. After
     /// Codex hooks install, offer to enable sandbox network access for the configured
     /// server(s) via <see cref="Installers.EnableCodexNetworkAccess"/>. Gated on hooks
@@ -1007,7 +1006,7 @@ internal static class CodingAgentsStep {
     /// CLI picks them up with no manual TOML edit. Gated on Codex hooks installing — the
     /// same "full Codex integration" trigger as skills. No prompt: registration is
     /// non-destructive (only adds missing kcap servers) and mirrors how the Claude plugin
-    /// auto-registers its MCP servers. <c>kcap-flows</c> stays Claude-only (AI-1056).
+    /// auto-registers its MCP servers. <c>kcap-flows</c> stays Claude-only.
     /// </summary>
     static bool HandleCodexMcp(
             Paths          paths,

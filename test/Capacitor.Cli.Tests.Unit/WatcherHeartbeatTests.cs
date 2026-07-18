@@ -76,7 +76,7 @@ public class WatcherHeartbeatTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // --- Connect-retry / reconnect heartbeat freshness (AI-1357 task 9, review issue 1) ---
+    // --- Connect-retry / reconnect heartbeat freshness ---
     // The connect-retry backoff grows to 30s, longer than the 20s staleness threshold. The wait
     // is chunked via HeartbeatSlices so the heartbeat is refreshed between slices; if any single
     // chunk could exceed the threshold, a healthy-but-reconnecting watcher would be falsely reaped.

@@ -358,7 +358,7 @@ static class ImportCommand {
     }
 
     /// <summary>
-    /// AI-1154 review fix (P2, broadened by the round-2 follow-up findings): a routed-phase
+    /// A routed-phase
     /// <c>AlreadyLoaded</c> classification (Cursor) is included in `routed` solely so its
     /// <c>ImportSessionAsync</c> call can re-assert lifecycle hooks and backfill the
     /// <c>repository</c> node on an already-fully-ingested session (the C2 suppressed-repo-import
@@ -1032,7 +1032,7 @@ static class ImportCommand {
         // contract was New/Partial only — but if a previous import advanced
         // the transcript watermark while a lifecycle POST failed, the session
         // is forever lifecycle-less under the old filter. Server-side
-        // idempotency (canonical event ids per AI-731) makes re-emission safe;
+        // idempotency (canonical event ids) makes re-emission safe;
         // CursorImportSource.ImportSessionAsync short-circuits the transcript
         // batch when there's nothing past the watermark and just fires the
         // lifecycle hooks.
@@ -1043,7 +1043,7 @@ static class ImportCommand {
             )
             .ToList();
 
-        // AI-1156 (D5): a Cursor subagent child whose correlated parent isn't itself among
+        // a Cursor subagent child whose correlated parent isn't itself among
         // `routed` (e.g. `--session <child>` excluded the parent from this run's classify slice,
         // or the parent was classified but excluded from import for any other reason) must import
         // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
@@ -1167,9 +1167,9 @@ static class ImportCommand {
         // sub-grid attributes Skipped-at-import to Excluded (not Errored).
         var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
 
-        // AI-1154 review fix (r6, P1): a SEPARATE tracker from `importedSessionIds`, used
+        // a SEPARATE tracker from `importedSessionIds`, used
         // ONLY to decide what gets privatized under --private — never fed into the Done-grid
-        // counting (`importedSessionIds`/`doneBySource` stay exactly as they were; the AI-1389
+        // counting (`importedSessionIds`/`doneBySource` stay exactly as they were; the
         // cosmetic double-count concern is intentionally left alone). `importedSessionIds`
         // only gains a Cursor session id when this run did "real new work" by the
         // Loaded/Failed/AlreadyLoaded + SentChildContent accounting — but privacy must NOT
@@ -1214,7 +1214,7 @@ static class ImportCommand {
                             // lines are posted: MaxValue is the session's sendable-line count and
                             // Value advances per flushed batch via OnSessionProgress. A slot that
                             // has no batch yet (or whose total couldn't be counted) draws an
-                            // indeterminate stripe rather than a stuck 0% (AI-907).
+                            // indeterminate stripe rather than a stuck 0%.
                             var slots = new ProgressTask[ImportWorkerCount];
 
                             for (var i = 0; i < ImportWorkerCount; i++) {
@@ -1366,7 +1366,7 @@ static class ImportCommand {
                                     var result  = await ImportOne(c);
                                     var outcome = result.Outcome;
 
-                                    // AI-1154 review fix (r6, P1): capture for privatization BEFORE
+                                    // capture for privatization BEFORE
                                     // any Loaded/Failed/AlreadyLoaded classification below — see the
                                     // declaration comment on privateScopeSessionIds. Deliberately
                                     // unconditional: even a Failed outcome (lifecycle POST failed
@@ -1467,7 +1467,7 @@ static class ImportCommand {
                         var result  = await ImportOne(c);
                         var outcome = result.Outcome;
 
-                        // AI-1154 review fix (r6, P1): see the Tty branch above — unconditional
+                        // see the Tty branch above — unconditional
                         // privatization capture, independent of the outcome classification below.
                         if (forcePrivate && c.Vendor == "cursor") {
                             privateScopeSessionIds.Add(c.SessionId);
@@ -1527,7 +1527,7 @@ static class ImportCommand {
 
         // --- --private: mark all imported sessions owner-only ---
         //
-        // AI-1154 review fix (r6, P1): the privatize set is importedSessionIds (chain-phase +
+        // the privatize set is importedSessionIds (chain-phase +
         // routed-phase "real new work") UNIONED with privateScopeSessionIds (every Cursor
         // routed classification touched this run under --private, regardless of outcome — see
         // its declaration above). The union — not a replacement — keeps chain-phase and
@@ -1789,7 +1789,7 @@ static class ImportCommand {
                 }
             }
 
-            // Scan from the end. Confirmed (AI-1358 A3.3) that Codex rollout
+            // Scan from the end. Confirmed that Codex rollout
             // records also key their per-record timestamp under root-level
             // "timestamp" (same envelope shape session_meta/response_item/
             // event_msg all share) — verified against
@@ -2043,7 +2043,7 @@ static class ImportCommand {
     /// <summary>
     /// Build a SessionId → repo lookup for every discovered transcript. Repo
     /// detection (git + `gh pr view`) is the slow part of the discovery phase
-    /// and ran sequentially per-session pre-AI-692, making `kcap import`
+    /// and previously ran sequentially per-session, making `kcap import`
     /// look frozen on large histories. This version deduplicates by cwd
     /// (transcripts in the same project share a repo) and runs detection in
     /// parallel, surfacing progress via a Spectre status spinner on a TTY and
@@ -2152,7 +2152,7 @@ static class ImportCommand {
             // segment). Trim the last separator-delimited segment ourselves
             // instead of Path.GetDirectoryName, which on Windows normalizes
             // '/' → '\' and would break the Ordinal set comparison for
-            // forward-slash transcript cwds (AI-820). Both '/' and '\' are
+            // forward-slash transcript cwds. Both '/' and '\' are
             // honored so mixed-style paths collapse consistently on every OS.
             var parent = TrimLastSegment(path);
 
@@ -2590,7 +2590,7 @@ static class ImportCommand {
         // Denominator for the per-slot progress bar: the number of parent-transcript
         // lines this import will POST. For a resume, only the lines past the server's
         // watermark are sent. 0 when the file is missing/unreadable — the slot then
-        // stays indeterminate instead of stuck at 0% (AI-907). Skipped entirely when
+        // stays indeterminate instead of stuck at 0%. Skipped entirely when
         // no live bar consumes it (non-TTY) so we don't pre-scan every transcript.
         var sendableTotal = events.TrackPerSessionProgress
             ? SessionImporter.CountSendableLines(
@@ -2681,7 +2681,7 @@ static class ImportCommand {
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
 
-        // AI-701: best-effort git-root discovery from the (already remap-resolved) cwd, so
+        // best-effort git-root discovery from the (already remap-resolved) cwd, so
         // historical imports carry the same workspace_root the live hooks do. Fail-open:
         // GitRepository.FindRoot swallows I/O errors and returns null when no repo is found
         // on this machine (e.g. the recorded path no longer exists), in which case the field

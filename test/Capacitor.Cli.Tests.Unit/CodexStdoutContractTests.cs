@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1357 Task 5: Codex's SessionStart hook must satisfy Codex's blocking stdout handshake
+/// Task 5: Codex's SessionStart hook must satisfy Codex's blocking stdout handshake
 /// BEFORE any best-effort post-stdout work (watcher-ensure, global spool drain) runs — a
 /// large/unreachable spool backlog must never stall the handshake. These tests exercise
 /// <see cref="CodexHookCommand.RunSessionStartHandshakeForTest"/> directly, the seam

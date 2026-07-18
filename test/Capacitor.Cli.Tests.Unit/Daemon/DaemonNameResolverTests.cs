@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// helper used by both the CLI supervisor and the daemon binary. Keeping
 /// these paths in lockstep is critical: a mismatch would mean the CLI
 /// checks one PID file while the daemon writes to a different one, and
-/// the AI-78 PID-file guard would be bypassable again.
+/// the PID-file guard would be bypassable again.
 /// </summary>
 [NotInParallel("KCAP_DAEMON_NAME")]
 public class DaemonNameResolverTests {
@@ -53,7 +53,7 @@ public class DaemonNameResolverTests {
 
     [Test]
     public async Task Resolve_NameArgOverridesEnvVar() {
-        // AI-630 fix: pre-AI-630 DaemonRunner had the env var trump --name,
+        // DaemonRunner previously had the env var trump --name,
         // which inverted the usual CLI convention (explicit flag is the
         // strongest signal). The new precedence puts --name first so the
         // user's explicit choice always wins.

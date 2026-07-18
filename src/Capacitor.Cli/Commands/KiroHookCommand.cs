@@ -6,7 +6,7 @@ using Capacitor.Cli.Core.Kiro;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Single-binary dispatcher for AWS Kiro CLI hooks (AI-888). Kiro (the rebranded
+/// Single-binary dispatcher for AWS Kiro CLI hooks. Kiro (the rebranded
 /// Amazon Q Developer CLI) delivers each hook as JSON on STDIN; the kcap
 /// installer writes one entry per event with the event name embedded in the
 /// command: <c>kcap hook --kiro --event agentSpawn</c>.
@@ -70,7 +70,7 @@ static class KiroHookCommand {
         // disable` must stop every POST and watcher restart for the session.
         if (DisabledSessions.IsDisabled(sessionId)) return 0;
 
-        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
         var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
 
@@ -106,7 +106,7 @@ static class KiroHookCommand {
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
 
-            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
 
@@ -137,7 +137,7 @@ static class KiroHookCommand {
             return 0;
         }
 
-        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
         // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
         // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
         // durably spools the payload for a later drain pass. Only a permanent failure skips the

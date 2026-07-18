@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="GeminiSubagentDiscovery"/> (AI-900) — the shared discovery
+/// Unit tests for <see cref="GeminiSubagentDiscovery"/> — the shared discovery
 /// used by both the import path and the live watcher: locate nested subagent files under
 /// <c>chats/&lt;dashedParent&gt;/</c>, resolve each subagent's type from the parent's
 /// <c>invoke_agent</c> call, and canonicalize the (dashed) subId for the server.
@@ -82,7 +82,7 @@ public class GeminiSubagentDiscoveryTests {
         await Assert.That(GeminiSubagentDiscovery.CanonicalAgentId(input)).IsEqualTo(expected);
     }
 
-    // ── EnumerateDescendantFiles (AI-1383 D3: recursive grandchild discovery) ──────────────
+    // ── EnumerateDescendantFiles (D3: recursive grandchild discovery) ──────────────
 
     const string DashedGrandsub = "8c1a2222-3333-4444-5555-666677778888";
 
@@ -216,7 +216,7 @@ public class GeminiSubagentDiscoveryTests {
         }
     }
 
-    // AI-1383 D3 review fix #3: the walker used to stop AT the boundary child (depth 9) and
+    // the walker used to stop AT the boundary child (depth 9) and
     // never look below it, so a chain continuing to depth 10 was still counted as ONE omitted
     // descendant. The walk must now continue (never importing) below the cap to count the
     // WHOLE omitted subtree.
@@ -254,7 +254,7 @@ public class GeminiSubagentDiscoveryTests {
         }
     }
 
-    // ── MaxCountingNodes scope (AI-1383 D3 review fix #4) ───────────────────────────────────
+    // ── MaxCountingNodes scope (D3 review fix #4) ───────────────────────────────────
     //
     // The counting ceiling used to gate the WHOLE unified traversal via the shared visited-id
     // set's total size, so a root with a wide IN-CAP fan-out (well within MaxDescendantDepth)
@@ -347,7 +347,7 @@ public class GeminiSubagentDiscoveryTests {
         }
     }
 
-    // AI-1383 D3 review fix #5: the ceiling used to bound the RETURNED omitted count/ids, but
+    // the ceiling used to bound the RETURNED omitted count/ids, but
     // not the actual WORK — every below-cap node already enqueued before the ceiling was hit
     // (up to MaxCountingNodes of them) still got individually dequeued and directory-enumerated
     // afterward. Once truncation is established, the below-cap frontier must be abandoned
@@ -403,7 +403,7 @@ public class GeminiSubagentDiscoveryTests {
         }
     }
 
-    // AI-1383 D3 review fix #6: a below-cap parent's single directory read used to always
+    // a below-cap parent's single directory read used to always
     // enumerate (and OrderBy-sort) the WHOLE directory before CountTruncated could even be
     // detected — a depth-8 node with (say) a million depth-9 subagent files would list and sort
     // all million entries in one call. The per-parent read must instead be capped to (remaining
@@ -457,7 +457,7 @@ public class GeminiSubagentDiscoveryTests {
         }
     }
 
-    // AI-1383 D3 review fix #7 (P2): a below-cap parent's bounded directory read caps RAW files
+    // a below-cap parent's bounded directory read caps RAW files
     // via Take(), but non-GUID filtering happens AFTER that — so a junk (non-GUID) *.jsonl file
     // landing inside the sentinel window used to silently consume the sole sentinel slot, filling
     // omittedIds to exactly MaxCountingNodes valid ids while CountTruncated stayed false: a false

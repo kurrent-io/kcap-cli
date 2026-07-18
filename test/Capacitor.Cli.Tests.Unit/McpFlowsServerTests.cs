@@ -236,7 +236,7 @@ public class McpFlowsServerTests {
 
     [Test]
     public async Task Ack_attempt_times_out_and_is_swallowed() {
-        // AI-1127 E-c final review, Important: the shared MCP client normally has
+        // E-c final review, Important: the shared MCP client normally has
         // Timeout = InfiniteTimeSpan (the review-flow endpoints long-poll), so
         // AckRenderedMessagesAsync now bounds each POST attempt itself (PerAckPostTimeout, 15s).
         // Driving the real 15s bound here would make this test slow without adding coverage —

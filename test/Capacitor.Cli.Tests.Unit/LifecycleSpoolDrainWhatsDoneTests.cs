@@ -6,7 +6,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1357 Task 12 / BLOCKER-2: <c>LifecycleSpoolDrain.PostOnce</c>'s (HttpClient/production
+/// Task 12 / BLOCKER-2: <c>LifecycleSpoolDrain.PostOnce</c>'s (HttpClient/production
 /// overload's) job in Task 3 didn't carry <c>ClaudeHookCommand.ClaudePoster</c>'s
 /// <c>generate_whats_done</c> side effect (spawning the what's-done generator). Once this drain
 /// runs centrally (Task 12's Program.cs wiring + the daemon-periodic sweep) it can be the one that

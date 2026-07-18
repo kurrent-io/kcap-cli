@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Wire-contract test for the AI-1358 (item 7.1) explicit gen_metadata usage pass on
+/// Wire-contract test for the (item 7.1) explicit gen_metadata usage pass on
 /// Antigravity historical import: the source must decode the sibling conversation
 /// <c>.db</c>'s <c>gen_metadata</c> row(s) into synthetic USAGE transcript lines and POST
 /// them via <c>/hooks/transcript</c> BEFORE <c>/hooks/session-end/antigravity</c> — for every

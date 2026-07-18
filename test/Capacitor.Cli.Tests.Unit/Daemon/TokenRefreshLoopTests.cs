@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// Unit tests for the daemon-side proactive token-refresh tick (AI-992). The loop wakes on a
+/// Unit tests for the daemon-side proactive token-refresh tick. The loop wakes on a
 /// low-frequency timer and asks the port to refresh the active profile's token if it is inside
 /// the expiry window. Like the daemon heartbeat loop, it runs as an unobserved background Task,
 /// so <see cref="TokenRefreshLoop.TickAsync"/> must be total — a throwing refresh must not kill

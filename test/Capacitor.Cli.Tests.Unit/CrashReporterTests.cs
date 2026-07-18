@@ -3,7 +3,7 @@ using Capacitor.Cli;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1168: the CLI's top-level guard converts an otherwise-uncaught exception
+/// the CLI's top-level guard converts an otherwise-uncaught exception
 /// (which NativeAOT turns into a SIGABRT + crash report on a ~1s hook/generator
 /// process) into a logged, clean exit. These cover the pure decisions —
 /// which commands fail open, the resulting exit code, and the crash-log entry

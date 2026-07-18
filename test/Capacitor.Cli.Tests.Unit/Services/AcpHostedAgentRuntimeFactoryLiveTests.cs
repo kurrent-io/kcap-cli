@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Services;
 
 /// <summary>
-/// AI-688 gap 1 — GATED live end-to-end test that drives the REAL <see cref="AcpHostedAgentRuntimeFactory"/>
+/// gap 1 — GATED live end-to-end test that drives the REAL <see cref="AcpHostedAgentRuntimeFactory"/>
 /// against a REAL <c>cursor-agent acp</c> child process (no <c>FakeAcpAgent</c>, no in-memory pipe —
 /// see <see cref="AcpHostedAgentRuntimeFactoryTests"/> for that coverage of the same code path) to
 /// prove that model selection (<c>session/set_config_option</c>, sent from
@@ -87,7 +87,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
                 config: new DaemonConfig(), // CursorPath="cursor-agent", CursorModel="claude-sonnet-4-5"
                 loggerFactory: liveLoggerFactory,
                 connection: connection,
-                connectionSource: null // real cursor-agent acp spawn — AI-688 gap 1's production path
+                connectionSource: null // real cursor-agent acp spawn — gap 1's production path
             );
 
             var ctx = new RuntimeStartContext(
@@ -135,7 +135,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
 
     /// <summary>
     /// Drains <paramref name="updates"/> until an <c>agent_message_chunk</c> (concatenated across
-    /// however many chunks Cursor streams the answer in — the AI-688 probe observed the reply
+    /// however many chunks Cursor streams the answer in — the probe observed the reply
     /// arriving split across multiple chunks) contains "HELLO" (case-insensitive), or
     /// <paramref name="timeout"/> elapses.
     /// </summary>

@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// Pure heartbeat read/write + staleness policy backing the watcher wedge-detection
-/// probe (AI-1357 task 9). Today <c>WatcherManager.IsWatcherAlive</c> only checks that
+/// probe. Today <c>WatcherManager.IsWatcherAlive</c> only checks that
 /// the PID exists, so a <b>wedged</b> watcher — main loop hung but the process still
 /// alive — is never restarted; the hook self-heal only recovers dead/absent watchers.
 ///

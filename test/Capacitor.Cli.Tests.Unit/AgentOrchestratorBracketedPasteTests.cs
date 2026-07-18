@@ -7,7 +7,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-30: a pasted (large, multi-line) message written to a hosted agent's PTY as raw bytes
+/// a pasted (large, multi-line) message written to a hosted agent's PTY as raw bytes
 /// followed by a carriage return often fails to submit — the CR races the still-ingesting
 /// paste and is folded into it as a literal newline, so the text sits in the composer until a
 /// later, isolated keystroke finishes it (Codex never submits at all; Claude ~50% of the time).

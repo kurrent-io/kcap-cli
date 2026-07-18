@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-// AI-1243 / Qodo #291: the streaming drain reader (ReadNewCompleteLinesAsync) replaces
+// Qodo #291: the streaming drain reader (ReadNewCompleteLinesAsync) replaces
 // File.ReadAllTextAsync in DrainNewLines. It must (1) open with FileShare.ReadWrite so a
 // concurrently-writing agent is never blocked (#291 #1), (2) NOT materialize the whole file
 // (#291 #2), and (3) stay byte-for-byte behaviour-equivalent to the string helper
@@ -24,7 +24,7 @@ public class ReadNewCompleteLinesAsyncTests {
         return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, policy, default);
     }
 
-    // AI-1382 review fix #1 — the Cursor watcher's captureRawBytes: true path.
+    // the Cursor watcher's captureRawBytes: true path.
     static async Task<WatchCommand.NewTranscriptLines> ReadViaStreamRaw(
             string path, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -170,7 +170,7 @@ public class ReadNewCompleteLinesAsyncTests {
     public async Task Cap_stops_reading_at_the_sampled_length() {
         // The wrapper mirrors a length sampled BEFORE a concurrent append: bytes past `limit`
         // exist in `inner` but must never be surfaced, so an as-yet unterminated final line can't
-        // be made to look complete and get consumed (the AI-1243 bug this PR fixes).
+        // be made to look complete and get consumed (the bug this PR fixes).
         var full  = Encoding.UTF8.GetBytes("a\nb\nc\n");   // 6 bytes
         var limit = 4L;                                     // "a\nb\n" only
         using var inner = new MemoryStream(full);
@@ -232,7 +232,7 @@ public class ReadNewCompleteLinesAsyncTests {
         await Assert.That(Encoding.UTF8.GetString(buffer, 0, total)).IsEqualTo("hello");
     }
 
-    // ---- 5. AI-1382 review fix #1: captureRawBytes threads the EXACT decode-read bytes back to
+    // 5. review fix #1: captureRawBytes threads the EXACT decode-read bytes back to
     // the caller. This is the mechanism the fix relies on to close the TOCTOU the round-2 review
     // found: the runtime rewrite guard used to decode lines from one read, then reopen the file
     // SEPARATELY to hash "the new range" — a rewrite landing between those two reads meant the
@@ -292,7 +292,7 @@ public class ReadNewCompleteLinesAsyncTests {
         }
     }
 
-    // ---- 6. AI-1382 review fix (r3, finding #3): rawBytesReadFrom/newRangeByteOffset bound the
+    // 6. review fix (r3, finding #3): rawBytesReadFrom/newRangeByteOffset bound the
     // captureRawBytes buffer instead of always materializing the whole file. A large, mostly-
     // unchanged Cursor transcript must NOT be re-read/re-allocated in full on every poll — only the
     // guard's own small trailing-tail zone plus whatever's actually new. The periodic full-prefix

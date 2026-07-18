@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Capacitor.Cli.Core.Cursor;
 
-/// <summary>CLI side of the pinned Cursor prompt canonicalization contract (AI-1154/1156).
+/// <summary>CLI side of the pinned Cursor prompt canonicalization contract.
 /// Body MUST stay byte-identical to the server's Capacitor.Cursor.CursorPromptCanonicalizer.</summary>
 public static class CursorPromptCanonicalizer {
     const string TsOpen = "<timestamp>", TsClose = "</timestamp>";

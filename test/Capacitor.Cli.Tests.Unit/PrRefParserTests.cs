@@ -102,7 +102,7 @@ public class PrRefParserTests {
 
     [Test]
     public async Task Gitlab_nested_group_mr_url_is_parsed() {
-        // Nested groups supported (§6b / AI-1121): owner is the full namespace path.
+        // Nested groups supported (§6b): owner is the full namespace path.
         var ok = PrRefParser.TryParse("https://gitlab.com/group/sub/project/-/merge_requests/42",
                                       out var owner, out var repo, out var pr);
         await Assert.That(ok).IsTrue();

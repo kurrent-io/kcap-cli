@@ -26,7 +26,7 @@ public static class CodexConfigToml {
     static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
 
     /// <summary>
-    /// AI-794 — enable network access for Codex's <c>workspace-write</c> sandbox so
+    /// enable network access for Codex's <c>workspace-write</c> sandbox so
     /// kcap skills (which shell out to <c>kcap …</c>) can reach the Capacitor server.
     /// Codex blocks all sandbox network by default; a constrained
     /// <c>network_proxy</c> allowlist keeps everything else closed.

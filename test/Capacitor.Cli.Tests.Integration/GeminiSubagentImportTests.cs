@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Wire-contract test for Gemini subagent import (AI-900). Gemini records subagents
+/// Wire-contract test for Gemini subagent import. Gemini records subagents
 /// in nested files (<c>chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl</c>); the parent's
 /// <c>invoke_agent</c> tool call persists <c>agentId == subId</c> + <c>args.agent_name</c>.
 /// This drives the full discover → classify → import path and asserts the subagent
@@ -269,14 +269,14 @@ public class GeminiSubagentImportTests : IDisposable {
         await Assert.That(resolved).IsNull();
     }
 
-    // --- AI-1383 D3: recursive grandchild/descendant discovery. ---
+    // --- D3: recursive grandchild/descendant discovery. ---
 
     const string DashedGrandsub   = "8c1a2222-3333-4444-5555-666677778888";
     const string DashlessGrandsub = "8c1a2222333344445555666677778888";
 
     // Root (invoke_agent → Sub) + Sub's OWN chats/<sub>/ dir with a grandsub file whose
     // invocation is recorded in SUB's own transcript (a DIFFERENT agent_name than the root's
-    // call) — matches EnumerateDescendantFiles' context-carrying walk (AI-1383 D3).
+    // call) — matches EnumerateDescendantFiles' context-carrying walk (D3).
     void WriteThreeLevelFixture() {
         var chats = Path.Combine(_tempDir, "proj", "chats");
         Directory.CreateDirectory(chats);
@@ -309,7 +309,7 @@ public class GeminiSubagentImportTests : IDisposable {
 
     [Test]
     public async Task ImportSession_imports_a_grandchild_subagent_as_direct_subagent_of_root_with_correct_type() {
-        // AI-1383 D3: a subagent's own subagent (chats/<sub>/<grandsub>.jsonl) must import —
+        // a subagent's own subagent (chats/<sub>/<grandsub>.jsonl) must import —
         // previously silently dropped by the single-level EnumerateSubagentFiles scan — as a
         // DIRECT subagent of the top-level root, with its type resolved from its IMMEDIATE
         // parent (Sub's own transcript), not the root's, and not falling back to "subagent".

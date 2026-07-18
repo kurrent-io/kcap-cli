@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core;
 /// A machine-local token identifying a specific process <i>incarnation</i>,
 /// stable across separate reader processes. Stored on the second line of the
 /// daemon PID file and compared to tell a live daemon apart from a recycled
-/// PID (AI-630 liveness check, AI-839 fix).
+/// PID.
 ///
 /// <para><b>Why not just <see cref="Process.StartTime"/>?</b> On Linux that
 /// value is NOT stable across processes: .NET derives it from a per-call
@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Core;
 /// drift as the realtime clock is adjusted (NTP). The daemon wrote its own
 /// start time, and the CLI's <c>status</c>/<c>stop</c>/<c>doctor</c> — separate
 /// processes — recomputed a slightly different value, so an exact-tick equality
-/// check classified every <i>live</i> daemon as a stale PID file (AI-839).</para>
+/// check classified every <i>live</i> daemon as a stale PID file.</para>
 ///
 /// <para>On Linux the token is <c>lx:&lt;boot_id&gt;:&lt;starttime&gt;</c> where
 /// <c>starttime</c> is field 22 of <c>/proc/&lt;pid&gt;/stat</c> (clock ticks
@@ -30,7 +30,7 @@ namespace Capacitor.Cli.Core;
 ///
 /// <para>The <c>scheme:</c> prefix lets <see cref="Matches"/> distinguish "a
 /// different incarnation" (same scheme, different value — conclusive) from "a
-/// token I can't compare" (a legacy pre-AI-839 PID file that stored bare
+/// token I can't compare" (a legacy PID file that stored bare
 /// <see cref="Process.StartTime"/> ticks with no prefix, encountered mid-upgrade
 /// while the old daemon is still running). The latter returns null so callers
 /// fall back to a weaker image-name check instead of stranding a live daemon.</para>

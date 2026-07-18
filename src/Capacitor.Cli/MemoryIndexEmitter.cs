@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// AI-1165 (Agent Memories Phase 2) — builds the SessionStart "team memory" index
+/// builds the SessionStart "team memory" index
 /// fragment from the <c>GET /api/memories/index</c> response body: a JSON array of
 /// <c>{memory_id, slug, audience, description, kind}</c>, already capped and
 /// most-recently-updated first by the server.

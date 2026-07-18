@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Shared symlink/cycle/depth-guarded file enumeration for import discovery (AI-1358 A4).
+/// Shared symlink/cycle/depth-guarded file enumeration for import discovery.
 /// Only Claude previously resolved link targets + deduped by real path; every routed source
 /// now shares this so a symlinked/large session tree can't loop, explode, or abort a pass.
 /// </summary>

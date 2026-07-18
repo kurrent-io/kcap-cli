@@ -6,7 +6,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Import;
 
-// AI-1382 review fix (r2) — several tests here share hardcoded session ids ("11111111-…",
+// several tests here share hardcoded session ids ("11111111-…",
 // "22222222-…") across BOTH ClassifyAsync and ImportSessionAsync calls, and CursorMarkers writes
 // a REAL, non-per-test quarantine marker file (no DI seam to isolate it). ImportSessionAsync now
 // also reads that marker (review fix #6) in addition to ClassifyAsync's existing check, widening
@@ -33,9 +33,9 @@ public class CursorImportSourceTests {
     [Test]
     public async Task session_start_payload_carries_pr_fields_when_repo_has_a_pr() {
         // Cursor is the one import source whose synthetic session-start carries a `repository`
-        // node (AI-1152) via BuildRepositoryNode — including pr_* when a PR is detected. Guard
+        // node via BuildRepositoryNode — including pr_* when a PR is detected. Guard
         // that the payload propagates those fields (a regression dropped them when Cursor's repo
-        // detector was switched to skip PR detection during the import-latency work — AI-1122).
+        // detector was switched to skip PR detection during the import-latency work).
         var repo = new RepositoryPayload {
             Owner = "o", RepoName = "r", Host = "github.com", Branch = "main",
             PrNumber = 7, PrTitle = "t", PrUrl = "https://github.com/o/r/pull/7", PrHeadRef = "main"
@@ -305,7 +305,7 @@ public class CursorImportSourceTests {
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
     }
 
-    // AI-1382 review fix #7 — a session already quarantined by the live watcher's runtime rewrite
+    // a session already quarantined by the live watcher's runtime rewrite
     // guard must never be fed back through `kcap import` either.
     [Test]
     public async Task classify_skips_a_quarantined_standalone_session() {
@@ -357,7 +357,7 @@ public class CursorImportSourceTests {
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
     }
 
-    // AI-1382 review fix #7 — quarantine is always keyed on the FAMILY (parent) identity, since
+    // quarantine is always keyed on the FAMILY (parent) identity, since
     // CursorRewriteGuard is constructed from the watcher process's own sessionId argument, which
     // for a spawned child watcher IS the parent id (WatcherManager.BuildSpawnArgs). A correlated
     // child must therefore be filtered under its PARENT's quarantine marker, not its own — an
@@ -462,7 +462,7 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task import_session_populates_started_at_and_ended_at_from_file_times() {
-        // AI-739: synthetic lifecycle hooks must carry the JSONL file's
+        // synthetic lifecycle hooks must carry the JSONL file's
         // creation/last-write time so the server records canonical
         // SessionStarted/SessionEnded with the real timestamps, not
         // import-time wall clock.
@@ -643,7 +643,7 @@ public class CursorImportSourceTests {
         await Assert.That(posted).DoesNotContain("/hooks/transcript");
     }
 
-    // --- AI-1154 round-2 review fix (finding 1): SentChildContent signal ---
+    // --- round-2 review fix (finding 1): SentChildContent signal ---
 
     [Test]
     public async Task already_loaded_parent_reports_sent_child_content_when_attaching_a_new_child() {
@@ -735,7 +735,7 @@ public class CursorImportSourceTests {
         await Assert.That(result.SentChildContent).IsFalse();
     }
 
-    // --- AI-1154 round-4 review fix (P1): probe failure is indeterminate, defaults privacy-safe ---
+    // --- round-4 review fix (P1): probe failure is indeterminate, defaults privacy-safe ---
 
     [Test]
     public async Task already_loaded_parent_with_failing_child_watermark_probe_conservatively_reports_sent_child_content_to_preserve_privacy() {
@@ -1153,7 +1153,7 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task import_session_attaches_repository_from_detected_workspace_repo() {
-        // AI-1152: the import/backfill path must attach a `repository` node to the
+        // the import/backfill path must attach a `repository` node to the
         // synthetic sessionStart so historical Cursor sessions emit RepositoryDetected
         // server-side and group under their repo (not just "All repos"). Detected from
         // the workspace folder via the repo detector (git remote parse).
@@ -1271,7 +1271,7 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task parent_import_nests_subagent_child_before_its_own_session_end() {
-        // AI-1153: the PARENT's import ingests its subagent child under the parent's
+        // the PARENT's import ingests its subagent child under the parent's
         // AgentSubsession stream (subagent-start + transcript-with-agent_id + subagent-stop),
         // and — critically — BEFORE the parent's own session-end, so a late subagent-start
         // can't reactivate the ended parent (review finding on ordering).
@@ -1384,7 +1384,7 @@ public class CursorImportSourceTests {
         await Assert.That(posted.Count).IsEqualTo(0); // nothing posted — the parent owns this child
     }
 
-    // AI-1382 review fix #6 — ImportSessionAsync must re-check quarantine FRESH, before ANY
+    // ImportSessionAsync must re-check quarantine FRESH, before ANY
     // lifecycle/transcript delivery, rather than trusting only ClassifyAsync's earlier check. This
     // simulates the runtime rewrite guard tripping SOMETIME AFTER classification (repo probing, an
     // interactive confirmation prompt, or simply queueing behind other sessions in the same
@@ -1468,7 +1468,7 @@ public class CursorImportSourceTests {
         await Assert.That(posted).Contains("/hooks/session-end/cursor");
     }
 
-    // AI-1382 review fix #6 (the second checkpoint) — a quarantine that appears WHILE the
+    // a quarantine that appears WHILE the
     // sessionStart POST is in flight must still be caught before any transcript content is sent;
     // the session already legitimately exists server-side by then, so it's best-effort closed
     // with session-end rather than left hanging "active" forever, and the outcome signals Failed
@@ -1515,7 +1515,7 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
     }
 
-    // AI-1382 review fix (r3, finding #4) — the round-2 fix above only re-checked quarantine
+    // the round-2 fix above only re-checked quarantine
     // immediately BEFORE SendTranscriptBatches; that method itself streamed the (mutable) file and
     // posted one request per 100 lines with NO quarantine check at all, so a quarantine written by
     // the live watcher's runtime rewrite guard AFTER the first transcript POST still let every
@@ -1575,7 +1575,7 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #3) — the round-3 fix above only proved the SECOND of TWO
+    // the round-3 fix above only proved the SECOND of TWO
     // batches gets aborted; it never exercised a transcript that is a SINGLE (final and only)
     // batch, which is exactly the gap SendTranscriptBatches' round-3 wiring left open (no "next"
     // pre-POST check ever runs for a one-batch send). This drives a transcript of 30 lines
@@ -1631,7 +1631,7 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #2) — a quarantine trip during a CHILD's own transcript
+    // a quarantine trip during a CHILD's own transcript
     // delivery must propagate to the parent's best-effort close-and-fail path — the same contract
     // as a trip during the parent's OWN transcript. Before the fix, SendSubagentLifecycleAsync's
     // catch-all swallowed the typed TranscriptDeliveryAbortedException into a bare `false`, so
@@ -1700,7 +1700,7 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(parentId)); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #2a) — never START a NEW child once the family is found
+    // never START a NEW child once the family is found
     // quarantined, even when that quarantine was NOT tripped by this child's own delivery (a
     // concurrent trip — the live watcher runs alongside this import — discovered only when it's
     // this child's turn in the loop). Two children are configured in a fixed, known order; the
@@ -1776,7 +1776,7 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(parentId)); } catch { } }
     }
 
-    // AI-1382 review fix #7 — subagentLinks is only ever computed from the sessions THIS batch
+    // subagentLinks is only ever computed from the sessions THIS batch
     // discovered. A --session <child> filter excludes the parent from that batch entirely, so the
     // in-batch correlator can never produce the family link. The persisted CursorLiveSubagentLinker
     // marker (written by the live hook dispatcher, independent of any one CLI invocation's

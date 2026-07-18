@@ -6,7 +6,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1151 (live): end-to-end coverage of CursorHookCommand's subagent-linking divert —
+/// end-to-end coverage of CursorHookCommand's subagent-linking divert —
 /// CursorLiveSubagentLinkerTests covers the pure ResolveParent/marker/discovery pieces in
 /// isolation; these tests exercise the actual hook dispatcher wiring (subagent-start/-stop
 /// instead of the top-level lifecycle, transcript routed with agent_id, mid-lifecycle hooks
@@ -137,7 +137,7 @@ public class CursorLiveSubagentIntegrationTests {
     }
 
     /// <summary>
-    /// AI-1151/AI-1358 A1: the agent_id the LIVE path uses (child session id, dashless) must
+    /// the agent_id the LIVE path uses (child session id, dashless) must
     /// be byte-identical to what the IMPORT path (CursorImportSource.SendSubagentLifecycleAsync)
     /// would use for the same child — otherwise a live-then-import of the same session would
     /// duplicate the subagent's AgentSubsession stream instead of converging on it.

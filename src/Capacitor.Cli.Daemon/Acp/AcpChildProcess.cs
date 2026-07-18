@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 
 /// <summary>
 /// <see cref="IAcpProcess"/> over a real <see cref="Process"/> — the <c>cursor-agent acp</c> child
-/// spawned by <see cref="Services.AcpHostedAgentRuntimeFactory"/> (AI-684 Task 10). Mirrors the
+/// spawned by <see cref="Services.AcpHostedAgentRuntimeFactory"/>. Mirrors the
 /// terminate/wait semantics of <c>Pty.Unix.UnixPtyProcess</c>/<c>WinPtyProcess</c> (SIGTERM-then-kill
 /// via <see cref="Process.Kill(bool)"/>, bounded waits that return silently on timeout) but owns no
 /// terminal I/O — stdin/stdout carry ACP JSON-RPC frames, consumed by <see cref="AcpConnection"/>.

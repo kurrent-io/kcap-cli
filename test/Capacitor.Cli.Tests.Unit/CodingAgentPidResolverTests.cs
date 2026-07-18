@@ -120,7 +120,7 @@ public class CodingAgentPidResolverTests {
         // On Windows the per-PID lookup (GetProcessInfo) returns the full image path
         // from QueryFullProcessImageNameW, e.g. "C:\...\claude.exe". The walk must match
         // it by basename plus a single ".exe" extension so the Windows parent-PID
-        // watchdog can resolve the durable agent past the transient hook executor (AI-822).
+        // watchdog can resolve the durable agent past the transient hook executor.
         // hook(100) -> cmd(90) -> claude.exe(50) -> explorer(20)
         var lookup = ProcTable.Of(
             (90, 50, @"C:\Windows\System32\cmd.exe"),
@@ -186,7 +186,7 @@ public class CodingAgentPidResolverTests {
     public async Task Resolves_kiro_when_process_is_kiro_cli() {
         // Kiro's process image is `kiro-cli`, but the vendor token is `kiro`. The by-name ancestry
         // walk must match a bounded `-cli` suffix so the parent-exit watchdog identifies the durable
-        // process instead of falling back to the fragile pgid heuristic (AI-1359).
+        // process instead of falling back to the fragile pgid heuristic.
         // hook(100) -> sh(90) -> kiro-cli(50) -> zsh(20)
         var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, "kiro-cli"), (20, 1, "-zsh"));
 

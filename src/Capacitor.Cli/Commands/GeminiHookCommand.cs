@@ -8,7 +8,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Single-binary dispatcher for Google Gemini CLI hooks (AI-887). Unlike
+/// Single-binary dispatcher for Google Gemini CLI hooks. Unlike
 /// Copilot, Gemini's command-hook stdin payload carries a uniform
 /// <c>hook_event_name</c> (PascalCase: <c>SessionStart</c> / <c>SessionEnd</c> /
 /// <c>Notification</c>), so this dispatcher self-routes on it like Claude — the
@@ -24,13 +24,13 @@ namespace Capacitor.Cli.Commands;
 ///                  so the server's deterministic lifecycle ids make the re-POST
 ///                  idempotent and the watcher resumes from the server watermark.
 ///   SessionEnd   → kill watcher + capped inline drain (mirror of the Copilot /
-///                  Claude AI-813 pre-drain cap), then POST /hooks/session-end/gemini.
+///                  Claude pre-drain cap), then POST /hooks/session-end/gemini.
 ///   Notification → best-effort forward to the Claude-shaped /hooks/notification.
 /// Gemini treats hook stdout as a JSON decision channel; this dispatcher emits
 /// nothing (no stdout) so every action is allowed.
 /// </remarks>
 static class GeminiHookCommand {
-    // Mirror of CopilotHookCommand.PreHookDrainCap (AI-813): the drain must
+    // Mirror of CopilotHookCommand.PreHookDrainCap: the drain must
     // never starve the session-end POST, or the session sticks "Active".
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
 
@@ -68,7 +68,7 @@ static class GeminiHookCommand {
             return 0;
         }
 
-        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
         var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
 
@@ -108,7 +108,7 @@ static class GeminiHookCommand {
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
 
-            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
 
@@ -137,7 +137,7 @@ static class GeminiHookCommand {
             return 0;
         }
 
-        // Spawn-before-post (AI-1357 Task 6): capture must start on Posted OR Spooled (auth lapse /
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
         // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
         // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
         // durably spools the payload for a later drain pass. Only a permanent failure keeps the
@@ -148,7 +148,7 @@ static class GeminiHookCommand {
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
-        // AI-1357 Task 6: await (was fire-and-forget) so a spawn failure is observed here rather
+        // Task 6: await (was fire-and-forget) so a spawn failure is observed here rather
         // than silently swallowed, and the process isn't torn down before the spawn completes.
         await EnsureWatcher(baseUrl, sessionId, node, cwd, source);
         return 0;
@@ -156,7 +156,7 @@ static class GeminiHookCommand {
 
     /// <summary>Test seam mirroring <see cref="AgentHookPoster.ShouldSpawnAfter"/> — session-start
     /// capture must start on <c>Posted</c> OR <c>Spooled</c>, never gated behind lifecycle-POST
-    /// delivery (AI-1357 Task 6).</summary>
+    /// delivery.</summary>
     internal static bool SpawnGateForTest(HookPostOutcome o) => AgentHookPoster.ShouldSpawnAfter(o);
 
     static async Task<int> HandleSessionEnd(string baseUrl, JsonNode node, string sessionId, string? cwd) {
@@ -176,7 +176,7 @@ static class GeminiHookCommand {
                         // teardown: kill each live child watcher, drain its tail, and finalize
                         // it (subagent-stop). Restart-safe — driven off the on-disk files,
                         // not an in-memory set. Shared with the watcher's parent-exit fallback
-                        // so a crash that bypasses this hook still finalizes subagents (AI-900).
+                        // so a crash that bypasses this hook still finalizes subagents.
                         await GeminiSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
                     },
                     PreHookDrainCap
@@ -259,7 +259,7 @@ static class GeminiHookCommand {
         // one and resume appends to the same transcript.
         var skipTitle = source is "resume" or "clear";
 
-        // AI-1357 Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
+        // Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
         // caller instead of being silently dropped, and the host process doesn't exit before the
         // spawn completes.
         await WatcherManager.EnsureWatcherRunning(

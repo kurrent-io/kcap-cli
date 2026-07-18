@@ -6,7 +6,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Dispatcher for Google Antigravity's control hooks (AI-1158). Antigravity is a GUI
+/// Dispatcher for Google Antigravity's control hooks. Antigravity is a GUI
 /// IDE with no shell hooks; the kcap plugin (a block in Antigravity's <c>hooks.json</c>)
 /// registers one command per lifecycle/tool event. Because the JSON payload carries NO
 /// event-name field, the event is passed as a positional arg:
@@ -24,13 +24,13 @@ namespace Capacitor.Cli.Commands;
 /// are no-ops here (the watcher already tails the transcript continuously).
 ///
 /// Fail-open throughout — a kcap/server problem must never disrupt the Antigravity IDE. The
-/// session-start POST goes through <see cref="AgentHookPoster.PostOrSpoolAsync"/> (AI-1357 Task
+/// session-start POST goes through <see cref="AgentHookPoster.PostOrSpoolAsync"/> (Task
 /// 6): a lapsed/outage POST is durably spooled for a later drain, and the watcher still spawns
 /// (<see cref="SpawnGateForTest"/>) — capture must not depend on lifecycle-POST delivery.
 /// Antigravity conversation ids are dashed UUIDs; kcap canonicalizes them to the DASHLESS form
 /// for BOTH the session-start payload and the watcher key so they resolve to one stream (the
 /// dashed id lives on only in the transcript file path). Historical import canonicalizes the
-/// same way, so a conversation captured live and later re-imported dedupes to one stream (AI-1238).
+/// same way, so a conversation captured live and later re-imported dedupes to one stream.
 /// </summary>
 static class AntigravityHookCommand {
     public static Task<int> Handle(string baseUrl, string[] args) =>
@@ -105,7 +105,7 @@ static class AntigravityHookCommand {
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
 
-            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
         if (Str(payload, "antigravityVersion") is { } version)
@@ -128,7 +128,7 @@ static class AntigravityHookCommand {
             return 0;
         }
 
-        // AI-1357 Task 6: spawn-before-post. Route through the shared spool-aware poster (which
+        // Task 6: spawn-before-post. Route through the shared spool-aware poster (which
         // replaced this dispatcher's former bespoke poster) — a lapse/outage durably spools the
         // payload for a later drain AND still proceeds to spawn the watcher, so capture never
         // depends on lifecycle-POST delivery. Only a permanent Failed withholds the watcher.

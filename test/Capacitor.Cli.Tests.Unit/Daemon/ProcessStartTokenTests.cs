@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// <summary>
 /// Tests for <see cref="ProcessStartToken"/> — the cross-process-stable start
 /// token that the daemon PID file uses to tell a live daemon from a recycled
-/// PID. The bug it fixes (AI-839) only manifests <i>across processes</i>: on
+/// PID. The bug it fixes only manifests <i>across processes</i>: on
 /// Linux <see cref="Process.StartTime"/> is recomputed per process from a
 /// boot-time estimate, so the daemon and a later <c>status</c> invocation
 /// disagreed and every live daemon looked "stale". The cross-process test
@@ -39,7 +39,7 @@ public class ProcessStartTokenTests {
     }
 
     /// <summary>
-    /// The core AI-839 guarantee on Linux: the token is built from the kernel's
+    /// The core guarantee on Linux: the token is built from the kernel's
     /// boot-relative <c>starttime</c> (field 22 of <c>/proc/&lt;pid&gt;/stat</c>)
     /// plus the per-boot id, NOT <see cref="Process.StartTime"/>. The kernel
     /// value is byte-identical for every reader and never recomputed, which is
@@ -83,7 +83,7 @@ public class ProcessStartTokenTests {
     }
 
     /// <summary>
-    /// A pre-AI-839 PID file stored a bare <see cref="Process.StartTime"/> tick
+    /// A legacy PID file stored a bare <see cref="Process.StartTime"/> tick
     /// count (no <c>scheme:</c> prefix). It must compare as "can't tell" (null)
     /// so the daemon-identity check falls back to the name match instead of
     /// stranding a still-running old daemon across an upgrade.

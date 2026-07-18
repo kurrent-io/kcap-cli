@@ -7,7 +7,7 @@ public class LifecycleSpoolDrainTests {
     static string TmpDir() => Path.Combine(Path.GetTempPath(), $"kcap-drain-{Guid.NewGuid():N}");
     const string Sid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    // AI-1382 review fix #1/#8 — the HttpClient-backed RunAsync overload's transcript poster
+    // review fix #1/#8 — the HttpClient-backed RunAsync overload's transcript poster
     // (PostTranscript) must enforce the Cursor quarantine marker itself: a batch spooled BEFORE
     // a runtime rewrite-guard trip (or one that simply never got checked anywhere else) must
     // still never reach `/hooks/transcript` once its session is quarantined — this is the ONLY
@@ -150,7 +150,7 @@ public class LifecycleSpoolDrainTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1357 Task 12 / BLOCKER-3: session-start/subagent-stop/session-end now share one spool
+    // Task 12 / BLOCKER-3: session-start/subagent-stop/session-end now share one spool
     // file in prod, so a subagent-stop that arrives (or is only discovered) AFTER session-end was
     // already delivered is reachable. Same-pass, DrainRoutesAsync's phase-mismatch break already
     // withholds it correctly — but a bare re-run of RunAsync on a FRESH file containing only that

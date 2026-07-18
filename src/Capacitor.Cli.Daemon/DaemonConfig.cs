@@ -35,7 +35,7 @@ public class DaemonConfig {
     /// <summary>
     /// Per-process GUID generated at startup, also written to the daemon's
     /// flock-file content. Sent over <c>DaemonConnect</c> so the server
-    /// (AI-630) can tell "same daemon reconnecting" from "different daemon
+    /// can tell "same daemon reconnecting" from "different daemon
     /// claiming the same name". Set in <c>DaemonRunner.RunAsync</c> once
     /// the lock has been acquired; <c>null</c> in tests that bypass lock
     /// acquisition.
@@ -54,7 +54,7 @@ public class DaemonConfig {
     /// Vendor tokens this daemon can actually spawn — populated in
     /// <c>DaemonRunner.RunAsync</c> by probing each registered
     /// <c>IHostedAgentLauncher.IsAvailable()</c>. Sent over
-    /// <c>DaemonConnect</c> (AI-652) so the server's launch dialog only
+    /// <c>DaemonConnect</c> so the server's launch dialog only
     /// offers vendors this daemon has installed. <c>null</c> when the
     /// host hasn't been built yet or in tests that bypass the runner.
     /// </summary>
@@ -71,7 +71,7 @@ public class DaemonConfig {
 
     /// <summary>
     /// Path or bare command for the Cursor CLI's ACP entry point, spawned as
-    /// <c>{CursorPath} acp</c> by <c>AcpHostedAgentRuntimeFactory</c> (AI-684 Task 10). Overridable
+    /// <c>{CursorPath} acp</c> by <c>AcpHostedAgentRuntimeFactory</c>. Overridable
     /// via <c>KCAP_CURSOR_PATH</c>, mirroring <see cref="ClaudePath"/>/<see cref="CodexPath"/>.
     /// </summary>
     public string CursorPath { get; set; } = "cursor-agent";

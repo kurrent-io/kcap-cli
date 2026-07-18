@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
 /// Import discards PR/MR fields on every path, so running the live `gh pr view` / `glab api`
-/// provider round-trip per cwd during a bulk import is wasted latency (AI-1122). These tests pin
+/// provider round-trip per cwd during a bulk import is wasted latency. These tests pin
 /// the `detectPullRequest` switch on RepositoryDetection.DetectRepositoryAsync via an injected
 /// command runner: import (false) resolves owner/repo with git only and never spawns a provider
 /// CLI, while the default (live) path still does.

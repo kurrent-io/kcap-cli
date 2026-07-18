@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Dispatcher for the SST OpenCode live-ingest plugin (AI-919). OpenCode has no
+/// Dispatcher for the SST OpenCode live-ingest plugin. OpenCode has no
 /// shell hooks; the shipped <c>kcap.ts</c> plugin invokes:
 ///   <c>kcap hook --opencode --event session-start --session &lt;id&gt; --file &lt;path&gt; [--cwd &lt;cwd&gt;] [--model &lt;m&gt;] [--provider &lt;p&gt;] [--version &lt;v&gt;]</c>
 ///
@@ -47,7 +47,7 @@ static class OpenCodeHookCommand {
         // and watcher restart for the session.
         if (DisabledSessions.IsDisabled(sessionId)) return 0;
 
-        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
         var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
 
@@ -84,7 +84,7 @@ static class OpenCodeHookCommand {
         if (cwd is not null) {
             forwarded["cwd"] = cwd;
 
-            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
         if (GetArg(args, "--model")    is { } model)    forwarded["model"]            = model;
@@ -110,7 +110,7 @@ static class OpenCodeHookCommand {
             return 0;
         }
 
-        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
         // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
         // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
         // durably spools the payload for a later drain pass. Only a permanent failure skips the

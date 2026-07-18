@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravityHookCommand"/> (AI-1158): event-arg parsing and
+/// Unit tests for <see cref="AntigravityHookCommand"/>: event-arg parsing and
 /// the fail-open routing paths that must NOT touch the network (non-PreInvocation events,
 /// malformed / incomplete payloads). The session-start POST path is exercised by the
 /// WireMock integration suite.

@@ -6,7 +6,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Shared session-end teardown for live Gemini subagents (AI-900). Gemini fires no
+/// Shared session-end teardown for live Gemini subagents. Gemini fires no
 /// subagent-stop hook, and the child watchers the parent spawns carry no parent-pid
 /// watchdog, so the parent session-end is the ONLY thing that finalizes them: for each
 /// nested subagent transcript, kill its child watcher (no-op if already gone), drain its

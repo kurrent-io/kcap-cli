@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core;
 /// <c>needs-import</c> marker so the session is surfaced as requiring `kcap import` rather than
 /// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order.
 ///
-/// <para>Moved to <c>Capacitor.Cli.Core</c> (AI-1357 Task 12) alongside <see cref="HookSpool"/> and
+/// <para>Moved to <c>Capacitor.Cli.Core</c> alongside <see cref="HookSpool"/> and
 /// <see cref="LifecycleSpoolDrain"/> so both the CLI and the daemon can share the ordered-drain
 /// primitives.</para>
 /// </summary>

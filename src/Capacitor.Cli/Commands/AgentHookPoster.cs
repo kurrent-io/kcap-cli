@@ -36,7 +36,7 @@ internal enum HookPostOutcome {
 /// and POSTed blindly. When auth has lapsed that meant a guaranteed-to-401 POST plus a
 /// misleading per-turn <c>HTTP 401</c> stderr line; this helper instead reports
 /// <see cref="HookPostOutcome.AuthLapsed"/> so the caller can skip the doomed work and exit
-/// cleanly — carrying the Claude hook's #183 behaviour to the other hooks (AI-993).
+/// cleanly — carrying the Claude hook's #183 behaviour to the other hooks.
 ///
 /// These agents have no user-facing stdout notice channel (stdout is either unused or a JSON
 /// decision/context channel), so no re-login nudge is surfaced here — the expired state is
@@ -94,7 +94,7 @@ internal static class AgentHookPoster {
     }
 
     /// <summary>
-    /// AI-1357: spawn-before-post variant. Like <see cref="PostAsync(string,string,string,string)"/>,
+    /// spawn-before-post variant. Like <see cref="PostAsync(string,string,string,string)"/>,
     /// but on a lapsed-auth or transient (5xx/408/429/unreachable) failure it durably spools the
     /// lifecycle payload to <paramref name="spool"/> and returns <see cref="HookPostOutcome.Spooled"/>
     /// (a global drain pass replays it after recovery). Callers treat <c>Posted</c> OR <c>Spooled</c>
@@ -107,7 +107,7 @@ internal static class AgentHookPoster {
                             baseUrl, endpoint, body, agentTag, spool, sessionId, route);
 
     /// <summary>
-    /// AI-1357: spawn-before-post decision. Capture must start regardless of whether the lifecycle
+    /// spawn-before-post decision. Capture must start regardless of whether the lifecycle
     /// POST was actually <em>delivered</em> — both <c>Posted</c> (delivered) and <c>Spooled</c>
     /// (durably persisted for a later drain) proceed to <c>WatcherManager.EnsureWatcherRunning</c>,
     /// because a spooled <c>SessionStarted</c> will still reach the server on the next drain pass.
@@ -125,7 +125,7 @@ internal static class AgentHookPoster {
     static readonly TimeSpan DrainThrottle = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// AI-1357 Task 4 (Task 12: centralized): bounded, best-effort drain of the cross-vendor
+    /// Task 4 (Task 12: centralized): bounded, best-effort drain of the cross-vendor
     /// lifecycle + transcript spools. Introduced in Task 4 as a per-vendor call from each
     /// JSON-payload dispatcher's <c>Handle</c>; Task 12 centralized the call site into
     /// <c>Program.cs</c>'s <c>case "hook":</c> (before dispatch, non-Codex) so it runs exactly once
@@ -136,7 +136,7 @@ internal static class AgentHookPoster {
     /// <see cref="LifecycleSpoolDrain.RunAsync(HttpClient,string,HookSpool,TranscriptSpool,string?,TimeSpan,CancellationToken,Action{string,string}?)"/>
     /// directly instead.
     ///
-    /// <para><b>Throttled (AI-1357 review #1).</b> Several vendors fire their lifecycle hook on
+    /// <para><b>Throttled.</b> Several vendors fire their lifecycle hook on
     /// EVERY prompt (Kiro's <c>agentSpawn</c>, OpenCode's <c>session.idle</c>-driven re-fire), so an
     /// un-throttled drain would attempt a ~1.5s network round-trip per prompt during a server outage.
     /// A cross-vendor on-disk stamp (<c>{spoolDir}/.last-drain</c>) caps attempts to one per
@@ -150,7 +150,7 @@ internal static class AgentHookPoster {
     /// <see cref="LifecycleSpoolDrain"/>'s production poster treats a non-timeout/non-5xx status as a
     /// permanent drop — which would silently discard the very backlog this protects.</para>
     ///
-    /// <para><b>Fresh client (AI-1357 review #3 — documented deviation).</b> The brief's Step 3
+    /// <para><b>Fresh client (review #3 — documented deviation).</b> The brief's Step 3
     /// suggested reusing the vendor's authenticated client, but the drain runs at the top of the
     /// dispatcher BEFORE any lifecycle POST, and the vendors never hold a reusable client — each
     /// <see cref="PostOrSpoolAsync(string,string,string,string,HookSpool,string,string)"/> builds and
@@ -176,7 +176,7 @@ internal static class AgentHookPoster {
             using (client) {
                 if (IsAuthLapsed(status)) return;
 
-                // AI-1357 Task 12 / BLOCKER-2: a generically-drained session-end (any vendor — the
+                // Task 12 / BLOCKER-2: a generically-drained session-end (any vendor — the
                 // server's generate_whats_done signal is vendor-agnostic, see WatchCommand's
                 // parent-exit path) must still trigger the what's-done generator, mirroring
                 // ClaudeHookCommand.ClaudePoster's own session-end replay side effect.

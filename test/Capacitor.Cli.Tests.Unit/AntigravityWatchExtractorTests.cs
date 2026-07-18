@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for the Antigravity watcher extractors (AI-1158): title-text extraction
+/// Unit tests for the Antigravity watcher extractors: title-text extraction
 /// from transcript_full.jsonl lines, the &lt;USER_REQUEST&gt; envelope strip, the
 /// title-event gate (<see cref="WatchCommand.IsEvent"/>), and the idle-timeout policy
 /// generalized to the antigravity GUI vendor (<see cref="WatchCommand.ShouldEndOnIdle"/>).
@@ -80,7 +80,7 @@ public class AntigravityWatchExtractorTests {
 
     [Test]
     public async Task PendingToolCalls_excludes_async_subagent_orchestration_so_a_parent_can_idle_end() {
-        // AI-1218: define_subagent/invoke_subagent resolve via a SEPARATE conversation (the child
+        // define_subagent/invoke_subagent resolve via a SEPARATE conversation (the child
         // reports back through brain/<parent>/messages), never as a result step in this transcript.
         // Counting them would pin the count > 0 forever and suppress idle-end, so a subagent-invoking
         // parent would only end when Antigravity quits. They must be excluded from the in-flight count.

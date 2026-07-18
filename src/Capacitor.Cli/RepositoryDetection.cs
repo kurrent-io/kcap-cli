@@ -12,7 +12,7 @@ namespace Capacitor.Cli;
 static class RepositoryDetection {
     // Bump whenever the cached shape/derivation changes so stale entries are ignored.
     // v2: added Host + provider-aware parsing.
-    // v3: multi-segment owner parsing (nested GitLab groups, AI-1121) — v2 entries for
+    // v3: multi-segment owner parsing (nested GitLab groups) — v2 entries for
     //     nested repos have owner=null and must re-derive.
     internal const int CacheSchemaVersion = 3;
 
@@ -57,7 +57,7 @@ static class RepositoryDetection {
     }
 
     /// <summary>
-    /// cwd-explicit enrichment (AI-1152). Same as <see cref="EnrichWithRepositoryInfo"/> but the
+    /// cwd-explicit enrichment. Same as <see cref="EnrichWithRepositoryInfo"/> but the
     /// working directory is supplied by the caller rather than read from a <c>cwd</c> field —
     /// used by the Cursor hook path, whose payloads carry <c>workspace_roots</c> instead of
     /// <c>cwd</c>. Always attaches when a repo is detected (no last-emitted dedup): callers use
@@ -119,7 +119,7 @@ static class RepositoryDetection {
     // detectPullRequest=false skips the live PR/MR provider detection (the `gh pr view` / `glab api`
     // round-trip) while still resolving base repo info (owner/repo/user/branch/host). Bulk import
     // passes false: it never emits PR fields, so that per-cwd round-trip is pure wasted latency
-    // (AI-1122). `run` is an injectable command runner (defaults to the real process spawner) so the
+    // `run` is an injectable command runner (defaults to the real process spawner) so the
     // git/provider spawns are unit-testable.
     public static async Task<RepositoryPayload?> DetectRepositoryAsync(
             string cwd, TimeSpan? budget = null, bool detectPullRequest = true, CommandRunner? run = null) {

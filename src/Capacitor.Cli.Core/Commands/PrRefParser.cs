@@ -42,7 +42,7 @@ public static partial class PrRefParser {
     [GeneratedRegex(@"^https?://[^/]+/([^/]+)/([^/]+)/pull/(\d+)(?:[/?#].*)?$")]
     private static partial Regex GitHubUrlPattern();
 
-    // GitLab MR URL. Nested groups supported (§6b / AI-1121): owner is the full
+    // GitLab MR URL. Nested groups supported (§6b): owner is the full
     // namespace path before the project, project is the last segment. The literal
     // "/-/merge_requests/" delimiter disambiguates the greedy owner from the project.
     // Same trailing-suffix tolerance so /diffs, /commits, ?query, #note parse.

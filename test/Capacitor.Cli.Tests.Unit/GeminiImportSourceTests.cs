@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-887: discovery walks <c>~/.gemini/tmp/&lt;project&gt;/chats/session-*.jsonl</c>
+/// discovery walks <c>~/.gemini/tmp/&lt;project&gt;/chats/session-*.jsonl</c>
 /// and reads the FULL dashed session id from the file's header record (the
 /// filename only carries the 8-char shortId). <see cref="GeminiImportSource.IsImportRelevantLine"/>
 /// must mirror the server normalizer's skip rules so the import watermark

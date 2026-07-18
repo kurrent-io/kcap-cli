@@ -6,7 +6,7 @@ static partial class SecretRedactor {
     // Above this length, lines are replaced with an opaque placeholder instead of being scanned
     // by the regex pipeline. Real conversation turns and small tool results stay well under this;
     // lines above it are almost always truncated dumps (mid-key secret blobs, base64 blobs) that
-    // would trip regex alternation paths into catastrophic backtracking (see AI-783 / line 953
+    // would trip regex alternation paths into catastrophic backtracking (the line 953
     // incident where an unterminated `-----BEGIN RSA PRIVATE KEY-----` blob wedged the watcher
     // main loop at 100% CPU). UTF-16 code units, not bytes — the redaction cost is dominated by
     // regex stepping over chars, and the limit is a coarse defense-in-depth bound, not a wire-size
@@ -73,7 +73,7 @@ static partial class SecretRedactor {
     // Each prefix is specific enough to avoid false positives — EXCEPT the bare `sk-` (OpenAI)
     // prefix, which is short enough to appear mid-word: it matched the `sk-notification` substring
     // inside "ta·sk-notification", redacting Claude Code's injected background-task blocks to
-    // `<ta[REDACTED]> … </ta[REDACTED]>` (AI-1162). Gate the `sk-` branch on a non-alphanumeric
+    // `<ta[REDACTED]> … </ta[REDACTED]>`. Gate the `sk-` branch on a non-alphanumeric
     // lookbehind so it only fires at a token boundary; real keys (`sk-proj-…`, `sk-live_…`,
     // preceded by whitespace/quote/punctuation) still redact, while `disk-`, `task-`, `kiosk-` etc.
     // pass through. The other prefixes carry `_`/distinctive spellings and don't collide mid-word.
@@ -133,7 +133,7 @@ static partial class SecretRedactor {
     // Known limitation: header values that embed escaped quotes (e.g. `Set-Cookie: a=\"b\"; …`
     // inside JSON-encoded content) capture only up to the first `\`. Fixing this properly
     // requires JSON-tree-aware redaction (parse → walk strings → redact decoded → re-serialize),
-    // tracked as a follow-up — see AI-649.
+    // tracked as a follow-up.
     //
     // group 1 = header name + colon + optional opening quote, group 2 = value
     [GeneratedRegex(

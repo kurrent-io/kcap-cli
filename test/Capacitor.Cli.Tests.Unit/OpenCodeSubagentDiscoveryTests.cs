@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.OpenCode;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="OpenCodeSubagentDiscovery"/> (AI-919 phase 2): the nested
+/// Unit tests for <see cref="OpenCodeSubagentDiscovery"/>: the nested
 /// child-file convention the kcap plugin writes + the parent watcher scans, the agent-name
 /// resolution, and the vendor-agnostic <c>/hooks/subagent-{start,stop}</c> payload shapes
 /// (whose required-field set the server's HookBase enforces).

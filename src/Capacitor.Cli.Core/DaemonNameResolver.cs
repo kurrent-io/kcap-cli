@@ -19,9 +19,9 @@ namespace Capacitor.Cli.Core;
 /// <item>The literal string <c>"daemon"</c>.</item>
 /// </list>
 ///
-/// <para>Note: pre-AI-630 <c>DaemonRunner.RunAsync</c> had the env var
+/// <para>Note: <c>DaemonRunner.RunAsync</c> previously had the env var
 /// unconditionally override <c>--name</c>. That was an unintentional
-/// inversion of the usual CLI convention (explicit flag wins). AI-630
+/// inversion of the usual CLI convention (explicit flag wins). This
 /// fixes it so <c>--name</c> is the strongest signal as users expect.</para>
 /// </summary>
 public static class DaemonNameResolver {

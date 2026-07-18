@@ -3,7 +3,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Daemon;
 
 /// <summary>
-/// Per-daemon-name exclusive lock and PID file (AI-630). Acquired by the
+/// Per-daemon-name exclusive lock and PID file. Acquired by the
 /// daemon process for its lifetime; release happens automatically when the
 /// <see cref="FileStream"/> handle closes (process exit, including
 /// <c>SIGKILL</c> / power-off — the kernel releases <c>flock</c>).
@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Daemon;
 /// <c>kcap daemon doctor</c> reads it to surface human-friendly
 /// "instance=<i>prefix</i>" output without needing a live SignalR session.</para>
 ///
-/// <para>The acquisition guards against the AI-630 scenario: two daemons
+/// <para>The acquisition guards against the scenario: two daemons
 /// under the same name on the same machine (regardless of
 /// <c>KCAP_CONFIG_DIR</c> — <see cref="DaemonLockPaths"/> uses a fixed
 /// directory). Two daemons with <i>different</i> names are allowed to
@@ -33,7 +33,7 @@ internal sealed class DaemonLock : IDisposable {
 
     /// <summary>
     /// True when a PID file for this name was still on disk at the moment we
-    /// acquired the exclusive flock (AI-1155). A graceful shutdown deletes the
+    /// acquired the exclusive flock. A graceful shutdown deletes the
     /// PID file in <see cref="Dispose"/>, so a leftover one means the previous
     /// holder exited WITHOUT running its cleanup — the signature of an
     /// uncatchable termination (external <c>SIGKILL</c> from macOS jetsam/OOM
@@ -91,7 +91,7 @@ internal sealed class DaemonLock : IDisposable {
 
         var instanceId = Guid.NewGuid().ToString("N");
 
-        // AI-1155: inspect any leftover PID file BEFORE WritePidFile overwrites
+        // inspect any leftover PID file BEFORE WritePidFile overwrites
         // it. Now that we hold the exclusive flock the prior holder is provably
         // gone, so a still-present PID file means it never ran Dispose (which
         // deletes it) — i.e. it died via an uncatchable SIGKILL / crash. Capture
@@ -176,7 +176,7 @@ internal sealed class DaemonLock : IDisposable {
     }
 
     static void WritePidFile(string pidPath) {
-        // The second line is a cross-process-stable start token (AI-839): on
+        // The second line is a cross-process-stable start token: on
         // Linux Process.StartTime differs between the daemon that writes it and
         // the CLI that later reads it, so we persist the kernel's boot-relative
         // starttime instead. Best-effort — a null token falls back to PID-only,
@@ -190,7 +190,7 @@ internal sealed class DaemonLock : IDisposable {
         if (_disposed) return;
         _disposed = true;
 
-        // AI-1155: delete the PID file (and version marker) BEFORE releasing the
+        // delete the PID file (and version marker) BEFORE releasing the
         // flock, not after. A successor waiting on the lock (`--await-lock`
         // restart-after-update) can't acquire it until we release below, so by
         // then our PID file is already gone — it can never observe a leftover PID
@@ -212,7 +212,7 @@ internal sealed class DaemonLock : IDisposable {
         // Release the kernel-level flock last. Do NOT delete the lock file: the
         // kernel flock is what enforces exclusion, file presence on disk is
         // irrelevant, and unlinking it here would race a daemon that acquired the
-        // path between our unlink and a re-create — reopening the AI-630 hole.
+        // path between our unlink and a re-create — reopening the hole.
         // `kcap daemon doctor --clean` removes truly stale files.
         try { _stream.Dispose(); } catch { /* best-effort */ }
     }

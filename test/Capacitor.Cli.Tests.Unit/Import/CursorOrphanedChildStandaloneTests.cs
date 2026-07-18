@@ -6,7 +6,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Import;
 
 /// <summary>
-/// AI-1156 Task F1/F2 (D5, CLI side): the subagent correlator's INPUT is widened to
+/// Task F1/F2 (D5, CLI side): the subagent correlator's INPUT is widened to
 /// same-workspace discovery (ignoring --session/--cwd/--since/scope), so a filtered/scoped
 /// import still stamps a correlated child even when its parent falls outside this run's slice —
 /// and such an orphaned child must import STANDALONE rather than being silently dropped.
@@ -139,7 +139,7 @@ public class CursorOrphanedChildStandaloneTests {
 
     [Test]
     public async Task reconciliation_prunes_a_child_excluded_from_the_routed_plan_off_the_parents_subagent_children() {
-        // AI-1154 review fix (P1): the reverse direction of F1/F2. `--session <parent>` puts the
+        // the reverse direction of F1/F2. `--session <parent>` puts the
         // PARENT in this run's routed plan but never classifies the child (excluded by the
         // --session filter) — yet ClassifyAsync's widened same-workspace scan still correlates and
         // stamps SubagentChildren=[child] onto the parent. Attaching that child in

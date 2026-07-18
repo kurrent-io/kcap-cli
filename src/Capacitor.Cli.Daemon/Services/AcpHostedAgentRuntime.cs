@@ -12,14 +12,14 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// <see cref="IHostedAgentRuntime"/> that drives an ACP (Agent Client Protocol) session over
-/// <see cref="AcpConnection"/> for Cursor (AI-684 Task 9). Owns the <c>initialize</c> →
+/// <see cref="AcpConnection"/> for Cursor. Owns the <c>initialize</c> →
 /// <c>session/new</c> → <c>session/prompt</c> handshake and reduces inbound <c>session/update</c>
 /// notifications to <see cref="AcpSessionUpdate"/> DTOs, surfaced via <see cref="Updates"/> for
-/// AI-685's mapper to turn into canonical events. AI-684 scope stops there — no canonical events, no
+/// the mapper to turn into canonical events. Scope stops there — no canonical events, no
 /// permission bridge (<c>OnServerRequest</c> stays unset, so the connection's default-decline
-/// posture answers any inbound server request with a method-not-found error; AI-686 wires the real
-/// bridge). Local-attach (raw byte input) and terminal output are PTY-only surfaces the ACP runtime
-/// does not support until AI-687 adds a terminal capability.
+/// posture answers any inbound server request with a method-not-found error; a follow-up wires
+/// the real bridge). Local-attach (raw byte input) and terminal output are PTY-only surfaces the
+/// ACP runtime does not support until a follow-up adds a terminal capability.
 ///
 /// Also owns a serialized, single-flight prompt-turn worker (<see cref="RunTurnWorkerAsync"/>/
 /// <see cref="ProcessTurnAsync"/>) and a chunk aggregator (<see cref="AggregateUpdate"/>) that
@@ -166,7 +166,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     /// <summary>
-    /// <paramref name="requestInteraction"/> is optional (AI-686) — when null, matches AI-684's
+    /// <paramref name="requestInteraction"/> is optional — when null, matches the
     /// original behavior exactly: <see cref="AcpConnection.OnServerRequest"/> stays unset, and any
     /// <c>session/request_permission</c>/<c>elicitation/create</c> the agent sends gets the
     /// connection's default JSON-RPC "Method not found" response. When provided, it is forwarded
@@ -538,8 +538,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     /// <summary>
     /// Never yields a byte — ACP stdout is protocol traffic, never terminal output (no terminal
-    /// capability until AI-687). Crucially, this must NOT complete until the process exits or
-    /// <paramref name="ct"/> cancels (AI-684 Fix B/E): <see cref="AgentOrchestrator.ReadAgentOutputAsync"/>
+    /// capability yet). Crucially, this must NOT complete until the process exits or
+    /// <paramref name="ct"/> cancels (Fix B/E): <see cref="AgentOrchestrator.ReadAgentOutputAsync"/>
     /// treats the enumerable ending as "the agent's output stream ended" and finalizes the agent —
     /// for a PTY that's a real signal (the CLI exited), but the old implementation here
     /// (<c>yield break</c> on the first call) made a LIVE ACP agent look like it had already
@@ -597,7 +597,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         throw new NotSupportedException("Local-attach raw input is a PTY-only surface; the ACP runtime has no equivalent channel.");
 
     public void Resize(ushort cols, ushort rows) {
-        // No terminal capability until AI-687 — no-op.
+        // No terminal capability until — no-op.
     }
 
     public async Task RequestGracefulStopAsync() {

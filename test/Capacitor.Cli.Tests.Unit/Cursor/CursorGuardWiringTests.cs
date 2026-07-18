@@ -6,7 +6,7 @@ using System.Linq;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1382 review fix #2 — regression tests for the Cursor runtime rewrite-guard WIRING inside
+/// regression tests for the Cursor runtime rewrite-guard WIRING inside
 /// <see cref="WatchCommand.DrainNewLines"/> (as distinct from <see cref="CursorRewriteGuardTests"/>,
 /// which pins the guard's own pure hash-comparison logic in isolation). Both scenarios here trip
 /// the guard and return BEFORE <c>DrainNewLines</c> ever touches its <see cref="HubConnection"/>
@@ -119,7 +119,7 @@ public class CursorGuardWiringTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix #3 — VerifyFullPrefix's only production call site (the periodic cadence
+    // VerifyFullPrefix's only production call site (the periodic cadence
     // check) used to seed lazily on its OWN first invocation, which — before this fix — never
     // happened until poll N (CursorFullPrefixVerifyEveryNPolls). The two OTHER full-prefix tests
     // above manually pre-seed the guard via a direct guard.VerifyFullPrefix(...) call to isolate
@@ -176,7 +176,7 @@ public class CursorGuardWiringTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r3, finding #3) — the guard's checks (prior-zone hash, shrink, new-range
+    // the guard's checks (prior-zone hash, shrink, new-range
     // record) must still work correctly on a NON-cadence poll, where DrainNewLines now captures
     // only a BOUNDED window (the guard's own trailing-tail zone plus the new range) instead of
     // materializing the whole file. Before this fix, this poll would have re-allocated/re-read the
@@ -269,7 +269,7 @@ public class CursorGuardWiringTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #1) — a poll that reads ONLY blank/whitespace lines
+    // a poll that reads ONLY blank/whitespace lines
     // (newLines.Count == 0, but the line frontier still advanced past them) must move
     // CursorByteOffset in LOCKSTEP with LinesProcessed. Before the fix, only LinesProcessed
     // advanced here, leaving CursorByteOffset (and the guard's own checkpoint) pointed at the OLD
@@ -332,7 +332,7 @@ public class CursorGuardWiringTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, finding #4) — CursorGuardPollCount (the full-prefix cadence counter)
+    // CursorGuardPollCount (the full-prefix cadence counter)
     // must only be committed once the guarded read it fed actually completes. Before the fix, the
     // counter incremented UNCONDITIONALLY before opening the file — a transient IOException on that
     // open/read (e.g. a concurrent writer briefly holding an exclusive lock) still "used up" the
@@ -378,7 +378,7 @@ public class CursorGuardWiringTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r4, the repo-only-failed drain branch) — the SAME byte/line-lockstep the
+    // the SAME byte/line-lockstep the
     // finding-#1 blank-only early-return got must also hold on the OTHER path that advances
     // LinesProcessed past blank lines without an acked send: the "repo-only batch failed" catch
     // branch. That branch is only reached when a repo change was pending (repoToSend != null) AND

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Services;
 
 /// <summary>
-/// AI-688 Option B task 5 (the capstone) — GATED live E2E that drives a REAL TOOL-USING turn
+/// Option B task 5 (the capstone) — GATED live E2E that drives a REAL TOOL-USING turn
 /// against a REAL <c>cursor-agent acp</c> process, through the FULL daemon pipeline built by tasks
 /// 1–4: <see cref="AcpHostedAgentRuntimeFactory"/> (real process spawn, no <c>FakeAcpAgent</c>) →
 /// <see cref="AcpHostedAgentRuntime"/>'s ACP handshake + chunk aggregation (task 2) →
@@ -17,8 +17,8 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// 2/4's bind-handoff shape) — the same shape task 3/4's orchestrator wiring reads from, just read
 /// directly here instead of through the (SignalR-backed) forwarder.
 ///
-/// Also exercises the AI-686 permission bridge for real: the python probe backing
-/// <c>docs/ai-688-cursor-prototype-findings.md</c>'s "Tool-using turn (AI-688 task 5)" section
+/// Also exercises the permission bridge for real: the python probe backing
+/// <c>docs/ai-688-cursor-prototype-findings.md</c>'s "Tool-using turn" section
 /// showed Cursor DOES send a real <c>session/request_permission</c> before running an
 /// un-allowlisted shell command, so this test's <see cref="AutoApproveServerConnection"/> answers
 /// it with a genuine "selected" decision (unlike <c>AcpHostedAgentRuntimeFactoryLiveTests</c>'s
@@ -70,7 +70,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
             if (chosen.OptionId is null && options.Length > 0)
                 chosen = options[0];
 
-            // AcpInteractionBridge.MapPermissionDecision (AI-686) fails closed unless BOTH (a)
+            // AcpInteractionBridge.MapPermissionDecision fails closed unless BOTH (a)
             // Outcome is on its AffirmativeOutcomes allowlist AND (b) SelectedOptionId matches one
             // of the OFFERED options' OptionId. "allow_once" is always on that allowlist, so it's
             // used as Outcome regardless of the chosen option's own Kind string — what actually
@@ -110,7 +110,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
                 config: new DaemonConfig(), // CursorPath="cursor-agent"
                 loggerFactory: liveLoggerFactory,
                 connection: connection,
-                connectionSource: null // real cursor-agent acp spawn — AI-688 gap 1/task 5's production path
+                connectionSource: null // real cursor-agent acp spawn — gap 1/task 5's production path
             );
 
             var ctx = new RuntimeStartContext(
@@ -178,7 +178,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
                 if (toolResults.Count > 0)
                     Console.WriteLine("[ai-688-task5-live] turn produced a ToolResult envelope — a tool_call_update reached a terminal status with extractable content.");
 
-                Console.WriteLine($"[ai-688-task5-live] AI-686 permission path fired: {connection.Requests.Count > 0}");
+                Console.WriteLine($"[ai-688-task5-live] PROJ-686 permission path fired: {connection.Requests.Count > 0}");
             } finally {
                 startCts.Cancel();
                 await started.Runtime.DisposeAsync();

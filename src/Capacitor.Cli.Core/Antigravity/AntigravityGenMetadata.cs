@@ -12,7 +12,7 @@ public readonly record struct AntigravityUsageRow(
 );
 
 /// <summary>
-/// Decoder for Antigravity's <c>gen_metadata.data</c> protobuf blob (AI-1158). Antigravity
+/// Decoder for Antigravity's <c>gen_metadata.data</c> protobuf blob. Antigravity
 /// keeps per-generation tokens/model in the sibling SQLite db, not the JSONL transcript, and
 /// ships NO <c>.proto</c>, so field numbers are pinned EMPIRICALLY against real Antigravity
 /// 2.2.1 blobs (verified across many rows / conversations):
@@ -72,7 +72,7 @@ public static class AntigravityGenMetadata {
     /// re-emitted row dedupes while a new row adds. <paramref name="createdAt"/> anchors the
     /// event timestamp to the conversation's most-recent transcript step (the row is decoded
     /// right after the generation that produced that step), so the backfill's recency reflects
-    /// the turn rather than the event-store write time (AI-1157 review, S4).
+    /// the turn rather than the event-store write time (review, S4).
     /// </summary>
     public static string ToUsageLine(AntigravityUsageRow row, long genRow, string? createdAt = null) {
         var o = new JsonObject {

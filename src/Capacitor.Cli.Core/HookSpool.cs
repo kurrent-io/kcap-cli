@@ -20,7 +20,7 @@ public enum DrainOutcome {
 /// <c>.draining</c> temp before reading, so concurrent appends never collide
 /// with an in-flight drain.
 ///
-/// <para>Moved to <c>Capacitor.Cli.Core</c> (AI-1357 Task 12) so both the CLI
+/// <para>Moved to <c>Capacitor.Cli.Core</c> so both the CLI
 /// (<c>Capacitor.Cli</c>, an AOT exe) and the daemon (<c>Capacitor.Cli.Daemon</c>,
 /// a separate AOT exe) can share the ordered-drain primitives without either
 /// project referencing the other's exe as a library.</para>
@@ -102,7 +102,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     }
 
     // Recovered temps (oldest first) then the rotated live file. Returns true => stop the whole pass.
-    // NOTE (AI-1357 Task 12 / BLOCKER-1): only ever recovers ITS OWN ".draining" temps — never the
+    // NOTE: only ever recovers ITS OWN ".draining" temps — never the
     // ordered drain's ".ordered-*" temps (see DrainRoutesAsync below). The ordered drain deliberately
     // WITHHOLDS a phase's remainder mid-pass (e.g. a session-end held back until the transcript tail
     // and the leading non-terminal run are done); if this route-agnostic FIFO recovered that withheld
@@ -191,7 +191,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     /// that entry — is preserved for the caller's next phase. Used by <see cref="LifecycleSpoolDrain"/>
     /// to enforce cross-spool ordering (lifecycle start &#8594; transcript tail &#8594; lifecycle end).
     ///
-    /// <para><b>Distinct temp namespace (AI-1357 Task 12 / BLOCKER-1).</b> Rotates the live file to a
+    /// <para><b>Distinct temp namespace.</b> Rotates the live file to a
     /// <c>{sid}.ordered-{pid}-{seq}</c> temp — NOT the <c>{sid}.{pid}-{seq}.draining</c> shape
     /// <see cref="DrainAllAsync"/> (route-agnostic FIFO, still used by Claude/Cursor) uses — so a
     /// deliberately-withheld phase can never be recovered and redelivered out of order by the
@@ -278,7 +278,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     /// <summary>
     /// True if a terminal (session-end) entry for this session has already been durably delivered
     /// (or permanently dropped) by a previous ordered-drain pass — see <see cref="MarkEnded"/>.
-    /// AI-1357 Task 12 / BLOCKER-3: once true, <see cref="LifecycleSpoolDrain"/> must never attempt
+    /// Task 12 / BLOCKER-3: once true, <see cref="LifecycleSpoolDrain"/> must never attempt
     /// to deliver a straggler non-terminal entry for this session, even one that arrives (or is
     /// discovered) in a later pass — that would be a real cross-pass ordering violation, not just a
     /// same-pass one (the same-pass case is already prevented by <see cref="DrainRoutesAsync"/>'s
@@ -302,7 +302,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     /// <summary>
     /// Deletes any lifecycle entries remaining for a session already <see cref="MarkEnded"/> —
     /// a post-end straggler (e.g. a subagent-stop that arrived after session-end was already
-    /// delivered) must be dropped, never delivered out of order (AI-1357 Task 12 / BLOCKER-3).
+    /// delivered) must be dropped, never delivered out of order.
     /// </summary>
     public void DiscardRemainder(string sessionId) {
         if (!SafeSessionId.IsMatch(sessionId)) return;

@@ -7,7 +7,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-688 Option B task 4: covers the orchestrator wiring that ties tasks 1–3 into the launch/
+/// Option B task 4: covers the orchestrator wiring that ties tasks 1–3 into the launch/
 /// teardown lifecycle — <see cref="AgentOrchestrator.HandleLaunchAgent"/>'s post-registration ACP
 /// bind + forwarder start, and <see cref="AgentOrchestrator"/>'s teardown path's bounded final-drain
 /// before <c>EndAgentSession</c>. Reuses the shared <see cref="AgentOrchestratorVendorTests"/> test
@@ -257,7 +257,7 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
-    // ── Reliability fixes (AI-688 PR #301 review: per-agent CTS) ───────────────────────────────
+    // ── Reliability fixes (PR #301 review: per-agent CTS) ───────────────────────────────
 
     /// <summary>
     /// Qodo #4: a drain that misses its budget must not leave the forwarder's <c>RunTask</c> running

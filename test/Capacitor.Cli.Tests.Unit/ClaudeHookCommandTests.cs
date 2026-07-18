@@ -16,7 +16,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.RouteOrder).Contains("session-start");
     }
 
-    // AI-701: the session-start payload gains a best-effort workspace_root (the git repo root
+    // the session-start payload gains a best-effort workspace_root (the git repo root
     // for cwd), used server-side by plan-artifact discovery. Fail-open: a cwd with no
     // discoverable .git entry (e.g. "/tmp") must omit the field entirely rather than send null.
     [Test]
@@ -306,7 +306,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(all).Contains("\"route\":\"subagent-stop\"");
     }
 
-    // AI-1357 Task 12 / BLOCKER-1+3 regression: the centralized ordered drain (now running on every
+    // Task 12 / BLOCKER-1+3 regression: the centralized ordered drain (now running on every
     // non-Codex hook, incl. --claude) can WITHHOLD a spooled session-end in the ".ordered-*" temp
     // namespace pending the transcript tail. ClaudeHookCommand.CurrentSessionHasBacklog must see that
     // withheld terminal (it now delegates to HookSpool.HasBacklog, which covers ".ordered-*") so a

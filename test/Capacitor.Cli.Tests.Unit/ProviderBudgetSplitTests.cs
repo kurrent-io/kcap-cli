@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Guards the effective-provider-budget split added in #229: the probe (GitProviderRouter) and the
 /// PR/MR detector share one ceiling, and the detector must run within the budget the probe LEFT
 /// BEHIND — not the full cap. This is timing-dependent in production; an injected timestamp makes
-/// it deterministic so a regression (handing the detector the full cap) is caught in CI (AI-1120).
+/// it deterministic so a regression (handing the detector the full cap) is caught in CI.
 /// </summary>
 public class ProviderBudgetSplitTests {
     [Before(Test)]

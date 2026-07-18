@@ -52,7 +52,7 @@ public class GeminiPathsTests {
             .IsEqualTo(Path.Combine("/foo", ".gemini", "GEMINI.md"));
     }
 
-    // AI-1158: ~/.gemini is shared with Google Antigravity — an Antigravity-only
+    // ~/.gemini is shared with Google Antigravity — an Antigravity-only
     // home must NOT read as a Gemini install, but a real Gemini marker still must.
     [Test]
     public async Task IsInstalled_false_when_only_antigravity_present() {

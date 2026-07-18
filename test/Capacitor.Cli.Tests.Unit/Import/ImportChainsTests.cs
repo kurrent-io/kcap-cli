@@ -100,7 +100,7 @@ public class ImportChainsTests : IDisposable {
 
     [Test]
     public async Task ImportChainsAsync_reports_per_session_progress() {
-        // Regression (AI-907): per-session slot rows always showed 0% because
+        // Regression: per-session slot rows always showed 0% because
         // BatchFlushed events were never wired to the slot bar. OnSessionProgress
         // must now fire once per flushed parent batch, carrying the batch size and
         // the session's full sendable-line total.
@@ -299,7 +299,7 @@ public class ImportChainsTests : IDisposable {
 
     [Test]
     public async Task ImportChainsAsync_derives_workspace_root_from_the_remapped_cwd_not_the_raw_meta_cwd() {
-        // Regression (AI-701 review): workspace_root discovery used to run
+        // Regression: workspace_root discovery used to run
         // GitRepository.FindRoot against the RAW transcript cwd (session.Meta.Cwd)
         // instead of the already remap-/worktree-resolved path the import flow
         // computes up front into sessionCwds. A historical transcript whose recorded

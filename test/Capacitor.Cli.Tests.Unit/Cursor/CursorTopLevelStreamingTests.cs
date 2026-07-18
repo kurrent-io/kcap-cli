@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.SignalR.Client;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1382 review fix #4 — a top-level Cursor watcher must stream new transcript lines
+/// a top-level Cursor watcher must stream new transcript lines
 /// immediately rather than accumulating them in <see cref="WatchState.BufferedLines"/> (the
 /// generic below-threshold buffer every other vendor without a pre-spawn commit still uses).
 /// <see cref="WatchCommand.SkipsThresholdBuffering"/> is the pure decision (see

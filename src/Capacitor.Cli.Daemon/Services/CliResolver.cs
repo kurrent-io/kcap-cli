@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>PATH</c> (plus <c>PATHEXT</c> on Windows). On Unix, requires at least
 /// one execute bit (mirrors <c>AgentDetector.IsExecutable</c> in the CLI
 /// project — keep the two in sync). Used by
-/// <see cref="IHostedAgentLauncher.IsAvailable"/> at daemon startup (AI-652)
+/// <see cref="IHostedAgentLauncher.IsAvailable"/> at daemon startup
 /// to decide which vendor launchers to advertise over <c>DaemonConnect</c>.
 ///
 /// <para>This intentionally does NOT execute the binary — startup must stay

@@ -99,7 +99,7 @@ public class ClaudeLauncherReviewFlowTests {
         await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
     }
 
-    // === AI-1126 D-c: definition MCP allowlist materialization ===
+    // === D-c: definition MCP allowlist materialization ===
 
     [Test]
     public async Task ReviewFlow_with_allowlist_merges_servers_into_mcp_config() {
@@ -203,7 +203,7 @@ public class ClaudeLauncherReviewFlowTests {
         await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
     }
 
-    // === AI-1207 Phase A: read-only argv for a borrowed reviewer ===
+    // === Phase A: read-only argv for a borrowed reviewer ===
 
     [Test]
     public async Task Review_flow_borrowed_cwd_denies_write_and_exec_tools_instead_of_bypass() {

@@ -4,7 +4,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1357 task 8: at shutdown (idle-timeout / parent-exit) with the hub down, the final drain's
+/// Task 8: at shutdown (idle-timeout / parent-exit) with the hub down, the final drain's
 /// undelivered transcript tail (state.LinesProcessed → EOF) must not be silently dropped — it is
 /// spooled into the dedicated <see cref="TranscriptSpool"/> so the global drain (task 3) replays it
 /// after recovery, without a manual `kcap import`.
@@ -137,7 +137,7 @@ public class ShutdownTranscriptSpoolTests {
     }
 
     /// <summary>
-    /// AI-1382 review fix #1: a Cursor session already quarantined by the runtime rewrite guard
+    /// a Cursor session already quarantined by the runtime rewrite guard
     /// must never have its tail re-read and spooled here — the bytes past `linesProcessed` ARE
     /// the exact corrupted batch the guard just discarded (the discard never advances
     /// LinesProcessed), so without this check the shutdown path would re-read and spool

@@ -38,7 +38,7 @@ internal sealed class OpenCodeDbFixtureIt : IDisposable {
 
     // Nullable-timestamp variant of AddSession — real OpenCode rows can carry a NULL
     // time_created/time_updated (session never touched after creation, or a schema
-    // that predates the column), which must map to "unknown", not epoch (AI-1358).
+    // that predates the column), which must map to "unknown", not epoch.
     public void AddSessionRaw(string id, string? parent, string? dir, string title, long? timeCreated, long? timeUpdated) {
         using var c = Open(); using var cmd = c.CreateCommand();
         cmd.CommandText = "INSERT INTO session(id,parent_id,directory,title,version,time_created,time_updated) VALUES($i,$p,$d,$t,'1.17',$tc,$tu)";

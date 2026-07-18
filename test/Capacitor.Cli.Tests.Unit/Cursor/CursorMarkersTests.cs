@@ -3,7 +3,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1382 D0/D1 — round-trips CursorMarkers' quarantine/barrier/heartbeat path helpers and the
+/// D0/D1 — round-trips CursorMarkers' quarantine/barrier/heartbeat path helpers and the
 /// quarantine read/write cycle. Shares the KCAP_CONFIG_DIR temp dir RepoPathStoreGlobalSetup pins
 /// before PathHelpers' static ConfigDir field is first touched (see that class's doc comment); a
 /// fresh GUID session id per test keeps these from colliding with each other or with the other
@@ -127,7 +127,7 @@ public class CursorMarkersTests {
         await Assert.That(WatcherHeartbeat.Read(CursorMarkers.HeartbeatPath(sid))).IsEqualTo(now);
     }
 
-    // AI-1382 review fix #5 — the durable per-child subagent-start-acknowledgement marker.
+    // the durable per-child subagent-start-acknowledgement marker.
     [Test]
     public async Task HasSubagentStartAck_false_before_any_ack_is_recorded() {
         var childSid = NewSessionId();

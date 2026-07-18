@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Commands;
 
 /// <summary>
 /// Detached post-<c>sessionEnd</c> "finalize drain" for GitHub Copilot CLI
-/// sessions (AI-897).
+/// sessions.
 /// </summary>
 /// <remarks>
 /// Copilot appends <c>session.shutdown</c> — the per-model input/cache token

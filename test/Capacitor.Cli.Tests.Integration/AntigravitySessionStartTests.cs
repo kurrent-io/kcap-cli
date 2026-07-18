@@ -9,7 +9,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// CLI→server integration for the Antigravity hook dispatcher (AI-1158/AI-1159):
+/// CLI→server integration for the Antigravity hook dispatcher:
 /// a PreInvocation drives a POST to /hooks/session-start/antigravity carrying the
 /// enriched payload (session id, version, profile default visibility), and an
 /// excluded-repo PreInvocation is skipped and marks the session disabled.

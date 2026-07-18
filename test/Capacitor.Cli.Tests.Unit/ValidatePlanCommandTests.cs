@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-701: <see cref="ValidatePlanCommand"/>'s two-call flow — <c>GET .../plan-artifacts?chain=true</c>
+/// <see cref="ValidatePlanCommand"/>'s two-call flow — <c>GET .../plan-artifacts?chain=true</c>
 /// for the discovered plan set, then the existing <c>GET .../recap?chain=true</c> for current-session
 /// work rows and "what's done" summaries. A 404 on the artifacts route (old server / non-visible
 /// session) falls back to the original recap-only rendering unchanged.
@@ -227,13 +227,13 @@ public class ValidatePlanCommandTests : IDisposable {
 
         await Assert.That(stdout).Contains("[plan content unavailable due to size bounds]");
         await Assert.That(stdout).Contains("Validation is not possible");
-        // AI-701 review finding 3: distinguishable from success (0) and from a generic error (1).
+        // review finding 3: distinguishable from success (0) and from a generic error (1).
         await Assert.That(exitCode).IsEqualTo(2);
     }
 
     [Test, NotInParallel]
     public async Task Truncated_primary_with_null_original_bytes_falls_back_to_unknown_total_marker() {
-        // AI-701 review finding 2: OriginalBytes is nullable — a malformed/edge response could
+        // review finding 2: OriginalBytes is nullable — a malformed/edge response could
         // omit it even on a "truncated" artifact. The marker must stay well-formed ("of ? bytes"),
         // never "of  bytes".
         const string content = "Truncated prefix with no known original size...";
@@ -281,7 +281,7 @@ public class ValidatePlanCommandTests : IDisposable {
 
     [Test, NotInParallel]
     public async Task Truncated_primary_with_null_content_renders_like_unavailable() {
-        // AI-701 review finding 2: content_state=="truncated" with Content == null is an edge
+        // review finding 2: content_state=="truncated" with Content == null is an edge
         // shape the server contract doesn't normally produce, but the CLI must not print
         // "first 0 of {n} bytes" — treat it like "unavailable" (placeholder + exit 2 since this
         // is the primary).
@@ -327,7 +327,7 @@ public class ValidatePlanCommandTests : IDisposable {
 
     [Test, NotInParallel]
     public async Task Degraded_primary_prefixes_the_plan_section_with_the_degraded_marker() {
-        // CRITICAL (AI-701 review): is_complete == false on the primary — a newer
+        // CRITICAL: is_complete == false on the primary — a newer
         // revision exists but hasn't resolved yet — must render the
         // "unresolved newer revision" marker before the content. This mirrors the
         // server's PlanRowRendering.DegradedText byte-for-byte (em-dash, spacing).
@@ -423,7 +423,7 @@ public class ValidatePlanCommandTests : IDisposable {
 
     [Test, NotInParallel]
     public async Task Primary_not_first_in_artifacts_array_still_renders_first_then_others_in_server_order() {
-        // MINOR (AI-701 review): the primary artifact can appear anywhere in the
+        // MINOR: the primary artifact can appear anywhere in the
         // "artifacts" array (the server's discovery order is newest-first, not
         // primary-first). Rendering must still put the primary's section first,
         // followed by the OTHER artifacts in the order the server returned them.

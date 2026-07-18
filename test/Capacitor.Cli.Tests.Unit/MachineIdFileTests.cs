@@ -3,8 +3,8 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Tests for <see cref="MachineId"/> — the AI-1207 stable per-machine id the daemon reports at
-/// registration (distinct from <see cref="MachineIdProvider"/>'s AI-1134 memory-tagging id; see
+/// Tests for <see cref="MachineId"/> — the stable per-machine id the daemon reports at
+/// registration (distinct from <see cref="MachineIdProvider"/>'s memory-tagging id; see
 /// MachineIdTests.cs for that one).
 ///
 /// PathHelpers.ConfigDir is static readonly — captured once at class-load time from

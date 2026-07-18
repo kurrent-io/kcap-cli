@@ -9,7 +9,7 @@ using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>AI-1264 P2 task 17: MCP tools for the work-items correlation surface — attach the
+/// <summary> P2 task 17: MCP tools for the work-items correlation surface — attach the
 /// current session (and its continuation chain) to a work item, and list what a session is
 /// already attached to. Cloned from <see cref="McpMemoryServer"/>'s stdio JSON-RPC loop; unlike
 /// memory this server has no repo/machine context to resolve — the only per-call input is the
@@ -195,7 +195,7 @@ static class McpWorkItemsServer {
     }
 
     // NOTE: request bodies use snake_case keys — the server's global JSON policy is
-    // JsonNamingPolicy.SnakeCaseLower (see AI-1134 task 9). Responses are passed through as raw
+    // JsonNamingPolicy.SnakeCaseLower. Responses are passed through as raw
     // text, so only this request-body builder is affected. The server enforces "exactly one of
     // issue_key/pr_number/work_item_id/new_title" (400 on violation) — this builder passes
     // through whichever selector(s) were supplied and lets that validation surface as a tool
@@ -291,7 +291,7 @@ static class McpWorkItemsServer {
         new("declare_work_item",
             "Attach the CURRENT session (and its continuation chain) to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
             new("object", new() {
-                ["issue_key"]    = new("string", "Attach to the work item for this issue key (e.g. 'AI-1234'), creating it if none exists yet."),
+                ["issue_key"]    = new("string", "Attach to the work item for this issue key (e.g. 'PROJ-1234'), creating it if none exists yet."),
                 ["pr_number"]    = new("integer", "Attach to the work item for this PR number, creating it if none exists yet."),
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),

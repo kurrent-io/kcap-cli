@@ -10,7 +10,7 @@ public class SecretRedactorTests {
         // `\n`-escaped key body lines, then truncated WITHOUT a matching `-----END` marker, used
         // to wedge the watcher: the `(?:\\n|[\s\S])*?` alternation in PemBlockRegex had two paths
         // for every `\n` pair, producing ~2^N backtracking on the failed-to-find-END search.
-        // Observed in prod (AI-783): watcher main loop at 100% CPU for 50s+ on a 5KB line.
+        // Observed in prod: watcher main loop at 100% CPU for 50s+ on a 5KB line.
         var keyBody = new StringBuilder();
 
         // Synthetic base64-like body — NOT a real key. The redactor's backtracking shape only
@@ -128,7 +128,7 @@ public class SecretRedactorTests {
 
     [Test]
     public async Task DoesNotRedact_TaskNotificationTag_MidWordSkMatch() {
-        // AI-1162: the OpenAI `sk-` vendor-token branch matched the `sk-notification` substring
+        // the OpenAI `sk-` vendor-token branch matched the `sk-notification` substring
         // inside "ta·sk-notification", turning Claude Code's injected background-task blocks into
         // `<ta[REDACTED]> … </ta[REDACTED]>`. The tag is not a secret and must survive verbatim.
         var line = """
@@ -434,7 +434,7 @@ public class SecretRedactorTests {
         await Assert.That(content[0].GetProperty("is_error").GetBoolean()).IsFalse();
     }
 
-    // AI-50 — auth headers recorded as-is
+    // auth headers recorded as-is
 
     [Test]
     public async Task RedactsLine_AuthorizationBearer_InCurlToolResult() {
@@ -579,7 +579,7 @@ public class SecretRedactorTests {
         await Assert.That(result).Contains("https://alice:[REDACTED]@github.com");
     }
 
-    // AI-53 — labeled secrets with no colon separator (e.g. `hcloud:token  <value>`)
+    // labeled secrets with no colon separator (e.g. `hcloud:token  <value>`)
 
     [Test]
     public async Task RedactsLine_LabeledSecret_HcloudToken_InToolResult() {

@@ -391,7 +391,7 @@ public class WatchCommandTests {
         await Assert.That(should).IsFalse();
     }
 
-    // AI-1382 Task 11 (D1) — Cursor joins the idle-ceiling vendor set (D1/D3): no shell hooks
+    // Task 11 (D1) — Cursor joins the idle-ceiling vendor set (D1/D3): no shell hooks
     // fire per-conversation the way a parent-exit watchdog needs, so an idle transcript (no file
     // growth AND heartbeat gone stale) is the fallback signal a Cursor session has ended. Unlike
     // Codex/Antigravity, the watcher itself must NOT synthesize session-end on this path — end
@@ -411,7 +411,7 @@ public class WatchCommandTests {
             lastActivityAt: now.AddMinutes(-5), now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsFalse();
     }
 
-    // AI-1382 review fix #6 — a Cursor CHILD (subagent) watcher never buffers, so
+    // a Cursor CHILD (subagent) watcher never buffers, so
     // WatchState.ThresholdReached never flips true for it; excluding non-session-watchers from
     // the idle ceiling (the pre-fix behavior) made every Cursor child watcher permanently
     // ineligible to idle-exit. The exemption is Cursor-only.
@@ -445,7 +445,7 @@ public class WatchCommandTests {
             lastActivityAt: idle, now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsFalse();
     }
 
-    // AI-1382 review fix #6 — ResolveCursorIdleClock: the idle clock is the LATER of transcript
+    // ResolveCursorIdleClock: the idle clock is the LATER of transcript
     // activity and the hook heartbeat, for Cursor only.
     [Test]
     public async Task ResolveCursorIdleClock_prefers_the_later_hook_heartbeat_for_cursor() {
@@ -501,7 +501,7 @@ public class WatchCommandTests {
         await Assert.That(ack.NextLineNumber).IsEqualTo(7);
     }
 
-    // AI-1382 review fix #3 — ByteOffsetForAckedLines: maps a server-acked LINE count to the byte
+    // ByteOffsetForAckedLines: maps a server-acked LINE count to the byte
     // offset within the guard's verified range, so the checkpoint advances only as far as the ack
     // actually covers (a partially-disposed D3 "halt-at-the-gap" batch must not have its unacked
     // tail bytes checkpointed as if delivered).
@@ -567,7 +567,7 @@ public class WatchCommandTests {
         await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
     }
 
-    // AI-1382 review fix #4 — Cursor's own sessionStart hook posts (and spawns this very watcher)
+    // Cursor's own sessionStart hook posts (and spawns this very watcher)
     // before any transcript line is ever read, exactly like Antigravity — so the generic
     // below-threshold buffer must not apply to it either.
     [Test]
@@ -740,7 +740,7 @@ public class CodexTranscriptExtractionTests {
     }
 }
 
-// AI-886 / PR #162: Pi emits type:"message" with message.role (not Claude's
+// PR #162: Pi emits type:"message" with message.role (not Claude's
 // top-level user/assistant), so the watcher title helpers need a Pi branch —
 // otherwise live Pi sessions never get the initial/LLM title.
 public class PiTitleHelperTests {

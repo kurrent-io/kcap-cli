@@ -18,7 +18,7 @@ static class WatcherManager {
     /// <summary>
     /// Per-key heartbeat file (touched every main-loop iteration by the watcher itself —
     /// see <c>WatchCommand.RunWatch</c>) used by <see cref="IsWatcherAlive"/> to tell a
-    /// wedged (hung-but-alive) watcher from a healthy one (AI-1357 task 9).
+    /// wedged (hung-but-alive) watcher from a healthy one.
     /// </summary>
     internal static string GetHeartbeatFilePath(string key) => WatcherHeartbeat.HeartbeatPath(GetWatcherDir(), key);
 
@@ -35,7 +35,7 @@ static class WatcherManager {
     /// (<c>FileShare.None</c> maps to <c>flock(LOCK_EX)</c> on POSIX and a real exclusive
     /// lock on Windows) — guarding every spawn decision in <see cref="EnsureWatcherRunning"/>
     /// (both "no watcher yet" and "reap a wedged one first") so concurrent hooks racing the
-    /// same key can't double-spawn (AI-1357 task 9).
+    /// same key can't double-spawn.
     /// </summary>
     static string GetSpawnLockFilePath(string key) => Path.Combine(GetWatcherDir(), $"{key}.spawnlock");
 
@@ -119,7 +119,7 @@ static class WatcherManager {
 
             // Stop the watcher from inheriting the coding agent's std handles on Windows;
             // otherwise it holds the agent's hook-stdout pipe open for its whole lifetime,
-            // hanging synchronous subagent hooks and orphaning the watcher (AI-820).
+            // hanging synchronous subagent hooks and orphaning the watcher.
             ProcessHelpers.PreventInheritedStdHandles();
 
             var process = Process.Start(psi);
@@ -136,7 +136,7 @@ static class WatcherManager {
 
             await File.WriteAllTextAsync(GetPidFilePath(key), process.Id.ToString());
 
-            // AI-1357 task 9: record this instance's start time so a later staleness probe
+            // Task 9: record this instance's start time so a later staleness probe
             // knows whether it's still within the startup grace window — written here (not
             // by the watcher itself) so it exists even if the child never gets far enough to
             // touch its own heartbeat.
@@ -151,7 +151,7 @@ static class WatcherManager {
     }
 
     /// <summary>
-    /// Deletes the per-key heartbeat + started markers (AI-1357 task 9) so they don't leak
+    /// Deletes the per-key heartbeat + started markers so they don't leak
     /// per-session the way the pid file never did. Deliberately does NOT touch the
     /// <c>{key}.spawnlock</c> file: <see cref="KillWatcher"/> can run from inside
     /// <see cref="WithSpawnLock"/> (the wedged-watcher reap path), and unlinking a held lock
@@ -168,7 +168,7 @@ static class WatcherManager {
     /// Removes every leftover per-key auxiliary file (<c>*.heartbeat</c>/<c>*.started</c>/
     /// <c>*.spawnlock</c>) in the watcher directory. Called by <c>kcap cleanup</c> after all
     /// watchers are killed — the one place it is safe to unlink spawn-lock files, since cleanup
-    /// holds no spawn lock. Returns the number of files removed (AI-1357 task 9).
+    /// holds no spawn lock. Returns the number of files removed.
     /// </summary>
     public static int PurgeAuxiliaryFiles() {
         var dir = GetWatcherDir();
@@ -196,7 +196,7 @@ static class WatcherManager {
     /// <summary>
     /// Kills the watcher process for the given key. Returns true if the watcher was running and was killed,
     /// false if it was already dead or no PID file existed. Always removes the per-key
-    /// heartbeat/started markers (AI-1357 task 9); see <see cref="DeleteHeartbeatFiles"/> for
+    /// heartbeat/started markers; see <see cref="DeleteHeartbeatFiles"/> for
     /// why the spawn lock is intentionally left behind here.
     /// </summary>
     public static async Task<bool> KillWatcher(string key) {
@@ -286,7 +286,7 @@ static class WatcherManager {
     /// <summary>
     /// True when the watcher's PID exists AND its heartbeat isn't stale (after the startup
     /// grace) — i.e. the process is alive AND its main loop is provably still turning, not
-    /// wedged (AI-1357 task 9). A PID-only check (the old behavior, still available via
+    /// wedged. A PID-only check (the old behavior, still available via
     /// <see cref="PidAlive"/>) can't tell a hung watcher from a healthy one.
     /// </summary>
     internal static bool IsWatcherAlive(string key) {
@@ -309,7 +309,7 @@ static class WatcherManager {
     /// <see cref="GetSpawnLockFilePath"/>). If another process already holds it, returns
     /// immediately WITHOUT running <paramref name="body"/> — the current holder is either
     /// already reaping + respawning this key, or about to, so there is nothing for the
-    /// loser to do but skip (AI-1357 task 9: prevents two concurrent hooks from
+    /// loser to do but skip (task 9: prevents two concurrent hooks from
     /// double-spawning a watcher for the same key).
     /// </summary>
     internal static async Task WithSpawnLock(string key, Func<Task> body) {
@@ -368,7 +368,7 @@ static class WatcherManager {
         // would leave a race: KillWatcher deletes the pid file before releasing the lock, so
         // a second hook arriving in that window would see "no pid" and take an unguarded
         // plain-spawn path, double-spawning anyway. Locking the whole decision — including
-        // the plain "no watcher yet" spawn — closes that window (AI-1357 task 9).
+        // the plain "no watcher yet" spawn — closes that window.
         await WithSpawnLock(key, async () => {
             // Re-check under the lock: another hook may have already reaped + respawned (or
             // spawned from scratch) this key while we were waiting to acquire it.
@@ -412,7 +412,7 @@ static class WatcherManager {
             }
 
             // Don't let this detached child inherit the agent's std handles on Windows
-            // (AI-820) — same pipe-leak hazard as the watcher spawn above.
+            // same pipe-leak hazard as the watcher spawn above.
             ProcessHelpers.PreventInheritedStdHandles();
 
             var process = Process.Start(psi);
@@ -438,7 +438,7 @@ static class WatcherManager {
     /// Spawns a detached, short-lived <c>kcap copilot-finalize</c> process that
     /// delivers the Copilot <c>session.shutdown</c> tail (and any final assistant
     /// turn) which Copilot writes to events.jsonl only AFTER the sessionEnd hook
-    /// returns (AI-897). The hook calls this as its FIRST action — before killing
+    /// returns. The hook calls this as its FIRST action — before killing
     /// the live watcher and POSTing session-end — so the drainer is guaranteed to
     /// exist even if the POST hangs and Copilot SIGKILLs the hook; being detached
     /// it survives that kill and is the only thing left to read the file. Fire-
@@ -462,7 +462,7 @@ static class WatcherManager {
             psi.ArgumentList.Add(transcriptPath);
 
             // Don't let this detached child inherit the agent's std handles on
-            // Windows (AI-820) — same pipe-leak hazard as the spawns above.
+            // Windows — same pipe-leak hazard as the spawns above.
             ProcessHelpers.PreventInheritedStdHandles();
 
             var process = Process.Start(psi);
@@ -538,7 +538,7 @@ static class WatcherManager {
                     // Redact like WatchCommand.DrainNewLines — the live watcher
                     // path already redacts, and this inline-drain can carry real
                     // assistant/tool content (e.g. the Copilot final turn the
-                    // finalize drain delivers, AI-897).
+                    // finalize drain delivers).
                     newLines.Add(SecretRedactor.RedactLine(line));
                     newLineNumbers.Add(lineIndex);
                 }

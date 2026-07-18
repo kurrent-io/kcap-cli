@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-688 Option B task 2: exercises <see cref="AcpHostedAgentRuntime"/>'s chunk aggregation +
+/// Option B task 2: exercises <see cref="AcpHostedAgentRuntime"/>'s chunk aggregation +
 /// serialized single-flight prompt-turn worker end-to-end against <see cref="FakeAcpAgent"/>, via the
 /// ordered <see cref="AcpHostedAgentRuntime.Envelopes"/> transcript (§2.1 of
 /// <c>docs/ai688-option-b-canonical-surfacing-design.md</c>). Mirrors the
@@ -47,7 +47,7 @@ public class AcpTranscriptAggregationTests {
 
         Task _fakeRunTask = Task.CompletedTask;
 
-        /// <summary>AI-688 reliability fix (Qodo #6): <paramref name="logger"/>/<paramref name="transcriptCapacity"/>
+        /// <summary> reliability fix (Qodo #6): <paramref name="logger"/>/<paramref name="transcriptCapacity"/>
         /// let the bounded-channel drop test inject a capturing logger and a tiny cap without every
         /// other <c>Harness()</c> call site having to care.</summary>
         public Harness(ILogger? logger = null, int? transcriptCapacity = null) {
@@ -288,7 +288,7 @@ public class AcpTranscriptAggregationTests {
         await h.Runtime.StartAsync("/abs/worktree", "go", h.Cts.Token).WaitAsync(HangGuard);
         await WaitForPromptCallCountAsync(h.Fake, minCount: 1);
 
-        // The crux of the cancellation contract (AI-688 task 2): a turn stuck awaiting a stopReason
+        // The crux of the cancellation contract: a turn stuck awaiting a stopReason
         // that will NEVER arrive (the fake holds the response forever) must not pin DisposeAsync.
         await h.Runtime.DisposeAsync().AsTask().WaitAsync(HangGuard);
 
@@ -332,7 +332,7 @@ public class AcpTranscriptAggregationTests {
         h.Fake.HoldPromptResponses.TrySetResult();
     }
 
-    // ── Bounded transcript channel (AI-688 PR #301 review, Qodo #6) ────────────────────────────
+    // ── Bounded transcript channel (PR #301 review, Qodo #6) ────────────────────────────
 
     /// <summary>Records every log call — mirrors <c>TokenRefreshLoopTests.CaptureLogger</c>'s
     /// established pattern for asserting on a warning without a real logging sink.</summary>

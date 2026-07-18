@@ -16,9 +16,9 @@ namespace Capacitor.Cli.Commands;
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
 ///   Stop              → POST /hooks/stop (best-effort, 2s cap, swallow-all).
-///                       Codex fires Stop at every turn end, not session end
-///                       (AI-648); session-end stays owned by the watcher's
-///                       parent-PID monitor (AI-647). The POST lets the server
+///                       Codex fires Stop at every turn end, not session end;
+///                       session-end stays owned by the watcher's
+///                       parent-PID monitor. The POST lets the server
 ///                       emit the idle-wait marker that clears the chat
 ///                       "working" indicator. HandleStop also refreshes watcher
 ///                       liveness and emits {"continue":true} for Codex's parser.
@@ -36,7 +36,7 @@ static class CodexHookCommand {
     // `stop.command.output` / `session-start.command.output` JSON schema and
     // reject empty bodies with "hook returned invalid stop hook JSON output".
     // `continue: true` is the schema default; emitting it explicitly satisfies
-    // the parser without altering behavior. See AI-635.
+    // the parser without altering behavior.
     const string SessionScopedOutputJson = """{"continue":true}""";
 
     /// <summary>
@@ -48,7 +48,7 @@ static class CodexHookCommand {
     internal static void WriteSessionScopedOutput(TextWriter writer) => writer.Write(SessionScopedOutputJson);
 
     /// <summary>
-    /// AI-1357 Task 5: enforces the Codex stdout-first contract — <paramref name="writeStdout"/>
+    /// Task 5: enforces the Codex stdout-first contract — <paramref name="writeStdout"/>
     /// (the synchronous handshake write) always completes before <paramref name="postStdoutWork"/>
     /// (the best-effort watcher-ensure + background spool drain) even starts. The parent Codex
     /// process blocks on the hook's stdout, so a large/unreachable spool backlog sitting behind
@@ -163,7 +163,7 @@ static class CodexHookCommand {
             // PermissionRequest response hangs it. If a handler throws (e.g. an
             // IO/permission fault while building the authenticated client), the
             // CLI's top-level guard would exit 0 with empty stdout and Codex would
-            // report "invalid hook output" (AI-1168 review). Emit the
+            // report "invalid hook output". Emit the
             // event-appropriate fallback here first, and record for diagnosis.
             CrashReporter.Record("hook", ex);
             EmitFallbackOutput(eventName);
@@ -202,7 +202,7 @@ static class CodexHookCommand {
             node["default_visibility"] = visibility;
         }
 
-        // AI-701: best-effort git-root discovery, fail-open (omitted when cwd is absent or no
+        // best-effort git-root discovery, fail-open (omitted when cwd is absent or no
         // repo is found) — see the mirrored ClaudeHookCommand comment for rationale.
         if (TryGetString(node, "cwd") is { } startCwd && GitRepository.FindRoot(startCwd) is { } workspaceRoot) {
             node["workspace_root"] = workspaceRoot;
@@ -230,7 +230,7 @@ static class CodexHookCommand {
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
 
-        // AI-1357: spawn-before-post. A lapsed-auth or transient/unreachable failure durably
+        // spawn-before-post. A lapsed-auth or transient/unreachable failure durably
         // spools the payload instead of dropping it (Spooled) — never AuthLapsed here, unlike the
         // legacy PostAsync path, so ShouldSpawnAfter below can safely spawn on Spooled too.
         var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
@@ -257,8 +257,8 @@ static class CodexHookCommand {
     // global lifecycle/transcript spool drain in the background. Neither may precede or block on
     // the stdout write in HandleSessionStart. The drain is fire-and-forget (never awaited) — its
     // own internal throttle/budget/try-catch make it safe to abandon if the process exits first;
-    // reliable delivery for Codex sessions is carried by the daemon's periodic drain pass
-    // (AI-1357 Task 12), not by this opportunistic best-effort attempt.
+    // reliable delivery for Codex sessions is carried by the daemon's periodic drain pass,
+    // not by this opportunistic best-effort attempt.
     static Task RunPostStdoutWork(
             string baseUrl, HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome) {
         var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
@@ -281,7 +281,7 @@ static class CodexHookCommand {
     static async Task<int> HandleStop(string baseUrl, JsonNode node) {
         // Codex 'Stop' fires at every turn end, NOT session end. Session-end
         // is fired by the watcher's parent-PID monitor in WatchCommand.cs
-        // (AI-647) when the codex process actually exits — that path POSTs
+        // when the codex process actually exits — that path POSTs
         // /hooks/session-end/codex with reason: "parent_exited" and handles
         // generate_whats_done. Treating Stop as session-end here would kill
         // the watcher after turn 1 and mismark multi-turn sessions as ended
@@ -305,7 +305,7 @@ static class CodexHookCommand {
             await PostBestEffortAsync(baseUrl, "stop", node, TimeSpan.FromSeconds(2));
         }
 
-        // AI-635: Codex's stop-hook output parser rejects empty stdout as
+        // Codex's stop-hook output parser rejects empty stdout as
         // "invalid stop hook JSON output". Emit the schema default explicitly.
         WriteSessionScopedOutput(Console.Out);
         return 0;
@@ -328,7 +328,7 @@ static class CodexHookCommand {
         // Do NOT post to /hooks/permission-request/{vendor} — that route runs
         // RunPermissionFlow which long-polls up to 10 hours waiting for a
         // hosted-agent UI decision. With Codex's 30 s hook timeout, the hook
-        // process is killed long before the server returns (AI-636).
+        // process is killed long before the server returns.
         //
         // Single 2 s deadline covers BOTH the /auth/config discovery and the
         // /hooks/permission-record POST inside PostBestEffortAsync.

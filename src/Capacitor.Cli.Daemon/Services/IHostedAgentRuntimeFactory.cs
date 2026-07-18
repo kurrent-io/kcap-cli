@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Runtime-selection seam (AI-684 Task 10): one implementation per vendor family, chosen by
+/// Runtime-selection seam: one implementation per vendor family, chosen by
 /// <see cref="AgentOrchestrator.HandleLaunchAgent"/> via <c>cmd.Vendor</c> instead of the orchestrator
 /// itself building the vendor-specific runtime inline. <see cref="PtyHostedAgentRuntimeFactory"/>
 /// wraps an <see cref="IHostedAgentLauncher"/> + <see cref="Pty.IPtyProcessFactory"/> for the
@@ -84,12 +84,12 @@ internal sealed record RuntimeStartContext(
         string?           ServerUrl,
         string?           DaemonBridgeUrl,
         string            CapacitorPath,
-        // AI-1126 D-c: the review-flow definition's MCP allowlist, carried verbatim from
+        // D-c: the review-flow definition's MCP allowlist, carried verbatim from
         // LaunchAgentCommand.McpAllowlist through to LauncherContext.McpAllowlist for the PTY
         // launchers to materialize. Unused by the ACP factory (Cursor has no MCP-allowlist
         // materialization yet).
         string[]?         McpAllowlist = null,
-        // AI-1207 Phase A: owned worktree (daemon-created) vs borrowed cwd (the user's own
+        // Phase A: owned worktree (daemon-created) vs borrowed cwd (the user's own
         // checkout), carried from LaunchAgentCommand.Borrowed through to LauncherContext.Work.
         // Defaults to OwnedWorktree — today's only exercised path — unchanged.
         WorkLocation       Work = WorkLocation.OwnedWorktree,

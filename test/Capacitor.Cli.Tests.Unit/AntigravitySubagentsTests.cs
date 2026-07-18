@@ -3,9 +3,9 @@ using Capacitor.Cli.Core.Antigravity;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravitySubagents"/>. AI-1218 redesign: the child→parent map is
+/// Unit tests for <see cref="AntigravitySubagents"/>. The child→parent map is
 /// built from the parent transcript's <c>INVOKE_SUBAGENT</c> steps (the spawn-time signal) rather
-/// than the child-reports-back <c>messages/*.json</c> scan used pre-AI-1218 (AI-1160), which
+/// than the child-reports-back <c>messages/*.json</c> scan used previously, which
 /// missed children that never reported back.
 /// </summary>
 public class AntigravitySubagentsTests {
@@ -18,7 +18,7 @@ public class AntigravitySubagentsTests {
     static void MakeBrainDir(string home, string convId) =>
         Directory.CreateDirectory(Path.Combine(home, ".gemini", "antigravity", "brain", convId, ".system_generated", "logs"));
 
-    // AI-1218: on-disk brain layout for the INVOKE_SUBAGENT-based BuildParentMap, one temp
+    // on-disk brain layout for the INVOKE_SUBAGENT-based BuildParentMap, one temp
     // home per test, auto-cleaned on dispose (mirrors the NewHome/MakeBrainDir pattern above,
     // but for transcript-based fixtures rather than messages/*.json).
     sealed class TempBrain : IDisposable {
@@ -35,8 +35,8 @@ public class AntigravitySubagentsTests {
         }
     }
 
-    // AI-1160 review (finding 3): the discovery scan is O(history) IO and must be interruptible.
-    // Still valid under the AI-1218 transcript-based rewrite (scan is still O(history) IO).
+    // the discovery scan is O(history) IO and must be interruptible.
+    // Still valid under the transcript-based rewrite (scan is still O(history) IO).
     [Test]
     public async Task BuildParentMap_honors_cancellation() {
         var home = NewHome();
@@ -49,10 +49,10 @@ public class AntigravitySubagentsTests {
         } finally { Directory.Delete(home, recursive: true); }
     }
 
-    // AI-1218: BuildParentMap now derives child→parent from the parent transcript's
+    // BuildParentMap now derives child→parent from the parent transcript's
     // INVOKE_SUBAGENT steps (spawn-time signal) instead of the child-reports-back
     // messages/*.json scan (the old signal was unreliable for children that never reported back —
-    // see AI-1218's d9956b89 case below).
+    // see the d9956b89 case below).
     [Test]
     public async Task BuildParentMap_from_invoke_maps_children_to_the_invoking_parent() {
         using var tmp = new TempBrain();

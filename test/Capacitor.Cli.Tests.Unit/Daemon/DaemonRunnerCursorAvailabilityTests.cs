@@ -5,7 +5,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-689 A3: <c>DaemonRunner.RunAsync</c> silently omits an unavailable vendor from
+/// <c>DaemonRunner.RunAsync</c> silently omits an unavailable vendor from
 /// <c>DaemonConfig.SupportedVendors</c> (correct — the launch dialog just won't offer it), but gave
 /// operators no clue WHY when that vendor is Cursor. <see cref="DaemonRunner.ShouldWarnCursorUnavailable"/>
 /// is the pure predicate extracted from that startup seam so it's testable without spinning up the

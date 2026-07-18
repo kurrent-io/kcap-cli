@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Acp;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-688 gap 1: pure unit tests for <see cref="AcpModelResolver.Resolve"/>'s match precedence
+/// Model-selection gap 1: pure unit tests for <see cref="AcpModelResolver.Resolve"/>'s match precedence
 /// (exact <c>modelId</c> -&gt; prefix <c>modelId</c> -&gt; <c>name</c> equals/contains -&gt;
 /// <see langword="null"/>). No ACP wire/process involved — see
 /// <see cref="AcpHostedAgentRuntimeModelSelectionTests"/> for the end-to-end

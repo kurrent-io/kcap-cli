@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-1154 Task C2 (D1, CLI side) — the CLI already posts <c>session-start/cursor</c> (carrying
+/// Task C2 (D1, CLI side) — the CLI already posts <c>session-start/cursor</c> (carrying
 /// <c>repository</c> when detected) before ever branching on classification status, so an
 /// <c>AlreadyLoaded</c> (suppression-simulating) re-import still ships the repository payload the
 /// server's D1 suppressed-path handler (Task C1) needs to backfill attribution. This pins that

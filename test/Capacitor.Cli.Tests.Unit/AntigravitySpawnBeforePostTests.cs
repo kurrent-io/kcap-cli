@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1357 Task 6: Antigravity is routed through <see cref="AgentHookPoster.PostOrSpoolAsync"/>
+/// Task 6: Antigravity is routed through <see cref="AgentHookPoster.PostOrSpoolAsync"/>
 /// (its own bespoke poster previously gated the watcher on <c>exit == 0</c>, which never spawned
 /// on a lapse/outage). <see cref="AntigravityHookCommand.SpawnGateForTest"/> exposes the same
 /// spawn decision as <see cref="AgentHookPoster.ShouldSpawnAfter"/> so a spooled outcome still

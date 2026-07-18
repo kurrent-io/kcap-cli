@@ -91,7 +91,7 @@ public class CursorTranscriptBackfillTests {
         await Assert.That(postCount).IsEqualTo(0);
     }
 
-    // AI-1382 review fix #8 — the markers must be re-checked IMMEDIATELY at the delivery
+    // the markers must be re-checked IMMEDIATELY at the delivery
     // boundary (right before the POST), not only before the watermark GET. Simulate a
     // concurrent quarantine landing DURING the watermark probe — after the early check already
     // passed, but before the POST — by setting the marker as a side effect of the GET call

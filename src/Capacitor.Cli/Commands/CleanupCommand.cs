@@ -33,7 +33,7 @@ static class CleanupCommand {
         // Sweep any leftover per-key auxiliary files (heartbeat/started/spawnlock). KillWatcher
         // removes the heartbeat/started markers per key but deliberately leaves spawn locks
         // behind (unlink-race safety); cleanup holds no lock, so it's the safe place to purge
-        // them, and this also mops up orphans whose .pid was already gone (AI-1357 task 9).
+        // them, and this also mops up orphans whose .pid was already gone.
         var purged = WatcherManager.PurgeAuxiliaryFiles();
 
         await Console.Out.WriteLineAsync(

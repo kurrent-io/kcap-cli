@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-688 Option B task 3: exercises <see cref="AcpTranscriptForwarder"/>'s seq assignment, unacked
+/// Option B task 3: exercises <see cref="AcpTranscriptForwarder"/>'s seq assignment, unacked
 /// buffer, and ack state machine (gap-resend, terminal-drop, send-throw-then-recover) against a fake
 /// send delegate and a fake transcript channel — no real <c>ServerConnection</c>/SignalR involved.
 /// The ack rules under test are transcribed EXACTLY from
@@ -163,7 +163,7 @@ public class AcpTranscriptForwarderTests {
         await Assert.That(callCount).IsEqualTo(2); // never retried/resent once terminal
     }
 
-    // ── Hot-loop guard (AI-688 review): stalled gap → terminal ─────────────────────────────────────
+    // ── Hot-loop guard: stalled gap → terminal ─────────────────────────────────────
 
     [Test]
     public async Task Stalled_gap_with_no_progress_stops_and_marks_terminal_after_the_cap() {

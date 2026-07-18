@@ -115,7 +115,7 @@ public partial class AgentOrchestratorVendorTests {
         public void StopApplication() { }
     }
 
-    // AI-864: re-registration is awaited inside RegisterDaemon before readiness is restored.
+    // re-registration is awaited inside RegisterDaemon before readiness is restored.
     // A transient per-agent failure must be retried (not swallowed on first try), so the agent's
     // ownership is restored before the daemon flips ready — narrowing the "ready despite reregister
     // failure" window qodo flagged.
@@ -195,7 +195,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
     }
 
-    // AI-1124: the orchestrator's unattended-launch guard (UnattendedLaunchPolicy.RejectionReason)
+    // the orchestrator's unattended-launch guard (UnattendedLaunchPolicy.RejectionReason)
     // must actually be wired into HandleLaunchAgent — reject a review-flow launch whose vendor
     // can't run unattended, and do it before any worktree/PTY side effects.
     [Test]
@@ -317,7 +317,7 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
-    // AI-684 Task 10: a "cursor" launch must route to its registered IHostedAgentRuntimeFactory
+    // Task 10: a "cursor" launch must route to its registered IHostedAgentRuntimeFactory
     // (the ACP seam) rather than falling through to a PTY launcher/factory. This is a pure unit
     // test — SpyHostedAgentRuntimeFactory never spawns a real cursor-agent process.
     [Test]
@@ -365,7 +365,7 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
-    // AI-684 Fix B/E (PR #244 review, BLOCKER): a runtime whose ReadOutputAsync never yields a byte
+    // Fix B/E (PR #244 review, BLOCKER): a runtime whose ReadOutputAsync never yields a byte
     // (ACP/cursor) must NOT wait for the orchestrator's on-first-chunk Starting→Running flip — that
     // flip lives in ReadAgentOutputAsync and only fires on an output CHUNK, which never arrives for
     // such a runtime. Before the fix this left the agent stuck in "Starting" (eventually auto-
@@ -592,7 +592,7 @@ public partial class AgentOrchestratorVendorTests {
 
             // Stopping the agent cancels ReadCts. The blocked enqueue MUST be released by
             // that cancellation; otherwise the read loop (and its finally-block cleanup)
-            // stalls until daemon shutdown (AI-846). Before the fix the enqueue awaited the
+            // stalls until daemon shutdown. Before the fix the enqueue awaited the
             // daemon-lifetime token instead, so this never completes.
             await orch.HandleStopAgentForTest("agent-bp");
 
@@ -782,7 +782,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     /// <summary>
-    /// Test double for the AI-684 Task 10 runtime-selection seam: records that <see cref="StartAsync"/>
+    /// Test double for the Task 10 runtime-selection seam: records that <see cref="StartAsync"/>
     /// was called (and with what agent id) and returns a no-op <see cref="FakeHostedAgentRuntime"/>,
     /// without ever spawning a real process — proves the orchestrator routes a launch to the correct
     /// <see cref="IHostedAgentRuntimeFactory"/> by vendor.
@@ -819,7 +819,7 @@ public partial class AgentOrchestratorVendorTests {
     /// harmless stand-in instead of a real PTY or ACP connection. <see cref="ReadOutputAsync"/>
     /// blocks until <see cref="ExitGate"/> is released (or <c>ct</c> cancels) rather than completing
     /// immediately, mirroring the real ACP runtime's "stay open until the process exits" contract —
-    /// this lets AI-684 Fix B/E tests observe orchestrator state (e.g. Status flips to "Running")
+    /// this lets Fix B/E tests observe orchestrator state (e.g. Status flips to "Running")
     /// WHILE the agent is still live, before ever driving it to completion.</summary>
     sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : IHostedAgentRuntime {
         public string Vendor              => vendor;
@@ -966,8 +966,8 @@ public partial class AgentOrchestratorVendorTests {
             return Task.CompletedTask;
         }
 
-        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (AI-864:
-        /// drives the bounded per-agent re-registration retry test).</summary>
+        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (drives
+        /// the bounded per-agent re-registration retry test).</summary>
         public int AgentRegisteredFailTimes { get; init; }
         public int AgentRegisteredCallCount { get; private set; }
 
@@ -980,7 +980,7 @@ public partial class AgentOrchestratorVendorTests {
                 : Task.CompletedTask;
         }
 
-        // ── AI-688 Option B task 4: ACP bind/forward capture ────────────────────────────────────
+        // ── Option B task 4: ACP bind/forward capture ────────────────────────────────────
         // Overrides the RAW hub-invoke seams (mirroring AcpServerConnectionTests' TestServerConnection)
         // rather than the higher-level gated AcpSessionStartedAsync/SendAcpEventsAsync, so every call
         // still goes through the REAL ConnectionRetry/IsReady gating the production wiring relies on.
@@ -1018,7 +1018,7 @@ public partial class AgentOrchestratorVendorTests {
 
         /// <summary>One-shot gate: when set, the NEXT raw AcpSessionStarted invoke awaits this task
         /// before returning (then the field is cleared) — models a bind call still in flight across
-        /// a reconnect outage (AI-688 reliability fix's stale-binding-race test), independent of
+        /// a reconnect outage (reliability fix's stale-binding-race test), independent of
         /// <paramref name="ct"/> so the test controls exactly when the "late bind" resolves.</summary>
         public TaskCompletionSource? PendingAcpBindGate { get; set; }
 
@@ -1051,7 +1051,7 @@ public partial class AgentOrchestratorVendorTests {
             if (AcpEventsBlockUntil is { } blockCts) {
                 // Linked with ct (unlike a bare blockCts.Token wait) so a per-agent CTS cancellation
                 // propagates through exactly like a real _hub.InvokeAsync(..., cancellationToken: ct)
-                // call would (AI-688 reliability fix: forwarder-cancel-on-drain-timeout relies on
+                // call would (reliability fix: forwarder-cancel-on-drain-timeout relies on
                 // this). A ct-driven cancellation PROPAGATES (mirrors the real hub); blockCts alone
                 // is purely test cleanup (releases an otherwise-abandoned background call) and falls
                 // through to a normal successful return.
@@ -1080,7 +1080,7 @@ public partial class AgentOrchestratorVendorTests {
 
         /// <summary>(AgentId, Status) pairs passed to every AgentStatusChangedAsync call, in
         /// call order — lets a test assert on the exact lifecycle transitions the orchestrator
-        /// drove (e.g. AI-684 Fix B/E's immediate Running flip for a no-terminal runtime).</summary>
+        /// drove (e.g. Fix B/E's immediate Running flip for a no-terminal runtime).</summary>
         public List<(string AgentId, string Status)> StatusChangedCalls { get; } = [];
 
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) {
@@ -1109,7 +1109,7 @@ public partial class AgentOrchestratorVendorTests {
             => Task.CompletedTask;
 
         /// <summary>Set both to make the send block (simulating a full/down terminal
-        /// queue) until its <c>ct</c> is cancelled — used by the AI-846 back-pressure
+        /// queue) until its <c>ct</c> is cancelled — used by the back-pressure
         /// test. Left null for every other test, where the send is a no-op.</summary>
         public TaskCompletionSource? SendEntered   { get; init; }
         public TaskCompletionSource? SendUnblocked { get; init; }

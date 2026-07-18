@@ -3,10 +3,10 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-630 review fix #4: <see cref="DaemonLockPaths.EnumerateNames"/> must
+/// <see cref="DaemonLockPaths.EnumerateNames"/> must
 /// union <c>*.lock</c> and <c>*.pid</c> filenames, not just <c>*.lock</c>.
 /// An orphan PID file (no matching lock, e.g. a daemon that stopped via
-/// the AI-78 path before the per-name layout existed) needs to be visible
+/// the path before the per-name layout existed) needs to be visible
 /// to <c>kcap daemon doctor --clean</c>; previously it was invisible.
 /// </summary>
 [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
@@ -20,7 +20,7 @@ public class DaemonLockEnumerationTests {
         try {
             // alpha has both lock and pid (held daemon).
             // beta has only a lock (e.g. doctor just cleaned the pid).
-            // gamma has only a pid (orphan from before AI-630 migration).
+            // gamma has only a pid (orphan from before migration).
             File.WriteAllText(Path.Combine(dir, "alpha.lock"), "instance-1");
             File.WriteAllText(Path.Combine(dir, "alpha.pid"),  "12345");
             File.WriteAllText(Path.Combine(dir, "beta.lock"),  "instance-2");

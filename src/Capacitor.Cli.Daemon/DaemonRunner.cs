@@ -66,7 +66,7 @@ public static partial class DaemonRunner {
         config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
         config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);
 
-        // AI-1155: reopen fds 1/2 onto the capture file BEFORE building the host,
+        // reopen fds 1/2 onto the capture file BEFORE building the host,
         // so even a crash during construction lands somewhere. On the detached
         // launch path the CLI closed our std pipes; without this a runtime/native
         // fatal message would go to a broken pipe and vanish. No-op under launchd
@@ -168,7 +168,7 @@ public static partial class DaemonRunner {
         // running under the same name on this machine. The lock content is
         // a fresh instance id that we'll also send over DaemonConnect so
         // the server can refuse a second daemon claiming the same
-        // (owner, name) slot (AI-630).
+        // (owner, name) slot.
         var daemonLock = awaitLock
             ? DaemonLock.TryAcquire(config.Name, TimeSpan.FromSeconds(5), config.Version)
             : DaemonLock.TryAcquire(config.Name, config.Version);
@@ -213,7 +213,7 @@ public static partial class DaemonRunner {
             sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
         );
 
-        // Runtime-selection seam (AI-684 Task 10): one IHostedAgentRuntimeFactory per vendor.
+        // Runtime-selection seam: one IHostedAgentRuntimeFactory per vendor.
         // AgentOrchestrator selects by vendor from the resulting dictionary instead of driving
         // Prepare/BuildArgs/Spawn inline. PtyHostedAgentRuntimeFactory wraps each registered PTY
         // launcher (Claude, Codex); AcpHostedAgentRuntimeFactory speaks ACP JSON-RPC over stdio for
@@ -283,7 +283,7 @@ public static partial class DaemonRunner {
         // Set by the supervised restart strategy so we exit non-zero for a supervisor relaunch.
         var restartState = host.Services.GetRequiredService<RestartState>();
 
-        // AI-652 (extended by AI-684 Task 10): probe each registered runtime factory's CLI binary
+        // probe each registered runtime factory's CLI binary
         // so the DaemonConnect payload only advertises vendors this daemon can actually spawn —
         // now via IHostedAgentRuntimeFactory.IsAvailable() rather than IHostedAgentLauncher, so
         // Cursor (which has no IHostedAgentLauncher) is advertised once cursor-agent is installed.
@@ -312,7 +312,7 @@ public static partial class DaemonRunner {
 
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
 
-        // AI-1155: if the previous daemon under this name vanished without
+        // if the previous daemon under this name vanished without
         // releasing its lock, it was SIGKILLed (macOS jetsam/OOM, `kill -9`),
         // lost power, or crashed hard — none of which the dying process can
         // log. Emit a breadcrumb now so the otherwise-silent death is on the
@@ -349,7 +349,7 @@ public static partial class DaemonRunner {
             LogLifetimeStopped(logger);
         });
 
-        // AI-630: if the server rejects our DaemonConnect because another
+        // if the server rejects our DaemonConnect because another
         // live daemon owns the (owner, name) slot, signal host shutdown
         // and remember to return exit code 3 instead of 0. Subscribe
         // before ConnectAsync so the initial-connect path is covered.
@@ -418,7 +418,7 @@ public static partial class DaemonRunner {
         // failure-restart policy relaunches the now-updated binary.
         if (restartState.SupervisedRestart) return ExitCodes.RestartRequested;
 
-        // AI-630: if the daemon was shut down because the server told us
+        // if the daemon was shut down because the server told us
         // our (owner, name) slot is contested mid-run (heartbeat-triggered
         // path), exit with code 3 so wrappers (systemd, npm, CI) can tell
         // this apart from a normal Ctrl+C exit.

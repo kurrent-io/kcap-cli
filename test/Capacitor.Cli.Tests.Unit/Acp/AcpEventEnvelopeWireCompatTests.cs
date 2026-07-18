@@ -5,7 +5,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-688 Option B task 1 wire-compat guard: <see cref="AcpEventEnvelope"/>/<see cref="AcpBatchAck"/>
+/// Option B task 1 wire-compat guard: <see cref="AcpEventEnvelope"/>/<see cref="AcpBatchAck"/>
 /// are daemon-local mirrors of the server's <c>Capacitor.Server.Core.Acp.AcpEventEnvelope</c> /
 /// <c>AcpBatchAck</c> (read from the ai-686 server worktree,
 /// <c>src/Capacitor.Server.Core/Acp/AcpEventEnvelope.cs</c>) — they cross the SignalR wire to the

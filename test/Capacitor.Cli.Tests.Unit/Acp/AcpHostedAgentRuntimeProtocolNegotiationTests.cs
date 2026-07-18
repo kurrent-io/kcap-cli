@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// AI-689 Workstream A: exercises <see cref="AcpHostedAgentRuntime.StartAsync"/>'s handling of the
+/// Workstream A: exercises <see cref="AcpHostedAgentRuntime.StartAsync"/>'s handling of the
 /// <c>initialize</c> response — protocol-version validation (A1), captured
 /// <c>agentCapabilities</c> (A2), and the auth/subscription hint appended to a handshake failure
 /// without masking the original error (A4). Mirrors the <c>AcpHostedAgentRuntimeTests</c> harness

@@ -34,7 +34,7 @@ internal sealed class CursorImportSource : IImportSource {
     readonly Lazy<IReadOnlyDictionary<string, string?>>  _sanitizedToFolder;
     readonly Func<string, Task<RepositoryPayload?>>      _repoDetector;
 
-    // AI-1358 (item 5): per-cwd cache of the detected repo payload, populated during
+    // per-cwd cache of the detected repo payload, populated during
     // ImportSessionAsync. Historical import can walk many sessions that share one workspace
     // folder — without this, each session would re-run repo detection for the same cwd. Keyed
     // by the resolved workspace folder (Ordinal — the same string ImportSessionAsync already
@@ -53,9 +53,9 @@ internal sealed class CursorImportSource : IImportSource {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
-        // AI-1358 (item 5): historical import must never attach a live PR to an old session —
+        // historical import must never attach a live PR to an old session —
         // stamping today's open PR onto a transcript from weeks ago is an anachronism, and it's
-        // exactly the wasted `gh pr view` / `glab api` round-trip per cwd that AI-1122 already
+        // exactly the wasted `gh pr view` / `glab api` round-trip per cwd that already
         // skips for the other import sources. detectPullRequest:false still resolves
         // owner/repo/branch (BuildRepositoryNode's non-PR fields), so imported sessions keep
         // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
@@ -79,7 +79,7 @@ internal sealed class CursorImportSource : IImportSource {
     // Path.GetFullPath: on Windows GetFullPath rebases a driveless rooted path
     // (e.g. "/Users/me/dev/foo") onto the current drive ("C:\Users\me\dev\foo"),
     // which neither Cursor's sanitized project-dir naming nor a caller-supplied
-    // --cwd ever carries — breaking the sanitized-key match (AI-820). Must stay
+    // cwd ever carries — breaking the sanitized-key match. Must stay
     // byte-identical to BuildSanitizedToFolderMap's normalization.
     static string NormalizeForComparison(string path) {
         var p = path.Replace('\\', '/').TrimEnd('/');
@@ -225,7 +225,7 @@ internal sealed class CursorImportSource : IImportSource {
         var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
         var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
 
-        // AI-1153: correlate subagent (child) sessions to their parent by prompt-hash across
+        // correlate subagent (child) sessions to their parent by prompt-hash across
         // all discovered transcripts. A child is ingested under the parent's AgentSubsession
         // stream *by the parent's own import* (subagent-start → transcript-with-agent_id →
         // subagent-stop, before the parent's session-end) rather than as a separate top-level
@@ -233,7 +233,7 @@ internal sealed class CursorImportSource : IImportSource {
         // the last event on its stream — a subagent-start posted after a parallel parent's
         // session-end would reactivate the ended parent (SubagentStarted is a reactivation event).
         //
-        // AI-1156 (D5): the correlator's INPUT is widened to every session under the SAME
+        // the correlator's INPUT is widened to every session under the SAME
         // workspace's agent-transcripts/ dir — ignoring --session/--cwd/--since/scope for this
         // internal step (cheap local file reads only). Without this, a `--session <child>`
         // (or --cwd/--since-narrowed) import only ever sees the child in `sessions`, so it can
@@ -357,7 +357,7 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
-            // Ended-at contract (AI-1358 A3): unlike Copilot (session.shutdown record) or
+            // Ended-at contract: unlike Copilot (session.shutdown record) or
             // Gemini/Pi (per-record "timestamp" field), Cursor's Anthropic content-block
             // transcript carries no authoritative session-end record to tail-scan. The
             // fallback is: the last parsed user-wrapper timestamp when the normalizer
@@ -428,10 +428,10 @@ internal sealed class CursorImportSource : IImportSource {
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
-        // AI-1153: a correlated subagent child is imported by its parent (below), under the
+        // a correlated subagent child is imported by its parent (below), under the
         // parent's AgentSubsession stream — never as a standalone top-level session.
         //
-        // AI-1156 (D5): this flag is no longer unconditional. ImportCommand reconciles `routed`
+        // this flag is no longer unconditional. ImportCommand reconciles `routed`
         // right after building it — an ORPHANED child (its correlated parent isn't itself part
         // of this run's plan) has IsSubagentChild/ParentSessionId cleared before reaching here,
         // so this check only still fires for a child whose parent IS about to run its own
@@ -441,7 +441,7 @@ internal sealed class CursorImportSource : IImportSource {
             return ImportOutcome.Skipped;
         }
 
-        // AI-1382 review fix #6 — re-check quarantine FRESH, before ANY lifecycle/transcript
+        // re-check quarantine FRESH, before ANY lifecycle/transcript
         // delivery. ClassifyAsync's own check (at classification time, above in this file) can be
         // stale by the time this runs: repo probing, an interactive confirmation prompt, or simply
         // queueing behind other sessions in the same import run all give the live watcher's
@@ -467,12 +467,12 @@ internal sealed class CursorImportSource : IImportSource {
 
         var (createdUtc, modifiedUtc) = TryGetTranscriptTimes(transcriptPath);
 
-        // AI-1152: detect the repo from the workspace folder so the synthetic
+        // detect the repo from the workspace folder so the synthetic
         // sessionStart carries a `repository` node → server emits RepositoryDetected
         // and the (historical/backfilled) session groups under its repo. Fail-open:
         // a non-git workspace or detection error leaves it null and unattributed.
         //
-        // AI-1358 (item 5): cached per cwd — a historical import walks every session under a
+        // cached per cwd — a historical import walks every session under a
         // workspace, and many share one cwd, so this only runs detection once per distinct
         // folder for the whole import rather than once per session.
         JsonObject? repositoryNode = null;
@@ -494,7 +494,7 @@ internal sealed class CursorImportSource : IImportSource {
         // (next run sees AlreadyLoaded and never re-emits). Treat lifecycle
         // POST failure as a hard import failure; the orchestrator surfaces
         // Errored and the user re-runs, which is idempotent on the server
-        // (canonical event ids are deterministic — AI-731).
+        // (canonical event ids are deterministic).
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
             BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc, repositoryNode),
@@ -512,7 +512,7 @@ internal sealed class CursorImportSource : IImportSource {
             _                                                => 0,
         };
 
-        // AI-1382 review fix #6 — re-check again at the transcript boundary: the sessionStart POST
+        // re-check again at the transcript boundary: the sessionStart POST
         // that just landed gave the runtime guard another window to trip. Unlike the pre-flight
         // check above (nothing posted yet, so Skipped there is exactly right), the session now
         // legitimately exists server-side — best-effort close it with session-end so it doesn't
@@ -530,7 +530,7 @@ internal sealed class CursorImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
-        // AI-1382 review fix (r4, finding #2) — the best-effort close-and-fail contract shared by
+        // the best-effort close-and-fail contract shared by
         // EVERY quarantine-abort seam below (the parent's own mid-transcript trip AND a child's):
         // best-effort session-end so the session doesn't hang open "active" forever (subagent-start
         // may already have posted for a child — this closes the parent/subsession the SAME way
@@ -550,7 +550,7 @@ internal sealed class CursorImportSource : IImportSource {
 
         int sent;
         try {
-            // AI-1382 review fix (r3, finding #4) — abortDelivery re-checks the ALREADY-resolved
+            // abortDelivery re-checks the ALREADY-resolved
             // quarantineIdentity (a cheap marker-file read, no correlator re-run) before every
             // 100-line batch. Without this, a quarantine written by the live watcher's runtime
             // rewrite guard between batch 1 and batch 2 (or later) still let every remaining batch
@@ -572,18 +572,18 @@ internal sealed class CursorImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
-        // AI-1153: import this parent's subagent children BEFORE its session-end, so the
+        // import this parent's subagent children BEFORE its session-end, so the
         // parent's SessionEnded remains the last event on its stream. A subagent-start
         // (reactivation event) appended after the parent's SessionEnded would flip the
         // ended parent back to Active. Hard-fail on child failure (same contract as the
         // parent lifecycle) so a re-run — idempotent via deterministic ids — repairs it.
         //
-        // AI-1154 review fix (P1): track whether any child ACTUALLY sent new transcript bytes,
+        // track whether any child ACTUALLY sent new transcript bytes,
         // independent of the parent's own `sent`/`startLine`. An AlreadyLoaded parent (nothing
         // past its own watermark) can still attach a previously-unloaded child here — that's
         // real new work, and ImportCommand's IsLifecycleOnlyRoutedReplay must not suppress it.
         //
-        // AI-1382 review fix (r4, finding #2) — a child-transcript quarantine trip is surfaced as
+        // a child-transcript quarantine trip is surfaced as
         // the SAME typed TranscriptDeliveryAbortedException the parent's own delivery throws (see
         // SendSubagentLifecycleAsync below); catching it here routes it through CloseAndFailAsync
         // instead of letting SendSubagentLifecycleAsync's old catch-all swallow it into a bare
@@ -632,10 +632,10 @@ internal sealed class CursorImportSource : IImportSource {
     /// <summary>
     /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so every
     /// session gets a fresh copy). Children carry <c>IsSubagentChild</c> + <c>ParentSessionId</c>
-    /// (AI-1156 D5 — the parent id lets <see cref="ImportCommand"/> reconcile an orphaned child
+    /// (D5 — the parent id lets <see cref="ImportCommand"/> reconcile an orphaned child
     /// to standalone when the parent isn't itself part of this run's plan) so their own import
     /// no-ops (unless reconciled); parents carry <c>SubagentChildren</c> so they import them inline.
-    /// Every classification also carries <c>QuarantineIdentity</c> — AI-1382 review fix #6 — so
+    /// Every classification also carries <c>QuarantineIdentity</c> — review fix #6 — so
     /// <see cref="ImportSessionAsync"/> can re-check <see cref="CursorMarkers.IsQuarantined"/>
     /// FRESH immediately before any lifecycle/transcript delivery (the family identity itself is
     /// stable for the run; only the quarantine STATE needs a live re-check, since the live
@@ -694,7 +694,7 @@ internal sealed class CursorImportSource : IImportSource {
     }
 
     /// <summary>
-    /// AI-1382 review fix #7 — resolves the FAMILY (quarantine) identity for <paramref name="sessionId"/>:
+    /// resolves the FAMILY (quarantine) identity for <paramref name="sessionId"/>:
     /// its correlated parent's id when <paramref name="subagentLinks"/> (computed from THIS batch's
     /// discovered sessions) has a link, falling back to the persisted
     /// <see cref="CursorLiveSubagentLinker"/> marker — written independently by the LIVE hook
@@ -717,7 +717,7 @@ internal sealed class CursorImportSource : IImportSource {
     }
 
     /// <summary>
-    /// AI-1153: ingest one Cursor subagent child under its parent's <c>AgentSubsession</c>
+    /// ingest one Cursor subagent child under its parent's <c>AgentSubsession</c>
     /// stream. Mirrors <c>SessionImporter.SendAgentLifecycle</c>: <c>subagent-start</c>
     /// (session_id=parent, agent_id=child) → transcript batches routed with <c>agent_id</c>=child
     /// (resumed from the subsession watermark so re-imports don't repost the whole child) →
@@ -728,14 +728,14 @@ internal sealed class CursorImportSource : IImportSource {
     /// session card.
     ///
     /// <para>
-    /// AI-1154 review fix (P1): also reports whether this call actually POSTed new transcript
+    /// also reports whether this call actually POSTed new transcript
     /// bytes for the child (<c>SentContent</c>) — the caller needs that to know real new work
     /// happened even when the PARENT's own <c>sent</c> count is zero (e.g. an AlreadyLoaded
     /// parent attaching a previously-unloaded child).
     /// </para>
     ///
     /// <para>
-    /// AI-1154 review fix (P1, round-4): a fail-open resend — the child subsession watermark
+    /// a fail-open resend — the child subsession watermark
     /// probe itself threw, so <c>startLine</c> resets to 0 and the whole child is reposted — is
     /// INDETERMINATE, not proof of "no new content". The round-3 fix treated a probe failure as
     /// "definitely a duplicate resend" and forced <c>SentContent = false</c>; but when the child
@@ -761,7 +761,7 @@ internal sealed class CursorImportSource : IImportSource {
         if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
             return (true, false); // missing child transcript — skip, non-fatal
 
-        // AI-1382 review fix (r4, finding #2a) — never start a NEW child under a family that is
+        // never start a NEW child under a family that is
         // ALREADY quarantined by the time its turn comes up in the parent's loop. Without this, a
         // quarantine tripped by some earlier child's own delivery (or any other concurrent trip —
         // the live watcher runs alongside this import) still let every LATER child's subagent-start
@@ -790,7 +790,7 @@ internal sealed class CursorImportSource : IImportSource {
         // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
         // doesn't repost the full child transcript every time. Fail-open to a full send.
         //
-        // AI-1154 review fix (P1, round-4): a fail-open resend (the probe itself threw — e.g. a
+        // a fail-open resend (the probe itself threw — e.g. a
         // transient 5xx) resets startLine to 0 and reposts the WHOLE child. That resend is
         // INDETERMINATE — it MAY be a duplicate of an already-complete child, or it MAY be
         // genuinely new content that a transient probe failure prevented us from resuming
@@ -826,7 +826,7 @@ internal sealed class CursorImportSource : IImportSource {
             // transcript POST must abort so the parent import fails and a re-run repairs it,
             // rather than leaving an empty completed subagent while reporting success.
             //
-            // AI-1382 review fix (r3, finding #4) — abortDelivery closes over the SAME
+            // abortDelivery closes over the SAME
             // already-resolved quarantineIdentity as the parent's own send (no extra correlator
             // work), so a quarantine tripping mid-child-transcript also aborts the remaining
             // child batches, not just the parent's.
@@ -841,7 +841,7 @@ internal sealed class CursorImportSource : IImportSource {
                 failOnError:   true,
                 abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
         } catch (SessionImporter.TranscriptDeliveryAbortedException) {
-            // AI-1382 review fix (r4, finding #2b) — a quarantine trip during THIS child's own
+            // a quarantine trip during THIS child's own
             // transcript delivery must propagate to the caller's close-and-fail path, not collapse
             // into the same bare `false` an ordinary POST failure returns below. A `false` here
             // returned Failed from ImportSessionAsync WITHOUT ever posting the parent's best-effort
@@ -891,12 +891,12 @@ internal sealed class CursorImportSource : IImportSource {
         if (workspaceFolder is not null) {
             payload["workspace_roots"] = new JsonArray(workspaceFolder);
         }
-        // AI-1152: git-detected repo (owner/repo/branch/...) so the server emits
+        // git-detected repo (owner/repo/branch/...) so the server emits
         // RepositoryDetected for historical/backfilled Cursor sessions.
         if (repository is not null) {
             payload["repository"] = repository;
         }
-        // AI-739: server prefers started_at over UtcNow when present, so
+        // server prefers started_at over UtcNow when present, so
         // historical sessions surface with their real start time. Use an
         // ISO-8601 round-trip ("O") string — DateTimeOffset? on the server
         // record deserialises that shape directly.
@@ -993,7 +993,7 @@ internal sealed class CursorImportSource : IImportSource {
     }
 
     static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
-        // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark (AI-1153).
+        // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark.
         var url = string.IsNullOrEmpty(agentId)
             ? $"{baseUrl}/api/sessions/{sessionId}/last-line"
             : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";

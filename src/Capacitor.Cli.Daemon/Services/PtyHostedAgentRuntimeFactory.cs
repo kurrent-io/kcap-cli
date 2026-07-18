@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// <see cref="IHostedAgentRuntimeFactory"/> for the interactive PTY-backed CLIs (Claude, Codex).
-/// Moved verbatim from the body of <see cref="AgentOrchestrator.HandleLaunchAgent"/> (AI-684 Task
+/// Moved verbatim from the body of <see cref="AgentOrchestrator.HandleLaunchAgent"/> (Task
 /// 10): builds the <see cref="LauncherContext"/> (including the review-launch
 /// <see cref="ReviewLaunchBuilder.BuildAsync"/> call), runs <see cref="IHostedAgentLauncher.Prepare"/>
 /// then <see cref="IHostedAgentLauncher.BuildArgs"/>, assembles the daemon-injected env vars, spawns

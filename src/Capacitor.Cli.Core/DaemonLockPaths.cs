@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// Path layout for per-name daemon lock + PID + start-lock files (AI-630).
+/// Path layout for per-name daemon lock + PID + start-lock files.
 ///
 /// <para>The previous layout used singletons at <c>PathHelpers.ConfigPath("agent.pid")</c>
 /// and <c>PathHelpers.ConfigPath("agent.start.lock")</c>. Two daemons with
@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Core;
 /// <c>~/.config/kcap</c>) wrote to different singletons and never saw
 /// each other, allowing two daemons under the same name to authenticate as
 /// the same GitHub ID and oscillate the server-side <c>DaemonRegistry</c>
-/// slot. The staging incident that motivated AI-630 was exactly that.</para>
+/// slot. The staging incident that motivated this fix was exactly that.</para>
 ///
 /// <para>This helper uses a <b>fixed location</b> under the home directory
 /// (<c>~/.config/kcap/daemons/</c>) regardless of <c>KCAP_CONFIG_DIR</c>,
@@ -121,7 +121,7 @@ public static partial class DaemonLockPaths {
     /// derived from <c>*.lock</c>, <c>*.pid</c>, <c>*.restart-pending</c>, and
     /// <c>*.version</c> files. Used by <c>daemon doctor</c> to classify held vs
     /// stale entries; covers orphan PID files that have no matching lock (e.g. a
-    /// pre-AI-630 daemon whose migration ran for the PID file but not the start
+    /// legacy daemon whose migration ran for the PID file but not the start
     /// lock, or a stop that removed the lock but left the PID behind) and
     /// marker-only leftovers (a crash between queueing a restart and applying it,
     /// or a version marker left after an unclean exit).

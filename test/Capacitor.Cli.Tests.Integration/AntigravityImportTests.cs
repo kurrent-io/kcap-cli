@@ -6,10 +6,10 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Wire-contract test for Antigravity historical import (AI-1160). Drives the full
+/// Wire-contract test for Antigravity historical import. Drives the full
 /// discover → classify → import path over an on-disk brain tree (a root conversation plus
 /// a subagent conversation linked via an INVOKE_SUBAGENT step in the parent's
-/// transcript_full.jsonl — the AI-1218 spawn-time signal, see
+/// transcript_full.jsonl — the spawn-time signal, see
 /// <c>AntigravitySubagents.BuildParentMap</c>) and asserts the lifecycle the server expects:
 /// session-start/antigravity → parent transcript → subagent-start → child transcript (routed
 /// by agent_id) → subagent-stop → session-end/antigravity, all tagged vendor=antigravity.
@@ -23,7 +23,7 @@ public class AntigravityImportTests : IDisposable {
 
     // The brain-dir conversation id is dashed on disk, but the id surfaced to the server
     // (session id + subagent agent_id) is the dashless canonical form — matching live capture
-    // so live + imported captures of one conversation land on the same stream (AI-1238).
+    // so live + imported captures of one conversation land on the same stream.
     static string Dashless(string id) => Guid.Parse(id).ToString("N");
 
     public void Dispose() {
@@ -43,7 +43,7 @@ public class AntigravityImportTests : IDisposable {
     }
 
     // Appends an INVOKE_SUBAGENT step to Root's transcript naming Child as the spawned
-    // conversation — the AI-1218 spawn-time linkage BuildParentMap reads (messages/*.json is
+    // conversation — the spawn-time linkage BuildParentMap reads (messages/*.json is
     // no longer consulted). Root's transcript must already exist (WriteTranscript(Root, ...)
     // is called before this at every call site).
     void WriteLinkage() {
@@ -130,7 +130,7 @@ public class AntigravityImportTests : IDisposable {
 
         // Parent (no agentId) fully ingested → AlreadyLoaded; the child (agentId=dashless Child)
         // was never imported (404). The AlreadyLoaded branch must STILL run the child-repair pass,
-        // else a once-skipped subagent is lost forever (AI-1160 review, finding 1).
+        // else a once-skipped subagent is lost forever.
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Dashless(Child)).UsingGet())
             .AtPriority(1)
             .RespondWith(Response.Create().WithStatusCode(404));
@@ -167,7 +167,7 @@ public class AntigravityImportTests : IDisposable {
 
         // The parent transcript is not re-sent, but lifecycle IS re-asserted (repair — a prior
         // run may have failed session-end) and the missing child is repaired: session-start →
-        // subagent-start → child transcript → subagent-stop → session-end (AI-1160 review, finding 1).
+        // subagent-start → child transcript → subagent-stop → session-end.
         await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
         await Assert.That(posts.Contains("/hooks/subagent-stop")).IsTrue();
         await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsTrue();
@@ -256,7 +256,7 @@ public class AntigravityImportTests : IDisposable {
         // server's stop no-ops without an active mark, and that mark is lost on a restart, so the
         // start re-establishes it before the stop appends the completion event. Without this a
         // prior run's stop that failed after content leaves the subagent uncompleted forever
-        // (AI-1160 review, findings at :240 / :249).
+        // (see the resume-from-line-position tests below for the exact edge cases).
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
         foreach (var route in new[] {
@@ -318,7 +318,7 @@ public class AntigravityImportTests : IDisposable {
 
         // Parent not yet imported (404) → New; child partially imported up to line 0 → resume from
         // file line 1, numbered by TRUE position (1). The pre-fix code fed the HWM as
-        // lineNumberOffset and re-sent the whole file as [1,2] (AI-1160 review, finding 2).
+        // lineNumberOffset and re-sent the whole file as [1,2].
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Dashless(Child)).UsingGet())
             .AtPriority(1)
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
