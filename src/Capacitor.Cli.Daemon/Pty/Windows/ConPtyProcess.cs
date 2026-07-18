@@ -23,9 +23,12 @@ public sealed class ConPtyProcess : IPtyProcess {
     public bool HasExited { get; private set; }
     public int? ExitCode  { get; private set; }
 
-    // Test-only seam (§4.1): exposes the raw job handle value so tests can join the same job
-    // to exercise the breakaway-denial path. Does not transfer ownership — the job is still
-    // torn down exclusively via _jobHandle.Dispose() in DisposeAsync.
+    // Test-only seam: exposes the raw job handle value so tests can QUERY the job's limit flags
+    // (a read-only structural proof that breakaway is impossible). Does not transfer ownership —
+    // the job is still torn down exclusively via _jobHandle.Dispose() in DisposeAsync.
+    // IRON RULE: a test must NEVER AssignProcessToJobObject(this handle, self). This job carries
+    // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so joining the test host and then disposing this
+    // process would close the last handle and have the OS kill the test host.
     internal IntPtr JobHandleForTests => _jobHandle.DangerousGetHandle();
 
     ConPtyProcess(IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream, SafeFileHandle jobHandle) {
@@ -275,7 +278,14 @@ public sealed class ConPtyProcess : IPtyProcess {
                     ref si,
                     out var pi
                 )) {
-                throw new InvalidOperationException($"CreateProcessW failed: {Marshal.GetLastWin32Error()}");
+                // CreateProcessW failure (bad path, access-denied, blocked nesting — all common)
+                // means no child was ever created, so the job has no members. Close its handle
+                // BEFORE throwing: the outer finally only frees the HGlobal buffers, never the
+                // job kernel handle, so without this the job would leak to GC finalization.
+                var err = Marshal.GetLastWin32Error();
+                jobHandle.Dispose();
+
+                throw new InvalidOperationException($"CreateProcessW failed: {err}");
             }
 
             try {

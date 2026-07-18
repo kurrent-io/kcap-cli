@@ -34,24 +34,23 @@ public class ConPtyJobObjectTests {
     }
 
     [Test]
-    public async Task Breakaway_from_the_job_is_denied() {
+    public async Task Job_sets_no_breakaway_flag_so_escape_is_impossible() {
         if (!OperatingSystem.IsWindows()) return;
 
-        // A child that explicitly requests CREATE_BREAKAWAY_FROM_JOB must fail to start —
-        // our job sets NO breakaway-allowed flag, so escape is impossible by construction
-        // (mere grandchild membership doesn't prove escape is impossible; an ACTUAL denied
-        // breakaway attempt does).
-        await using var proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "pause"], Directory.GetCurrentDirectory());
+        // Structural proof that a hosted descendant cannot CreateProcess its way out of the job:
+        // the production job carries EXACTLY JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and NEITHER
+        // breakaway-allowed flag, so a CREATE_BREAKAWAY_FROM_JOB child fails with
+        // ERROR_ACCESS_DENIED by construction. We PROVE this by querying the job's limit flags —
+        // NOT by joining this test host to proc's killing job and disposing it (which would
+        // close the last handle and have the OS kill the host). Reading the flags is host-safe;
+        // proc.DisposeAsync closes proc's own killing job, killing proc's child, never the host.
+        await using var proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "exit"], Directory.GetCurrentDirectory());
 
-        // CreateProcess with CREATE_BREAKAWAY_FROM_JOB against a job with no
-        // JOB_OBJECT_LIMIT_BREAKAWAY_OK/SILENT_BREAKAWAY_OK must fail with
-        // ERROR_ACCESS_DENIED — asserted via the raw Win32 call, not System.Diagnostics.Process
-        // (which has no breakaway knob). We join proc's own production job first so the
-        // breakaway attempt has something real to break away from.
-        var breakawaySucceeded = ConPtyJobObjectTestHelper.TryCreateWithBreakaway(
-            "cmd.exe", "/c exit", ConPtyInteropTestAccessor.JobHandle(proc));
+        var limitFlags = ConPtyJobObjectTestHelper.QueryJobLimitFlags(ConPtyInteropTestAccessor.JobHandle(proc));
 
-        await Assert.That(breakawaySucceeded).IsFalse();
+        await Assert.That(limitFlags & ConPtyInterop.JOB_OBJECT_LIMIT_BREAKAWAY_OK).IsEqualTo(0u);
+        await Assert.That(limitFlags & ConPtyInterop.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK).IsEqualTo(0u);
+        await Assert.That(limitFlags).IsEqualTo(ConPtyInterop.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
     }
 
     [Test]
@@ -61,6 +60,11 @@ public class ConPtyJobObjectTests {
         // Put THIS test process into an outer job with no UI-restriction flags (nesting is
         // only blocked when either job carries UI limits) — mirrors "the daemon happens to be
         // launched inside another job" (e.g. a CI runner, a service wrapper).
+        //
+        // HOST-SAFETY INVARIANT: outerJob is a PLAIN CreateJobObjectW with NO
+        // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so joining the test host to it is safe — a plain
+        // job does NOT kill its members when its last handle closes. Clean up with CloseHandle,
+        // never TerminateJobObject (which would kill every member, including this test host).
         var outerJob = ConPtyInterop.CreateJobObjectW(IntPtr.Zero, null);
         ConPtyJobObjectTestHelper.AssignSelfToJob(outerJob);
 
@@ -70,7 +74,12 @@ public class ConPtyJobObjectTests {
         // member of the outer job too — checked via the native IsProcessInJob.
         await Assert.That(ConPtyJobObjectTestHelper.IsProcessInJob(proc.Pid, outerJob)).IsTrue();
 
-        ConPtyInterop.TerminateJobObject(outerJob, 0);
+        // CloseHandle (NOT TerminateJobObject) — see the invariant above. Windows has no API to
+        // un-assign a process from a job, so the test host stays a member of this now-handleless
+        // plain job for the rest of the run. That accumulation is harmless (a plain job imposes
+        // nothing); at worst a later self-join could fail with a nesting error, which fails that
+        // test cleanly and can no longer kill the host now that the killing/terminate paths are gone.
+        ConPtyInterop.CloseHandle(outerJob);
     }
 
     [Test]
@@ -80,13 +89,19 @@ public class ConPtyJobObjectTests {
         // Simulate "nesting genuinely prevented": put this process in an outer job that DOES
         // carry a UI-restriction limit so a nested job can't form, and assert Spawn throws
         // rather than silently spawning uncontained.
+        //
+        // HOST-SAFETY INVARIANT: CreateUiRestrictedJobAndAssignSelf sets ONLY the UI-restriction
+        // flag — NO JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — so self-join is safe, and cleanup is
+        // CloseHandle, never TerminateJobObject (which would kill this test host). As with the
+        // nesting test, the host stays a member of this handleless job for the rest of the run;
+        // that accumulation is harmless.
         var restrictiveJob = ConPtyJobObjectTestHelper.CreateUiRestrictedJobAndAssignSelf();
 
         try {
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                 await ConPtyProcess.Spawn("cmd.exe", ["/c", "exit"], Directory.GetCurrentDirectory()).DisposeAsync());
         } finally {
-            ConPtyInterop.TerminateJobObject(restrictiveJob, 0);
+            ConPtyInterop.CloseHandle(restrictiveJob);
         }
     }
 

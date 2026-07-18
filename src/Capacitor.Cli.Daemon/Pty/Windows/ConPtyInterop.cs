@@ -154,13 +154,16 @@ internal static partial class ConPtyInterop
     // flags (so a descendant literally cannot CreateProcess its way out of the job).
     internal const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
 
+    // The two breakaway-allowed flags we deliberately DON'T set. Asserted absent by the
+    // job-flags test: with neither present, a descendant's CreateProcess(CREATE_BREAKAWAY_FROM_JOB)
+    // fails with ERROR_ACCESS_DENIED, so nothing can escape the job by construction.
+    internal const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK        = 0x00000800;
+    internal const uint JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000;
+
     // PROC_THREAD_ATTRIBUTE_JOB_LIST — grows the existing 1-entry attribute list
     // (PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE) to 2 entries. The value is a POINTER TO AN ARRAY
     // of job handles (we pass an array of exactly one).
     internal static readonly IntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
-
-    // Used only by the breakaway-denial test: a child that tries this must fail.
-    internal const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct JOBOBJECT_BASIC_LIMIT_INFORMATION {

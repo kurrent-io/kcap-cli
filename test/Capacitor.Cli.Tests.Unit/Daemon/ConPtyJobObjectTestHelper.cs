@@ -43,7 +43,17 @@ internal static class ConPtyJobObjectTestHelper {
     private static extern bool SetInformationJobObjectUiRestrictions(
         IntPtr hJob, int JobObjectInformationClass, ref JOBOBJECT_BASIC_UI_RESTRICTIONS lpJobObjectInfo, uint cbJobObjectInfoLength);
 
-    /// <summary>Assigns the CURRENT (test) process into <paramref name="job"/>.</summary>
+    /// <summary>
+    /// Assigns the CURRENT (test) process into <paramref name="job"/>.
+    ///
+    /// IRON RULE — do not break this or you will kill the CI test host:
+    /// Windows has NO API to remove a process from a job, so this binds the test-runner process
+    /// for its entire life. Therefore <paramref name="job"/> MUST be a job that (a) has NO
+    /// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and (b) is cleaned up with CloseHandle, NEVER
+    /// TerminateJobObject. A killing job would kill the host when its last handle closes; a
+    /// TerminateJobObject call kills every member (the host included) unconditionally. Every
+    /// call site must satisfy both conditions — audit them before adding a new one.
+    /// </summary>
     internal static void AssignSelfToJob(IntPtr job) {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
 
@@ -83,32 +93,30 @@ internal static class ConPtyJobObjectTestHelper {
         return job;
     }
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(
+        IntPtr hJob, int JobObjectInformationClass, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION lpJobObjectInfo,
+        uint cbJobObjectInfoLength, IntPtr lpReturnLength);
+
     /// <summary>
-    /// Joins the CURRENT process to <paramref name="jobHandle"/> (a production job created by
-    /// <see cref="ConPtyProcess.Spawn"/>, which carries no breakaway-allowed flags), then
-    /// attempts a raw CreateProcess with CREATE_BREAKAWAY_FROM_JOB. Returns true iff the create
-    /// call SUCCEEDED (breakaway was allowed — the bad outcome); a correctly-contained job makes
-    /// this return false.
+    /// Reads the <c>LimitFlags</c> of <paramref name="jobHandle"/>'s extended-limit information
+    /// via the native <c>QueryInformationJobObject</c> — a READ-ONLY structural probe of a
+    /// production job created by <see cref="ConPtyProcess.Spawn"/>. Callers assert the flags to
+    /// prove escape is impossible by construction. This deliberately does NOT (and must never)
+    /// join the test host to the killing job — see the IRON RULE on
+    /// <see cref="AssignSelfToJob"/>; that self-join + dispose is exactly what killed the host.
     /// </summary>
-    internal static bool TryCreateWithBreakaway(string fileName, string arguments, IntPtr jobHandle) {
+    internal static uint QueryJobLimitFlags(IntPtr jobHandle) {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
 
-        AssignSelfToJob(jobHandle);
-
-        var si = new STARTUPINFOEXW();
-        si.StartupInfo.cb = Marshal.SizeOf<STARTUPINFOW>();
-
-        var created = CreateProcessW(
-            null, $"{fileName} {arguments}", IntPtr.Zero, IntPtr.Zero, false,
-            CREATE_BREAKAWAY_FROM_JOB, IntPtr.Zero, null, ref si, out var pi);
-
-        if (created) {
-            TerminateProcess(pi.hProcess, 0);
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
+        if (!QueryInformationJobObject(
+                jobHandle, JobObjectExtendedLimitInformation, out var info,
+                (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>(), IntPtr.Zero)) {
+            throw new InvalidOperationException($"QueryInformationJobObject failed: {Marshal.GetLastWin32Error()}");
         }
 
-        return created;
+        return info.BasicLimitInformation.LimitFlags;
     }
 
     /// <summary>
