@@ -67,10 +67,10 @@ public class McpWorkItemsServerTests {
 
     [Test]
     public async Task Declare_body_carries_session_id_and_issue_key() {
-        var body = McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","issue_key":"AI-1234"}"""));
+        var body = McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","issue_key":"PROJ-1234"}"""));
 
         await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo("s1");
-        await Assert.That(body["issue_key"]!.GetValue<string>()).IsEqualTo("AI-1234");
+        await Assert.That(body["issue_key"]!.GetValue<string>()).IsEqualTo("PROJ-1234");
         await Assert.That(body["pr_number"]).IsNull();
         await Assert.That(body["work_item_id"]).IsNull();
         await Assert.That(body["new_title"]).IsNull();
@@ -120,7 +120,7 @@ public class McpWorkItemsServerTests {
         // dropping the wrong-shaped selector would let the server's exactly-one rule pass and
         // perform an attach the caller never validly requested.
         var ex = Assert.Throws<ArgumentException>(
-            () => McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","issue_key":"AI-1","pr_number":"123"}""")));
+            () => McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","issue_key":"PROJ-1","pr_number":"123"}""")));
 
         await Assert.That(ex!.Message).Contains("pr_number");
     }

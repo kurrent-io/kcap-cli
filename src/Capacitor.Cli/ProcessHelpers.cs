@@ -197,7 +197,7 @@ static partial class ProcessHelpers {
                 stdHandleInheritWarned = true;
                 Console.Error.WriteLine(
                     $"[kcap] warning: could not clear HANDLE_FLAG_INHERIT on {streamName} "
-                  + $"(win32 error {Marshal.GetLastPInvokeError()}); a spawned watcher may inherit std handles (AI-820).");
+                  + $"(win32 error {Marshal.GetLastPInvokeError()}); a spawned watcher may inherit std handles.");
             }
         } catch {
             // Best effort — handle hygiene must never crash the spawn path.

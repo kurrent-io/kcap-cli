@@ -355,7 +355,7 @@ static partial class WatchCommand {
             case ParentWatchdog.ParentAlreadyDead:
                 Log($"Parent pid {parentPid} already dead at watcher startup; entering staged recovery — "
                   + "will periodically re-resolve + re-arm the watchdog, and only end after a long ceiling "
-                  + "with no transcript progress and continued resolution failure (AI-1359).");
+                  + "with no transcript progress and continued resolution failure.");
 
                 // Staged recovery: re-resolve the durable agent (using the vendor alias) and re-arm if
                 // found; otherwise end ONLY after `ceiling` of no transcript progress. Any new progress

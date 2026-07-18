@@ -178,7 +178,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
                 if (toolResults.Count > 0)
                     Console.WriteLine("[ai-688-task5-live] turn produced a ToolResult envelope — a tool_call_update reached a terminal status with extractable content.");
 
-                Console.WriteLine($"[ai-688-task5-live] AI-686 permission path fired: {connection.Requests.Count > 0}");
+                Console.WriteLine($"[ai-688-task5-live] PROJ-686 permission path fired: {connection.Requests.Count > 0}");
             } finally {
                 startCts.Cancel();
                 await started.Runtime.DisposeAsync();
