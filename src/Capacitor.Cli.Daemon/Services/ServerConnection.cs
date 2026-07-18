@@ -835,7 +835,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         ) => _hub.InvokeAsync<AcpBatchAck>("AcpSessionEvents", agentId, acpSessionId, envelopes, cancellationToken: ct);
 
     /// <summary>
-    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror.:
+    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror:
     /// chunks are drained by <see cref="TerminalOutputSender"/>'s single ordered loop
     /// instead of being fired at <c>SendAsync</c> fire-and-forget, so they reach the
     /// server in PTY order. The enqueue awaits when the queue is full — the caller

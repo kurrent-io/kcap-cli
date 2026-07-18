@@ -406,7 +406,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     }
 
     /// <summary>
-    /// gap 1: answers a <c>session/set_config_option</c> request — either the scripted
+    /// Model-selection gap 1: answers a <c>session/set_config_option</c> request — either the scripted
     /// JSON-RPC error (see <see cref="FailNextSetConfigOption"/>) or a probe-shaped success result
     /// echoing back the requested <c>value</c> as the <c>model</c> config option's
     /// <c>currentValue</c>, mirroring the real agent's confirmed response shape

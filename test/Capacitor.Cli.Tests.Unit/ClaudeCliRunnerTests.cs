@@ -332,7 +332,7 @@ public class ClaudeCliRunnerTests {
         await Assert.That(result!.Result).IsEqualTo("ok");
     }
 
-    // follow-up: if the envelope says is_error:true, the parser
+    // Follow-up: if the envelope says is_error:true, the parser
     // returns null but RunCoreAsync still tries TryReadTranscriptFallback.
     // The transcript's last assistant block on a failed turn can be a
     // partial reply or stale auto-memory content, so converting that into

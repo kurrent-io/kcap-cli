@@ -494,7 +494,7 @@ internal sealed class CursorImportSource : IImportSource {
         // (next run sees AlreadyLoaded and never re-emits). Treat lifecycle
         // POST failure as a hard import failure; the orchestrator surfaces
         // Errored and the user re-runs, which is idempotent on the server
-        // (canonical event ids are deterministic —).
+        // (canonical event ids are deterministic).
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
             BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc, repositoryNode),

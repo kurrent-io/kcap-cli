@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Commands;
 /// Lives in the CLI project (not Core) so the Microsoft.Data.Sqlite native bundle never
 /// reaches the AOT-published daemon — same rationale as <see cref="OpenCodeDb"/>. Opened
 /// read-only, WAL-tolerant. Every step is best-effort: a missing db / table / undecodable
-/// row is skipped, never thrown (cost is always fail-open —).
+/// row is skipped, never thrown (cost is always fail-open).
 /// </summary>
 internal sealed class AntigravityGenMetadataDb : IDisposable {
     readonly SqliteConnection _conn;

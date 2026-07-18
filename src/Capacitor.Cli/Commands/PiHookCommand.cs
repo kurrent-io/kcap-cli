@@ -29,7 +29,7 @@ namespace Capacitor.Cli.Commands;
 static class PiHookCommand {
     // Pi's extension shells out with a 10s pi.exec timeout (see kcap.ts), so the
     // session-end drain must finish well inside that or the session-end POST is
-    // starved and the session sticks "Active" (mirror of).
+    // starved and the session sticks "Active" (same drain-cap pattern as ClaudeHookCommand's).
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(6);
 
     public static async Task<int> Handle(string baseUrl, string[] args) {
@@ -141,7 +141,7 @@ static class PiHookCommand {
     static async Task<int> HandleSessionEnd(string baseUrl, string sessionId, string file, string? cwd, string? reason) {
         // Kill watcher + inline-drain BEFORE the POST so the server computes
         // stats over the full transcript — capped so a slow drain can't starve
-        // the session-end POST (mirror of ClaudeHookCommand /).
+        // the session-end POST (mirror of ClaudeHookCommand).
         try {
             var drained = await TimeBudget.RunCappedAsync(
                 async () => {

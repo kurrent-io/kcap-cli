@@ -14,7 +14,7 @@ public class EvalServiceTests {
 
     // ── Judge MCP config ───────────────────────────────────────────────────
 
-    // follow-up: the inline judge server is named `kcap-judge` (not
+    // Follow-up: the inline judge server is named `kcap-judge` (not
     // `kcap-review`) so it never collides with the plugin-registered
     // `kcap-review` (`kcap mcp review`) server, and the allowlist prefix must
     // track that server key exactly — otherwise every judge tool call lands

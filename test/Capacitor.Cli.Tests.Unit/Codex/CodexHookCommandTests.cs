@@ -98,7 +98,7 @@ public class CodexHookCommandTests : IDisposable {
             var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
             await Assert.That(endRequests.Count).IsEqualTo(0);
 
-            // invariant: valid JSON object on stdout, no chatter.
+            // Invariant: valid JSON object on stdout, no chatter.
             var stdout = stdoutWriter.ToString();
             var doc    = JsonDocument.Parse(stdout);
             await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
@@ -227,7 +227,7 @@ public class CodexHookCommandTests : IDisposable {
         // the request server-side via /hooks/permission-record (the same
         // fire-and-forget endpoint Claude's terminal path uses) and emits an
         // empty hookSpecificOutput so Codex's normal in-CLI approval prompt
-        // asks the user. Regression for.
+        // asks the user. Regression test for this behavior.
         var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
         Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", null);
 
@@ -314,12 +314,12 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
-    // / Qodo finding: bounding only the POST left auth discovery
+    // Qodo finding: bounding only the POST left auth discovery
     // (GET /auth/config) running on HttpClient's 100 s default. Stub
     // /auth/config slow and assert the hook still returns under 5 s — the
     // shared 2 s CTS in CodexHookCommand covers discovery too.
     //
-    // follow-up: this test redirects Console.Out, so it must share
+    // Separately, this test redirects Console.Out, so it must share
     // ConsoleSerialGroup with every other Console.Out-redirecting test in
     // the suite. Previously it lived in its own "CodexPermissionRequestStdout"
     // group and raced against the ConsoleSerialGroup tests, occasionally
@@ -422,10 +422,10 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
-    // Fix #3 /: non-string session_id in a Stop payload must not crash.
+    // Fix #3: non-string session_id in a Stop payload must not crash.
     // session_id falls to null via the safe TryGetString helper, so HandleStop
     // short-circuits before EnsureWatcherRunning. No server POST is expected
-    // (removed Stop's session-end POST), but we still stub
+    // (Stop's session-end POST was removed), but we still stub
     // /hooks/session-end/codex so a regression that reintroduces the POST
     // surfaces as a test failure via the WireMock log assertion below.
     [Test]
@@ -444,7 +444,7 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(endRequests.Count).IsEqualTo(0);
     }
 
-    // when the user runs `kcap disable`, the marker file
+    // When the user runs `kcap disable`, the marker file
     // under PathHelpers.ConfigPath("disabled") must short-circuit the Codex
     // hook the same way it does for Claude. Without this guard, the next
     // Codex Stop hook restarts the watcher (HandleStop calls
@@ -507,7 +507,7 @@ public class CodexHookCommandTests : IDisposable {
     // PermissionRequest_records_event_and_yields_decision_to_codex above; it
     // asserts the new record-and-yield contract (no in-CLI decision, fall back
     // to Codex's own approval prompt). The tests below cover the new
-    // daemon-bridge branch added in.
+    // daemon-bridge branch added since then.
 
     [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {

@@ -966,8 +966,8 @@ public partial class AgentOrchestratorVendorTests {
             return Task.CompletedTask;
         }
 
-        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (:
-        /// drives the bounded per-agent re-registration retry test).</summary>
+        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (drives
+        /// the bounded per-agent re-registration retry test).</summary>
         public int AgentRegisteredFailTimes { get; init; }
         public int AgentRegisteredCallCount { get; private set; }
 

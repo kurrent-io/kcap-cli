@@ -38,7 +38,7 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
 
     /// <summary>
     /// Terminal byte stream consumed by the orchestrator read loop. PTY runtimes yield real
-    /// terminal output; the ACP runtime yields an empty stream until adds a terminal
+    /// terminal output; the ACP runtime yields an empty stream until a follow-up adds a terminal
     /// capability (ACP stdout is protocol traffic, never terminal output).
     /// </summary>
     IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default);
@@ -63,7 +63,7 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     Task SendRawInputAsync(byte[] data);
 
     /// <summary>Viewer resize. PTY runtimes resize the winsize; the ACP runtime no-ops until
-    /// adds a terminal capability.</summary>
+    /// a follow-up adds a terminal capability.</summary>
     void Resize(ushort cols, ushort rows);
 
     /// <summary>

@@ -35,7 +35,7 @@ public class CursorImportSourceTests {
         // Cursor is the one import source whose synthetic session-start carries a `repository`
         // node via BuildRepositoryNode — including pr_* when a PR is detected. Guard
         // that the payload propagates those fields (a regression dropped them when Cursor's repo
-        // detector was switched to skip PR detection during the import-latency work —).
+        // detector was switched to skip PR detection during the import-latency work).
         var repo = new RepositoryPayload {
             Owner = "o", RepoName = "r", Host = "github.com", Branch = "main",
             PrNumber = 7, PrTitle = "t", PrUrl = "https://github.com/o/r/pull/7", PrHeadRef = "main"

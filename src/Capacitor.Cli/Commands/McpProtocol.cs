@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Commands;
 /// Shared MCP protocol plumbing so every kcap MCP server answers the standard capability
 /// probes (<c>resources/list</c>, <c>prompts/list</c>, <c>ping</c>) and negotiates the
 /// protocol version — instead of returning <c>-32601</c>, which some clients treat as fatal
-/// and drop the server (the likely root of). JsonNode DOM only → AOT-safe.
+/// and drop the server. JsonNode DOM only → AOT-safe.
 /// </summary>
 static class McpProtocol {
     /// The version we advertise when we don't recognise the client's request.

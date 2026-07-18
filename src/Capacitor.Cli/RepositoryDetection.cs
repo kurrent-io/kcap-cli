@@ -12,7 +12,7 @@ namespace Capacitor.Cli;
 static class RepositoryDetection {
     // Bump whenever the cached shape/derivation changes so stale entries are ignored.
     // v2: added Host + provider-aware parsing.
-    // v3: multi-segment owner parsing (nested GitLab groups,) — v2 entries for
+    // v3: multi-segment owner parsing (nested GitLab groups) — v2 entries for
     //     nested repos have owner=null and must re-derive.
     internal const int CacheSchemaVersion = 3;
 

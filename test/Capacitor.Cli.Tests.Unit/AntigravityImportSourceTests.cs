@@ -18,7 +18,7 @@ public class AntigravityImportSourceTests {
     const string SessB = "bbbbbbbb-0000-0000-0000-00000000b00b";
 
     // The brain-dir conversation id is dashed on disk, but the surfaced session id is the
-    // dashless canonical form (matching live capture —). Children stay dashed because
+    // dashless canonical form (matching live capture). Children stay dashed because
     // they resolve on-disk brain-dir transcript paths.
     static string Dashless(string id) => Guid.Parse(id).ToString("N");
 

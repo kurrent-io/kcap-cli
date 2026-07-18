@@ -17,8 +17,8 @@ namespace Capacitor.Cli.Core.Acp;
 
 /// <summary>
 /// <c>initialize</c> params. Deliberately advertises MINIMAL client capabilities (no <c>fs</c>, no
-/// <c>terminal</c>) — decides those from the findings; does not implement
-/// either capability.
+/// <c>terminal</c>) — those get decided later based on ACP probe findings; this type implements
+/// neither capability.
 /// </summary>
 public sealed record InitializeParams(
     [property: JsonPropertyName("protocolVersion")]  int                     ProtocolVersion,

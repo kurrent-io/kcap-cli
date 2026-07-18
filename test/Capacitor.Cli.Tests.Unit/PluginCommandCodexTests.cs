@@ -534,7 +534,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(stdout).Contains("trust");
     }
 
-    // regression: when the top-level skills/ folder is present but one
+    // Regression: when the top-level skills/ folder is present but one
     // or more individual skill sub-folders are missing (packaging defect),
     // `plugin install --codex` must fail BEFORE writing hooks. The per-skill
     // preflight must run before InstallCodexHooks to maintain the atomicity

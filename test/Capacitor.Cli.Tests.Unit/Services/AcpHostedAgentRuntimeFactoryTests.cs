@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Services;
 
 /// <summary>
-/// 4, Finding 3: proves <see cref="AcpHostedAgentRuntimeFactory"/> — constructed for
+/// Round-4 review finding 3: proves <see cref="AcpHostedAgentRuntimeFactory"/> — constructed for
 /// real, driven through its REAL <see cref="AcpHostedAgentRuntimeFactory.StartAsync"/> — actually
 /// wires the ACP interaction bridge into the runtime it produces, by observing an inbound
 /// <c>session/request_permission</c> genuinely dispatch to the injected <c>requestInteraction</c>
@@ -18,8 +18,8 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// process-spawning is swapped out via its <c>connectionSource</c> constructor seam for one backed
 /// by <see cref="FakeAcpAgent"/>'s existing in-memory pipe streams, the same fake this project
 /// already uses for <c>AcpHostedAgentRuntimeTests</c>/<c>AcpHostedAgentRuntimePermissionTests</c>.
-/// A regression that left <c>StartAsync</c> passing <c>requestInteraction: null</c> ('s
-/// original default-decline posture) would make this test's <c>session/request_permission</c>
+/// A regression that left <c>StartAsync</c> passing <c>requestInteraction: null</c> (reverting to
+/// the runtime's original default-decline posture) would make this test's <c>session/request_permission</c>
 /// resolve with a JSON-RPC "Method not found" error instead of the well-formed <c>cancelled</c>
 /// outcome asserted below — i.e. this test FAILS on that regression, unlike the pre-round-4 test it
 /// replaces.
@@ -122,7 +122,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     }
 
     /// <summary>
-    /// gap 1: <c>ctx.Model</c> (the launch's own model override) must take precedence over
+    /// Model-precedence gap: <c>ctx.Model</c> (the launch's own model override) must take precedence over
     /// <c>DaemonConfig.CursorModel</c> (the daemon-wide family-prefix default) — proves the full
     /// chain (factory merges the two, runtime resolves against `session/new`'s `availableModels`,
     /// sends `session/set_config_option`) picks the PER-LAUNCH model, not the daemon default.
@@ -178,7 +178,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     public async Task StartAsync_IfRequestInteractionWereNull_PermissionRequestWouldGetMethodNotFound() {
         var fake = new FakeAcpAgent();
         var conn = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
-        var runtime = new AcpHostedAgentRuntime(conn, new FakeAcpProcess(), NullLogger.Instance); // no requestInteraction — default
+        var runtime = new AcpHostedAgentRuntime(conn, new FakeAcpProcess(), NullLogger.Instance); // no requestInteraction — default behavior
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);

@@ -482,7 +482,7 @@ static class ClaudeCliRunner {
     /// Rejects responses with <c>is_error: true</c> — the CLI signals API
     /// failures (overload, rate limit, auth) by setting this flag and writing
     /// the error text into <c>result</c>. Treating that text as a valid title
-    /// caused, where API error messages surfaced as session titles.
+    /// caused a regression where API error messages surfaced as session titles.
     /// </para>
     /// </summary>
     static ClaudeCliResult? ParseJsonResponseOnly(string stdout) {

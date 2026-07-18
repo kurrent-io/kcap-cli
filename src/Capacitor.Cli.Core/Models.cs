@@ -139,7 +139,7 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
-    // task 7: set by the shutdown final drain (isFinalDrain) when it held back an
+    // Task 7: set by the shutdown final drain (isFinalDrain) when it held back an
     // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
     // the final drain to flag the session needs-import (never drop a truncated tail).
     public bool FinalDrainHeldIncompleteLine { get; set; }
@@ -188,7 +188,7 @@ class WatchState {
     // until its link POST succeeds, so a failed POST retries on the next scan (fail-open).
     public HashSet<string> PostedSubagentLinks { get; } = new(StringComparer.Ordinal);
 
-    // task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
+    // Task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
     // synthetic KiroUsageBackfilled line, so a later drain never re-emits the same anchor. Mirrors
     // LastAntigravityGenIdx above, but keyed on the anchor string rather than a row index because
     // Kiro's sidecar has no stable ordinal — committed ONLY after a successful send (see

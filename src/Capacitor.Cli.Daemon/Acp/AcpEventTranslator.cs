@@ -46,7 +46,7 @@ internal static partial class AcpEventTranslator {
     /// or terminal with no extractable content) returns <see langword="null"/> rather than an empty
     /// <c>ToolResultReceived</c>.</description></item>
     /// <item><description><see cref="AcpUpdateKind.Plan"/>/<see cref="AcpUpdateKind.AvailableCommands"/>
-    /// → always <see langword="null"/> (not transcript content; deferred to).</description></item>
+    /// → always <see langword="null"/> (not transcript content; deferred to future work).</description></item>
     /// <item><description><see cref="AcpUpdateKind.Unknown"/> → <see langword="null"/>, but
     /// logged via <paramref name="logger"/> (when supplied) at debug level — never silently
     /// swallowed. <see cref="AcpSessionUpdate.Raw"/> itself is only logged verbatim when

@@ -84,7 +84,7 @@ public class SplitNewCompleteLinesTests {
 
     [Test]
     public async Task Final_drain_consumes_a_parseable_unterminated_final_line() {
-        // task 7: the shutdown final drain (ConsumeIfComplete) delivers an unterminated
+        // Task 7: the shutdown final drain (ConsumeIfComplete) delivers an unterminated
         // final line ONLY when it is a complete JSON record. Here the last line parses, so it is
         // consumed and the position advances past it.
         var r = WatchCommand.SplitNewCompleteLines(

@@ -4,7 +4,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// task 8: at shutdown (idle-timeout / parent-exit) with the hub down, the final drain's
+/// Task 8: at shutdown (idle-timeout / parent-exit) with the hub down, the final drain's
 /// undelivered transcript tail (state.LinesProcessed → EOF) must not be silently dropped — it is
 /// spooled into the dedicated <see cref="TranscriptSpool"/> so the global drain (task 3) replays it
 /// after recovery, without a manual `kcap import`.

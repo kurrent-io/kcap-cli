@@ -320,7 +320,7 @@ public static class DaemonCommands {
         if (ReadPidFile(name) is not { } entry) {
             // ReadPidFile returns null for BOTH an absent file and a present-but-
             // unparseable one (empty/partial — e.g. a mid-write SIGKILL; it no
-            // longer unlinks the latter,).
+            // longer unlinks the latter).
             if (!File.Exists(DaemonLockPaths.PidPath(name))) {
                 Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
 

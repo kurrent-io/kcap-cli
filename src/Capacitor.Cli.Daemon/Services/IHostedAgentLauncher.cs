@@ -31,7 +31,7 @@ internal interface IHostedAgentLauncher {
     /// the loop — no tool-permission prompts — and cannot recursively invoke
     /// flow-starting MCP tools. The orchestrator refuses an unattended launch
     /// for a vendor that returns <c>false</c>. Both shipped launchers
-    /// support it; a future vendor (e.g. Gemini,) may not.
+    /// support it; a future vendor (e.g. Gemini) may not.
     /// </summary>
     bool SupportsUnattended { get; }
 

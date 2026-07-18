@@ -403,7 +403,7 @@ public static class EvalService {
         // chain. Accepted here because the alternative for an oversized chained
         // trace is the embed path's hard 400 (no verdict at all). Full
         // chain-aware tools require server-side chain support on
-        // eval-summary/search/transcript — tracked in.
+        // eval-summary/search/transcript — tracked separately for future work.
         var tokenBudget = TraceTokenBudget();
         var forceTools  = ShouldForceTools(traceJson.Length, tokenBudget);
         if (forceTools) {

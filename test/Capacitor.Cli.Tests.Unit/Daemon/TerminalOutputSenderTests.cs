@@ -5,12 +5,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// the hosted-agent terminal mirror must reach the server in PTY
+/// The hosted-agent terminal mirror must reach the server in PTY
 /// order and survive a flapping SignalR connection <em>without dropping bytes</em>.
-/// routed the stream through a single ordered drain loop but capped it with a
+/// An earlier version routed the stream through a single ordered drain loop but capped it with a
 /// <c>DropOldest</c> channel — under back-pressure that silently discarded the
 /// oldest chunks, severing a redraw-TUI stream mid-escape-sequence (the garbled
-/// "Terminal" tab). makes the queue loss-free: a full channel back-pressures
+/// "Terminal" tab). A later fix makes the queue loss-free: a full channel back-pressures
 /// the producer instead of dropping, and the only remaining drop — a send that keeps
 /// throwing while the hub reports Connected — is bounded-retried, then counted and
 /// logged rather than silently lost. These tests pin those guarantees without

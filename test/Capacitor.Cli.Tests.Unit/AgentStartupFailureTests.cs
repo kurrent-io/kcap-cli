@@ -57,7 +57,7 @@ public class AgentStartupFailureTests {
 
     [Test]
     public async Task UserExitedAfterShortInteractiveSession_IsNotStartupFailure() {
-        // scenario: agent ran for ~27 seconds, user typed /exit. The
+        // Scenario: agent ran for ~27 seconds, user typed /exit. The
         // 30-second wall-clock window misclassified this as a startup failure.
         // Output flowed throughout, so the spawn → last-output gap is large.
         var result = AgentOrchestrator.IsStartupFailure(

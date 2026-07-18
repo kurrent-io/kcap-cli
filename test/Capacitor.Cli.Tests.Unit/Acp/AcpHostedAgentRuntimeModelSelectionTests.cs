@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// gap 1: exercises <see cref="AcpHostedAgentRuntime.StartAsync"/>'s model-selection step —
+/// Model-selection gap 1: exercises <see cref="AcpHostedAgentRuntime.StartAsync"/>'s model-selection step —
 /// <c>session/set_config_option</c>, sent AFTER <c>session/new</c> resolves and BEFORE the first
 /// <c>session/prompt</c> fires — end-to-end against <see cref="FakeAcpAgent"/>. Mirrors the
 /// <c>AcpHostedAgentRuntimeTests</c> harness pattern; no real <c>cursor-agent acp</c> process.

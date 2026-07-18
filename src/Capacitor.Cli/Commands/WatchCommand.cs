@@ -191,7 +191,7 @@ static partial class WatchCommand {
         Console.SetOut(logWriter);
         Console.SetError(logWriter);
 
-        // task 9: `logKey` is already the same `{sessionId}` / `{sessionId}-{agentId}`
+        // Task 9: `logKey` is already the same `{sessionId}` / `{sessionId}-{agentId}`
         // key WatcherManager uses for the pid file, so it doubles as the heartbeat key. Touch
         // once here (startup) and then every main-loop iteration below so a hook-side
         // staleness probe can distinguish a wedged (hung-but-alive) watcher from a healthy
@@ -314,7 +314,7 @@ static partial class WatchCommand {
             cts.Cancel();
         }
 
-        // task 8: the dedicated undelivered-transcript-tail spool, shared by the final-drain
+        // Task 8: the dedicated undelivered-transcript-tail spool, shared by the final-drain
         // needs-import marker below and the shutdown-during-outage tail spool.
         var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
 
@@ -547,7 +547,7 @@ static partial class WatchCommand {
         var connectRetryDelay = TimeSpan.FromSeconds(1);
 
         while (!cts.Token.IsCancellationRequested) {
-            // task 9: touch every connect-retry iteration too. A server outage at
+            // Task 9: touch every connect-retry iteration too. A server outage at
             // startup (backoff up to 30s) that lasts longer than grace+threshold (~50s) is a
             // healthy-but-reconnecting watcher, NOT a wedged one — without a heartbeat here
             // the hook probe would judge it stale and reap+respawn it repeatedly for the
@@ -614,7 +614,7 @@ static partial class WatchCommand {
 
         try {
             while (!cts.Token.IsCancellationRequested) {
-                // task 9: touch every iteration — including no-content drains and
+                // Task 9: touch every iteration — including no-content drains and
                 // while disconnected/reconnecting below — so staleness unambiguously means
                 // the loop itself is wedged, not merely idle or mid-reconnect.
                 TouchHeartbeat();
@@ -741,7 +741,7 @@ static partial class WatchCommand {
                 transcriptSpool.MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
             }
 
-            // task 8: shutdown-during-outage. DrainNewLines above only advances
+            // Task 8: shutdown-during-outage. DrainNewLines above only advances
             // state.LinesProcessed past lines the hub actually CONFIRMED — a failed final-drain send
             // (hub down, OR a HubException while the connection stays Connected — the generic catch
             // below does not change connection state) leaves LinesProcessed unchanged, so any lines
@@ -818,7 +818,7 @@ static partial class WatchCommand {
     /// sight of a file it registers the subagent (<c>subagent-start</c>, fail-closed) then
     /// spawns a detached child watcher that streams it with the subagent's canonical agentId
     /// (→ <c>AgentSubsession-*</c>). Idempotent across ticks via <paramref name="seen"/>;
-    /// deterministic server-side lifecycle ids make re-registration safe..
+    /// deterministic server-side lifecycle ids make re-registration safe.
     /// </summary>
     static async Task ScanGeminiSubagents(
             string          baseUrl,
@@ -888,7 +888,7 @@ static partial class WatchCommand {
     /// that streams it with the canonical agentId (= childSid) → <c>AgentSubsession-*</c>, which
     /// lines up with the agentId the server surfaced from the parent's <c>task</c> tool call.
     /// Idempotent across ticks via <paramref name="seen"/>; deterministic server-side lifecycle
-    /// ids make re-registration safe. phase 2.
+    /// ids make re-registration safe.
     /// </summary>
     static async Task ScanOpenCodeSubagents(
             string            baseUrl,
@@ -1476,7 +1476,7 @@ static partial class WatchCommand {
                 antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
             }
 
-            // task 10: Kiro's per-turn credits/context% live in the sibling {id}.json, not
+            // Task 10: Kiro's per-turn credits/context% live in the sibling {id}.json, not
             // the .jsonl (see KiroUsage docs) — by the time Kiro flushes that sidecar, a live drain
             // has usually already sent the anchor's AssistantMessage line, so import-style inline
             // enrichment can't reach it. Backfill it instead as a synthetic KiroUsageBackfilled line
@@ -1892,7 +1892,7 @@ static partial class WatchCommand {
             CapacitorJsonContext.Default.TranscriptBatch);
 
     /// <summary>
-    /// task 8: called from the shutdown path only when the hub is NOT connected at the point
+    /// Task 8: called from the shutdown path only when the hub is NOT connected at the point
     /// the final drain finishes. Re-reads the transcript from <paramref name="linesProcessed"/> (the
     /// last line the server actually confirmed, per <see cref="DrainNewLines"/>'s
     /// "only advance position after successful send" rule) to EOF, using the same
@@ -2243,7 +2243,7 @@ static partial class WatchCommand {
         return maxIdx;
     }
 
-    // task 10: Kiro's per-turn credits/context% live in the sidecar {id}.json, not the
+    // Task 10: Kiro's per-turn credits/context% live in the sidecar {id}.json, not the
     // .jsonl the live watcher tails (see KiroUsage docs) — the import path enriches the anchor
     // AssistantMessage line inline because it reads the whole file up front, but a live drain has
     // already sent that line by the time Kiro flushes the sidecar. So the live path emits a
@@ -2824,7 +2824,7 @@ static partial class WatchCommand {
     /// means the agent is mid-write of it: it is held back — excluded from the batch AND from
     /// <see cref="NewTranscriptLines.NextPosition"/> — so a later drain re-reads it once complete.
     /// Consuming it would send a truncated line that fails to normalize server-side and permanently
-    /// drop the completed line (, the "endless reads" bug; large Read tool_result lines were
+    /// drop the completed line (the "endless reads" bug; large Read tool_result lines were
     /// the common victim). Blank lines are skipped from the output but still advance the position,
     /// matching the long-standing drain behaviour.
     /// </summary>
@@ -3218,7 +3218,7 @@ static partial class WatchCommand {
     /// the whole file (Qodo #291 #2): only lines beyond <paramref name="linesProcessed"/> are retained.
     /// The file length is sampled once and the end-of-file newline is read from the last byte, then the
     /// read is CAPPED at that length — so a concurrent append after the sample can't make an as-yet
-    /// unterminated final line look complete and get consumed (which would re-drop it —).
+    /// unterminated final line look complete and get consumed (which would re-drop it).
     /// Opened by the caller with FileShare.ReadWrite (Qodo #291 #1) so the writing agent is never blocked.
     /// </summary>
     /// <param name="rawBytesReadFrom">

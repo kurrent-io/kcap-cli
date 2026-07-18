@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>{DaemonConfig.CursorPath} acp</c> as a child process, wraps its stdio in an
 /// <see cref="AcpConnection"/> + <see cref="AcpChildProcess"/>, and drives the ACP handshake via
 /// <see cref="AcpHostedAgentRuntime.StartAsync"/>. Cursor has no unattended mode yet (no permission
-/// bridge until), so <see cref="SupportsUnattended"/> is <c>false</c> — the orchestrator's
+/// bridge yet), so <see cref="SupportsUnattended"/> is <c>false</c> — the orchestrator's
 /// <c>UnattendedLaunchPolicy</c> refuses a review-flow launch for this vendor.
 ///
 /// <b>Spec-review Finding 4:</b> gained a <see cref="ServerConnection"/> constructor

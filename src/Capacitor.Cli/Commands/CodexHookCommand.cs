@@ -36,7 +36,7 @@ static class CodexHookCommand {
     // `stop.command.output` / `session-start.command.output` JSON schema and
     // reject empty bodies with "hook returned invalid stop hook JSON output".
     // `continue: true` is the schema default; emitting it explicitly satisfies
-    // the parser without altering behavior..
+    // the parser without altering behavior.
     const string SessionScopedOutputJson = """{"continue":true}""";
 
     /// <summary>

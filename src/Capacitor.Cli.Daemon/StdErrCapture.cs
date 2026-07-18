@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Daemon;
 ///
 /// <para>The detached launch path (<c>kcap daemon start -d</c> / <c>kcap
 /// agent</c>) redirects the child's std streams to a pipe and immediately
-/// closes it (, to avoid a pipe-leak hang), so without this those fatal
+/// closes it (to avoid a pipe-leak hang), so without this those fatal
 /// messages are written to a broken pipe and lost — which is exactly why a
 /// hard daemon death currently leaves no trace. The CLI therefore passes
 /// <c>--stderr-file &lt;path&gt;</c> on the detached path; the daemon reopens

@@ -100,7 +100,7 @@ static class CodexCliRunner {
         psi.ArgumentList.Add($"model_reasoning_effort=\"{reasoning}\"");
         // Only pin a model when the caller explicitly asks. Letting codex pick its
         // own default keeps title generation working for ChatGPT-account auth
-        // (which rejects model names like "gpt-5.3-codex" with a 400 —).
+        // (which rejects model names like "gpt-5.3-codex" with a 400).
         // Empty/whitespace is treated the same as null to match CodexLauncher's
         // argv-building behaviour — passing `-m ""` to codex is never useful.
         if (!string.IsNullOrWhiteSpace(model)) {

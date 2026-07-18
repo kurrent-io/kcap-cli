@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Core;
 /// <c>~/.config/kcap</c>) wrote to different singletons and never saw
 /// each other, allowing two daemons under the same name to authenticate as
 /// the same GitHub ID and oscillate the server-side <c>DaemonRegistry</c>
-/// slot. The staging incident that motivated was exactly that.</para>
+/// slot. The staging incident that motivated this fix was exactly that.</para>
 ///
 /// <para>This helper uses a <b>fixed location</b> under the home directory
 /// (<c>~/.config/kcap/daemons/</c>) regardless of <c>KCAP_CONFIG_DIR</c>,

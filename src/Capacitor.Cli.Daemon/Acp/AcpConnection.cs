@@ -82,7 +82,7 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
     /// <c>fs/*</c>, <c>terminal/*</c>). The read loop echoes the request's id verbatim in the
     /// response it writes back, with this delegate's return value as the JSON-RPC <c>result</c>.
     /// If unset, every inbound server request is answered with a method-not-found error — a safe
-    /// default-decline posture. leaves this unset; wires it to the permission bridge.
+    /// default-decline posture. This constructor leaves it unset; permission-bridge wiring assigns it.
     ///
     /// A handler returning <see langword="null"/> signals the method is unhandled: the connection
     /// answers <c>-32601 Method not found</c>, the SAME response a fully unset handler produces —

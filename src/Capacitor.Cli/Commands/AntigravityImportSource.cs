@@ -250,7 +250,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
         // Explicit gen_metadata usage pass — decodes the sibling conversation .db and posts the
         // synthetic USAGE lines the live watcher would have streamed, so a content-only import
-        // still gains cost. Best-effort (cost is never load-bearing,); always before
+        // still gains cost. Best-effort (cost is never load-bearing); always before
         // session-end.
         await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
 

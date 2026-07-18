@@ -376,8 +376,7 @@ internal sealed class PiImportSource : IImportSource {
     /// True when the line maps to at least one canonical event under the
     /// server's <c>PiTranscriptNormalizer</c>: the <c>session</c> header always
     /// emits; <c>compaction</c> emits a <c>ContextCompacted</c>;
-    /// <c>branch_summary</c> emits an <c>AssistantTextGenerated</c> with Pi metadata
-    ///;
+    /// <c>branch_summary</c> emits an <c>AssistantTextGenerated</c> with Pi metadata;
     /// <c>message</c> emits for roles user/assistant (non-empty content),
     /// toolResult (has toolCallId), bashExecution (has command). Everything else
     /// (model_change / thinking_level_change / label / session_info / custom*) is

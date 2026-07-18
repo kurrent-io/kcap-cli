@@ -28,7 +28,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// The fix adds a separate, outcome-independent tracker
 /// (<c>privateScopeSessionIds</c> in <c>ImportCommand.cs</c>) that captures every Cursor routed
 /// classification touched under <c>--private</c> regardless of outcome, and unions it into the
-/// privatize set — without touching <c>importedSessionIds</c>/the Done-grid counting (
+/// privatize set — without touching <c>importedSessionIds</c>/the Done-grid counting (that
 /// stays deferred, untouched).
 /// </para>
 /// </summary>

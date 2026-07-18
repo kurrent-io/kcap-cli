@@ -538,7 +538,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     /// <summary>
     /// Never yields a byte — ACP stdout is protocol traffic, never terminal output (no terminal
-    /// capability until). Crucially, this must NOT complete until the process exits or
+    /// capability yet). Crucially, this must NOT complete until the process exits or
     /// <paramref name="ct"/> cancels (Fix B/E): <see cref="AgentOrchestrator.ReadAgentOutputAsync"/>
     /// treats the enumerable ending as "the agent's output stream ended" and finalizes the agent —
     /// for a PTY that's a real signal (the CLI exited), but the old implementation here

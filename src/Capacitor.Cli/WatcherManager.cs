@@ -136,7 +136,7 @@ static class WatcherManager {
 
             await File.WriteAllTextAsync(GetPidFilePath(key), process.Id.ToString());
 
-            // task 9: record this instance's start time so a later staleness probe
+            // Task 9: record this instance's start time so a later staleness probe
             // knows whether it's still within the startup grace window — written here (not
             // by the watcher itself) so it exists even if the child never gets far enough to
             // touch its own heartbeat.
@@ -538,7 +538,7 @@ static class WatcherManager {
                     // Redact like WatchCommand.DrainNewLines — the live watcher
                     // path already redacts, and this inline-drain can carry real
                     // assistant/tool content (e.g. the Copilot final turn the
-                    // finalize drain delivers,).
+                    // finalize drain delivers).
                     newLines.Add(SecretRedactor.RedactLine(line));
                     newLineNumbers.Add(lineIndex);
                 }

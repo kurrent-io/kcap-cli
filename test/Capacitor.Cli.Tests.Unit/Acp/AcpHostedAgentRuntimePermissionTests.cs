@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
 /// <summary>
-/// end-to-end: <see cref="FakeAcpAgent"/> sends a real
+/// End-to-end: <see cref="FakeAcpAgent"/> sends a real
 /// <c>session/request_permission</c> server→client request mid-turn; the runtime's wired
 /// <see cref="AcpInteractionBridge"/> forwards it to an injected "ask the server" delegate and
 /// writes the JSON-RPC response back to the wire only once that delegate resolves — proving the
