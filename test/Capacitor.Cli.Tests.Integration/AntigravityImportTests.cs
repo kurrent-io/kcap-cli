@@ -154,9 +154,13 @@ public class AntigravityImportTests : IDisposable {
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 
-        var outcome = await source.ImportSessionAsync(
+        var result = await source.ImportSessionAsync(
             classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
+        // Outcome stays hardcoded Skipped, but SentChildContent threads through the repair's
+        // actual work: this repair attaches brand-new child content (the child was previously
+        // missing entirely), so it must report true.
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(result.SentChildContent).IsTrue();
 
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
             .Select(e => e.RequestMessage.Path).ToList();
@@ -173,6 +177,72 @@ public class AntigravityImportTests : IDisposable {
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
             .Select(e => e.RequestMessage.Body!).Single();
         await Assert.That(childTranscript).Contains($"\"agent_id\":\"{Dashless(Child)}\"");
+    }
+
+    [Test]
+    public async Task ImportSession_AlreadyLoaded_root_child_transcript_rejected_reports_no_sent_child_content_and_suppresses() {
+        WriteTranscript(Root, "build it");
+        WriteTranscript(Child, "sub task");
+        WriteLinkage();
+
+        // Parent (no agentId) fully ingested → AlreadyLoaded; the child (agentId=dashless Child)
+        // was never imported (404), so the repair pass attempts to resend its content — but the
+        // server REJECTS that batch (500). Regression for a Qodo-flagged false positive:
+        // SentChildContent must reflect only server-ACCEPTED batches (failOnError: true), so a
+        // rejected batch must NOT flip the signal to true.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Dashless(Child)).UsingGet())
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .AtPriority(10)
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] {
+            "/hooks/session-start/antigravity",
+            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+        // The server rejects the child's content batch.
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500));
+
+        using var client = new HttpClient();
+        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var result = await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        // Outcome stays hardcoded Skipped, but the rejected batch must NOT be reported as
+        // having sent child content — the exact bug under test.
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(result.SentChildContent).IsFalse();
+
+        // The walk continues non-fatally past the rejected batch (caught by the surrounding
+        // try/catch): subagent-start was posted, but subagent-stop is left unsent (a re-import
+        // retries), and the parent's own lifecycle (session-start/session-end) still completes.
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
+            .Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/subagent-stop")).IsFalse();
+        await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsTrue();
+
+        // A routed AlreadyLoaded+Skipped replay with a false signal is SUPPRESSED for counting,
+        // not reported as Loaded — the false-positive Qodo flagged.
+        var isSuppressed = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(isSuppressed).IsTrue();
+
+        var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(resolved).IsNull();
     }
 
     [Test]
@@ -206,8 +276,14 @@ public class AntigravityImportTests : IDisposable {
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 
-        await source.ImportSessionAsync(
+        var result = await source.ImportSessionAsync(
             classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        // The child's only action here is the lifecycle-only repair (start+stop, no content
+        // resend) — that's a repair, not new work, so SentChildContent stays false. (Outcome
+        // stays Skipped.)
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(result.SentChildContent).IsFalse();
 
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
             .Select(e => e.RequestMessage.Path).ToList();

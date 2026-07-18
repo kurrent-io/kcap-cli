@@ -237,7 +237,15 @@ internal sealed class GeminiImportSource : IImportSource {
         // Import nested subagents (chats/<parentSessionId>/<subId>.jsonl) under the parent,
         // BEFORE session-end so their SubagentStarted/Completed land in the parent stream
         // ahead of SessionEnded. Subagent failures don't fail the (already-imported) parent.
-        await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ct);
+        //
+        // Capture whether any subagent actually got new content POSTed and ACCEPTED — the
+        // SentChildContent signal. KNOWN RESIDUAL: ImportSubagentsAsync has no per-child
+        // watermark — it always resends the whole subagent transcript from line 0 on every
+        // re-run, so for a session that HAS a subagent this reads true on essentially every
+        // re-run whether or not anything is actually new. Accepted — still strictly better
+        // than defaulting false (which would risk hiding genuinely-new subagent content
+        // behind the lifecycle-only-replay label).
+        var sentChildContent = await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ct);
 
         var endOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/gemini",
@@ -245,9 +253,9 @@ internal sealed class GeminiImportSource : IImportSource {
             ct);
         if (!endOk) return ImportOutcome.Failed;
 
-        if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+        if (sent == 0) return new ImportSessionResult(startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped, sentChildContent);
 
-        return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        return new ImportSessionResult(startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded, sentChildContent);
     }
 
     static JsonObject BuildSessionStartPayload(string sessionId, DateTimeOffset? startedAt) {
@@ -297,8 +305,17 @@ internal sealed class GeminiImportSource : IImportSource {
     /// it. Re-runs are idempotent (deterministic server-side ids). Any descendants beyond the
     /// depth cap, or a descendant directory that couldn't be read, are surfaced (never silent)
     /// via a stderr diagnostic.
+    ///
+    /// Returns <c>true</c> iff any descendant's <see cref="SessionImporter.SendTranscriptBatches"/>
+    /// call sent &gt;0 server-accepted lines — the <c>SentChildContent</c> signal, aggregated
+    /// across the ENTIRE recursive descendant subtree (direct children and every deeper
+    /// grandchild found by the walk above), not just direct children. Unlike Cursor/Antigravity,
+    /// there is no per-descendant watermark here: every re-run resends each descendant's whole
+    /// transcript from line 0, so this reads <c>true</c> on essentially every re-run of a session
+    /// that has any descendant subagent, whether or not anything is actually new (accepted
+    /// residual).
     /// </summary>
-    async Task ImportSubagentsAsync(
+    async Task<bool> ImportSubagentsAsync(
         HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath, CancellationToken ct
     ) {
         // Gemini has no completeness-fingerprint ledger (unlike OpenCode), so the omitted ids
@@ -320,9 +337,10 @@ internal sealed class GeminiImportSource : IImportSource {
                 "(a descendant directory existed but could not be read — its subtree may be incomplete)");
         }
 
-        if (descendants.Count == 0) return;
+        if (descendants.Count == 0) return false;
 
         var typesByParentTranscript = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+        var anySubagentContentSent  = false;
 
         foreach (var d in descendants) {
             ct.ThrowIfCancellationRequested();
@@ -341,19 +359,27 @@ internal sealed class GeminiImportSource : IImportSource {
                 GeminiSubagentDiscovery.BuildStartPayload(parentSessionIdDashless, agentId, agentType, d.File), ct);
             if (!startOk) continue;
 
+            int subSent;
             try {
-                await SessionImporter.SendTranscriptBatches(
+                // failOnError: true — SentChildContent must reflect only server-ACCEPTED
+                // batches; a non-2xx now throws and is caught below, so a rejected batch
+                // never flips the signal (Qodo finding 3).
+                subSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl,
                     sessionId:  parentSessionIdDashless, filePath: d.File,
-                    agentId:    agentId, startLine: 0, vendor: Vendor);
+                    agentId:    agentId, startLine: 0, vendor: Vendor, failOnError: true);
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
             }
+
+            if (subSent > 0) anySubagentContentSent = true;
 
             await PostSyntheticHookAsync(
                 client, baseUrl, "subagent-stop",
                 GeminiSubagentDiscovery.BuildStopPayload(parentSessionIdDashless, agentId, agentType, d.File), ct);
         }
+
+        return anySubagentContentSent;
     }
 
     static DateTimeOffset? TryGetLastWriteUtc(string path) {

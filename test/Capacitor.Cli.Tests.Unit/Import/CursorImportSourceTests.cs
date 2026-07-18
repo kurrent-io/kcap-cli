@@ -847,6 +847,310 @@ public class CursorImportSourceTests {
         await Assert.That(result.SentChildContent).IsTrue();
     }
 
+    // --- Watermark probe 2-attempt cap ---
+
+    [Test]
+    public async Task cursor_watermark_probe_retries_once_on_transient_500_then_succeeds() {
+        // A single transient 500 no longer skips straight to fail-open on the first failure:
+        // the status-bearing retry engages, the second attempt succeeds with a real watermark,
+        // and only the genuinely-new lines beyond it are sent.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        // 3 child lines; watermark (once known) reports last_line_number=0, so lines 1 and 2
+        // are genuinely new.
+        var childJsonl = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var getCalls = 0;
+        var posted   = new List<(string Path, string Body)>();
+
+        using var handler = new StubHandler(
+            getResponse: _ => {
+                getCalls++;
+                return getCalls == 1
+                    ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                    : new HttpResponseMessage(HttpStatusCode.OK) {
+                        Content = new StringContent("{\"last_line_number\":0}", System.Text.Encoding.UTF8, "application/json"),
+                    };
+            },
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        // Exactly 2 probe attempts: the retryable 500, then the successful retry — no fail-open
+        // triggered (the watermark WAS resolved).
+        await Assert.That(getCalls).IsEqualTo(2);
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsTrue();
+
+        var transcriptPost = posted.Single(p => p.Path == "/hooks/transcript");
+        var lineNumbers     = JsonNode.Parse(transcriptPost.Body)!["line_numbers"]!.AsArray()
+            .Select(n => n!.GetValue<int>()).ToArray();
+        // The exact startLine used: only lines 1 and 2 (beyond the resolved watermark) were sent.
+        await Assert.That(lineNumbers).IsEquivalentTo(new[] { 1, 2 });
+    }
+
+    [Test]
+    public async Task cursor_watermark_probe_falls_open_after_exactly_2_attempts_on_sustained_500() {
+        // A sustained failure exhausts the fixed 2-attempt cap before falling open — not before,
+        // not after. The fail-open resend still happens (idempotent server-side) and still
+        // conservatively reports SentChildContent=true since lines were actually posted.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var getCalls = 0;
+        var posted   = new List<(string Path, string Body)>();
+
+        using var handler = new StubHandler(
+            getResponse: _ => {
+                getCalls++;
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+            },
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        // Exactly 2 attempts made — the fixed cap, no more and no less — before falling open.
+        await Assert.That(getCalls).IsEqualTo(2);
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsTrue();
+
+        var transcriptPost = posted.Single(p => p.Path == "/hooks/transcript");
+        var lineNumbers     = JsonNode.Parse(transcriptPost.Body)!["line_numbers"]!.AsArray()
+            .Select(n => n!.GetValue<int>()).ToArray();
+        // Fail-open: the watermark was never resolved, so the whole child is resent from 0.
+        await Assert.That(lineNumbers).IsEquivalentTo(new[] { 0, 1, 2 });
+    }
+
+    [Test]
+    public async Task cursor_watermark_probe_does_not_retry_a_404() {
+        // A definitive 4xx (here reached via the existing NotFound "no watermark yet" shortcut)
+        // is not retried — the first attempt's result stands, matching today's behavior for a
+        // never-before-imported child.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var getCalls = 0;
+
+        using var handler = new StubHandler(
+            getResponse: _ => {
+                getCalls++;
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            },
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(getCalls).IsEqualTo(1); // no second attempt
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsTrue();
+    }
+
+    [Test]
+    public async Task cursor_watermark_probe_does_not_retry_a_429() {
+        // 429 is explicitly excluded from the outer retry (a rate-limit signal, not a transient
+        // blip) — no second attempt, fail-open triggers immediately, same treatment as a
+        // non-retryable 4xx.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var getCalls = 0;
+
+        using var handler = new StubHandler(
+            getResponse: _ => {
+                getCalls++;
+                return new HttpResponseMessage((HttpStatusCode)429);
+            },
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(getCalls).IsEqualTo(1); // no second attempt
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsTrue();
+    }
+
+    // The statusless case is tested directly against the pure retry-decision shell
+    // (FetchServerLastLineWithCappedRetryAsync) rather than end-to-end through ImportSessionAsync:
+    // a genuinely statusless HttpRequestException can only come out of GetWithRetryAsync by
+    // exhausting its own real ~30s internal backoff loop (a normally-returned non-2xx status,
+    // used by the four tests above, never enters that loop at all — only a THROWN
+    // HttpRequestException does, and GetWithRetryAsync retries every thrown HttpRequestException
+    // it sees regardless of status). Driving that for real would make this one test take ~30s of
+    // wall-clock time for no extra coverage; testing the shell directly with an injected probe
+    // keeps it instant while still exercising the exact acceptance criterion (finding 4): a
+    // statusless failure gets no second attempt.
+
+    [Test]
+    public async Task fetch_server_last_line_with_capped_retry_does_not_retry_a_statusless_transport_failure() {
+        var probeCalls = 0;
+
+        Task<int?> Probe(CancellationToken _) {
+            probeCalls++;
+
+            throw new HttpRequestException("connection refused"); // no HttpStatusCode — statusless
+        }
+
+        await Assert.That(async () =>
+            await CursorImportSource.FetchServerLastLineWithCappedRetryAsync(Probe, CancellationToken.None)
+        ).Throws<HttpRequestException>();
+
+        await Assert.That(probeCalls).IsEqualTo(1); // no second attempt
+    }
+
+    [Test]
+    public async Task fetch_server_last_line_with_capped_retry_retries_a_status_bearing_5xx_once() {
+        var probeCalls = 0;
+
+        Task<int?> Probe(CancellationToken _) {
+            probeCalls++;
+
+            if (probeCalls == 1)
+                throw new HttpRequestException("boom", null, HttpStatusCode.InternalServerError);
+
+            return Task.FromResult<int?>(7);
+        }
+
+        var result = await CursorImportSource.FetchServerLastLineWithCappedRetryAsync(Probe, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(7);
+        await Assert.That(probeCalls).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task fetch_server_last_line_with_capped_retry_propagates_cancellation_without_retrying() {
+        var probeCalls = 0;
+        using var cts  = new CancellationTokenSource();
+
+        Task<int?> Probe(CancellationToken _) {
+            probeCalls++;
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        }
+
+        await Assert.That(async () =>
+            await CursorImportSource.FetchServerLastLineWithCappedRetryAsync(Probe, cts.Token)
+        ).Throws<OperationCanceledException>();
+
+        await Assert.That(probeCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(500, true)]
+    [Arguments(503, true)]
+    [Arguments(408, true)]
+    [Arguments(404, false)]
+    [Arguments(429, false)]
+    [Arguments(401, false)]
+    public async Task is_retryable_watermark_probe_status_classifies_correctly(int statusCode, bool expected) {
+        var result = CursorImportSource.IsRetryableWatermarkProbeStatus((HttpStatusCode)statusCode);
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task is_retryable_watermark_probe_status_is_false_for_a_null_statusless_code() {
+        var result = CursorImportSource.IsRetryableWatermarkProbeStatus(null);
+        await Assert.That(result).IsFalse();
+    }
+
     [Test]
     public async Task import_session_attaches_repository_from_detected_workspace_repo() {
         // AI-1152: the import/backfill path must attach a `repository` node to the
