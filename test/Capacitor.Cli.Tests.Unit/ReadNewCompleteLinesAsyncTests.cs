@@ -1,5 +1,6 @@
 using System.Text;
 using Capacitor.Cli.Commands;
+using System.Linq;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -21,6 +22,13 @@ public class ReadNewCompleteLinesAsyncTests {
             string path, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, policy, default);
+    }
+
+    // AI-1382 review fix #1 — the Cursor watcher's captureRawBytes: true path.
+    static async Task<WatchCommand.NewTranscriptLines> ReadViaStreamRaw(
+            string path, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, policy, default, captureRawBytes: true);
     }
 
     static async Task AssertParity(string content, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
@@ -222,5 +230,163 @@ public class ReadNewCompleteLinesAsyncTests {
 
         await Assert.That(total).IsEqualTo((int)limit);
         await Assert.That(Encoding.UTF8.GetString(buffer, 0, total)).IsEqualTo("hello");
+    }
+
+    // ---- 5. AI-1382 review fix #1: captureRawBytes threads the EXACT decode-read bytes back to
+    // the caller. This is the mechanism the fix relies on to close the TOCTOU the round-2 review
+    // found: the runtime rewrite guard used to decode lines from one read, then reopen the file
+    // SEPARATELY to hash "the new range" — a rewrite landing between those two reads meant the
+    // guard recorded/verified a snapshot the batch never actually came from. Binding the guard's
+    // hash to SnapshotBytes (this same capped read) instead of a later reopen closes that window. ----
+
+    [Test]
+    public async Task CaptureRawBytes_snapshot_bytes_are_exactly_the_bytes_that_decoded_the_returned_lines() {
+        var path = WriteTemp("line1\nline2\nline3\n");
+        try {
+            var r = await ReadViaStreamRaw(path, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(r.SnapshotBytes).IsNotNull();
+            await Assert.That(r.SnapshotBytes!.Length).IsEqualTo((int)r.SnapshotByteLength);
+
+            // Independently decoding the SAME buffer must reproduce exactly the lines the
+            // streaming read already decoded — proving SnapshotBytes really is "the bytes that
+            // produced Lines", not bytes from some other (possibly later, possibly rewritten) read.
+            var reDecoded = WatchCommand.SplitNewCompleteLines(
+                Encoding.UTF8.GetString(r.SnapshotBytes!), 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(reDecoded.Lines).IsEquivalentTo(r.Lines);
+            await Assert.That(reDecoded.LineNumbers).IsEquivalentTo(r.LineNumbers);
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task CaptureRawBytes_defaults_to_null_when_the_caller_does_not_opt_in() {
+        // Every non-Cursor vendor keeps the original zero-buffering streaming path.
+        var path = WriteTemp("line1\nline2\n");
+        try {
+            var r = await ReadViaStream(path, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+            await Assert.That(r.SnapshotBytes).IsNull();
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task CaptureRawBytes_stays_behaviour_equivalent_to_the_non_capturing_path() {
+        const string content = "a\nb\n\nc";
+        var pathA = WriteTemp(content);
+        var pathB = WriteTemp(content);
+        try {
+            var expected = await ReadViaStream(pathA, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+            var actual   = await ReadViaStreamRaw(pathB, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(actual.Lines).IsEquivalentTo(expected.Lines);
+            await Assert.That(actual.LineNumbers).IsEquivalentTo(expected.LineNumbers);
+            await Assert.That(actual.NextPosition).IsEqualTo(expected.NextPosition);
+            await Assert.That(actual.HeldIncompleteFinalLine).IsEqualTo(expected.HeldIncompleteFinalLine);
+        } finally {
+            File.Delete(pathA);
+            File.Delete(pathB);
+        }
+    }
+
+    // ---- 6. AI-1382 review fix (r3, finding #3): rawBytesReadFrom/newRangeByteOffset bound the
+    // captureRawBytes buffer instead of always materializing the whole file. A large, mostly-
+    // unchanged Cursor transcript must NOT be re-read/re-allocated in full on every poll — only the
+    // guard's own small trailing-tail zone plus whatever's actually new. The periodic full-prefix
+    // cadence (a separate, rare poll) is the only time the whole file is still read; that path is
+    // exercised by passing rawBytesReadFrom: 0 (the default), already covered above. ----
+
+    static async Task<WatchCommand.NewTranscriptLines> ReadViaStreamRawBounded(
+            string path, int linesProcessed, long rawBytesReadFrom, long newRangeByteOffset,
+            WatchCommand.IncompleteFinalLinePolicy policy = WatchCommand.IncompleteFinalLinePolicy.Hold) {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return await WatchCommand.ReadNewCompleteLinesAsync(
+            stream, linesProcessed, policy, default,
+            captureRawBytes: true, rawBytesReadFrom: rawBytesReadFrom, newRangeByteOffset: newRangeByteOffset);
+    }
+
+    [Test]
+    public async Task Bounded_capture_allocates_only_the_window_from_rawBytesReadFrom_not_the_whole_file() {
+        // A large "already-checkpointed" prefix (well past any TrailingBytes window a real guard
+        // would use) followed by a few new lines. Before this fix, captureRawBytes always
+        // allocated a buffer the size of the WHOLE file, every poll, no matter how little was new.
+        var padding = string.Concat(Enumerable.Repeat("x", 50_000)); // one huge already-processed line
+        var content = padding + "\nnew1\nnew2\nnew3\n";
+        var path    = WriteTemp(content);
+        try {
+            var paddingLineByteLength = padding.Length + 1; // "xxxx...x\n"
+            var totalFileLength       = (long)Encoding.UTF8.GetByteCount(content);
+
+            var r = await ReadViaStreamRawBounded(
+                path, linesProcessed: 1, rawBytesReadFrom: paddingLineByteLength, newRangeByteOffset: paddingLineByteLength);
+
+            // Only the new lines are decoded, correctly labelled starting at linesProcessed.
+            await Assert.That(r.Lines).IsEquivalentTo(new[] { "new1", "new2", "new3" });
+            await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 1, 2, 3 });
+
+            // The captured buffer starts at rawBytesReadFrom and is bounded by the NEW range —
+            // nowhere near the ~50,000-byte padding line, which the old unconditional whole-file
+            // capture would have re-read and re-hashed every single poll.
+            await Assert.That(r.SnapshotStartOffset).IsEqualTo((long)paddingLineByteLength);
+            await Assert.That(r.SnapshotBytes).IsNotNull();
+            await Assert.That(r.SnapshotBytes!.Length).IsEqualTo((int)(totalFileLength - paddingLineByteLength));
+            await Assert.That(r.SnapshotBytes!.Length).IsLessThan(1000); // "new1\nnew2\nnew3\n" — tiny
+            await Assert.That(r.SnapshotByteLength).IsEqualTo(totalFileLength); // total file length unaffected
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task Bounded_capture_on_an_idle_poll_with_no_new_lines_allocates_essentially_nothing() {
+        // The Cursor watcher's common case: a 1-second poll on a large, fully-synced transcript
+        // with nothing new appended since the last poll. rawBytesReadFrom == newRangeByteOffset ==
+        // EOF (mirrors DrainNewLines when cursorGuardOldOffset already equals the file length).
+        var padding = string.Concat(Enumerable.Repeat("y", 100_000));
+        var content = padding + "\n";
+        var path    = WriteTemp(content);
+        try {
+            var totalFileLength = (long)Encoding.UTF8.GetByteCount(content);
+
+            var r = await ReadViaStreamRawBounded(
+                path, linesProcessed: 1, rawBytesReadFrom: totalFileLength, newRangeByteOffset: totalFileLength);
+
+            await Assert.That(r.Lines).IsEmpty();
+            await Assert.That(r.SnapshotBytes).IsNotNull();
+            // Nothing new, no trailing-zone lookback requested (rawBytesReadFrom == EOF) — the
+            // buffer allocated is ~0 bytes, not the ~100,000-byte file.
+            await Assert.That(r.SnapshotBytes!.Length).IsEqualTo(0);
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task Bounded_capture_snapshot_bytes_still_bind_exactly_to_the_new_range_decoded() {
+        // Mirrors CaptureRawBytes_snapshot_bytes_are_exactly_the_bytes_that_decoded_the_returned_lines
+        // for the BOUNDED path: the guard's exact-byte-binding property (the bytes hashed for the
+        // new-range record are the SAME bytes decoded into the sent lines) must survive making the
+        // capture incremental, not just the whole-file case.
+        var padding = "prefix-line-already-checkpointed";
+        var content = padding + "\nnew1\nnew2\n";
+        var path    = WriteTemp(content);
+        try {
+            var paddingLineByteLength = Encoding.UTF8.GetByteCount(padding) + 1;
+
+            var r = await ReadViaStreamRawBounded(
+                path, linesProcessed: 1, rawBytesReadFrom: paddingLineByteLength, newRangeByteOffset: paddingLineByteLength);
+
+            // Re-decoding SnapshotBytes independently (from its own start, offset 0 relative to the
+            // snapshot itself) must reproduce exactly the lines the bounded read already decoded.
+            var reDecoded = WatchCommand.SplitNewCompleteLines(
+                Encoding.UTF8.GetString(r.SnapshotBytes!), 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(reDecoded.Lines).IsEquivalentTo(r.Lines);
+        } finally {
+            File.Delete(path);
+        }
     }
 }

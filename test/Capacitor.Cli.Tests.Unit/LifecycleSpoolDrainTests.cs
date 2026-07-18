@@ -1,3 +1,4 @@
+using System.Net;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -5,6 +6,70 @@ namespace Capacitor.Cli.Tests.Unit;
 public class LifecycleSpoolDrainTests {
     static string TmpDir() => Path.Combine(Path.GetTempPath(), $"kcap-drain-{Guid.NewGuid():N}");
     const string Sid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    // AI-1382 review fix #1/#8 — the HttpClient-backed RunAsync overload's transcript poster
+    // (PostTranscript) must enforce the Cursor quarantine marker itself: a batch spooled BEFORE
+    // a runtime rewrite-guard trip (or one that simply never got checked anywhere else) must
+    // still never reach `/hooks/transcript` once its session is quarantined — this is the ONLY
+    // delivery-time check the spool-replay path has.
+    [Test]
+    public async Task PostTranscript_drops_a_quarantined_cursor_batch_without_posting() {
+        var dir = TmpDir();
+        try {
+            var sid  = Guid.NewGuid().ToString("N");
+            var life = new HookSpool(Path.Combine(dir, "spool"));
+            var tx   = new TranscriptSpool(Path.Combine(dir, "tx"));
+            tx.Append(sid, $$"""{"session_id":"{{sid}}","vendor":"cursor","lines":["x"],"line_numbers":[0]}""");
+            CursorMarkers.Quarantine(sid, "rewrite detected");
+
+            var posted = new List<string>();
+            using var handler = new StubHandler((req, _) => {
+                posted.Add(req.RequestUri!.AbsolutePath);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+            using var client = new HttpClient(handler);
+
+            await LifecycleSpoolDrain.RunAsync(client, "http://s", life, tx, currentSessionId: null,
+                budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+
+            await Assert.That(posted).DoesNotContain("/hooks/transcript");
+            // Dropped (permanently discarded), not left spooled for an endless retry loop.
+            await Assert.That(tx.HasBacklog(sid)).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // Regression guard: a non-quarantined Cursor batch (the overwhelmingly common case) must
+    // still post normally — the marker check must not false-positive.
+    [Test]
+    public async Task PostTranscript_posts_a_non_quarantined_cursor_batch_normally() {
+        var dir = TmpDir();
+        try {
+            var sid  = Guid.NewGuid().ToString("N");
+            var life = new HookSpool(Path.Combine(dir, "spool"));
+            var tx   = new TranscriptSpool(Path.Combine(dir, "tx"));
+            tx.Append(sid, $$"""{"session_id":"{{sid}}","vendor":"cursor","lines":["x"],"line_numbers":[0]}""");
+
+            var posted = new List<string>();
+            using var handler = new StubHandler((req, _) => {
+                posted.Add(req.RequestUri!.AbsolutePath);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+            using var client = new HttpClient(handler);
+
+            await LifecycleSpoolDrain.RunAsync(client, "http://s", life, tx, currentSessionId: null,
+                budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+
+            await Assert.That(posted).Contains("/hooks/transcript");
+            await Assert.That(tx.HasBacklog(sid)).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    sealed class StubHandler(Func<HttpRequestMessage, string, HttpResponseMessage> impl) : HttpMessageHandler {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
+            return impl(request, body);
+        }
+    }
 
     [Test]
     public async Task drains_start_then_transcript_then_end_for_a_session_with_no_further_hook() {

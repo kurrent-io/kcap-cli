@@ -62,6 +62,10 @@ public static partial class DaemonRunner {
             }
         }
 
+        // Phase B (D3): reviewer lifetime/idle backstop overrides from env (seconds; 0 disables).
+        config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
+        config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);
+
         // AI-1155: reopen fds 1/2 onto the capture file BEFORE building the host,
         // so even a crash during construction lands somewhere. On the detached
         // launch path the CLI closed our std pipes; without this a runtime/native
@@ -362,6 +366,15 @@ public static partial class DaemonRunner {
         // exactly what this bridge is meant to avoid.
         await host.StartAsync(lifetime.ApplicationStopping);
 
+        // Phase B (D4 §6.4(3)): resolve the orchestrator (which wires OnLaunchAgent +
+        // GetLiveAgents in its ctor) and reap any hosted-agent children that outlived a PRIOR daemon run
+        // — all BEFORE ConnectAsync advertises this daemon and the server can dispatch launches. Doing
+        // it after connect would let new work be admitted while old capacity is still being reclaimed
+        // (those survivors aren't yet in EffectiveCount), and would leave a window where a launch races
+        // an unwired handler. Under the daemon lock; best-effort (swallows its own faults).
+        var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
+        await orchestrator.ReapOrphansOnceAsync();
+
         try {
             await connection.ConnectAsync(lifetime.ApplicationStopping);
         } catch (Exception ex) when (nameInUse) {
@@ -379,7 +392,6 @@ public static partial class DaemonRunner {
         var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
         await worktreeManager.CleanupOrphanedAsync();
 
-        var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
         // Instantiate EvalRunner so it wires the per-phase eval handlers
         // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
         // ServerConnection. It's stateless beyond the handler assignment —
@@ -429,6 +441,15 @@ public static partial class DaemonRunner {
         "none"                         => LogLevel.None,
         _                              => null
     };
+
+    /// <summary>Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
+    /// (<c>0</c> → <see cref="TimeSpan.Zero"/>, which disables the bound). Unset/blank/invalid/negative
+    /// → the supplied <paramref name="fallback"/>.</summary>
+    internal static TimeSpan ParseSecondsEnv(string name, TimeSpan fallback) {
+        var raw = Environment.GetEnvironmentVariable(name);
+
+        return int.TryParse(raw, out var secs) && secs >= 0 ? TimeSpan.FromSeconds(secs) : fallback;
+    }
 
     /// <summary>
     /// Parses <c>KCAP_ACP_DEBUG_FRAMES</c> ("1"/"true", case-insensitive, are On; anything else —

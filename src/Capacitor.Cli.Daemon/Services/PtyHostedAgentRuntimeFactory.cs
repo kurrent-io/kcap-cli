@@ -79,6 +79,13 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             ["KCAP_AGENT_ID"]       = ctx.AgentId
         };
 
+        // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
+        // OrphanReaper env-marker scan can reap a recordless survivor of a PRIOR incarnation of THIS
+        // daemon (same KCAP_DAEMON_ID, older KCAP_DAEMON_EPOCH) — and never touch another daemon's
+        // child or a live agent of the current incarnation.
+        if (!string.IsNullOrEmpty(ctx.DaemonId))    env["KCAP_DAEMON_ID"]    = ctx.DaemonId;
+        if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
+
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) {
             env["KCAP_URL"] = ctx.ServerUrl;
         }

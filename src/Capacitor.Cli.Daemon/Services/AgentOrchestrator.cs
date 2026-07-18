@@ -28,10 +28,29 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
     public string               Status            { get; set; } = "Starting";
-    public DateTime             CreatedAt         { get; }      = DateTime.UtcNow;
+    public DateTime             CreatedAt         { get; init; } = DateTime.UtcNow;
     public DateTime             LastOutputAt      { get; set; } = DateTime.UtcNow;
     public bool                 HasReceivedOutput { get; set; }
     public TerminalOutputBuffer OutputBuffer      { get; } = new();
+
+    /// <summary>Phase B (D2): the launch kind + (for a ReviewFlow launch) the flow identity,
+    /// captured from <see cref="LaunchAgentCommand"/> at construction. Reported in
+    /// <c>LiveAgents</c>/<c>DaemonStatusReport</c> so a restarted server can associate a surviving
+    /// unassigned reviewer with its role. Defaults preserve pre-D2 behavior for any non-D2 launch path.</summary>
+    public LaunchKind           Kind              { get; init; } = LaunchKind.Default;
+    public string?              FlowRunId         { get; init; }
+    public string?              FlowRole          { get; init; }
+
+    /// <summary>Phase B (D1): single-flight teardown latch — a plain field (not a property) so
+    /// <see cref="System.Threading.Interlocked.CompareExchange(ref int,int,int)"/> can gate it. Exactly
+    /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
+    public int CleanupStarted;
+
+    /// <summary>Phase B (D4): the child's exact start-identity captured ONCE at spawn (the
+    /// <c>ProcessStartToken</c>). Teardown uses THIS stored token — never a freshly-recaptured one — so a
+    /// pid recycled after the child exited can't be adopted and later killed. Null only when the pid was
+    /// never capturable (a non-live/degenerate pid — nothing to track).</summary>
+    public string? StartIdentity { get; set; }
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
@@ -167,6 +186,21 @@ public class TerminalOutputBuffer {
 
 internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly ConcurrentDictionary<string, AgentInstance>       _agents = new();
+
+    // Phase B (D4): durable PID records + this daemon's logical identity/epoch for
+    // crash-survivor reaping. Initialized in the ctor from config.
+    AgentPidRecordStore? _pidRecords;
+    AgentKillQuarantine? _quarantine;
+    OrphanReaper?        _orphanReaper;
+    string               _daemonId    = "";
+    string               _daemonEpoch = "";
+
+    // Phase B (D4 §6.4(2a)/(3)): single-flight latches so a slow sweep (each survivor consumes a
+    // ~5s TERM grace sequentially) can't overlap itself when the next heartbeat tick fires — otherwise
+    // sweeps accumulate, double-signal, and re-scan /proc concurrently. A tick whose prior sweep is still
+    // running is simply skipped. 0 = idle, 1 = running (Interlocked-gated).
+    int _orphanSweepRunning;
+    int _quarantineSweepRunning;
     readonly DaemonConfig                                      _config;
     readonly ServerConnection                                  _server;
     readonly WorktreeManager                                   _worktreeManager;
@@ -265,6 +299,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _runtimeFactories  = runtimeFactories;
         _logger            = logger;
 
+        // Phase B (D4): per-daemon PID-record store + this daemon's logical id + boot epoch.
+        // Records live under "{stateDir}/{name}/agents" so they are unambiguously THIS daemon's own
+        // (the startup reap only touches its own leftovers). DaemonId is a stable per-name identity;
+        // DaemonEpoch is fresh per boot so the env-marker scan can tell a prior incarnation's
+        // survivors from the current incarnation's live children.
+        var recordRoot = Path.Combine(
+            config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+        _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        _quarantine  = new AgentKillQuarantine(logger);
+        _daemonId    = ComputeDaemonId(config.Name);
+        _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
+        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger);
+
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;
         _server.OnStopAgent              += HandleStopAgent;
@@ -281,14 +328,203 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 .Select(kvp => kvp.Key)
         ];
 
+        // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
+        _server.GetLiveAgents = () => [.. BuildLiveAgents()];
+
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunTokenRefreshLoopAsync(_shutdownCts.Token);
         _ = RunSpoolDrainLoopAsync(_shutdownCts.Token);
+        _ = RunDaemonStatusReportLoopAsync(_shutdownCts.Token); // Phase B (D2): periodic self-report
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
+
+    /// <summary>Phase B (D3): clock seam so the reviewer-TTL heartbeat check is testable with a
+    /// fixed time. Production uses the real UTC clock.</summary>
+    internal Func<DateTime> ClockUtc { get; set; } = () => DateTime.UtcNow;
+
+    /// <summary>Phase B (D3): the ReviewFlow agents the heartbeat should reap now — past
+    /// <see cref="DaemonConfig.ReviewerMaxLifetime"/> (reason <c>reviewer_ttl_expired</c>) or
+    /// <see cref="DaemonConfig.ReviewerIdleTimeout"/> (reason <c>reviewer_idle_expired</c>). Only
+    /// Running ReviewFlow agents; a <see cref="TimeSpan.Zero"/> bound disables it; interactive agents
+    /// are never returned. Pure (no side effects) so the heartbeat and tests share one decision.</summary>
+    internal IReadOnlyList<(string Id, string Reason)> FindReviewersToReap() {
+        var now    = ClockUtc();
+        var result = new List<(string, string)>();
+
+        foreach (var a in _agents.Values) {
+            if (a.Kind != LaunchKind.ReviewFlow || a.Status != "Running") continue;
+
+            if (_config.ReviewerMaxLifetime > TimeSpan.Zero && now - a.CreatedAt > _config.ReviewerMaxLifetime)
+                result.Add((a.Id, "reviewer_ttl_expired"));
+            else if (_config.ReviewerIdleTimeout > TimeSpan.Zero && now - a.LastOutputAt > _config.ReviewerIdleTimeout)
+                result.Add((a.Id, "reviewer_idle_expired"));
+        }
+
+        return result;
+    }
+
+    /// <summary>Phase B (D2): the daemon's self-report snapshot — its authoritative
+    /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
+    /// kill-quarantine). Pure; the send loop + tests share it.</summary>
+    internal DaemonStatusReport BuildStatusReport() =>
+        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()]);
+
+    /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
+
+    /// <summary>Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
+    /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
+    /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
+    /// the wire contract) keeps a slot reserved across the whole teardown, so a concurrent launch can't
+    /// observe a transiently-freed slot and over-admit. A persistent kill/record-write failure shrinks
+    /// admission (fails closed) rather than minting processes beyond the budget.</summary>
+    internal int EffectiveCount => _agents.Count + (_quarantine?.Count ?? 0);
+
+    /// <summary>Phase B (D4): this daemon's stable logical id = a hash of its name, written
+    /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
+    /// user is never mistaken for ours by the env-marker scan.</summary>
+    static string ComputeDaemonId(string name) =>
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name ?? "")))
+        [..16].ToLowerInvariant();
+
+    /// <summary>Phase B (D4 §6.4(2)/(2a)): capture the child's EXACT start-identity ONCE, store it
+    /// on the agent (teardown reuses it — never re-captures a possibly-recycled pid), and persist the
+    /// durable PID record FAIL-CLOSED. A write failure (I/O) or a live-but-unidentifiable child THROWS —
+    /// caught by the post-insert single-flight cleanup, so a spawned child we cannot durably track never
+    /// stays admitted holding capacity. A non-live/degenerate pid (already gone, or pid&lt;=0) has nothing
+    /// to track, so it returns cleanly rather than failing an already-doomed launch.</summary>
+    void PersistPidRecordOrThrow(AgentInstance agent, int pid) {
+        if (_pidRecords is null) return;
+
+        var identity = ProcessIdentity.Capture(pid);
+        if (identity is null) {
+            if (ProcessIdentity.IsAlive(pid))
+                throw new InvalidOperationException(
+                    $"Could not capture start-identity for live agent {agent.Id} (pid {pid}) — failing launch closed");
+
+            return; // no live capturable process → nothing to record or leak
+        }
+
+        agent.StartIdentity = identity;
+
+        // Write throws on I/O failure → propagates → post-insert single-flight cleanup (fail closed):
+        // a spawned, capturable child we cannot durably record must not stay admitted without a record.
+        _pidRecords.Write(new AgentPidRecord(
+            agent.Id, pid, identity, agent.Kind.ToString(), agent.Vendor,
+            agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>Delete an agent's PID record after its death is confirmed (teardown / confirmed reap).</summary>
+    void DeletePidRecord(string agentId) => _pidRecords?.Delete(agentId);
+
+    /// <summary>Test seams (this daemon's PID-record store) so a unit test can seed/inspect records
+    /// without a real launch. Never used in production.</summary>
+    internal void WritePidRecordForTest(AgentPidRecord record)     => _pidRecords?.Write(record);
+    internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
+    internal string DaemonIdForTest                                 => _daemonId;
+    internal string DaemonEpochForTest                             => _daemonEpoch;
+
+    /// <summary>Phase B (D4 §6.4(3) StopAgent fallback): the caller had no in-memory agent for
+    /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,
+    /// on Unix, carries the expected <c>KCAP_AGENT_ID</c> env — ambiguity spares), reap it by identity
+    /// and delete the record on confirmed death. This makes the server's registry-independent S2 stop
+    /// effective even against a NEW daemon incarnation that never knew the agent in memory.</summary>
+    async Task<bool> TryStopByPidRecordAsync(string agentId) {
+        if (_pidRecords is null) return false;
+
+        var record = _pidRecords.ReadAll().FirstOrDefault(r => r.AgentId == agentId);
+        if (record.AgentId != agentId) return false; // no record
+
+        var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _shutdownCts.Token);
+        if (confirmedGone) _pidRecords.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+
+        return confirmedGone;
+    }
+
+    /// <summary>Phase B (D4 §6.4(3)): run the startup orphan reap once — called by DaemonRunner
+    /// at boot under the daemon lock (next to WorktreeManager.CleanupOrphanedAsync), and re-run on each
+    /// heartbeat tick. SINGLE-FLIGHT: if a prior sweep is still running (a long /proc scan + sequential
+    /// TERM graces can outlast the 30s heartbeat, and the ctor-started heartbeat can overlap the boot
+    /// call), this tick is skipped rather than piling on. Best-effort: a reaper fault is logged and
+    /// swallowed, never faulting the caller.</summary>
+    internal async Task ReapOrphansOnceAsync(CancellationToken ct = default) {
+        if (_orphanReaper is null) return;
+        if (Interlocked.CompareExchange(ref _orphanSweepRunning, 1, 0) != 0) return; // a sweep is already in flight
+
+        try { await _orphanReaper.ReapOnceAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "OrphanReaper sweep faulted — continuing"); }
+        finally { Interlocked.Exchange(ref _orphanSweepRunning, 0); }
+    }
+
+    /// <summary>Phase B (D4 §6.4(2a)): retry the kill-quarantine once — SINGLE-FLIGHT, mirroring
+    /// <see cref="ReapOrphansOnceAsync"/>, so a slow retry (each entry a ~5s TERM grace) can't overlap the
+    /// next heartbeat tick. Skipped when empty or already running.</summary>
+    async Task RetryQuarantineOnceAsync(CancellationToken ct) {
+        if (_quarantine is not { Count: > 0 }) return;
+        if (Interlocked.CompareExchange(ref _quarantineSweepRunning, 1, 0) != 0) return;
+
+        try {
+            // Delete the durable PID record of every agent whose death the retry CONFIRMED — teardown
+            // retained it (with the current epoch) while the child was quarantined, so without this it
+            // would be skipped by the orphan sweep and leak until the next daemon restart.
+            foreach (var agentId in await _quarantine.RetryAllAsync(ct)) DeletePidRecord(agentId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "quarantine retry sweep faulted — continuing"); }
+        finally { Interlocked.Exchange(ref _quarantineSweepRunning, 0); }
+    }
+
+    /// <summary>Phase B (D2): build + send one status report, one-way, swallowing errors (an
+    /// old server has no handler; a transient send failure must not touch the agent loops).</summary>
+    internal async Task SendDaemonStatusReportOnceAsync() {
+        try { await _server.DaemonStatusReportAsync(BuildStatusReport()); }
+        catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed — ignoring"); }
+    }
+
+    async Task RunDaemonStatusReportLoopAsync(CancellationToken ct) {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        while (await timer.WaitForNextTickAsync(ct)) {
+            try { await SendDaemonStatusReportOnceAsync(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) { _logger.LogWarning(ex, "DaemonStatusReport loop tick faulted — continuing"); }
+        }
+    }
+
+    /// <summary>Phase B (D2): one <see cref="LiveAgentInfo"/> per currently-live (Starting or
+    /// Running), non-private agent, carrying its kind + flow identity. Mirrors the
+    /// <see cref="ServerConnection.GetLiveAgentIds"/> filter (private-local agents excluded).</summary>
+    internal IReadOnlyList<LiveAgentInfo> BuildLiveAgents() =>
+        [.. _agents.Values
+            .Where(a => a.Status is "Starting" or "Running" && !a.IsPrivate)
+            .Select(a => new LiveAgentInfo(a.Id, a.Kind.ToString(), a.CreatedAt, a.FlowRunId, a.FlowRole))];
+
+    /// <summary>Phase B: test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
+    /// PTY runtime, no real process/worktree) so unit tests can exercise <see cref="BuildLiveAgents"/>
+    /// / status-report / reviewer-TTL logic without a live launch. Never called in production.</summary>
+    internal AgentInstance SeedAgentForTest(
+            string id, LaunchKind kind = LaunchKind.Default, string status = "Running",
+            string? flowRunId = null, string? flowRole = null,
+            DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false,
+            IPtyProcess? pty = null, string? startIdentity = null) {
+        var agent = new AgentInstance(
+            id, null, "default", null, "/repo", "codex",
+            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance),
+            new WorktreeInfo("/repo", "b", "/repo"),
+            new CancellationTokenSource()) {
+            Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
+            CreatedAt = createdAt ?? DateTime.UtcNow, StartIdentity = startIdentity
+        };
+        agent.Status = status;
+        if (lastOutputAt is { } lo) agent.LastOutputAt = lo;
+        _agents[id] = agent;
+        return agent;
+    }
 
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
@@ -335,7 +571,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         string? reviewerToken = null;
 
         try {
-            if (ActiveCount >= _config.MaxConcurrentAgents) {
+            if (EffectiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return;
@@ -480,7 +716,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 DaemonBridgeUrl: daemonBridgeUrl,
                 CapacitorPath: _config.CapacitorPath,
                 McpAllowlist: effectiveAllowlist,
-                Work: work
+                Work: work,
+                DaemonId: _daemonId,       // Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
+                DaemonEpoch: _daemonEpoch
             );
 
             HostedRuntimeStart start;
@@ -518,9 +756,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CurrentCols         = HostedPtyCols,
                 CurrentRows         = HostedPtyRows,
                 Work                = work,
-                ReviewerBridgeToken = reviewerToken
+                ReviewerBridgeToken = reviewerToken,
+                Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
+                FlowRunId           = cmd.FlowRunId,
+                FlowRole            = cmd.FlowRole
             };
             _agents[agentId] = agent;
+
+            // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
+            // immediately after the process exists (before registration) so a daemon crash right after
+            // this leaves a reapable record. FAIL-CLOSED: a write/identity failure throws → the catch
+            // routes it through the single-flight cleanup (the agent is already in _agents).
+            PersistPidRecordOrThrow(agent, runtime.Pid);
 
             await RegisterAgentAsync(agent);
 
@@ -570,6 +817,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
+
+            // Phase B (D1): a post-insert failure (agent already in _agents — e.g. a throwing
+            // RegisterAgentAsync) routes teardown through the single-flight CleanupAgentAsync so it
+            // can't strand a live child; a pre-insert failure falls through to the transient cleanup below.
+            if (_agents.ContainsKey(agentId)) {
+                await CleanupAgentAsync(agentId);
+                await _server.LaunchFailedAsync(agentId, ex.Message);
+                return;
+            }
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
@@ -910,8 +1166,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     static readonly TimeSpan GracefulExitWait = TimeSpan.FromSeconds(15);
 
-    async Task HandleStopAgent(string agentId) {
+    internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
+            // Phase B (D4 §6.4(3)): no in-memory agent — this may be a survivor of a PRIOR
+            // daemon incarnation the server is still trying to stop (S2). Fall back to the PID record:
+            // reap by exact identity if a matching live process is still there.
+            await TryStopByPidRecordAsync(agentId);
             return;
         }
 
@@ -928,7 +1188,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Mark this as a user-initiated stop so the read-loop's finally-block
             // EndAgentSessionAsync call uses "agent_stopped" if it ends up being
             // the only successful call (e.g., transient SignalR failure here).
-            agent.PendingEndReason = "agent_stopped";
+            // Phase B (D3): but PRESERVE a backstop reason the heartbeat already stamped
+            // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
+            // default, so server-side attribution can tell a TTL/idle reap from a user stop.
+            if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
             _                      = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
             _                      = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
 
@@ -1476,6 +1739,29 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
         while (await _heartbeatTimer.WaitForNextTickAsync(ct)) {
+            // Phase B (D3): reap review-flow reviewers past their lifetime/idle backstop. Done
+            // before the per-agent loop so a reaped reviewer isn't also heartbeated this tick. Reason
+            // stamped on PendingEndReason so the end attribution is correct even if HandleStopAgent's
+            // own end call loses to the read-loop's.
+            // Phase B (D4 §6.4(2a)): retry killing any unconfirmed-death quarantined process,
+            // draining those confirmed gone (frees admission). Single-flight (skips if a prior retry runs).
+            _ = RetryQuarantineOnceAsync(ct);
+
+            // Phase B (D4 §6.4(3)): re-run the orphan reap — record pass is epoch-guarded (never
+            // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
+            // recordless survivors. Fire-and-forget; single-flight; swallows its own faults.
+            _ = ReapOrphansOnceAsync(ct);
+
+            foreach (var (id, reason) in FindReviewersToReap()) {
+                if (_agents.TryGetValue(id, out var reviewer)) {
+                    _logger.LogInformation(
+                        "Reaping review-flow reviewer {AgentId} ({Reason}); age {AgeHours:F1}h, idle {IdleHours:F1}h",
+                        id, reason, (ClockUtc() - reviewer.CreatedAt).TotalHours, (ClockUtc() - reviewer.LastOutputAt).TotalHours);
+                    reviewer.PendingEndReason = reason;
+                    _ = HandleStopAgent(id);
+                }
+            }
+
             // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
             // the local user is present and drives them directly).
             foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
@@ -1554,9 +1840,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task CleanupAgentAsync(string agentId) {
-        if (!_agents.TryRemove(agentId, out var agent)) {
-            return;
-        }
+        // Phase B (D1): claim the single-flight teardown BEFORE removing the agent from _agents.
+        // TryGetValue (not TryRemove) keeps the agent COUNTED in ActiveCount for the whole teardown, so a
+        // concurrent launch can't observe an under-counted EffectiveCount mid-teardown and over-admit
+        // (the P2 admission race). The CompareExchange latch on the SAME instance guarantees exactly one
+        // teardown even if the launch-catch and the read-loop's finally race here.
+        if (!_agents.TryGetValue(agentId, out var agent)) return;
+        if (Interlocked.CompareExchange(ref agent.CleanupStarted, 1, 0) != 0) return;
 
         // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
         // path), so revoke its bridge token now — after any final submit_review_result was served.
@@ -1583,6 +1873,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.Work == WorkLocation.OwnedWorktree) {
             try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
+
+        // Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
+        // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
+        // if the child exited and its pid was recycled, a re-capture would adopt the unrelated process's
+        // identity and the heartbeat would later kill it. Quarantine ONLY when the pid is alive AND still
+        // matches the stored identity (a stuck child of ours) — retain the record + count it against
+        // admission (fail closed) so the heartbeat retries the kill to confirmed death. A dead pid, a
+        // recycled pid (proven mismatch), or an agent with no captured identity → confirmed gone, delete
+        // the record. Add to quarantine BEFORE removing from _agents so EffectiveCount never dips
+        // (Activeized→quarantined is count-preserving).
+        var pid = agent.Runtime.Pid;
+        // Quarantine (retain + count) when the child may still be OURS-and-alive: a stored identity that
+        // still matches (true) OR is uncomparable (null — unreadable/foreign token). Delete only on a
+        // proven-gone pid: dead, a conclusive recycle (MatchesTri == false), or an agent that was never
+        // identified. Collapsing the uncomparable case to "gone" would drop a live child's record.
+        if (agent.StartIdentity is { } startIdentity
+            && ProcessIdentity.IsAlive(pid)
+            && ProcessIdentity.MatchesTri(pid, startIdentity) != false) {
+            _quarantine?.Add(new AgentKillQuarantine.Entry(
+                agent.Id, pid, startIdentity, agent.Kind.ToString(), agent.CreatedAt, agent.FlowRunId, agent.FlowRole));
+            _logger.LogWarning(
+                "Agent {AgentId} (pid {Pid}) still alive after teardown — quarantined for heartbeat kill-retry", agent.Id, pid);
+        } else {
+            DeletePidRecord(agentId); // confirmed dead / conclusively recycled pid / never-identified
+        }
+
+        // Now drop the agent from the live registry — after a surviving child is already in quarantine,
+        // so a concurrent launch never sees EffectiveCount transiently under-count this agent.
+        _agents.TryRemove(agentId, out _);
 
         // Skip server unregister during shutdown — _ct is cancelled and the call
         // would throw TaskCanceledException. The server detects the daemon
@@ -1754,6 +2073,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private cleanup path.</summary>
     internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
+
+    /// <summary>Phase B (D4 §6.4(2a)): drive one quarantine-retry sweep (drains confirmed-dead
+    /// entries and deletes their durable records) so a test needn't wait for a heartbeat tick.</summary>
+    internal Task RetryQuarantineForTest() => RetryQuarantineOnceAsync(_shutdownCts.Token);
 
     /// <summary>Test-only: number of agents currently tracked (for awaiting cleanup).</summary>
     internal int ActiveAgentCountForTest => _agents.Count;

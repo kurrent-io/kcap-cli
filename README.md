@@ -143,7 +143,7 @@ kcap import --antigravity       # only Antigravity
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Because Pi also ships no built-in MCP, the same command installs an MCP-bridge extension (`~/.pi/agent/extensions/kcap-mcp.ts`, opt out `--skip-pi-mcp`) that exposes the kcap MCP servers as native Pi tools, plus a steering block in `~/.pi/agent/AGENTS.md` (opt out `--skip-pi-instructions`). Historical `kcap import --pi` works with or without any of it.
 
-> **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Historical `kcap import --opencode` reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) and imports child sessions as subagents, so it backfills sessions from before the plugin was installed.
+> **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Historical `kcap import --opencode` reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) and imports every transitive descendant session (children, grandchildren, and so on — see [Loading historical sessions](#loading-historical-sessions)), so it backfills sessions from before the plugin was installed.
 
 This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), `~/.local/share/opencode/opencode.db` (OpenCode), and `~/.gemini/antigravity/brain/` (Antigravity) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, `--opencode`, or `--antigravity` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
@@ -491,7 +491,7 @@ Cursor historical import walks every JSONL transcript under `~/.cursor/projects/
 
 Kiro historical import reads each session's append-only log at `~/.kiro/sessions/cli/{id}.jsonl` (plus the sibling `{id}.json` for cwd / model / title) and posts the lines through `POST /hooks/transcript` — the same lines the live watcher tails, so live and historical ingest converge. Set `KIRO_HOME` to point at a non-default location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(session id, message/tool id, kind)`.
 
-OpenCode historical import reads its SQLite database (`~/.local/share/opencode/opencode.db`, honouring `XDG_DATA_HOME`) and reconstructs the same `{info,parts}` lines the live plugin streams — so live and historical ingest converge on one canonical event stream (`vendor=opencode`). Child sessions are imported as subagents of their parent (`/hooks/subagent-*`), matching the live nesting. Because the server exposes no completeness signal, kcap records each fully-imported session in a local ledger (`~/.cache/kcap/opencode-imported.json`, keyed by server) to skip it on re-run; a session interrupted mid-import is repaired on the next run. Re-imports are idempotent — canonical event ids derive from OpenCode's stable `prt_` part ids.
+OpenCode historical import reads its SQLite database (`~/.local/share/opencode/opencode.db`, honouring `XDG_DATA_HOME`) and reconstructs the same `{info,parts}` lines the live plugin streams — so live and historical ingest converge on one canonical event stream (`vendor=opencode`). Unlike live capture, which only nests direct children, historical import walks every transitive descendant session (children, grandchildren, and so on, up to a depth of 8) and imports each one as a direct subagent of the top-level root (`/hooks/subagent-*`) — flattened because a session's stream key can't express deeper nesting. A descendant beyond the depth cap is never silently dropped: import prints a `[kcap] opencode: root <id> descendants_omitted=N (depth cap 8 exceeded)` diagnostic to stderr, appending `(lower bound — counting ceiling hit)` in the rare case where counting the omitted subtree itself hit an internal safety cap before finishing — the count is then a lower bound, not exact. Because the server exposes no completeness signal, kcap records each fully-imported session in a local ledger (`~/.cache/kcap/opencode-imported.json`, keyed by server) to skip it on re-run — the ledger key is a content fingerprint over the whole descendant tree (including omitted ids), so a newly-reachable descendant invalidates a stale entry; a session interrupted mid-import is repaired on the next run. Re-imports are idempotent — canonical event ids derive from OpenCode's stable `prt_` part ids.
 
 Claude (`CLAUDE_CONFIG_DIR`), Codex (`CODEX_HOME`), Gemini (`GEMINI_CLI_HOME`, which names the parent of `.gemini`), OpenCode (`OPENCODE_CONFIG_DIR`), and Pi (`PI_CODING_AGENT_DIR`, which names the `~/.pi/agent` leaf) historical/live paths follow each agent's own config-relocation environment variable when it is set, so a relocated config is discovered automatically.
 
@@ -619,6 +619,29 @@ kcap plugin install --cursor --skip-cursor-mcp  # hooks only, skip ~/.cursor/mcp
 kcap plugin remove --cursor                 # remove Cursor hooks + kcap MCP servers
 ```
 
+**Live capture is watcher-backed (AI-1382).** Every Cursor hook (any of the 8, not just
+`sessionStart`) spawns — or heals — a per-session `kcap watch --vendor cursor` background watcher
+that tails `~/.cursor/projects/<sanitized>/agent-transcripts/<sid>/<sid>.jsonl` and streams new
+lines the moment Cursor writes them, instead of relying solely on the next hook's HTTP backfill.
+Hooks are kept as belt-and-braces: `subagent-start`/`subagent-stop`/`session-end` POSTs still
+fire, a spooled hook is still retried on the next invocation, and a per-hook backfill still runs
+as a fallback — the watcher just makes capture continuous instead of hook-triggered. A subagent
+gets its own child watcher, tailing its own transcript file, spawned only once its diverted
+`subagent-start` is acknowledged by the server (so no subagent transcript line can ever arrive
+before its lifecycle is opened) — a spooled (unacknowledged) start defers the spawn until a later
+hook's spool drain delivers it. If Cursor is force-quit mid-turn, the watcher's shutdown drain
+still recovers the last (possibly newline-less but complete) transcript line before exiting; if a
+session goes idle past `KCAP_CURSOR_IDLE_CEILING_MINUTES` (default `60`) the watcher exits WITHOUT
+posting `session-end` itself — end-of-session synthesis for Cursor stays owned by the
+`sessionEnd` hook or, as a backstop, a server-side lease-gated sweep — and the next hook for that
+session (any of the 8, not just `sessionStart`) reactivates a fresh watcher. A runtime rewrite
+guard defends against Cursor ever rewriting a transcript in place (expected append-only, but not
+hook-guaranteed): a detected rewrite discards the unsent batch and quarantines the session rather
+than risk re-sending stale byte ranges. `kcap cursor-verify-appendonly --path <file>` is a hidden
+diagnostic (not listed in `--help`) that samples a live transcript file for a bounded duration and
+reports whether it stayed append-only — the empirical evidence behind the watcher promotion, not
+something you need to run day to day.
+
 #### GitHub Copilot CLI hooks
 
 Copilot CLI is detected via `~/.copilot/` (created on Copilot's first run) or the `copilot` binary on `PATH`. kcap writes its own hooks file — Copilot merges every `*.json` under `~/.copilot/hooks/`, so your other hook files are never touched. Copilot loads hook config at startup: restart any running `copilot` session after installing.
@@ -641,7 +664,7 @@ kcap plugin remove --gemini                 # removes only kcap's entries
 
 Live sessions stream from the chat-recording JSONL Gemini names in each hook's `transcript_path` (`~/.gemini/tmp/<project>/chats/session-*.jsonl`); historical sessions import via `kcap import --gemini`. Sessions resumed with `gemini --resume` reattach to the same recorded session. (Historical import leaves working-directory / repo enrichment empty — Gemini doesn't record the cwd in a machine-readable header; live capture gets it from the hook payload.)
 
-Spawned subagents are captured too: Gemini records each in a nested `chats/<session>/<subId>.jsonl`, and both live capture (a child watcher per subagent) and `kcap import --gemini` discover and stream them, so they nest under the parent session in the trace.
+Spawned subagents are captured too: Gemini records each in a nested `chats/<session>/<subId>.jsonl`. Live capture (a child watcher per subagent) discovers direct children only. Historical `kcap import --gemini` goes further, recursively discovering every transitive descendant — a subagent's own subagents, and so on, up to a depth of 8 — under each descendant's own nested dir, and imports them all as direct subagents of the top-level session (flattened, since a session's stream key can't express deeper nesting). A descendant beyond the depth cap is never silently dropped: import prints a `descendants_omitted=N` diagnostic to stderr, appending `(lower bound — counting ceiling hit)` in the rare case where counting the omitted subtree itself hit an internal safety cap before finishing — the count is then a lower bound, not exact.
 
 #### AWS Kiro CLI hooks
 
@@ -784,6 +807,19 @@ verbatim, exactly like every other agent, with no Cursor/ACP-specific redaction.
 |----------------------|---------|-------------|
 | `KCAP_CODEX_IDLE_MINUTES` | `60` | How long a Codex rollout file may be idle (no new rollout lines and no Codex tool call in flight) before the `kcap watch` background watcher ends the session (`reason: idle_timeout`). Increase for very long thinking/compute turns; decrease for faster cleanup of abandoned sessions. Invalid or non-positive values fall back to the 60-minute default. |
 | `KCAP_PARENT_DEAD_CEILING_MINUTES` | `360` | Staged recovery ceiling for a watcher whose parent coding-agent PID was already dead at startup (a resolution glitch) and can't be re-resolved. The watcher first periodically re-resolves and re-arms the parent-exit watchdog; only if that keeps failing AND the transcript makes no progress for this long does it post `session-end` (`reason: parent_dead_ceiling`). Deliberately far above the idle timeout so a user parked at a Kiro/OpenCode prompt is never ended prematurely. Invalid or non-positive values fall back to 360 minutes (6h). |
+| `KCAP_CURSOR_IDLE_CEILING_MINUTES` | `60` | How long a Cursor session's transcript watcher may go idle before it exits (AI-1382). Unlike Codex/Antigravity, this exit does NOT itself POST `session-end` — Cursor's end-of-session synthesis stays owned by the `sessionEnd` hook or, as a backstop, a server-side lease-gated sweep; the next hook for that session reactivates a fresh watcher. Invalid or non-positive values fall back to the 60-minute default. |
+
+#### Review-flow reviewer backstops & crash-survivor reaping
+
+Hosted review-flow reviewers are *unattended* and count against the daemon's `--max-agents` budget. To keep a stuck or abandoned reviewer from holding a slot forever, the daemon defends its own capacity:
+
+- **Lifetime / idle backstop.** The heartbeat reaps a review-flow reviewer that has run past a maximum lifetime or gone idle too long (the driver vanished, or its run went terminal on the server without the daemon hearing about it). Interactive agents are never touched by these bounds.
+- **Crash-survivor reaping.** Each hosted child's pid + an exact OS-native start-identity is written to a durable per-daemon record under `{state-dir}/{name}/agents/` at spawn, and every child is stamped with `KCAP_AGENT_ID` / `KCAP_DAEMON_ID` / `KCAP_DAEMON_EPOCH` env markers. On the next boot (and on the heartbeat) the daemon reaps any child that outlived a **prior** incarnation of itself — matched by exact `(pid, start-identity)` from the record, or, for a recordless survivor, by the env markers (same daemon id, older epoch). A process is killed only when its identity is *proven*; anything ambiguous is spared (never a wrong kill). On Linux the env checks read `/proc/{pid}/environ`; on macOS 26 process env is redacted from other processes, so the record-based path is the effective mechanism there (production runs on Linux).
+
+| Environment variable | Default | Description |
+|----------------------|---------|-------------|
+| `KCAP_REVIEWER_MAX_LIFETIME` | `6h` (`21600`) | Max wall-clock lifetime, **in seconds**, for a hosted review-flow reviewer before the heartbeat reaps it. `0` disables the bound. |
+| `KCAP_REVIEWER_IDLE_TIMEOUT` | `2h` (`7200`)  | Max time, **in seconds**, a reviewer may go without output before the heartbeat reaps it. `0` disables the bound. |
 
 #### Daemon log verbosity
 

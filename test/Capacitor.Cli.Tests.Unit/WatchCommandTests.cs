@@ -390,6 +390,194 @@ public class WatchCommandTests {
 
         await Assert.That(should).IsFalse();
     }
+
+    // AI-1382 Task 11 (D1) — Cursor joins the idle-ceiling vendor set (D1/D3): no shell hooks
+    // fire per-conversation the way a parent-exit watchdog needs, so an idle transcript (no file
+    // growth AND heartbeat gone stale) is the fallback signal a Cursor session has ended. Unlike
+    // Codex/Antigravity, the watcher itself must NOT synthesize session-end on this path — end
+    // synthesis has exactly one owner (the hook or the server-side sweep) — so the idle-ceiling
+    // exit is wired to skip PostSessionEndOnParentExitAsync at the RunWatch call site.
+    [Test]
+    public async Task Cursor_idle_ceiling_ends_on_idle_without_posting_session_end() {
+        var now  = DateTimeOffset.UtcNow;
+        var idle = now.AddMinutes(-61);
+
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: "cursor", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: idle, now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsTrue();
+
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: "cursor", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: now.AddMinutes(-5), now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsFalse();
+    }
+
+    // AI-1382 review fix #6 — a Cursor CHILD (subagent) watcher never buffers, so
+    // WatchState.ThresholdReached never flips true for it; excluding non-session-watchers from
+    // the idle ceiling (the pre-fix behavior) made every Cursor child watcher permanently
+    // ineligible to idle-exit. The exemption is Cursor-only.
+    [Test]
+    public async Task Cursor_child_watcher_is_idle_ceiling_eligible_without_threshold_reached() {
+        var now  = DateTimeOffset.UtcNow;
+        var idle = now.AddMinutes(-61);
+
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: "cursor", isSessionWatcher: false, thresholdReached: false,
+            lastActivityAt: idle, now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsTrue();
+
+        // Not yet idle — still false.
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: "cursor", isSessionWatcher: false, thresholdReached: false,
+            lastActivityAt: now.AddMinutes(-5), now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsFalse();
+    }
+
+    // Regression guard: the child-watcher exemption from the threshold gate is Cursor-specific —
+    // a non-session (subagent) watcher for every other idle-ceiling vendor (codex/antigravity)
+    // must stay ineligible, exactly as before this fix.
+    [Test]
+    [Arguments("codex")]
+    [Arguments("antigravity")]
+    public async Task NonCursor_child_watcher_stays_ineligible_for_the_idle_ceiling(string vendor) {
+        var now  = DateTimeOffset.UtcNow;
+        var idle = now.AddMinutes(-61);
+
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: vendor, isSessionWatcher: false, thresholdReached: true,
+            lastActivityAt: idle, now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsFalse();
+    }
+
+    // AI-1382 review fix #6 — ResolveCursorIdleClock: the idle clock is the LATER of transcript
+    // activity and the hook heartbeat, for Cursor only.
+    [Test]
+    public async Task ResolveCursorIdleClock_prefers_the_later_hook_heartbeat_for_cursor() {
+        var now             = DateTimeOffset.UtcNow;
+        var staleActivity   = now.AddMinutes(-61);
+        var freshHeartbeat  = now.AddMinutes(-2); // Cursor still firing hooks recently
+
+        var resolved = WatchCommand.ResolveCursorIdleClock("cursor", staleActivity, freshHeartbeat);
+
+        await Assert.That(resolved).IsEqualTo(freshHeartbeat);
+    }
+
+    [Test]
+    public async Task ResolveCursorIdleClock_keeps_transcript_activity_when_the_heartbeat_is_older() {
+        var now           = DateTimeOffset.UtcNow;
+        var freshActivity = now.AddMinutes(-2);
+        var staleHeartbeat = now.AddMinutes(-61);
+
+        var resolved = WatchCommand.ResolveCursorIdleClock("cursor", freshActivity, staleHeartbeat);
+
+        await Assert.That(resolved).IsEqualTo(freshActivity);
+    }
+
+    [Test]
+    public async Task ResolveCursorIdleClock_keeps_transcript_activity_when_no_heartbeat_recorded() {
+        var now      = DateTimeOffset.UtcNow;
+        var activity = now.AddMinutes(-61);
+
+        var resolved = WatchCommand.ResolveCursorIdleClock("cursor", activity, hookHeartbeatAt: null);
+
+        await Assert.That(resolved).IsEqualTo(activity);
+    }
+
+    // Regression guard: for every non-Cursor vendor the heartbeat argument is ignored entirely —
+    // the caller never even reads the file for them, but pin the degrade-to-activity behavior
+    // defensively in case a heartbeat value is ever passed anyway.
+    [Test]
+    public async Task ResolveCursorIdleClock_ignores_the_heartbeat_for_non_cursor_vendors() {
+        var now      = DateTimeOffset.UtcNow;
+        var activity = now.AddMinutes(-61);
+        var heartbeat = now; // would win for cursor, must NOT win here
+
+        var resolved = WatchCommand.ResolveCursorIdleClock("codex", activity, heartbeat);
+
+        await Assert.That(resolved).IsEqualTo(activity);
+    }
+
+    [Test]
+    public async Task Cursor_acked_ack_sets_next_line_cursor() {
+        var ack = System.Text.Json.JsonSerializer.Deserialize(
+            """{"next_line_number":7}""", CapacitorJsonContext.Default.TranscriptBatchAck);
+
+        await Assert.That(ack.NextLineNumber).IsEqualTo(7);
+    }
+
+    // AI-1382 review fix #3 — ByteOffsetForAckedLines: maps a server-acked LINE count to the byte
+    // offset within the guard's verified range, so the checkpoint advances only as far as the ack
+    // actually covers (a partially-disposed D3 "halt-at-the-gap" batch must not have its unacked
+    // tail bytes checkpointed as if delivered).
+    [Test]
+    public async Task ByteOffsetForAckedLines_zero_acked_returns_the_range_start() {
+        var range = System.Text.Encoding.UTF8.GetBytes("line0\nline1\nline2\n");
+
+        var offset = WatchCommand.ByteOffsetForAckedLines(range, rangeStartOffset: 100, ackedLineCount: 0);
+
+        await Assert.That(offset).IsEqualTo(100L);
+    }
+
+    [Test]
+    public async Task ByteOffsetForAckedLines_partial_ack_stops_at_the_nth_newline() {
+        var range = System.Text.Encoding.UTF8.GetBytes("line0\nline1\nline2\n"); // 6+6+6 bytes
+
+        // Only the first line acked — offset should land right after its newline (byte 6),
+        // relative to the range start.
+        var offset = WatchCommand.ByteOffsetForAckedLines(range, rangeStartOffset: 100, ackedLineCount: 1);
+
+        await Assert.That(offset).IsEqualTo(106L);
+    }
+
+    [Test]
+    public async Task ByteOffsetForAckedLines_two_of_three_acked_stops_after_the_second_newline() {
+        var range = System.Text.Encoding.UTF8.GetBytes("line0\nline1\nline2\n"); // 6+6+6 bytes
+
+        var offset = WatchCommand.ByteOffsetForAckedLines(range, rangeStartOffset: 100, ackedLineCount: 2);
+
+        await Assert.That(offset).IsEqualTo(112L);
+    }
+
+    [Test]
+    public async Task ByteOffsetForAckedLines_full_ack_consumes_the_whole_range() {
+        var range = System.Text.Encoding.UTF8.GetBytes("line0\nline1\nline2\n");
+
+        var offset = WatchCommand.ByteOffsetForAckedLines(range, rangeStartOffset: 100, ackedLineCount: 3);
+
+        await Assert.That(offset).IsEqualTo(100L + range.Length);
+    }
+
+    [Test]
+    public async Task ByteOffsetForAckedLines_acked_more_than_available_newlines_still_bounded_by_the_range() {
+        // Defensive: an ack count exceeding what this range accounts for must not read/return
+        // past the range's own length.
+        var range = System.Text.Encoding.UTF8.GetBytes("line0\nline1\n");
+
+        var offset = WatchCommand.ByteOffsetForAckedLines(range, rangeStartOffset: 0, ackedLineCount: 99);
+
+        await Assert.That(offset).IsEqualTo(range.Length);
+    }
+
+    [Test]
+    [Arguments(null, 60)]      // unset → default 60 min
+    [Arguments("", 60)]        // empty → default
+    [Arguments("abc", 60)]     // non-numeric → default
+    [Arguments("0", 60)]       // non-positive → default (clamped)
+    [Arguments("-5", 60)]      // negative → default
+    [Arguments("30", 30)]      // valid override
+    public async Task ResolveCursorIdleCeiling_parses_env_with_default(string? env, int expectedMinutes) {
+        var result = WatchCommand.ResolveCursorIdleCeiling(env);
+
+        await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
+    }
+
+    // AI-1382 review fix #4 — Cursor's own sessionStart hook posts (and spawns this very watcher)
+    // before any transcript line is ever read, exactly like Antigravity — so the generic
+    // below-threshold buffer must not apply to it either.
+    [Test]
+    [Arguments("antigravity", true)]
+    [Arguments("cursor",      true)]
+    [Arguments("codex",       false)]
+    [Arguments("claude",      false)]
+    [Arguments("gemini",      false)]
+    public async Task SkipsThresholdBuffering_matches_only_the_vendors_that_pre_commit_the_session(string vendor, bool expected) =>
+        await Assert.That(WatchCommand.SkipsThresholdBuffering(vendor)).IsEqualTo(expected);
 }
 
 public class UpdateCodexPendingToolCallsTests {

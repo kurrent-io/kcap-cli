@@ -201,6 +201,20 @@ class WatchState {
     // re-staged) fresh on the next drain, so nothing is lost.
     public List<string> KiroUsagePendingAnchors { get; } = [];
 
+    // AI-1382 Task 11 (D0/D3) — byte offset (end of the last batch the runtime rewrite guard
+    // verified and the server acked) the Cursor watcher's guard checks resume from each poll.
+    // Distinct from LinesProcessed (a LINE-number cursor set from the server's acked frontier,
+    // which can differ from the raw count of lines sent when a line was disposed differently
+    // than "emitted"); this is a plain BYTE count so the guard can re-read/re-hash the exact
+    // range it last verified. Only ever set for vendor == "cursor".
+    public long CursorByteOffset { get; set; }
+
+    // AI-1382 review fix #2 — poll counter driving the periodic full-prefix re-hash cadence
+    // (WatchCommand.CursorFullPrefixVerifyEveryNPolls). Incremented once per poll for vendor ==
+    // "cursor" only; a plain counter (not wall-clock time) so the cadence is exact regardless of
+    // how long any individual poll takes.
+    public int CursorGuardPollCount { get; set; }
+
     public const int TranscriptThreshold = 10;
 }
 
@@ -942,6 +956,10 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveCompleted))]
 [JsonSerializable(typeof(EvalRetrospectiveFailed))]
 [JsonSerializable(typeof(DaemonConnect))]
+[JsonSerializable(typeof(LiveAgentInfo))]
+[JsonSerializable(typeof(QuarantinedAgentInfo))]
+[JsonSerializable(typeof(DaemonStatusReport))]
+[JsonSerializable(typeof(AgentPidRecord))]
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
@@ -955,6 +973,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PermissionResolution))]
 [JsonSerializable(typeof(EndAgentSessionResult))]
 [JsonSerializable(typeof(MachineIdFile))]
+[JsonSerializable(typeof(CursorQuarantineMarker))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
@@ -994,6 +1013,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AcpEventEnvelope))]
 [JsonSerializable(typeof(AcpEventEnvelope[]))]
 [JsonSerializable(typeof(AcpBatchAck))]
+[JsonSerializable(typeof(TranscriptBatchAck))]
 // The AcpSessionStarted hub method's optional metadata argument. Registered as its own root type
 // (not just nested inside another JsonSerializable graph) because SignalR's JsonHubProtocol
 // serializes each hub-invocation argument independently by its declared type.
@@ -1173,6 +1193,18 @@ public readonly record struct AcpEventEnvelope(
 /// </summary>
 public readonly record struct AcpBatchAck(long AcceptedSeq, long PersistedSeq, long? ExpectedNextSeq = null);
 
+/// <summary>
+/// Ack returned from the server's <c>SendTranscriptBatchAcked</c> hub method (AI-1382 D3).
+/// Field-for-field mirror of the server-side <c>Capacitor.TranscriptBatchAck</c> record.
+/// <see cref="NextLineNumber"/> is the source-acknowledgement frontier — the first line number
+/// the server has NOT fully disposed of (emitted or deliberately ignored). The Cursor watcher
+/// sets its local cursor from this value rather than the count of lines it sent, so a
+/// server-held (retry-blocked or persist-blocked) line is re-delivered on the next poll and an
+/// ignored (no-event) line still advances past — the server, not the client's send count, is
+/// authoritative for what's actually been disposed of.
+/// </summary>
+public readonly record struct TranscriptBatchAck(int NextLineNumber);
+
 /// <summary>Commands sent from the server to daemon clients via SignalR.</summary>
 public readonly record struct LaunchAgentCommand(
         string            AgentId,
@@ -1199,7 +1231,13 @@ public readonly record struct LaunchAgentCommand(
         // absolute path to borrow when Borrowed is true. Appended last, same wire-compat rule as the
         // fields above.
         bool               Borrowed = false,
-        string?            BorrowCwd = null
+        string?            BorrowCwd = null,
+        // Phase B (D2): flow identity for a ReviewFlow launch, so the daemon can store it on
+        // the AgentInstance and report it in LiveAgents / DaemonStatusReport (lets a restarted server
+        // associate a surviving unassigned reviewer with its role). Appended last, same wire-compat
+        // rule as the fields above — old daemons ignore them, old servers never set them.
+        string?            FlowRunId = null,
+        string?            FlowRole  = null
     );
 
 /// <summary>
@@ -1215,6 +1253,62 @@ public enum LaunchKind {
     Review     = 1,
     ReviewFlow = 2
 }
+
+// ── Phase B (D2): daemon self-report DTOs ────────────────────────────────────────────────
+
+/// <summary>Phase B (D2): one live hosted agent in the daemon's self-report. <see cref="Kind"/>
+/// is the <see cref="LaunchKind"/> name; <see cref="FlowRunId"/>/<see cref="FlowRole"/> are set only
+/// for a ReviewFlow launch. Carried additively on <see cref="DaemonConnect.LiveAgents"/> and in
+/// <see cref="DaemonStatusReport"/> so the server can associate a surviving unassigned reviewer with
+/// its role instead of a blind grace period. All-optional trailing fields keep it wire-compatible.</summary>
+public readonly record struct LiveAgentInfo(
+        string         Id,
+        string         Kind,
+        DateTimeOffset CreatedAt,
+        string?        FlowRunId = null,
+        string?        FlowRole  = null
+    );
+
+/// <summary>Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
+/// or kill failure) and is being retried by the daemon heartbeat. Same shape as
+/// <see cref="LiveAgentInfo"/>; reported separately so the server can see it counts against admission
+/// (<c>EffectiveCount = ActiveCount + Quarantined.Count</c>) without changing <c>ActiveCount</c>'s
+/// meaning.</summary>
+public readonly record struct QuarantinedAgentInfo(
+        string         Id,
+        string         Kind,
+        DateTimeOffset CreatedAt,
+        string?        FlowRunId = null,
+        string?        FlowRole  = null
+    );
+
+/// <summary>Phase B (D2): the periodic (60s) one-way daemon→server self-report. Sent via a
+/// one-way <c>SendAsync</c> (never <c>InvokeAsync</c>) so an old server without the handler produces
+/// only a server-side log line, not a client fault. <see cref="ActiveCount"/> is exactly the daemon's
+/// Starting/Running agent count (its wire meaning never changes).</summary>
+public readonly record struct DaemonStatusReport(
+        int                  ActiveCount,
+        LiveAgentInfo[]      LiveAgents,
+        QuarantinedAgentInfo[] Quarantined
+    );
+
+/// <summary>Phase B (D4 §6.4(2)): the durable per-agent PID record written atomically at spawn
+/// to <c>&lt;state-dir&gt;/agents/{agentId}.json</c>, so a restarted daemon can reap a surviving child
+/// by EXACT identity. <see cref="StartIdentity"/> is the <c>ProcessStartToken</c> string
+/// (kernel starttime / absolute start ticks — exact, no tolerance). <see cref="DaemonId"/> = hash of
+/// the daemon state-dir path (stable logical identity); <see cref="DaemonEpoch"/> = fresh per boot.</summary>
+public readonly record struct AgentPidRecord(
+        string         AgentId,
+        int            Pid,
+        string         StartIdentity,
+        string         Kind,
+        string         Vendor,
+        string?        FlowRunId,
+        string?        FlowRole,
+        string         DaemonId,
+        string         DaemonEpoch,
+        DateTimeOffset SpawnedAt
+    );
 
 public readonly record struct ReviewLaunchInfo(
         string Owner,
@@ -1292,7 +1386,10 @@ public readonly record struct DaemonConnect(
         string?   InstanceId       = null,
         string?   Version          = null,
         string[]? SupportedVendors = null,
-        string?   MachineId        = null
+        string?   MachineId        = null,
+        // Phase B (D2): richer live-agent metadata alongside the existing LiveAgentIds
+        // (kept for back-compat). Trailing/optional — old servers ignore it, old daemons never set it.
+        LiveAgentInfo[]? LiveAgents = null
     );
 
 public readonly record struct AgentRegistered(
