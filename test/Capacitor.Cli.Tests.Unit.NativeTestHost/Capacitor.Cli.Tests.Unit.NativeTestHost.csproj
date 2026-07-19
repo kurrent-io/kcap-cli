@@ -5,6 +5,9 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
+        <!-- mac-identity-smoke calls UnixPtyInterop.pty_capture_mac_identity directly, which is
+             an unsafe byte*-based P/Invoke signature. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\Capacitor.Cli.Daemon\Capacitor.Cli.Daemon.csproj" />

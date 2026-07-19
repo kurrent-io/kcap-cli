@@ -186,6 +186,19 @@ jobs:
             exit 1
           fi
 
+      # macOS-only: the mac: incarnation-identity scheme (design spec §4.3, M1-A) has no useful
+      # emulation off real hardware, so its one CI acceptance gate is a runtime-capture smoke
+      # here in the per-RID packaging checks — capture this process's own identity and a spawned
+      # child's, and assert both are present and distinct (proves the kernel primitive actually
+      # works and varies per process, not a mock). ci.yml has no macOS runner at all, so this
+      # cannot live there — see the Global Constraints note in the design spec.
+      - name: Verify mac incarnation-identity runtime capture (osx-arm64 only)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- mac-identity-smoke
+
       # `kcap import --opencode` reads opencode.db via Microsoft.Data.Sqlite +
       # SQLitePCLRaw.bundle_e_sqlite3. NativeAOT does NOT statically link the engine and we
       # deliberately do NOT bundle it (it's only needed for OpenCode import) — instead the
