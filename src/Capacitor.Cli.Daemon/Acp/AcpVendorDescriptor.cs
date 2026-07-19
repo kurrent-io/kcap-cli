@@ -32,17 +32,49 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// a <c>static readonly</c> descriptor singleton (see <see cref="AcpVendorDescriptors"/>), shared
 /// across every launch for the daemon's whole lifetime, must not expose a mutable array a caller
 /// could reach in and alter, silently corrupting every later (and any concurrent) launch.
+///
+/// <b>Task-review defensive hardening:</b> this record uses an EXPLICIT constructor — not a
+/// positional-record primary constructor, which can't carry a normalizing body — for the same
+/// reason as <see cref="Core.Acp.AcpMcpServerSpec"/>: <c>default(ImmutableArray{string})</c> (the
+/// unallocated sentinel, distinct from <see cref="ImmutableArray{T}.Empty"/>) throws a
+/// <see cref="NullReferenceException"/> on enumeration, not on construction — so a descriptor built
+/// by a future author who forgets to pass <c>[]</c>/an initializer for <see cref="Argv"/> or
+/// <see cref="UnattendedTrustArgv"/> would construct successfully and only blow up later, on first
+/// use, far from the mistake. The constructor normalizes both to
+/// <see cref="ImmutableArray{T}.Empty"/> up front so that class of bug can't happen at all. Every
+/// call site today already passes <c>[]</c>/<c>["acp"]</c> explicitly, so this is purely
+/// defensive — no observable behavior change.
 /// </summary>
-internal sealed record AcpVendorDescriptor(
-    string                      Vendor,
-    Func<DaemonConfig, string>  ResolveBinaryPath,
-    Func<DaemonConfig, string?> ResolveDefaultModel,
-    ImmutableArray<string>      Argv,
-    ImmutableArray<string>      UnattendedTrustArgv,
-    bool                        SupportsUnattended,
-    IAcpModelSelector           ModelSelector,
-    bool                        SupportsMcpServers
-);
+internal sealed record AcpVendorDescriptor {
+    public string                      Vendor               { get; }
+    public Func<DaemonConfig, string>  ResolveBinaryPath     { get; }
+    public Func<DaemonConfig, string?> ResolveDefaultModel   { get; }
+    public ImmutableArray<string>      Argv                  { get; }
+    public ImmutableArray<string>      UnattendedTrustArgv   { get; }
+    public bool                        SupportsUnattended    { get; }
+    public IAcpModelSelector           ModelSelector         { get; }
+    public bool                        SupportsMcpServers    { get; }
+
+    public AcpVendorDescriptor(
+            string                      Vendor,
+            Func<DaemonConfig, string>  ResolveBinaryPath,
+            Func<DaemonConfig, string?> ResolveDefaultModel,
+            ImmutableArray<string>      Argv,
+            ImmutableArray<string>      UnattendedTrustArgv,
+            bool                        SupportsUnattended,
+            IAcpModelSelector           ModelSelector,
+            bool                        SupportsMcpServers
+        ) {
+        this.Vendor              = Vendor;
+        this.ResolveBinaryPath   = ResolveBinaryPath;
+        this.ResolveDefaultModel = ResolveDefaultModel;
+        this.Argv                = Argv.IsDefault ? ImmutableArray<string>.Empty : Argv;
+        this.UnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
+        this.SupportsUnattended  = SupportsUnattended;
+        this.ModelSelector       = ModelSelector;
+        this.SupportsMcpServers  = SupportsMcpServers;
+    }
+}
 
 internal static class AcpVendorDescriptors {
     /// <summary>Reproduces AcpHostedAgentRuntimeFactory's original Cursor-only behavior

@@ -12,7 +12,8 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// <see cref="IHostedAgentRuntime"/> that drives an ACP (Agent Client Protocol) session over
-/// <see cref="AcpConnection"/> for Cursor. Owns the <c>initialize</c> →
+/// <see cref="AcpConnection"/> for any ACP-speaking vendor (Cursor today, more via
+/// <c>AcpVendorDescriptor</c>). Owns the <c>initialize</c> →
 /// <c>session/new</c> → <c>session/prompt</c> handshake and reduces inbound <c>session/update</c>
 /// notifications to <see cref="AcpSessionUpdate"/> DTOs, surfaced via <see cref="Updates"/> for
 /// the mapper to turn into canonical events. Scope stops there — no canonical events, no
@@ -288,7 +289,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// model-selection step — resolves <paramref name="requestedModel"/> against
     /// <c>session/new</c>'s <c>availableModels</c> and, if it matches, sends
     /// <c>session/set_config_option</c> and awaits the response BEFORE the first turn fires (see
-    /// <see cref="TrySelectModelAsync"/>). If <paramref name="initialPrompt"/> is non-empty,
+    /// <see cref="IAcpModelSelector.TrySelectAsync"/>). If <paramref name="initialPrompt"/> is non-empty,
     /// <see cref="EnqueueTurn"/>s it onto the serialized prompt-turn worker (see
     /// <see cref="RunTurnWorkerAsync"/>) and returns as soon as the session is established — it
     /// does NOT await that prompt turn to completion. Not part of
@@ -297,8 +298,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// (never hangs): the read loop is started before any request is sent, and every request goes
     /// through <see cref="AcpConnection.RequestAsync"/>, which itself never hangs past
     /// <paramref name="ct"/> cancellation. Model selection is NEVER part of that "failed handshake"
-    /// exception path — an unresolved or rejected model just falls back to Cursor's own default
-    /// (see <see cref="TrySelectModelAsync"/>'s remarks).
+    /// exception path — an unresolved or rejected model just falls back to the vendor's own default
+    /// (see <see cref="IAcpModelSelector.TrySelectAsync"/>'s remarks).
     /// </summary>
     public async Task StartAsync(
             string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null,
