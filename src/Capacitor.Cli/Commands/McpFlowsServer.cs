@@ -261,15 +261,11 @@ static class McpFlowsServer {
     }
 
     /// <summary>
-    /// Pure decision for the reviewer-vendor-override version-skew seam + echo defense-in-depth on
-    /// a start_review_flow/start_flow response. Returns null when the caller should proceed with
-    /// the normal success/failure handling — no override was requested (any tool, or this one
-    /// omitted "vendor"), or the override was accepted and echoed back correctly. Otherwise returns
-    /// the tool-error result to return immediately; <paramref name="flowRunIdToClose"/> carries a
-    /// run id the caller should best-effort close first (echo-mismatch case only — the 404 case
-    /// never started a run, so there's nothing to close). Extracted as a pure function (no
-    /// <see cref="HttpClient"/> dependency) so this decision logic is unit-testable directly,
-    /// leaving the actual close-call side effect to the caller.
+    /// Pure decision for the reviewer-vendor-override skew seam (404 = old server) + echo check on a
+    /// start response. Returns null to proceed normally (no override, or the override was echoed
+    /// back correctly); otherwise the tool-error to return, with <paramref name="flowRunIdToClose"/>
+    /// set (echo-mismatch case only) for the caller's best-effort close. Pure (no HttpClient) so it
+    /// is unit-testable and the close side effect stays with the caller.
     /// </summary>
     internal static (string Message, bool IsError)? CheckVendorOverrideResult(
             string toolName, string? requestedVendor, HttpStatusCode statusCode, bool isSuccess, string postBody,
