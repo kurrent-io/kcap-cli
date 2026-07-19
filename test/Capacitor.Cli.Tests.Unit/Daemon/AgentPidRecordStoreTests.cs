@@ -16,7 +16,7 @@ public class AgentPidRecordStoreTests {
     }
 
     static AgentPidRecord Rec(string agentId, int pid = 123) =>
-        new(agentId, pid, "lx:boot:999", "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
+        new(agentId, pid, "lx:boot:999", PidIdentityKind.Present, "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
 
     [Test]
     public async Task Write_ReadAll_Delete_roundtrip_preserves_exact_identity() {
@@ -82,5 +82,84 @@ public class AgentPidRecordStoreTests {
         await Assert.That(all).Count().IsEqualTo(1);
         await Assert.That(all[0].Pid).IsEqualTo(2);
         await Assert.That(Directory.EnumerateFiles(Path.Combine(dir, "agents"), "*.tmp-*")).IsEmpty();
+    }
+
+    [Test]
+    public async Task ReadAll_decodes_a_legacy_record_with_no_identity_kind_key_as_present() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+
+        // Build the JSON via the REAL serializer first (so this test can't drift from the actual
+        // schema/casing), then surgically remove the identity_kind member — this produces the
+        // EXACT old-shape JSON a pre-M1-A daemon actually wrote, not a hand-typed guess at the
+        // property's wire name/casing.
+        var current = new AgentPidRecord("legacy1", 999, "tk:123456789", PidIdentityKind.Present,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
+        var json = System.Text.Json.JsonSerializer.Serialize(current, CapacitorJsonContext.Default.AgentPidRecord);
+        var legacyJson = System.Text.RegularExpressions.Regex.Replace(
+            json, "\"identity_kind\"\\s*:\\s*\"?[A-Za-z]+\"?,?", "");
+
+        await Assert.That(legacyJson).DoesNotContain("identity_kind");
+
+        var agentsDir = Path.Combine(dir, "agents");
+        Directory.CreateDirectory(agentsDir);
+        File.WriteAllText(Path.Combine(agentsDir, "legacy.json"), legacyJson);
+
+        var all = store.ReadAll();
+        await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "legacy1" });
+        await Assert.That(all[0].IdentityKind).IsEqualTo(PidIdentityKind.Present);
+        await Assert.That(all[0].StartIdentity).IsEqualTo("tk:123456789");
+        // NOT quarantined — this is the whole point of the backward-compat contract.
+        await Assert.That(File.Exists(Path.Combine(agentsDir, "legacy.json.corrupt"))).IsFalse();
+    }
+
+    [Test]
+    public async Task ReadAll_round_trips_an_identity_unavailable_record() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+
+        store.Write(new AgentPidRecord("unresolved1", 42, "", PidIdentityKind.IdentityUnavailable,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow));
+
+        var all = store.ReadAll();
+        await Assert.That(all).Count().IsEqualTo(1);
+        await Assert.That(all[0].IdentityKind).IsEqualTo(PidIdentityKind.IdentityUnavailable);
+        await Assert.That(all[0].StartIdentity).IsEmpty();
+        await Assert.That(File.Exists(Path.Combine(dir, "agents", Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("unresolved1"))).ToLowerInvariant() + ".json.corrupt"))).IsFalse();
+    }
+
+    [Test]
+    public async Task ReadAll_quarantines_present_with_empty_token_as_corrupt() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+
+        // An inconsistent NEW shape — Present claims a comparable identity but the token is
+        // empty. This is a real corruption signal (unlike the legacy missing-key case above),
+        // so it must be quarantined, not silently accepted.
+        store.Write(new AgentPidRecord("bad1", 1, "", PidIdentityKind.Present,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow));
+
+        var all = store.ReadAll();
+        await Assert.That(all).IsEmpty();
+
+        var agentsDir = Path.Combine(dir, "agents");
+        var corruptFiles = Directory.GetFiles(agentsDir, "*.json.corrupt");
+        await Assert.That(corruptFiles.Length).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ReadAll_quarantines_identity_unavailable_with_nonempty_token_as_corrupt() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+
+        store.Write(new AgentPidRecord("bad2", 1, "lx:boot:999", PidIdentityKind.IdentityUnavailable,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow));
+
+        var all = store.ReadAll();
+        await Assert.That(all).IsEmpty();
+
+        var corruptFiles = Directory.GetFiles(Path.Combine(dir, "agents"), "*.json.corrupt");
+        await Assert.That(corruptFiles.Length).IsEqualTo(1);
     }
 }

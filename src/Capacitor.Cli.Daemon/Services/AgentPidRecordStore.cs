@@ -65,6 +65,23 @@ internal sealed class AgentPidRecordStore(string stateDir, ILogger logger) {
                 continue;
             }
 
+            // M1-A (spec §4.3): the only rejected shapes are NEW-schema-inconsistent combinations —
+            // Present claiming a comparable identity with an empty token, or IdentityUnavailable
+            // claiming NO comparable identity while still carrying a nonempty one. A LEGACY record
+            // (no identity_kind key at all) always decodes as Present (PidIdentityKind's zero value)
+            // and is never rejected here, however old its token scheme.
+            var inconsistent =
+                (record.IdentityKind == PidIdentityKind.Present && record.StartIdentity.Length == 0) ||
+                (record.IdentityKind == PidIdentityKind.IdentityUnavailable && record.StartIdentity.Length != 0);
+
+            if (inconsistent) {
+                logger.LogWarning(
+                    "AgentPidRecordStore: record {Path} has an inconsistent identity_kind/start_identity combination ({Kind}, token length {Len}); quarantining as .corrupt",
+                    path, record.IdentityKind, record.StartIdentity.Length);
+                TryQuarantine(path);
+                continue;
+            }
+
             results.Add(record);
         }
 

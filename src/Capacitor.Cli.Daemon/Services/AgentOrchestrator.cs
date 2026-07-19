@@ -422,14 +422,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // separator), which is exactly "ambiguity never kills": a still-alive
             // identity-unavailable agent gets quarantined and retried, never silently dropped.
             //
-            // NOTE: the record shape here is UNCHANGED from before this task — an explicit
-            // identity_kind classification (distinguishing "" == identity_unavailable from a real
-            // captured token in the persisted record itself, not just inferred from an empty
-            // string) is a follow-up concern, not added by this task.
+            // M1-A (spec §4.3): the record's identity_kind makes "" a well-formed, distinguishable
+            // IdentityUnavailable marker rather than an inferred-from-emptiness convention.
             agent.StartIdentity = capturedStartIdentity; // "" is intentional, not a bug
 
+            var identityKind = capturedStartIdentity.Length == 0
+                ? PidIdentityKind.IdentityUnavailable
+                : PidIdentityKind.Present;
+
             _pidRecords.Write(new AgentPidRecord(
-                agent.Id, pid, capturedStartIdentity, agent.Kind.ToString(), agent.Vendor,
+                agent.Id, pid, capturedStartIdentity, identityKind, agent.Kind.ToString(), agent.Vendor,
                 agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
 
             return;
@@ -449,8 +451,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // Write throws on I/O failure → propagates → post-insert single-flight cleanup (fail closed):
         // a spawned, capturable child we cannot durably record must not stay admitted without a record.
+        // This legacy path only reaches here with a non-null capture (see the guard above) — always Present.
         _pidRecords.Write(new AgentPidRecord(
-            agent.Id, pid, identity, agent.Kind.ToString(), agent.Vendor,
+            agent.Id, pid, identity, PidIdentityKind.Present, agent.Kind.ToString(), agent.Vendor,
             agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
     }
 

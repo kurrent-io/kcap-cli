@@ -183,7 +183,7 @@ public partial class AgentOrchestratorVendorTests {
         using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "qr" });
         var identity = ProcessIdentity.Capture(dummy.Pid)!;
         orch.WritePidRecordForTest(new AgentPidRecord(
-            "qr", dummy.Pid, identity, "ReviewFlow", "codex", "f1", "reviewer",
+            "qr", dummy.Pid, identity, PidIdentityKind.Present, "ReviewFlow", "codex", "f1", "reviewer",
             orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
         orch.SeedAgentForTest("qr", LaunchKind.ReviewFlow, status: "Running",
             pty: new LiveNoKillPtyProcess(dummy.Pid), startIdentity: identity);

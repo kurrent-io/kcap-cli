@@ -19,7 +19,7 @@ public class OrphanReaperTests {
     }
 
     static AgentPidRecord Rec(string agentId, int pid, string identity, string daemonId, string epoch) =>
-        new(agentId, pid, identity, "ReviewFlow", "codex", "flow-1", "reviewer", daemonId, epoch, DateTimeOffset.UtcNow);
+        new(agentId, pid, identity, PidIdentityKind.Present, "ReviewFlow", "codex", "flow-1", "reviewer", daemonId, epoch, DateTimeOffset.UtcNow);
 
     [Test]
     public async Task Record_pass_reaps_a_prior_incarnation_survivor_and_deletes_the_record() {
