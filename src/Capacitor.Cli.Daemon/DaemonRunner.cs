@@ -297,6 +297,13 @@ public static partial class DaemonRunner {
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
 
+        // Reviewer vendor override support: a strict subset of SupportedVendors — only vendors that
+        // can also run fully unattended (no permission bridge needed). The server gates a review-flow
+        // vendor override on this list rather than SupportedVendors alone, so a vendor that's merely
+        // installed (e.g. an ACP-hosted vendor with no unattended launcher yet) is never offered as an
+        // override target.
+        config.UnattendedVendors = ComputeUnattendedVendors(runtimeFactories);
+
         // IsAvailable()==false silently omits cursor from SupportedVendors above — correct
         // behavior (the launch dialog just won't offer Cursor), but gave operators no clue WHY. One
         // Warning at startup (not per-launch) so a missing/misconfigured cursor-agent install is
@@ -468,6 +475,21 @@ public static partial class DaemonRunner {
     /// </summary>
     internal static bool ShouldWarnCursorUnavailable(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
         factories.FirstOrDefault(f => f.Vendor == "cursor") is { } cursorFactory && !cursorFactory.IsAvailable();
+
+    /// <summary>
+    /// Vendor tokens this daemon can run fully unattended — a strict subset of
+    /// <c>SupportedVendors</c> (installed) further filtered by
+    /// <see cref="IHostedAgentRuntimeFactory.SupportsUnattended"/>. Pulled out as a pure
+    /// function over the factory list (same reasoning as <see cref="ShouldWarnCursorUnavailable"/>)
+    /// so the reviewer-vendor-override capability advertisement is testable without spinning up
+    /// the whole DI host <see cref="RunAsync"/> builds.
+    /// </summary>
+    internal static string[] ComputeUnattendedVendors(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+        factories
+            .Where(f => f.IsAvailable() && f.SupportsUnattended)
+            .Select(f => f.Vendor)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToArray();
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
