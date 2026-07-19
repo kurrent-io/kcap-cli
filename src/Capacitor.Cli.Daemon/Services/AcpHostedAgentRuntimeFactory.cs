@@ -114,6 +114,14 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// </summary>
     internal static ProcessStartInfo BuildProcessStartInfo(
             AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx) {
+        // Defense-in-depth: the orchestrator's UnattendedLaunchPolicy is expected to reject a
+        // review-flow launch for a vendor that doesn't support it before this factory ever runs,
+        // but the factory doesn't rely on that alone — it refuses to build review-flow argv for an
+        // unsupported vendor rather than trusting an external caller always applied the gate.
+        if (ctx.IsReviewFlow && !descriptor.SupportsUnattended)
+            throw new InvalidOperationException(
+                $"Vendor '{descriptor.Vendor}' does not support unattended (review-flow) launches.");
+
         var argv = ctx.IsReviewFlow
             ? [.. descriptor.Argv, .. descriptor.UnattendedTrustArgv]
             : descriptor.Argv;

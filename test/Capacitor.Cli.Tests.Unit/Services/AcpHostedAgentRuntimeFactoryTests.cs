@@ -364,6 +364,21 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await Assert.That(reviewFlowPsi.ArgumentList.SequenceEqual(["acp", "--flag-a", "--trust"])).IsTrue();
     }
 
+    /// <summary>Qodo finding 3: defense-in-depth — even though the orchestrator's
+    /// <c>UnattendedLaunchPolicy</c> is expected to reject a review-flow launch for a vendor that
+    /// doesn't support it before the factory ever runs, <c>BuildProcessStartInfo</c> refuses to
+    /// build review-flow argv for a <c>SupportsUnattended: false</c> descriptor rather than
+    /// trusting that gate alone.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Throws_ForReviewFlow_WhenDescriptorDoesNotSupportUnattended() {
+        var descriptor = AcpVendorDescriptors.Cursor; // SupportsUnattended: false
+        var config     = new DaemonConfig();
+
+        await Assert.That(() => AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            descriptor, config, MakeContext("agent-1") with { IsReviewFlow = true }
+        )).Throws<InvalidOperationException>();
+    }
+
     // ── Test plan item 6: mcpServers gating and wire shape ─────────────────────────────────
 
     static async Task<HostedRuntimeStart> RunSyntheticStartAsync(

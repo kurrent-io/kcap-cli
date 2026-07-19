@@ -65,11 +65,18 @@ internal sealed record AcpVendorDescriptor {
             IAcpModelSelector           ModelSelector,
             bool                        SupportsMcpServers
         ) {
+        var normalizedUnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
+
+        if (!SupportsUnattended && !normalizedUnattendedTrustArgv.IsEmpty)
+            throw new ArgumentException(
+                $"{nameof(UnattendedTrustArgv)} must be empty when {nameof(SupportsUnattended)} is false (vendor: {Vendor}).",
+                nameof(UnattendedTrustArgv));
+
         this.Vendor              = Vendor;
         this.ResolveBinaryPath   = ResolveBinaryPath;
         this.ResolveDefaultModel = ResolveDefaultModel;
         this.Argv                = Argv.IsDefault ? ImmutableArray<string>.Empty : Argv;
-        this.UnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
+        this.UnattendedTrustArgv = normalizedUnattendedTrustArgv;
         this.SupportsUnattended  = SupportsUnattended;
         this.ModelSelector       = ModelSelector;
         this.SupportsMcpServers  = SupportsMcpServers;

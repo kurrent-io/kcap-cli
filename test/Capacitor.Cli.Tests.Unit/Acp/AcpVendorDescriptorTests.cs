@@ -59,4 +59,21 @@ public class AcpVendorDescriptorTests {
 
         await Assert.That(descriptor.ModelSelector).IsEqualTo(NoOpModelSelector.Instance);
     }
+
+    /// <summary>Qodo finding 3: a vendor that doesn't support unattended launches must not carry
+    /// any <see cref="AcpVendorDescriptor.UnattendedTrustArgv"/> — the constructor enforces this
+    /// invariant rather than relying solely on the orchestrator's external gate.</summary>
+    [Test]
+    public async Task Constructor_Throws_WhenUnattendedTrustArgvNonEmpty_AndSupportsUnattendedFalse() {
+        await Assert.That(() => new AcpVendorDescriptor(
+            Vendor:              "test-vendor",
+            ResolveBinaryPath:   _ => "test-vendor-cli",
+            ResolveDefaultModel: _ => null,
+            Argv:                ["acp"],
+            UnattendedTrustArgv: ["--trust"],
+            SupportsUnattended:  false,
+            ModelSelector:       NoOpModelSelector.Instance,
+            SupportsMcpServers:  false
+        )).Throws<ArgumentException>();
+    }
 }

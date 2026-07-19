@@ -32,4 +32,24 @@ public class AcpMcpServerSpecTests {
 
         await Assert.That(json).IsEqualTo("""{"name":"fs","command":"npx","args":[],"env":[]}""");
     }
+
+    /// <summary>Qodo finding 4: the constructor must clone caller-supplied <c>Args</c>/<c>Env</c>
+    /// arrays rather than store them by reference, so mutating the original array after
+    /// construction can't silently change what this record serializes onto the ACP wire.</summary>
+    [Test]
+    public async Task Constructor_ClonesArgsAndEnv_MutatingOriginalArrayDoesNotAffectSpec() {
+        var args = new[] { "--flag" };
+        var env  = new[] { new AcpMcpServerEnvVar("KEY", "value") };
+
+        var spec = new AcpMcpServerSpec(Name: "fs", Command: "npx", Args: args, Env: env);
+
+        args[0] = "--mutated";
+        env[0]  = new AcpMcpServerEnvVar("KEY", "mutated");
+
+        await Assert.That(spec.Args[0]).IsEqualTo("--flag");
+        await Assert.That(spec.Env[0].Value).IsEqualTo("value");
+
+        var json = JsonSerializer.Serialize(spec, CapacitorJsonContext.Default.AcpMcpServerSpec);
+        await Assert.That(json).IsEqualTo("""{"name":"fs","command":"npx","args":["--flag"],"env":[{"name":"KEY","value":"value"}]}""");
+    }
 }
