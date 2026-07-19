@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -75,6 +76,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var connection = new CaptureServerConnection();
 
         var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
             config: new DaemonConfig { CursorPath = "cursor-agent" }, // never actually spawned — connectionSource below bypasses Process.Start
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
@@ -141,6 +143,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var connection = new CaptureServerConnection();
 
         var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
             config: new DaemonConfig { CursorPath = "cursor-agent", CursorModel = "claude-sonnet-4-5" },
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
@@ -235,6 +238,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         var loggerFactory  = new CaptureLoggerFactory();
 
         var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
             config: new DaemonConfig { CursorPath = "cursor-agent" },
             loggerFactory: loggerFactory,
             connection: connection,
@@ -253,6 +257,380 @@ public class AcpHostedAgentRuntimeFactoryTests {
             && e.Message.Contains("agent-launch-log")
             && e.Message.Contains("cursor")
             && e.Message.Contains("/abs/some-worktree"));
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    // ── Test plan item 1: Cursor pin test (spec-review Finding 4) ──────────────────────────
+
+    /// <summary>
+    /// (a) proves the actual PRODUCTION <see cref="AcpHostedAgentRuntimeFactory.BuildProcessStartInfo"/>
+    /// shape for the real Cursor descriptor — no <c>connectionSource</c>, no fake, no
+    /// <c>StartAsync</c> — this is the only place in the suite that can observe it, since every
+    /// other test replaces process-spawning entirely via <c>connectionSource</c>. (b) drives a full
+    /// <c>StartAsync</c> against <see cref="FakeAcpAgent"/> and asserts the exact
+    /// <c>initialize</c>/<c>session/new</c> frames are byte-identical to today's — in particular
+    /// <c>session/new</c>'s <c>mcpServers</c> is <c>[]</c> (an empty array, not omitted, not
+    /// populated) when <c>ctx.McpServers</c> is left at its default <see langword="null"/>. Together
+    /// these are the primary regression guard for the whole refactor.
+    /// </summary>
+    [Test]
+    public async Task StartAsync_ForCursorDescriptor_SpawnsExactSameArgvAndHandshakeAsBeforeAI1401() {
+        // (a) — pure BuildProcessStartInfo assertion.
+        var config = new DaemonConfig { CursorPath = "/usr/local/bin/cursor-agent" };
+        var ctx    = MakeContext("agent-1");
+
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(AcpVendorDescriptors.Cursor, config, ctx);
+
+        await Assert.That(psi.FileName).IsEqualTo(config.CursorPath);
+        await Assert.That(psi.ArgumentList.SequenceEqual(["acp"])).IsTrue();
+        await Assert.That(psi.WorkingDirectory).IsEqualTo(ctx.Worktree.Path);
+
+        // (b) — full StartAsync against FakeAcpAgent; assert the exact initialize/session/new frames.
+        var fake       = new FakeAcpAgent();
+        var connection = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
+            config: new DaemonConfig { CursorPath = "cursor-agent" },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (fake.ReceivedCalls.Count(c => c.Method is "initialize" or "session/new") < 2 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var initializeCall = fake.ReceivedCalls.Single(c => c.Method == "initialize");
+        await Assert.That(initializeCall.Params!.Value.GetProperty("protocolVersion").GetInt32()).IsEqualTo(1);
+        await Assert.That(initializeCall.Params!.Value.GetProperty("clientCapabilities").GetProperty("terminal").GetBoolean()).IsFalse();
+        await Assert.That(initializeCall.Params!.Value.GetProperty("clientCapabilities").GetProperty("fs").GetProperty("readTextFile").GetBoolean()).IsFalse();
+
+        var sessionNewCall = fake.ReceivedCalls.Single(c => c.Method == "session/new");
+        await Assert.That(sessionNewCall.Params!.Value.GetProperty("cwd").GetString()).IsEqualTo(ctx.Worktree.Path);
+        await Assert.That(sessionNewCall.Params!.Value.GetProperty("mcpServers").GetRawText()).IsEqualTo("[]");
+
+        await Assert.That(started.Runtime.Vendor).IsEqualTo("cursor");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    // ── Test plan item 5: descriptor-driven spawn args via BuildProcessStartInfo ──────────
+
+    /// <summary>Second, test-only descriptor — not <see cref="AcpVendorDescriptors.Cursor"/> — used
+    /// by test plan items 5 and 6. <c>SupportsMcpServers</c> is parameterized since item 6(c) needs
+    /// it <see langword="false"/> while items 6(a)/6(b) need it <see langword="true"/>; every other
+    /// field is identical across both.</summary>
+    static AcpVendorDescriptor SyntheticDescriptor(bool supportsMcpServers) => new(
+        Vendor:              "test-acp-vendor",
+        ResolveBinaryPath:   _ => "test-acp-vendor-cli",
+        ResolveDefaultModel: _ => null,
+        Argv:                ["acp", "--flag-a"],
+        UnattendedTrustArgv: ["--trust"],
+        SupportsUnattended:  true,
+        ModelSelector:       NoOpModelSelector.Instance,
+        SupportsMcpServers:  supportsMcpServers
+    );
+
+    /// <summary>
+    /// Exercises the trust-argv seam against the REAL production builder — no REAL descriptor sets
+    /// <c>SupportsUnattended: true</c> yet (Cursor's stays <c>false</c> — see
+    /// <c>UnattendedLaunchPolicyTests.Cursor_descriptor_unattended_launch_is_rejected</c>), so this
+    /// proves the MECHANISM works ahead of the vendor that will eventually use it.
+    /// </summary>
+    [Test]
+    public async Task BuildProcessStartInfo_DescriptorDriven_AppendsTrustArgvOnlyForReviewFlow() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: false);
+        var config     = new DaemonConfig();
+
+        var interactivePsi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            descriptor, config, MakeContext("agent-1") with { IsReviewFlow = false });
+        var reviewFlowPsi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            descriptor, config, MakeContext("agent-1") with { IsReviewFlow = true });
+
+        await Assert.That(interactivePsi.ArgumentList.SequenceEqual(["acp", "--flag-a"])).IsTrue();
+        await Assert.That(reviewFlowPsi.ArgumentList.SequenceEqual(["acp", "--flag-a", "--trust"])).IsTrue();
+    }
+
+    // ── Test plan item 6: mcpServers gating and wire shape ─────────────────────────────────
+
+    static async Task<HostedRuntimeStart> RunSyntheticStartAsync(
+            AcpVendorDescriptor descriptor, FakeAcpAgent fake, RuntimeStartContext ctx, CancellationToken ct) {
+        var connection = new CaptureServerConnection();
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: descriptor,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        return await factory.StartAsync(ctx, ct).WaitAsync(HangGuard, ct);
+    }
+
+    static async Task<string> WaitForSessionNewMcpServersJsonAsync(FakeAcpAgent fake) {
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!fake.ReceivedCalls.Any(c => c.Method == "session/new") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        return fake.ReceivedCalls.Single(c => c.Method == "session/new").Params!.Value.GetProperty("mcpServers").GetRawText();
+    }
+
+    [Test]
+    public async Task StartAsync_SupportsMcpServersTrue_PopulatedContext_ForwardsServerVerbatim() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
+        var fake        = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        AcpMcpServerSpec[] mcpServers = [
+            new AcpMcpServerSpec(Name: "fs", Command: "npx",
+                Args: ["-y", "@modelcontextprotocol/server-filesystem"],
+                Env: [new AcpMcpServerEnvVar("FOO", "bar")])
+        ];
+        var ctx = MakeContext("agent-1") with { McpServers = mcpServers };
+
+        var started = await RunSyntheticStartAsync(descriptor, fake, ctx, cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo(
+            """[{"name":"fs","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem"],"env":[{"name":"FOO","value":"bar"}]}]""");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>The exact regression Finding 1 flagged: an empty <c>Env</c> must still serialize as
+    /// <c>"env":[]</c>, NOT an omitted key and NOT <c>"env":null</c>.</summary>
+    [Test]
+    public async Task StartAsync_SupportsMcpServersTrue_EmptyEnv_SerializesAsEmptyArray_NotOmittedNotNull() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
+        var fake        = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        AcpMcpServerSpec[] mcpServers = [
+            new AcpMcpServerSpec(Name: "fs", Command: "npx", Args: ["-y", "server-filesystem"], Env: [])
+        ];
+        var ctx = MakeContext("agent-1") with { McpServers = mcpServers };
+
+        var started = await RunSyntheticStartAsync(descriptor, fake, ctx, cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo("""[{"name":"fs","command":"npx","args":["-y","server-filesystem"],"env":[]}]""");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Proves the DESCRIPTOR flag — not just an unpopulated context — is what gates
+    /// forwarding: even with a populated <c>ctx.McpServers</c>, <c>SupportsMcpServers: false</c>
+    /// still sends <c>mcpServers: []</c> on the wire.</summary>
+    [Test]
+    public async Task StartAsync_SupportsMcpServersFalse_PopulatedContext_StillSendsEmptyArray() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: false);
+        var fake        = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        AcpMcpServerSpec[] mcpServers = [
+            new AcpMcpServerSpec(Name: "fs", Command: "npx",
+                Args: ["-y", "@modelcontextprotocol/server-filesystem"],
+                Env: [new AcpMcpServerEnvVar("FOO", "bar")])
+        ];
+        var ctx = MakeContext("agent-1") with { McpServers = mcpServers };
+
+        var started = await RunSyntheticStartAsync(descriptor, fake, ctx, cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo("[]");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    // ── Test plan item 11: factory-selector integration + frame ordering ──────────────────
+
+    static async Task<IReadOnlyList<(string Method, System.Text.Json.JsonElement? Params)>> WaitForCallCountAsync(FakeAcpAgent fake, int minCount) {
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (fake.ReceivedCalls.Count < minCount && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        return fake.ReceivedCalls;
+    }
+
+    static readonly (string ModelId, string Name)[] TeamAvailableModels = [
+        ("default[]", "default"),
+        ("composer-2.5[fast=true]", "composer-2.5"),
+        ("claude-sonnet-4-5[thinking=true,context=200k]", "claude-sonnet-4-5"),
+        ("claude-opus-4-8[thinking=true]", "claude-opus-4-8"),
+    ];
+
+    /// <summary>(a) An explicit <c>ctx.Model</c> that resolves → order is <c>initialize</c>,
+    /// <c>session/new</c>, <c>session/set_config_option</c>, <c>session/prompt</c>, and the
+    /// started runtime's <c>Vendor == "cursor"</c>.</summary>
+    [Test]
+    public async Task StartAsync_ExplicitResolvableModel_FrameOrderIsInitializeNewSetConfigPrompt() {
+        var fake = new FakeAcpAgent();
+        fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(FakeAcpAgent.FixedSessionId, currentModelId: "composer-2.5[fast=true]", TeamAvailableModels));
+        var connection = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
+            config: new DaemonConfig { CursorModel = "claude-sonnet-4-5" },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var ctx     = MakeContext("agent-1") with { Model = "claude-opus-4-8", Prompt = "do the thing" };
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var calls = await WaitForCallCountAsync(fake, minCount: 4);
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(4);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+        await Assert.That(calls[1].Method).IsEqualTo("session/new");
+        await Assert.That(calls[2].Method).IsEqualTo("session/set_config_option");
+        await Assert.That(calls[2].Params!.Value.GetProperty("value").GetString()).IsEqualTo("claude-opus-4-8[thinking=true]");
+        await Assert.That(calls[3].Method).IsEqualTo("session/prompt");
+        await Assert.That(started.Runtime.Vendor).IsEqualTo("cursor");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>(b) <c>ctx.Model: "default"</c> (the UI's "no override" sentinel) → resolves to
+    /// <c>config.CursorModel</c> against <c>session/new</c>'s <c>availableModels</c>, same
+    /// four-call order — the sentinel still resolves TO a model (the configured default), not a
+    /// caller override.</summary>
+    [Test]
+    public async Task StartAsync_DefaultSentinelModel_ResolvesToConfigCursorModel_FrameOrderIsInitializeNewSetConfigPrompt() {
+        var fake = new FakeAcpAgent();
+        fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(FakeAcpAgent.FixedSessionId, currentModelId: "composer-2.5[fast=true]", TeamAvailableModels));
+        var connection = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
+            config: new DaemonConfig { CursorModel = "claude-sonnet-4-5" },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var ctx     = MakeContext("agent-1") with { Model = "default", Prompt = "do the thing" };
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var calls = await WaitForCallCountAsync(fake, minCount: 4);
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(4);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+        await Assert.That(calls[1].Method).IsEqualTo("session/new");
+        await Assert.That(calls[2].Method).IsEqualTo("session/set_config_option");
+        await Assert.That(calls[2].Params!.Value.GetProperty("value").GetString()).IsEqualTo("claude-sonnet-4-5[thinking=true,context=200k]");
+        await Assert.That(calls[3].Method).IsEqualTo("session/prompt");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>(c) A requested model NOT present in <c>availableModels</c> → order is
+    /// <c>initialize</c>, <c>session/new</c>, <c>session/prompt</c> only — NO
+    /// <c>session/set_config_option</c> call, proving an unresolvable model never even attempts
+    /// the RPC.</summary>
+    [Test]
+    public async Task StartAsync_UnresolvableModel_FrameOrderSkipsSetConfigOption() {
+        var fake = new FakeAcpAgent();
+        fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(FakeAcpAgent.FixedSessionId, currentModelId: "composer-2.5[fast=true]", TeamAvailableModels));
+        var connection = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
+            config: new DaemonConfig { CursorModel = "claude-sonnet-4-5" },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var ctx     = MakeContext("agent-1") with { Model = "totally-unknown-model", Prompt = "do the thing" };
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var calls = await WaitForCallCountAsync(fake, minCount: 3);
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(3);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+        await Assert.That(calls[1].Method).IsEqualTo("session/new");
+        await Assert.That(calls[2].Method).IsEqualTo("session/prompt");
+        await Assert.That(calls.Any(c => c.Method == "session/set_config_option")).IsFalse();
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>(d) A resolvable model but <c>fake.FailNextSetConfigOption()</c> → the full
+    /// four-call order (the RPC IS attempted and fails) and <c>session/prompt</c> still fires
+    /// afterward with no exception — the integration-level counterpart to test plan item 10, now
+    /// proving the FACTORY-produced runtime (not a hand-built one) behaves the same way.</summary>
+    [Test]
+    public async Task StartAsync_SetConfigOptionRpcError_FrameOrderStillReachesPrompt_NoException() {
+        var fake = new FakeAcpAgent();
+        fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(FakeAcpAgent.FixedSessionId, currentModelId: "composer-2.5[fast=true]", TeamAvailableModels));
+        fake.FailNextSetConfigOption();
+        var connection = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
+            config: new DaemonConfig { CursorModel = "claude-sonnet-4-5" },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var ctx     = MakeContext("agent-1") with { Model = "claude-opus-4-8", Prompt = "do the thing" };
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var calls = await WaitForCallCountAsync(fake, minCount: 4);
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(4);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+        await Assert.That(calls[1].Method).IsEqualTo("session/new");
+        await Assert.That(calls[2].Method).IsEqualTo("session/set_config_option");
+        await Assert.That(calls[3].Method).IsEqualTo("session/prompt");
 
         cts.Cancel();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }

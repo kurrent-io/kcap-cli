@@ -84,6 +84,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             // below is "" so AcpHostedAgentRuntimeFactory.ResolveRequestedModel falls back to it,
             // proving the daemon-wide default reaches a real cursor-agent process, not just the fake.
             var factory = new AcpHostedAgentRuntimeFactory(
+                descriptor: AcpVendorDescriptors.Cursor,
                 config: new DaemonConfig(), // CursorPath="cursor-agent", CursorModel="claude-sonnet-4-5"
                 loggerFactory: liveLoggerFactory,
                 connection: connection,

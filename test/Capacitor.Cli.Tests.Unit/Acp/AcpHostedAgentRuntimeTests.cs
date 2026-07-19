@@ -470,4 +470,45 @@ public class AcpHostedAgentRuntimeTests {
 
         h.Fake.HoldPromptResponses.TrySetResult();
     }
+
+    // ── Test plan item 9: cancellation propagates out of StartAsync ───────────────────
+
+    /// <summary>
+    /// A <c>ct</c> canceled WHILE <c>session/set_config_option</c> is in flight must abort
+    /// <c>StartAsync</c> via a propagated <see cref="OperationCanceledException"/> — the runtime
+    /// must never hand a live runtime back to a caller who already canceled the launch (spec-review
+    /// Finding 2). Contrasted against <see cref="AcpHostedAgentRuntimeModelSelectionTests.StartAsync_JsonRpcErrorFromSetConfigOption_IsNonFatal_PromptStillFires"/>,
+    /// which shares almost the same setup but asserts the opposite outcome for an RPC ERROR
+    /// response (as opposed to cancellation).
+    /// </summary>
+    [Test]
+    public async Task StartAsync_CanceledWhileSetConfigOptionInFlight_ThrowsOperationCanceled() {
+        await using var h = new Harness();
+        h.Fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(
+            FakeAcpAgent.FixedSessionId,
+            currentModelId: "composer-2.5[fast=true]",
+            availableModels: [("claude-sonnet-4-5[thinking=true,context=200k]", "claude-sonnet-4-5")]));
+        h.Fake.HoldSetConfigOptionResponse = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.StartFakeAgentLoop();
+
+        using var innerCts = CancellationTokenSource.CreateLinkedTokenSource(h.Cts.Token);
+
+        var startTask = h.Runtime.StartAsync(
+            "/abs/worktree", "do the thing", innerCts.Token,
+            requestedModel: "claude-sonnet-4-5"
+        );
+
+        // Wait for session/set_config_option to actually be in flight before cancelling.
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!h.Fake.ReceivedCalls.Any(c => c.Method == "session/set_config_option") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/set_config_option")).IsTrue();
+
+        await innerCts.CancelAsync();
+
+        await Assert.That(async () => await startTask.WaitAsync(HangGuard)).Throws<OperationCanceledException>();
+
+        // Release the fake's held response so the harness can tear down cleanly.
+        h.Fake.HoldSetConfigOptionResponse.TrySetResult();
+    }
 }

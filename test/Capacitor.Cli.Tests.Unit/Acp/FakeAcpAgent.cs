@@ -261,6 +261,19 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     public TaskCompletionSource? HoldPromptResponses { get; set; }
 
     /// <summary>
+    /// Test plan item 9: when set, a <c>session/set_config_option</c> request's RESPONSE is
+    /// held back until <paramref name="gate"/>'s task completes — mirrors
+    /// <see cref="HoldPromptResponses"/> exactly. The fake still records the call immediately (so
+    /// <see cref="ReceivedCalls"/> observes it right away via <c>DispatchLineAsync</c>'s
+    /// <c>Record</c> call, which runs before this method is ever reached), it just doesn't answer
+    /// until released. Used to prove a <c>ct</c> canceled WHILE this RPC is in flight aborts
+    /// <c>StartAsync</c> via a propagated <see cref="OperationCanceledException"/>, rather than the
+    /// selector silently swallowing it and returning <see langword="null"/> the way it does for a
+    /// resolution failure.
+    /// </summary>
+    public TaskCompletionSource? HoldSetConfigOptionResponse { get; set; }
+
+    /// <summary>
     /// The fake's read loop: parses newline-delimited JSON-RPC frames arriving from the connection
     /// under test (its simulated stdin) and dispatches <c>initialize</c> / <c>session/new</c> /
     /// <c>session/prompt</c> / <c>session/cancel</c>. Must be started explicitly by the test (e.g.
@@ -419,6 +432,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
             await WriteErrorResponseAsync(id, -32602, "Invalid params: unknown model", ct).ConfigureAwait(false);
             return;
         }
+
+        if (HoldSetConfigOptionResponse is { } gate)
+            await gate.Task.ConfigureAwait(false);
 
         var value = @params is { } p && p.TryGetProperty("value", out var valueEl) ? valueEl.GetString() ?? "" : "";
 
