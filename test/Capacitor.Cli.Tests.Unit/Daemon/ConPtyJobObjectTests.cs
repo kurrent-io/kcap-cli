@@ -86,27 +86,56 @@ public class ConPtyJobObjectTests {
     public async Task Job_creation_failure_fails_the_spawn_closed() {
         if (!OperatingSystem.IsWindows()) return;
 
-        // Simulate "nesting genuinely prevented": put this process in an outer job that DOES
-        // carry a UI-restriction limit so a nested job can't form, and assert Spawn throws
-        // rather than silently spawning uncontained.
+        // "Nesting genuinely prevented": a process inside a UI-restricted job cannot form a
+        // nested job, so ConPtyProcess.Spawn must fail CLOSED (throw, no uncontained child)
+        // rather than silently launch one.
         //
-        // HOST-SAFETY INVARIANT: CreateUiRestrictedJobAndAssignSelf sets ONLY the UI-restriction
-        // flag — NO JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — so self-join is safe, and cleanup is
-        // CloseHandle, never TerminateJobObject (which would kill this test host). As with the
-        // nesting test, the host stays a member of this handleless job for the rest of the run;
-        // that accumulation is harmless.
-        var restrictiveJob = ConPtyJobObjectTestHelper.CreateUiRestrictedJobAndAssignSelf();
+        // This assertion runs OUT-OF-PROCESS, in a disposable NativeTestHost, precisely because
+        // assigning a process to a UI-restricted job is IRREVERSIBLE (Windows has no un-assign
+        // API). Doing it in THIS shared test host — as an earlier in-process version did — would
+        // permanently poison later job NESTING and make Disposing_the_process_kills_child_and_grandchild
+        // and Job_sets_no_breakaway_flag... throw whenever they were scheduled after it. [NotInParallel]
+        // + ordering cannot fix an irreversible mutation, so the poisoning lives in its own process
+        // (the same pattern the Linux PDEATHSIG/FailFast tests use). The child assigns ITSELF to a
+        // UI-restricted job, attempts a real Spawn, and exits: 0 = failed closed (Spawn threw),
+        // 20 = leaked an uncontained child, 30 = could not set up the poison job.
+        using var host   = StartHost("win-ui-restricted-fail-closed");
+        var       exited = host.WaitForExit(30000);
 
-        try {
-            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await ConPtyProcess.Spawn("cmd.exe", ["/c", "exit"], Directory.GetCurrentDirectory()).DisposeAsync());
-        } finally {
-            ConPtyInterop.CloseHandle(restrictiveJob);
-        }
+        await Assert.That(exited).IsTrue();
+        await Assert.That(host.ExitCode).IsEqualTo(0); // 0 == proven fail-closed
     }
 
     static bool IsProcessAlive(int pid) {
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch { return false; }
+    }
+
+    // Launches the sibling NativeTestHost project as a separate process running <paramref
+    // name="mode"/>. Mirrors UnixSpawnerThreadTests' helper (kept local rather than shared to
+    // avoid touching those tests); the fail-closed proof reads only the child's exit code.
+    static Process StartHost(string mode) {
+        var dll = ResolveNativeHostDll();
+        var psi = new ProcessStartInfo("dotnet", $"\"{dll}\" {mode}") {
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+        };
+
+        return Process.Start(psi) ?? throw new InvalidOperationException("failed to start NativeTestHost");
+    }
+
+    static string ResolveNativeHostDll() {
+        var dir      = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var tfm      = Path.GetFileName(dir);
+        var config   = Path.GetFileName(Path.GetDirectoryName(dir)!);
+        var testRoot = Path.GetFullPath(Path.Combine(dir, "..", "..", "..", ".."));
+        var hostDll  = Path.Combine(testRoot, "Capacitor.Cli.Tests.Unit.NativeTestHost", "bin", config, tfm,
+            "Capacitor.Cli.Tests.Unit.NativeTestHost.dll");
+
+        if (!File.Exists(hostDll))
+            throw new InvalidOperationException($"NativeTestHost not built at {hostDll} — build Capacitor.slnx first");
+
+        return hostDll;
     }
 }
