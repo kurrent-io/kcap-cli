@@ -89,6 +89,7 @@ public class AcpEventEnvelopeWireCompatTests {
         await Assert.That(AcpEventKind.AssistantThinking).IsEqualTo("assistant_thinking");
         await Assert.That(AcpEventKind.ToolCall).IsEqualTo("tool_call");
         await Assert.That(AcpEventKind.ToolResult).IsEqualTo("tool_result");
+        await Assert.That(AcpEventKind.SessionTitle).IsEqualTo("session_title");
         await Assert.That(AcpEventKind.SessionEnded).IsEqualTo("session_ended");
     }
 

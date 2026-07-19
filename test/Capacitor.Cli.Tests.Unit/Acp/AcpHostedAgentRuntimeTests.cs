@@ -181,6 +181,24 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(received.Raw!.Value.GetProperty("foo").GetString()).IsEqualTo("bar");
     }
 
+    [Test]
+    public async Task SessionInfo_update_is_reduced_to_SessionInfo_with_the_captured_title() {
+        await using var h = new Harness();
+
+        var infoUpdate   = FakeAcpAgent.BuildSessionInfoUpdate("Shell Reporter");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, infoUpdate);
+        var result       = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.Kind).IsEqualTo(AcpUpdateKind.SessionInfo);
+        await Assert.That(received.Title).IsEqualTo("Shell Reporter");
+    }
+
     // ── Option B task 1: Reduce() tool-call/tool-result field capture ──────────────
 
     [Test]

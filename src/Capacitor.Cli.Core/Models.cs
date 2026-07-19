@@ -1134,6 +1134,7 @@ public static class AcpEventKind {
     public const string AssistantThinking  = "assistant_thinking";
     public const string ToolCall           = "tool_call";
     public const string ToolResult         = "tool_result";
+    public const string SessionTitle       = "session_title";
     public const string SessionEnded       = "session_ended";
 }
 

@@ -577,6 +577,17 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
+    /// <summary>
+    /// Probe-confirmed <c>session_info_update</c> variant (agent session auto-titling):
+    /// <c>{"sessionUpdate":"session_info_update","title":"..."}</c> — captured verbatim in
+    /// docs/ai-688-cursor-prototype-findings.md.
+    /// </summary>
+    public static JsonElement BuildSessionInfoUpdate(string title) {
+        var escaped = JsonEncodedText.Encode(title);
+        return JsonDocument.Parse($$$"""{"sessionUpdate":"session_info_update","title":"{{{escaped}}}"}""")
+            .RootElement.Clone();
+    }
+
     // ---- spec-derived (NOT probe-confirmed) helper builders ----
     //
     // The probe account was plan-gated before any tool-call turn completed, so none of the

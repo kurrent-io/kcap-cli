@@ -671,6 +671,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
             "available_commands_update" => new AcpSessionUpdate(AcpUpdateKind.AvailableCommands, Raw: update),
 
+            "session_info_update" => new AcpSessionUpdate(
+                AcpUpdateKind.SessionInfo,
+                Title: GetStringOrNull(update, "title"),
+                Raw: update),
+
             _ => new AcpSessionUpdate(AcpUpdateKind.Unknown, Raw: update),
         };
     }
