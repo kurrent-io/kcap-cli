@@ -5,12 +5,12 @@ namespace Capacitor.Cli.Daemon.Acp;
 
 /// <summary>
 /// Discriminator for <see cref="AcpSessionUpdate.Kind"/>, mirroring the <c>sessionUpdate</c> string
-/// values documented in <c>docs/acp-probe-findings.md</c>. Only <see cref="AgentMessageChunk"/> and
-/// <see cref="AvailableCommands"/> are probe-confirmed; <see cref="AgentThoughtChunk"/>,
-/// <see cref="ToolCall"/>, <see cref="ToolCallUpdate"/>, and <see cref="Plan"/> are spec-derived but
-/// not yet observed on the wire (see the probe doc's "Recommended follow-up"). <see cref="Unknown"/>
-/// covers any future/unrecognized discriminator so the reducer never throws on an unfamiliar
-/// variant.
+/// values documented in <c>docs/acp-probe-findings.md</c>. <see cref="AgentMessageChunk"/>,
+/// <see cref="AvailableCommands"/>, and <see cref="SessionInfo"/> are probe-confirmed;
+/// <see cref="AgentThoughtChunk"/>, <see cref="ToolCall"/>, <see cref="ToolCallUpdate"/>, and
+/// <see cref="Plan"/> are spec-derived but not yet observed on the wire (see the probe doc's
+/// "Recommended follow-up"). <see cref="Unknown"/> covers any future/unrecognized discriminator so
+/// the reducer never throws on an unfamiliar variant.
 /// </summary>
 internal enum AcpUpdateKind {
     AgentMessageChunk,
@@ -19,6 +19,7 @@ internal enum AcpUpdateKind {
     ToolCallUpdate,
     Plan,
     AvailableCommands,
+    SessionInfo,
     Unknown,
 }
 
@@ -42,6 +43,7 @@ internal enum AcpUpdateKind {
 internal sealed record AcpSessionUpdate(
     AcpUpdateKind Kind,
     string?       Text           = null,
+    string?       Title          = null, // session_info_update's agent-authored session title
     string?       ToolCallId     = null,
     string?       ToolTitle      = null,
     string?       ToolKind       = null,

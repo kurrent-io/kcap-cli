@@ -671,6 +671,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
             "available_commands_update" => new AcpSessionUpdate(AcpUpdateKind.AvailableCommands, Raw: update),
 
+            "session_info_update" => new AcpSessionUpdate(
+                AcpUpdateKind.SessionInfo,
+                Title: GetStringOrNull(update, "title"),
+                Raw: update),
+
             _ => new AcpSessionUpdate(AcpUpdateKind.Unknown, Raw: update),
         };
     }
@@ -681,7 +686,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             : null;
 
     static string? GetStringOrNull(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) ? value.GetString() : null;
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null; // guard the ValueKind: GetString() THROWS on a non-string value (number/object/
+                    // array), which would let a schema-drift frame bubble an exception up and skip
+                    // the entire notification. A wrong-typed field is treated as absent instead.
 
     /// <summary>
     /// Verbatim JSON text of <paramref name="propertyName"/> when it's a JSON object (e.g. a
@@ -750,6 +759,18 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                         _openRunKind = update.Kind;
                         _openRunText = new StringBuilder(update.Text ?? "");
                     }
+                    break;
+
+                case AcpUpdateKind.SessionInfo:
+                    // Session-title metadata is not transcript content: it must NOT close an open
+                    // chunk run. A session_info_update interleaved between two message/thought
+                    // chunks would otherwise flush the run mid-stream and split one contiguous
+                    // assistant message into two envelopes. Emit it standalone, leaving
+                    // _openRunKind/_openRunText untouched so the surrounding chunks still aggregate
+                    // into one run (the title is orderless metadata — its relative seq is immaterial).
+                    var titleEnvelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
+                    if (titleEnvelope is { } t)
+                        EmitEnvelope(t);
                     break;
 
                 default:

@@ -142,6 +142,29 @@ public class AcpEventTranslatorTests {
         await Assert.That(AcpEventTranslator.Translate(new AcpSessionUpdate(AcpUpdateKind.Unknown), 1, TimestampIso)).IsNull();
     }
 
+    [Test]
+    public async Task SessionInfo_with_title_translates_to_SessionTitle_envelope_carrying_the_title() {
+        var update = new AcpSessionUpdate(AcpUpdateKind.SessionInfo, Title: "Shell Reporter");
+
+        var env = AcpEventTranslator.Translate(update, seq: 3, timestampIso: TimestampIso);
+
+        await Assert.That(env).IsNotNull();
+        await Assert.That(env!.Value.Kind).IsEqualTo(AcpEventKind.SessionTitle);
+        await Assert.That(env.Value.Text).IsEqualTo("Shell Reporter");
+        await Assert.That(env.Value.Seq).IsEqualTo(3L);
+        await Assert.That(env.Value.TimestampIso).IsEqualTo(TimestampIso);
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task SessionInfo_with_blank_title_translates_to_null(string? title) {
+        var update = new AcpSessionUpdate(AcpUpdateKind.SessionInfo, Title: title);
+
+        await Assert.That(AcpEventTranslator.Translate(update, 1, TimestampIso)).IsNull();
+    }
+
     // ── KCAP_ACP_DEBUG_FRAMES gate: Unknown-kind raw-JSON dump ──────────────────────────────────
 
     static AcpSessionUpdate UnknownUpdateWithSecretMarker() {

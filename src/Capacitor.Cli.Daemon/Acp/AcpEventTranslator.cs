@@ -45,6 +45,9 @@ internal static partial class AcpEventTranslator {
     /// <see cref="AcpSessionUpdate.ToolResultText"/> is non-null — a status-only update (non-terminal,
     /// or terminal with no extractable content) returns <see langword="null"/> rather than an empty
     /// <c>ToolResultReceived</c>.</description></item>
+    /// <item><description><see cref="AcpUpdateKind.SessionInfo"/> → <see cref="AcpEventKind.SessionTitle"/>
+    /// when the update carries a non-blank <see cref="AcpSessionUpdate.Title"/> (the agent's
+    /// auto-generated session title), else <see langword="null"/>.</description></item>
     /// <item><description><see cref="AcpUpdateKind.Plan"/>/<see cref="AcpUpdateKind.AvailableCommands"/>
     /// → always <see langword="null"/> (not transcript content; deferred to future work).</description></item>
     /// <item><description><see cref="AcpUpdateKind.Unknown"/> → <see langword="null"/>, but
@@ -100,6 +103,18 @@ internal static partial class AcpEventTranslator {
                     ToolResult: update.ToolResultText,
                     ToolIsError: update.ToolIsError,
                     TimestampIso: timestampIso);
+
+            case AcpUpdateKind.SessionInfo:
+                // session_info_update carries the agent's auto-generated session title. Emit a
+                // SessionTitle envelope only when a non-blank title is present; a title-less info
+                // update has nothing to surface, so it is dropped like the other content-free kinds.
+                return string.IsNullOrWhiteSpace(update.Title)
+                    ? null
+                    : new AcpEventEnvelope(
+                        Seq: seq,
+                        Kind: AcpEventKind.SessionTitle,
+                        Text: update.Title,
+                        TimestampIso: timestampIso);
 
             case AcpUpdateKind.Plan:
             case AcpUpdateKind.AvailableCommands:
