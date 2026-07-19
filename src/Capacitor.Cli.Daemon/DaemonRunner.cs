@@ -406,33 +406,44 @@ public static partial class DaemonRunner {
         // (those survivors aren't yet in EffectiveCount), and would leave a window where a launch races
         // an unwired handler. Under the daemon lock; best-effort (swallows its own faults).
         var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
-        await orchestrator.ReapOrphansOnceAsync();
 
+        // Once the orchestrator is resolved, the Unix IPtyProcessFactory has pulled in
+        // UnixSpawnerThread — whose foreground (non-background) OS thread is now running and
+        // parks forever until the ServiceProvider is disposed (host.StopAsync() alone does NOT
+        // retire it; see the block comment in the finally below). So EVERY exit path from here on
+        // — success, the nameInUse early-return, OR any exception out of ReapOrphansOnceAsync,
+        // ConnectAsync (non-nameInUse), CleanupOrphanedAsync, or EvalRunner resolution — MUST run
+        // the unified finally so DisposeHostAsync(host) fires and the process can actually exit
+        // instead of hanging. That is why everything below is wrapped in this single try/finally.
+        // Structural fix; backed by DaemonHostDisposalTests, which proves StopAsync-then-dispose
+        // is what retires the DI-owned UnixSpawnerThread.
         try {
-            await connection.ConnectAsync(lifetime.ApplicationStopping);
-        } catch (Exception ex) when (nameInUse) {
-            // ConnectAsync's initial-connect path threw because of
-            // NameInUse. OnNameInUse already fired and set our flag; the
-            // host hasn't started its main loop yet, so just clean up
-            // and exit cleanly with code 3.
-            _ = ex;
-            daemonLock.Dispose();
-            await host.StopAsync();
-            await DisposeHostAsync(host);
+            // Phase B (D4 §6.4(3)): reap any hosted-agent children that outlived a PRIOR daemon run
+            // BEFORE ConnectAsync advertises this daemon (see the orchestrator-resolution comment
+            // above). Under the daemon lock; best-effort (swallows its own faults).
+            await orchestrator.ReapOrphansOnceAsync();
 
-            return 3;
-        }
+            try {
+                await connection.ConnectAsync(lifetime.ApplicationStopping);
+            } catch (Exception ex) when (nameInUse) {
+                // ConnectAsync's initial-connect path threw because of NameInUse. OnNameInUse
+                // already fired and set our flag; the host hasn't started its main loop yet, so
+                // just exit with code 3 — the unified finally below disposes daemonLock,
+                // orchestrator, connection, and the host (retiring the spawner thread).
+                _ = ex;
 
-        var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-        await worktreeManager.CleanupOrphanedAsync();
+                return 3;
+            }
 
-        // Instantiate EvalRunner so it wires the per-phase eval handlers
-        // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
-        // ServerConnection. It's stateless beyond the handler assignment —
-        // cached context lives in EvalContextCache — so no disposal dance.
-        _ = host.Services.GetRequiredService<EvalRunner>();
+            var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
+            await worktreeManager.CleanupOrphanedAsync();
 
-        try {
+            // Instantiate EvalRunner so it wires the per-phase eval handlers
+            // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
+            // ServerConnection. It's stateless beyond the handler assignment —
+            // cached context lives in EvalContextCache — so no disposal dance.
+            _ = host.Services.GetRequiredService<EvalRunner>();
+
             // Wait without passing the lifetime token: WaitForShutdownAsync(token) treats
             // token cancellation as a fault, so a normal Ctrl+C / lifetime.StopApplication()
             // would surface as OperationCanceledException. The no-arg overload listens
