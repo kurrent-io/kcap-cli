@@ -83,6 +83,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev ${{ contains(matrix.rid, 'musl') && 'musl-tools' || '' }}
 
+      # musl-tools (installed above) provides the musl-gcc cross-compiler CompilePtyShim needs
+      # for the two musl RIDs on a native (non-container) runner. Fail loudly here if the
+      # install silently didn't provide it, rather than inside the opaque CompilePtyShim Exec.
+      # Skipped under matrix.container: the Alpine path below installs its own native
+      # build-base toolchain (cc/gcc against musl libc directly), no musl-gcc cross-compiler
+      # needed there.
+      - name: Verify musl toolchain (musl RIDs only)
+        if: contains(matrix.rid, 'musl') && !matrix.container
+        run: musl-gcc --version
+
       - uses: actions/checkout@v6
 
       - name: Setup .NET
@@ -111,16 +121,19 @@ jobs:
           -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
           -o publish/daemon/
 
-      # The daemon's UnixPtyInterop hard-imports libpty_shim on macOS ARM64. If
-      # the macOS-only build target ever silently fails to produce the dylib,
-      # the npm package would ship a daemon that crashes on PTY resize. Fail
-      # loudly here instead of distributing a broken artifact.
-      - name: Verify libpty_shim built (osx-arm64)
-        if: matrix.rid == 'osx-arm64'
+      # The daemon's UnixPtyInterop hard-imports libpty_shim on every non-win-x64 RID (macOS
+      # ARM64's variadic-ioctl workaround, and every Linux RID's containment shim as of L1-build).
+      # If CompilePtyShim ever silently fails to produce the shim for a given RID, the npm
+      # package would ship a daemon that crashes on first PTY use. Fail loudly here instead of
+      # distributing a broken artifact.
+      - name: Verify libpty_shim built
+        if: matrix.rid != 'win-x64'
         shell: bash
         run: |
-          if [ ! -f publish/daemon/libpty_shim.dylib ]; then
-            echo "::error::libpty_shim.dylib missing from publish/daemon/ on osx-arm64"
+          ext="so"
+          if [[ "${{ matrix.rid }}" == osx-* ]]; then ext="dylib"; fi
+          if [ ! -f "publish/daemon/libpty_shim.$ext" ]; then
+            echo "::error::libpty_shim.$ext missing from publish/daemon/ on ${{ matrix.rid }}"
             ls -la publish/daemon/
             exit 1
           fi
@@ -185,9 +198,11 @@ jobs:
           mkdir -p npm/${{ matrix.npm-package }}/bin
           cp publish/cli/${{ matrix.cli-binary }} npm/${{ matrix.npm-package }}/bin/
           cp publish/daemon/${{ matrix.daemon-binary }} npm/${{ matrix.npm-package }}/bin/
-          if [ -f publish/daemon/libpty_shim.dylib ]; then
-            cp publish/daemon/libpty_shim.dylib npm/${{ matrix.npm-package }}/bin/
-          fi
+          for ext in so dylib; do
+            if [ -f "publish/daemon/libpty_shim.$ext" ]; then
+              cp "publish/daemon/libpty_shim.$ext" npm/${{ matrix.npm-package }}/bin/
+            fi
+          done
 
       - name: Create release archive
         shell: bash
@@ -195,9 +210,11 @@ jobs:
           mkdir -p archive
           cp publish/cli/${{ matrix.cli-binary }} archive/
           cp publish/daemon/${{ matrix.daemon-binary }} archive/
-          if [ -f publish/daemon/libpty_shim.dylib ]; then
-            cp publish/daemon/libpty_shim.dylib archive/
-          fi
+          for ext in so dylib; do
+            if [ -f "publish/daemon/libpty_shim.$ext" ]; then
+              cp "publish/daemon/libpty_shim.$ext" archive/
+            fi
+          done
           cd archive
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
             7z a ../kcap-${{ matrix.rid }}.zip *
