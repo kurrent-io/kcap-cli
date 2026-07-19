@@ -115,4 +115,131 @@ public class OrphanReaperTests {
         mine.Kill();
         stale.Kill();
     }
+
+    [Test]
+    public async Task Identity_unavailable_record_is_not_suppressed_from_the_marker_scan_and_self_deletes_on_confirmed_kill() {
+        if (!OperatingSystem.IsLinux()) return;
+
+        // A prior daemon incarnation spawned this, captured NOTHING (private-ABI hiccup — modeled
+        // here directly since this test doesn't need real capture failure, just the RECORD shape),
+        // and crashed. The record pass alone can never resolve an identity_unavailable record (no
+        // token to compare) — it must fall through to the env-marker scan, which CAN reap it via
+        // the live process's own KCAP_* triple, and must delete the record in the SAME operation.
+        var store = NewStore();
+        using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> {
+            ["KCAP_AGENT_ID"] = "unresolved", ["KCAP_DAEMON_ID"] = "did", ["KCAP_DAEMON_EPOCH"] = "old-epoch" });
+
+        store.Write(new AgentPidRecord("unresolved", dummy.Pid, "", PidIdentityKind.IdentityUnavailable,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
+
+        var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
+        await reaper.ReapOnceAsync();
+
+        dummy.WaitForExit(TimeSpan.FromSeconds(8));
+        await Assert.That(dummy.HasExited).IsTrue();
+        // Positive, PID-independent resolution: the marker scan's own confirmed kill deleted the
+        // identity_unavailable record — NOT a later record pass keyed on the numeric pid.
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "unresolved")).IsFalse();
+    }
+
+    [Test]
+    public async Task Identity_unavailable_record_stays_pending_when_the_marker_read_is_unreadable() {
+        if (!OperatingSystem.IsLinux()) return;
+
+        // A recordless-of-env process (no KCAP_* markers at all — simulating a marker read that
+        // can't confirm ownership) with an identity_unavailable record on file: the record pass
+        // can't resolve it (no token) AND the marker scan can't confirm it (no matching env) —
+        // it must stay PENDING (retained), never silently treated as absent/resolved.
+        var store = NewStore();
+        using var dummy = DummyProcess.StartSleep(30); // no KCAP_* env at all
+
+        store.Write(new AgentPidRecord("unresolved2", dummy.Pid, "", PidIdentityKind.IdentityUnavailable,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
+
+        var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
+        await reaper.ReapOnceAsync();
+
+        await Assert.That(dummy.HasExited).IsFalse();
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "unresolved2")).IsTrue();
+        dummy.Kill();
+    }
+
+    [Test]
+    public async Task Forced_pid_reuse_between_marker_kill_and_a_later_sweep_never_acts_on_the_new_occupant() {
+        if (!OperatingSystem.IsLinux()) return;
+
+        // After the marker scan confirms a kill and deletes the identity_unavailable record, a
+        // LATER sweep must find NOTHING to act on for that agent id even if the pid gets reused —
+        // proven by running ReapOnceAsync a second time after spawning a decoy on a (best-effort)
+        // recycled pid and confirming no record references it.
+        var store = NewStore();
+        using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> {
+            ["KCAP_AGENT_ID"] = "reused", ["KCAP_DAEMON_ID"] = "did", ["KCAP_DAEMON_EPOCH"] = "old-epoch" });
+        var firstPid = dummy.Pid;
+
+        store.Write(new AgentPidRecord("reused", firstPid, "", PidIdentityKind.IdentityUnavailable,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
+
+        var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
+        await reaper.ReapOnceAsync();
+        dummy.WaitForExit(TimeSpan.FromSeconds(8));
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "reused")).IsFalse();
+
+        // A second sweep (simulating a later heartbeat) with an unrelated live process happening
+        // to occupy a nearby pid must find nothing keyed to "reused" — the record is genuinely
+        // gone, not re-derived from the numeric pid.
+        await reaper.ReapOnceAsync();
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "reused")).IsFalse();
+    }
+
+    [Test]
+    public async Task Macos_identity_unavailable_record_is_identity_unresolvable_manual_only() {
+        if (!OperatingSystem.IsMacOS()) return;
+
+        var store = NewStore();
+        using var dummy = DummyProcess.StartSleep(30);
+
+        store.Write(new AgentPidRecord("mac-unresolved", dummy.Pid, "", PidIdentityKind.IdentityUnavailable,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
+
+        var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
+        await reaper.ReapOnceAsync(); // macOS has no marker scan — this can NEVER auto-resolve
+
+        await Assert.That(dummy.HasExited).IsFalse();
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "mac-unresolved")).IsTrue();
+
+        // Manual-kill contract: once the operator kills the pid, the NEXT sweep observes it dead
+        // (IsAlive false) and deletes the record normally — no special-case code needed for this
+        // half, Classify's existing Dead branch already covers it.
+        dummy.Kill();
+        dummy.WaitForExit(TimeSpan.FromSeconds(5));
+        await reaper.ReapOnceAsync();
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "mac-unresolved")).IsFalse();
+    }
+
+    [Test]
+    public async Task Macos_legacy_tk_record_is_legacy_unresolvable_spared_every_pass_until_manual_kill() {
+        if (!OperatingSystem.IsMacOS()) return;
+
+        // A pre-M1-A tk: record compared against the now-mac:-producing live process is
+        // cross-scheme → Ambiguous → spared, every pass, forever — until the operator manually
+        // kills it, at which point Classify's Dead branch (which runs BEFORE any token
+        // comparison) confirms death regardless of scheme and the record is deleted normally.
+        var store = NewStore();
+        using var dummy = DummyProcess.StartSleep(30);
+
+        store.Write(new AgentPidRecord("legacy-live", dummy.Pid, "tk:1", PidIdentityKind.Present,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "did", "old-epoch", DateTimeOffset.UtcNow));
+
+        var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
+        await reaper.ReapOnceAsync();
+
+        await Assert.That(dummy.HasExited).IsFalse();
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "legacy-live")).IsTrue();
+
+        dummy.Kill();
+        dummy.WaitForExit(TimeSpan.FromSeconds(5));
+        await reaper.ReapOnceAsync();
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "legacy-live")).IsFalse();
+    }
 }

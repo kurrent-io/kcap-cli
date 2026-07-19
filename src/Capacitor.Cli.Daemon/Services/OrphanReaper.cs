@@ -1,4 +1,5 @@
 using System.Globalization;
+using Capacitor.Cli.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -32,7 +33,16 @@ internal sealed class OrphanReaper(
         // ── (1) record pass ──────────────────────────────────────────────────────────────────────
         foreach (var record in store.ReadAll()) {
             if (ct.IsCancellationRequested) return;
-            handledPids.Add(record.Pid);
+
+            // An IdentityUnavailable record carries NO comparable token — the record pass can
+            // NEVER resolve it (ProcessReaper.Classify always lands Ambiguous for an empty
+            // expectedIdentity). Do NOT mark the pid "handled" here, so the env-marker scan below
+            // still gets a chance to reap it via the live process's OWN env triple (Linux only;
+            // macOS has no marker scan, so such a record stays identity_unresolvable/manual — see
+            // §4.3 and this file's class doc).
+            if (record.IdentityKind == PidIdentityKind.Present) {
+                handledPids.Add(record.Pid);
+            }
 
             // Reap ONLY prior-incarnation records. A record stamped with the CURRENT epoch belongs to a
             // live agent of THIS incarnation (its normal teardown deletes it) — reaping it would kill
@@ -48,8 +58,19 @@ internal sealed class OrphanReaper(
                     logger.LogInformation(
                         "OrphanReaper: reaped leftover agent {AgentId} (pid {Pid}) from a prior daemon run",
                         record.AgentId, record.Pid);
+                } else if (record.IdentityKind == PidIdentityKind.IdentityUnavailable) {
+                    logger.LogWarning(
+                        "OrphanReaper: identity_unavailable record for {AgentId} (pid {Pid}, age {Age}) unresolved by the record pass — the env-marker scan may still reap it on Linux; macOS requires a manual kill",
+                        record.AgentId, record.Pid, DateTimeOffset.UtcNow - record.SpawnedAt);
+                } else if (OperatingSystem.IsMacOS()) {
+                    // Present but Ambiguous on macOS almost always means a cross-scheme mismatch
+                    // (a pre-M1-A tk: record compared against the now-mac:-producing live
+                    // process) — the spec's "legacy_unresolvable" residual.
+                    logger.LogWarning(
+                        "OrphanReaper: legacy_unresolvable record for {AgentId} (pid {Pid}, age {Age}) — spared every pass (cross-scheme token); manually verify and kill the pid",
+                        record.AgentId, record.Pid, DateTimeOffset.UtcNow - record.SpawnedAt);
                 }
-                // spared (unreadable env) → retain the record for the next tick
+                // otherwise spared (unreadable env) → retain the record for the next tick
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 logger.LogWarning(ex, "OrphanReaper: record-pass reap failed for {AgentId} (pid {Pid})", record.AgentId, record.Pid);
             }
@@ -100,12 +121,20 @@ internal sealed class OrphanReaper(
             // Recordless survivor of a PRIOR incarnation of THIS daemon → reap by the captured identity.
             try {
                 var gone = await ProcessReaper.ReapByMarkerAsync(pid, token, agentId, logger, ct);
-                if (gone)
+                if (gone) {
+                    // Positive, PID-independent resolution: delete any record for THIS agent id (a
+                    // no-op if none exists — the ordinary recordless-survivor case). This is what
+                    // makes the "identity_unavailable record + live-env-triple confirms it" case
+                    // self-heal WITHOUT ever keying off the numeric pid alone (a reused pid between
+                    // this kill and any later record pass can't act on the wrong occupant, because the
+                    // record is already gone by then).
+                    store.Delete(agentId);
                     logger.LogInformation(
                         "OrphanReaper: reaped recordless survivor {AgentId} (pid {Pid}) of a prior daemon incarnation", agentId, pid);
-                else
+                } else {
                     logger.LogWarning(
                         "OrphanReaper: env-marker kill of {AgentId} (pid {Pid}) not confirmed — retrying next tick", agentId, pid);
+                }
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 logger.LogWarning(ex, "OrphanReaper: env-marker reap failed for pid {Pid}", pid);
             }
