@@ -58,10 +58,55 @@ public sealed record FsCapabilities(
     [property: JsonPropertyName("writeTextFile")] bool WriteTextFile
 );
 
-/// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).</summary>
+/// <summary>One MCP server session/new can hand the agent — stdio transport only (ACP's
+/// agentCapabilities.mcpCapabilities also advertises http/sse per
+/// docs/ai-688-cursor-prototype-findings.md:22-23, but no caller needs a non-stdio transport yet;
+/// add a discriminated Transport field if/when one does).
+///
+/// <b>Spec-review Finding 1 (round 1) / Round 2 Finding 1:</b> <see cref="Args"/> and
+/// <see cref="Env"/> are both non-nullable arrays on the wire — never <see langword="null"/>,
+/// never omitted. ACP's stdio mcpServers shape
+/// (agentclientprotocol.com/protocol/v1/session-setup#mcp-servers, verified during round 1) types
+/// <c>args</c> as a required array and <c>env</c> as an optional <c>EnvVariable[]</c> that MAY be
+/// omitted or sent empty — this design deliberately always picks the "send an array, `[]` when
+/// empty" branch of that spec. Round 1 relied on non-nullable PROPERTY TYPES alone to enforce this;
+/// round 2 caught that a non-nullable array annotation is only a compile-time signal — nothing
+/// stops a caller writing <c>new AcpMcpServerSpec(..., Args: null!, Env: null!)</c>, and nothing
+/// stops a deserialization or reflection path from producing <see langword="null"/> for either
+/// property despite the declared type, which would then serialize as the illegal
+/// <c>"args":null</c>/<c>"env":null</c>. This record now uses an EXPLICIT constructor — not a
+/// positional-record primary constructor, which can't carry a normalizing body — that accepts
+/// nullable <c>Args</c>/<c>Env</c> and coalesces both to <c>[]</c> before assignment, so the wire
+/// shape is guaranteed by the type itself regardless of what any caller passes in, rather than by
+/// caller discipline. Env is a name/value array, not a dictionary, to keep this AOT-safe under the
+/// same JsonPropertyName-per-property convention every other type in this file already
+/// follows.</summary>
+public sealed record AcpMcpServerSpec {
+    [JsonPropertyName("name")]    public string               Name    { get; }
+    [JsonPropertyName("command")] public string               Command { get; }
+    [JsonPropertyName("args")]    public string[]             Args    { get; }
+    [JsonPropertyName("env")]     public AcpMcpServerEnvVar[] Env     { get; }
+
+    public AcpMcpServerSpec(string Name, string Command, string[]? Args, AcpMcpServerEnvVar[]? Env) {
+        this.Name    = Name;
+        this.Command = Command;
+        this.Args    = Args ?? [];
+        this.Env     = Env  ?? [];
+    }
+}
+
+public sealed record AcpMcpServerEnvVar(
+    [property: JsonPropertyName("name")]  string Name,
+    [property: JsonPropertyName("value")] string Value
+);
+
+/// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).
+/// <c>McpServers</c> is always sent as an array (never omitted) — empty for every launch until a
+/// caller populates RuntimeStartContext.McpServers (no caller does yet — the reviewer path is
+/// the first planned consumer).</summary>
 public sealed record SessionNewParams(
-    [property: JsonPropertyName("cwd")]        string        Cwd,
-    [property: JsonPropertyName("mcpServers")] object[]      McpServers
+    [property: JsonPropertyName("cwd")]        string             Cwd,
+    [property: JsonPropertyName("mcpServers")] AcpMcpServerSpec[] McpServers
 );
 
 /// <summary><c>session/prompt</c> params — a content-block array, per the probe (not a bare string).</summary>

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -98,5 +99,12 @@ internal sealed record RuntimeStartContext(
         // own (KCAP_DAEMON_ID == this daemon) from a PRIOR incarnation (KCAP_DAEMON_EPOCH != current)
         // and reap it. Empty when a test/legacy caller omits them — the markers are simply not written.
         string             DaemonId    = "",
-        string             DaemonEpoch = ""
+        string             DaemonEpoch = "",
+        // Optional MCP-server list for session/new — null/empty for every launch today
+        // (no caller populates this yet; interactive launches must keep it empty). The reviewer
+        // path is the first planned consumer. Distinct from McpAllowlist above, which is a PTY-only
+        // materialization concern (an allowlist of names the launcher writes into a temp
+        // mcp-config file) — this is the literal ACP session/new payload for descriptors that
+        // support it.
+        IReadOnlyList<AcpMcpServerSpec>? McpServers = null
     );

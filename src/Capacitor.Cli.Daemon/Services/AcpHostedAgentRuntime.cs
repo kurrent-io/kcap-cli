@@ -34,7 +34,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// flush.
 /// </summary>
 internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
-    static readonly object[] NoMcpServers = [];
+    static readonly AcpMcpServerSpec[] NoMcpServers = [];
 
     readonly AcpConnection _connection;
     readonly IAcpProcess   _process;
@@ -42,6 +42,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     readonly TimeProvider  _timeProvider;
     readonly string        _agentId;
     readonly bool          _debugFrames;
+    readonly string        _vendor;
+    readonly IAcpModelSelector _modelSelector;
     readonly AcpInteractionBridge? _interactionBridge;
     readonly CancellationTokenSource _cts = new();
     // Raw reduced-update surface, used only for test/live-inspection — the production transcript
@@ -194,14 +196,23 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             TimeProvider?                                                                  timeProvider = null,
             int?                                                                           transcriptCapacity = null,
             int?                                                                           pendingTurnsCapacity = null,
-            bool                                                                           debugFrames = false
+            bool                                                                           debugFrames = false,
+            string                                                                         vendor = "cursor",
+            IAcpModelSelector?                                                             modelSelector = null
         ) {
-        _connection   = connection;
-        _process      = process;
-        _logger       = logger;
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _agentId      = agentId;
-        _debugFrames  = debugFrames;
+        _connection    = connection;
+        _process       = process;
+        _logger        = logger;
+        _timeProvider  = timeProvider ?? TimeProvider.System;
+        _agentId       = agentId;
+        _debugFrames   = debugFrames;
+        _vendor        = vendor;
+        // LEGACY/COMPAT default (spec-review Finding 3a): null here means
+        // ConfigOptionModelSelector.Instance, NOT NoOpModelSelector — every existing call site
+        // that constructs this runtime directly (without a descriptor) keeps today's exact Cursor
+        // model-selection behavior. The generalized path (AcpHostedAgentRuntimeFactory.StartAsync)
+        // always passes descriptor.ModelSelector explicitly and never relies on this default.
+        _modelSelector = modelSelector ?? ConfigOptionModelSelector.Instance;
 
         // Bounded, not unbounded — see the fields' own remarks for the FullMode rationale.
         // transcriptCapacity/pendingTurnsCapacity are production-null (defaults apply); tests
@@ -224,7 +235,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
     }
 
-    public string Vendor              => "cursor";
+    public string Vendor              => _vendor;
     public int    Pid                 => _process.Pid;
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;
@@ -289,7 +300,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// exception path — an unresolved or rejected model just falls back to Cursor's own default
     /// (see <see cref="TrySelectModelAsync"/>'s remarks).
     /// </summary>
-    public async Task StartAsync(string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null) {
+    public async Task StartAsync(
+            string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null,
+            IReadOnlyList<AcpMcpServerSpec>? mcpServers = null) {
         _cwd = cwd;
 
         _connectionRunTask = RunConnectionLoopAsync(_cts.Token);
@@ -342,7 +355,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
-                new SessionNewParams(Cwd: cwd, McpServers: NoMcpServers),
+                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers),
                 CapacitorJsonContext.Default.SessionNewParams);
 
             sessionNewResult = await _connection.RequestAsync("session/new", sessionNewParams, ct).ConfigureAwait(false);
@@ -374,8 +387,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
 
         // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never
-        // fatal — see TrySelectModelAsync's remarks.
-        await TrySelectModelAsync(sessionNewResult, requestedModel, ct).ConfigureAwait(false);
+        // fatal for a resolution failure — see IAcpModelSelector's cancellation-contract remarks
+        // for why a canceled ct is the one exception to that (it propagates, aborting StartAsync).
+        _resolvedModel = await _modelSelector
+            .TrySelectAsync(_connection, _sessionId!, sessionNewResult, requestedModel, _logger, ct)
+            .ConfigureAwait(false);
 
         // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
         // one consolidated Info log carrying the negotiated protocol version, loadSession, and the
@@ -389,67 +405,6 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // observed via the Updates/Envelopes channels, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt))
             EnqueueTurn(initialPrompt);
-    }
-
-    /// <summary>
-    /// Resolves <paramref name="requestedModel"/> (already merged by the caller from
-    /// <c>ctx.Model</c>/<c>DaemonConfig.CursorModel</c> — see
-    /// <c>AcpHostedAgentRuntimeFactory.ResolveRequestedModel</c>) against
-    /// <paramref name="sessionNewResult"/>'s <c>models.availableModels</c> via
-    /// <see cref="AcpModelResolver.Resolve"/> and, if it resolves, sends
-    /// <c>session/set_config_option</c> and AWAITS the response before returning — the model must
-    /// be set before <see cref="SendPromptAsync"/> fires the first turn. Never throws: no requested
-    /// model, an unparsable/missing <c>models</c> object, no match, or a JSON-RPC error response are
-    /// all logged (where relevant) and treated as "use Cursor's default model" — per the probe
-    /// findings (<c>docs/ai-688-cursor-prototype-findings.md</c>), model selection is a nice-to-have,
-    /// never a launch precondition.
-    /// </summary>
-    async Task TrySelectModelAsync(JsonElement sessionNewResult, string? requestedModel, CancellationToken ct) {
-        if (string.IsNullOrWhiteSpace(requestedModel))
-            return;
-
-        AvailableModelDto[]? availableModels = null;
-
-        if (sessionNewResult.TryGetProperty("models", out var modelsElement)) {
-            try {
-                availableModels = JsonSerializer
-                    .Deserialize(modelsElement.GetRawText(), CapacitorJsonContext.Default.SessionModelsInfo)
-                    ?.AvailableModels;
-            } catch (JsonException ex) {
-                _logger.LogDebug(ex, "ACP: failed to parse session/new 'models' object; skipping model selection.");
-                return;
-            }
-        }
-
-        var resolvedModelId = AcpModelResolver.Resolve(requestedModel, availableModels);
-
-        if (resolvedModelId is null) {
-            _logger.LogWarning(
-                "ACP: requested model '{RequestedModel}' was not found in session/new's availableModels; continuing with Cursor's default model.",
-                requestedModel);
-            return;
-        }
-
-        var setConfigOptionParams = JsonSerializer.SerializeToElement(
-            new SetConfigOptionParams(SessionId: _sessionId!, ConfigId: "model", Value: resolvedModelId),
-            CapacitorJsonContext.Default.SetConfigOptionParams);
-
-        try {
-            await _connection.RequestAsync("session/set_config_option", setConfigOptionParams, ct).ConfigureAwait(false);
-
-            // Only record the model as "resolved" once the agent has actually confirmed it — a
-            // rejected/errored set_config_option (below) falls back to Cursor's own default, so
-            // IAcpTranscriptSource.ResolvedModel must stay null in that case too, not report a model
-            // that was never actually applied.
-            _resolvedModel = resolvedModelId;
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
-            // Covers AcpRpcException (a well-formed JSON-RPC error response) and any other
-            // non-cancellation failure — per the probe findings this is explicitly non-fatal.
-            _logger.LogWarning(
-                ex,
-                "ACP: session/set_config_option failed for model '{ResolvedModelId}'; continuing with Cursor's default model.",
-                resolvedModelId);
-        }
     }
 
     /// <summary>
