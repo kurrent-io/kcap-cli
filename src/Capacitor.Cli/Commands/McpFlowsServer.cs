@@ -168,10 +168,16 @@ static class McpFlowsServer {
                     // wrongly-vendored reviewer running unattended.
                     if (flowRunIdToClose is not null) {
                         try {
+                            // The shared flows client uses Timeout.InfiniteTimeSpan (flow starts
+                            // long-poll), so bound THIS best-effort close with its own short
+                            // deadline — otherwise a stalled close would wedge the single-threaded
+                            // stdio MCP loop and the mismatch error would never be delivered.
+                            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                             using var closeResponse = await client.PostAsync(
-                                $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunIdToClose)}/close", null);
+                                $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunIdToClose)}/close", null, closeCts.Token);
                         } catch {
-                            // best-effort; the run still shows up in the Flows tab / stale-reviewer sweep either way.
+                            // best-effort (incl. the timeout above); the run still shows up in the
+                            // Flows tab / stale-reviewer sweep either way.
                         }
                     }
 
@@ -288,12 +294,18 @@ static class McpFlowsServer {
         // starting/started — assert the applied vendor actually matches what was requested.
         if (!isSuccess) return null;
 
-        var node    = JsonNode.Parse(postBody)?.AsObject();
-        var applied = node?["applied_reviewer_vendor"]?.GetValue<string>();
+        // Parse defensively: a malformed / non-object / wrong-typed body must NOT throw past this
+        // method (the outer catch would turn it into a generic error and SKIP the close). Any
+        // missing/invalid applied-vendor echo is treated as a hard mismatch; a valid flow_run_id is
+        // still salvaged so the best-effort close can run.
+        JsonObject? node = null;
+        try { node = JsonNode.Parse(postBody) as JsonObject; } catch (JsonException) { /* leave null → mismatch */ }
+
+        var applied = TryGetString(node, "applied_reviewer_vendor");
 
         if (string.Equals(applied, requestedVendor, StringComparison.Ordinal)) return null;
 
-        flowRunIdToClose = node?["flow_run_id"]?.GetValue<string>();
+        flowRunIdToClose = TryGetString(node, "flow_run_id");
 
         return (
             $"Error: requested reviewer vendor '{requestedVendor}' but the server applied " +
@@ -301,6 +313,14 @@ static class McpFlowsServer {
             "when the versioned start route matched; please report it.",
             true);
     }
+
+    /// <summary>Reads a string property without throwing on a missing key, a null, or a
+    /// wrong-typed (e.g. numeric) value — a wrong-typed applied-vendor echo must read as "no valid
+    /// echo" (→ hard mismatch), never crash the defensive close path.</summary>
+    static string? TryGetString(JsonObject? obj, string key) =>
+        obj is not null && obj.TryGetPropertyValue(key, out var v) && v is JsonValue jv && jv.TryGetValue<string>(out var s)
+            ? s
+            : null;
 
     /// <summary>
     /// Posts to POST /api/flows/review/start (or, when a vendor override is present, the versioned

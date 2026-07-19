@@ -158,6 +158,33 @@ public class McpFlowsServerVendorOverrideTests {
     }
 
     [Test]
+    public async Task CheckVendorOverrideResult_wrongtyped_echo_is_a_hard_mismatch_but_still_salvages_the_run_id() {
+        // A 2xx body whose applied_reviewer_vendor is the wrong TYPE (a number, not a string) must
+        // NOT throw past this method (which would skip the defensive close): it reads as "no valid
+        // echo" → hard mismatch, and the still-valid flow_run_id is salvaged for the close.
+        var body = """{"flow_run_id":"f1","applied_reviewer_vendor":123}""";
+
+        var result = McpFlowsServer.CheckVendorOverrideResult(
+            "start_review_flow", requestedVendor: "claude", HttpStatusCode.OK, isSuccess: true, body, out var flowRunIdToClose);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Value.IsError).IsTrue();
+        await Assert.That(flowRunIdToClose).IsEqualTo("f1");
+    }
+
+    [Test]
+    public async Task CheckVendorOverrideResult_malformed_body_is_a_hard_mismatch_with_no_run_id() {
+        // A non-JSON / non-object body can't be parsed — still a hard mismatch (the applied vendor
+        // was never confirmed), with no run id to close.
+        var result = McpFlowsServer.CheckVendorOverrideResult(
+            "start_review_flow", requestedVendor: "claude", HttpStatusCode.OK, isSuccess: true, postBody: "not json", out var flowRunIdToClose);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Value.IsError).IsTrue();
+        await Assert.That(flowRunIdToClose).IsNull();
+    }
+
+    [Test]
     public async Task CheckVendorOverrideResult_non_success_non_404_is_a_noop_generic_failure_handles_it() {
         // A 5xx (or any other non-2xx that isn't the versioned-route 404) is left to the existing
         // generic FormatFlowStartError handling — this check only ever intercepts the 404 and the
