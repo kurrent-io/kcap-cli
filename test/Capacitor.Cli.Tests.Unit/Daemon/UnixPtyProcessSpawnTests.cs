@@ -23,26 +23,24 @@ public class UnixPtyProcessSpawnTests {
             await Assert.That(proc.StartIdentity).IsNotEmpty();
             await Assert.That(proc.StartIdentity).StartsWith(OperatingSystem.IsLinux() ? "lx:" : "mac:");
 
-            if (OperatingSystem.IsLinux()) {
-                // Cross-check against the independent, existing ProcessStartToken machinery: on
-                // Linux both the shim's capture_lx_identity (pty_shim.c) and
-                // ProcessStartToken.ForPid read the SAME two kernel facts (starttime field 22 of
-                // /proc/{pid}/stat, and /proc/sys/kernel/random/boot_id) in the SAME "lx:{boot}:
-                // {starttime}" format via two independently-implemented code paths, so they must
-                // produce byte-identical tokens for a healthy spawn.
-                //
-                // On macOS this check does NOT apply: the shim captures a NEW, more robust
-                // "mac:{bootsessionuuid}:{p_uniqueid}" scheme (kernel-assigned, monotonic,
-                // never-reused-within-a-boot-session — pty_shim.c's pty_capture_mac_identity),
-                // which Core's ProcessStartToken.ForPid has no knowledge of: its non-Linux branch
-                // still returns the OLDER "tk:{Process.StartTime.Ticks}" scheme (used by the
-                // Windows/ACP legacy re-capture path in AgentOrchestrator.PersistPidRecordOrThrow).
-                // The two are deliberately different schemes for different consumers — there is no
-                // live re-deriver for "mac:" tokens to cross-check against (Task 3's own
-                // PtySpawnTests doesn't attempt this either, for the same reason).
-                var liveToken = Capacitor.Cli.Core.ProcessStartToken.ForPid(proc.Pid);
-                await Assert.That(liveToken).IsEqualTo(proc.StartIdentity);
-            }
+            // Cross-check against the independent, existing ProcessStartToken machinery: on
+            // Linux both the shim's capture_lx_identity (pty_shim.c) and ProcessStartToken.ForPid
+            // read the SAME two kernel facts (starttime field 22 of /proc/{pid}/stat, and
+            // /proc/sys/kernel/random/boot_id) in the SAME "lx:{boot}:{starttime}" format via two
+            // independently-implemented code paths, so they must produce byte-identical tokens
+            // for a healthy spawn.
+            //
+            // On macOS, as of M1-A(a) [Task 7], ProcessStartToken.ForPid ALSO vendors the SAME
+            // proc_pidinfo(PROC_PIDUNIQIDENTIFIERINFO=17) + kern.bootsessionuuid capture pty_shim.c's
+            // pty_capture_mac_identity uses natively (same fixed-offset prefix read, same 256-byte
+            // buffer size) — so the two independently-implemented code paths must ALSO produce
+            // byte-identical "mac:{bootsessionuuid}:{p_uniqueid}" tokens for a healthy spawn. This
+            // is the regression guard against the two vendored copies of the private struct
+            // drifting apart (before Task 7 landed, Core's non-Linux branch returned the OLDER
+            // "tk:{Process.StartTime.Ticks}" scheme instead, so this cross-check did not apply on
+            // macOS and was gated out below).
+            var liveToken = Capacitor.Cli.Core.ProcessStartToken.ForPid(proc.Pid);
+            await Assert.That(liveToken).IsEqualTo(proc.StartIdentity);
         } finally {
             await proc.DisposeAsync();
         }
