@@ -113,7 +113,10 @@ static class McpFlowsServer {
         return 0;
     }
 
-    static async Task<string> HandleToolCallAsync(
+    // Internal (not private) so unit tests can drive the tool-call dispatch directly against a
+    // WireMock stub, without spawning the real stdio JSON-RPC process (that full-process path is
+    // Capacitor.Cli.Tests.Integration's job).
+    internal static async Task<string> HandleToolCallAsync(
             JsonNode            id,
             JsonObject          request,
             HttpClient          client,
@@ -151,6 +154,29 @@ static class McpFlowsServer {
 
                 if (postResponse.StatusCode == HttpStatusCode.Unauthorized)
                     return BuildToolResult(id, "Not logged in. Run 'kcap login' on the host shell.", isError: true);
+
+                // Reviewer vendor override: version-skew seam (a 404 here means an old server with
+                // no versioned route — before any run started, no agent launched) plus an echo
+                // defense-in-depth check once the route matched. Only start_review_flow/start_flow
+                // ever carry "vendor" — submit_review_round/send_to_participant never do, so
+                // CheckVendorOverrideResult is a no-op for those.
+                var requestedVendor = arguments?["vendor"]?.GetValue<string>();
+
+                if (CheckVendorOverrideResult(toolName, requestedVendor, postResponse.StatusCode, postResponse.IsSuccessStatusCode, postBody, out var flowRunIdToClose) is { } vendorCheck) {
+                    // Best-effort: we have the run id from this same response (echo mismatch only —
+                    // the 404 case never has one) — close it defensively rather than leave a
+                    // wrongly-vendored reviewer running unattended.
+                    if (flowRunIdToClose is not null) {
+                        try {
+                            using var closeResponse = await client.PostAsync(
+                                $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunIdToClose)}/close", null);
+                        } catch {
+                            // best-effort; the run still shows up in the Flows tab / stale-reviewer sweep either way.
+                        }
+                    }
+
+                    return BuildToolResult(id, vendorCheck.Message, vendorCheck.IsError);
+                }
 
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, FormatFlowStartError((int)postResponse.StatusCode, postBody, wasDynamicStart), isError: true);
@@ -229,14 +255,64 @@ static class McpFlowsServer {
     }
 
     /// <summary>
-    /// Posts to POST /api/flows/review/start. Shared by start_review_flow (reads the flow
-    /// kind from the "kind" arg) and its generic alias start_flow (reads it from
+    /// Pure decision for the reviewer-vendor-override version-skew seam + echo defense-in-depth on
+    /// a start_review_flow/start_flow response. Returns null when the caller should proceed with
+    /// the normal success/failure handling — no override was requested (any tool, or this one
+    /// omitted "vendor"), or the override was accepted and echoed back correctly. Otherwise returns
+    /// the tool-error result to return immediately; <paramref name="flowRunIdToClose"/> carries a
+    /// run id the caller should best-effort close first (echo-mismatch case only — the 404 case
+    /// never started a run, so there's nothing to close). Extracted as a pure function (no
+    /// <see cref="HttpClient"/> dependency) so this decision logic is unit-testable directly,
+    /// leaving the actual close-call side effect to the caller.
+    /// </summary>
+    internal static (string Message, bool IsError)? CheckVendorOverrideResult(
+            string toolName, string? requestedVendor, HttpStatusCode statusCode, bool isSuccess, string postBody,
+            out string? flowRunIdToClose
+        ) {
+        flowRunIdToClose = null;
+
+        if (toolName is not ("start_review_flow" or "start_flow")) return null;
+        if (requestedVendor is null) return null;
+
+        // Primary seam: the versioned route either exists (server supports the feature) or
+        // doesn't (clean 404, no run started, no agent launched — see StartFlowAsync's
+        // route-selection logic).
+        if (statusCode == HttpStatusCode.NotFound)
+            return (
+                "Error: this server does not support reviewer vendor overrides on " +
+                "start_review_flow/start_flow — upgrade the kcap server before relying on a " +
+                "vendor override for review flows.",
+                true);
+
+        // Defense in depth: the route existed (matched, non-404), so a run may already be
+        // starting/started — assert the applied vendor actually matches what was requested.
+        if (!isSuccess) return null;
+
+        var node    = JsonNode.Parse(postBody)?.AsObject();
+        var applied = node?["applied_reviewer_vendor"]?.GetValue<string>();
+
+        if (string.Equals(applied, requestedVendor, StringComparison.Ordinal)) return null;
+
+        flowRunIdToClose = node?["flow_run_id"]?.GetValue<string>();
+
+        return (
+            $"Error: requested reviewer vendor '{requestedVendor}' but the server applied " +
+            $"'{applied ?? "(none)"}' — closed the run defensively. This should not happen " +
+            "when the versioned start route matched; please report it.",
+            true);
+    }
+
+    /// <summary>
+    /// Posts to POST /api/flows/review/start (or, when a vendor override is present, the versioned
+    /// sibling POST /api/flows/review/start/vendor-override). Shared by start_review_flow (reads
+    /// the flow kind from the "kind" arg) and its generic alias start_flow (reads it from
     /// "definition_id" — the server treats kind == definition id, phase C).
     /// start_flow additionally accepts an inline "definition_yaml" (dynamic flows): the MCP
     /// schema can't express the xor, so exactly-one is enforced here, BEFORE any HTTP call;
-    /// start_review_flow stays catalog-only (kind remains required there).
+    /// start_review_flow stays catalog-only (kind remains required there). Internal (not private)
+    /// so unit tests can drive it directly against a WireMock stub.
     /// </summary>
-    static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
+    internal static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
             HttpClient         client,
             string             apiRoot,
             JsonObject?        arguments,
@@ -265,6 +341,7 @@ static class McpFlowsServer {
         var context      = GetRequiredArg(arguments, "context");
         var instructions = arguments?["instructions"]?.GetValue<string>();
         var mode         = arguments?["mode"]?.GetValue<string>();
+        var vendor       = arguments?["vendor"]?.GetValue<string>();
 
         var sessionId = ArgParsing.ResolveSessionIdFromEnv();
 
@@ -301,11 +378,21 @@ static class McpFlowsServer {
             Mode:                 mode,
             Async:                true,
             RequesterMachineId:   machineId,
-            DefinitionYaml:       definitionYaml
+            DefinitionYaml:       definitionYaml,
+            Vendor:               vendor
         );
 
+        // A request carrying a vendor override posts to the versioned sibling route — its mere
+        // existence is the server's capability signal. A server that predates this feature has no
+        // such route registered and returns a clean 404 before any handler runs, so the caller can
+        // fail closed BEFORE any run has started. A request with no override keeps using the
+        // original route, on any server version, unchanged.
+        var startPath = vendor is not null
+            ? $"{apiRoot}/api/flows/review/start/vendor-override"
+            : $"{apiRoot}/api/flows/review/start";
+
         return await client.PostAsync(
-            $"{apiRoot}/api/flows/review/start",
+            startPath,
             JsonContent.Create(body, McpJsonContext.Default.StartReviewFlowDto)
         );
     }
@@ -859,7 +946,8 @@ static class McpFlowsServer {
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that.")
+                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that."),
+                    ["vendor"]       = new("string", "Optional. Override the reviewer's vendor for this run (e.g. 'claude' instead of the kind's default). Only valid for single-participant flow kinds — rejected for a multi-participant definition. The daemon that will host this run must have that vendor installed and able to run fully unattended, or the call fails naming the vendor and daemon. Reviewer model override is not yet supported — the vendor's own default model is always used. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex').")
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
             )
@@ -919,7 +1007,8 @@ static class McpFlowsServer {
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
-                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that.")
+                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that."),
+                    ["vendor"]         = new("string", "Optional. Override the reviewer's vendor for this run (e.g. 'claude' instead of the kind's default). Only valid for single-participant catalog flow kinds — rejected for a multi-participant definition and for the definition_yaml (dynamic) form, where each participant already declares its own vendor. The daemon that will host this run must have that vendor installed and able to run fully unattended, or the call fails naming the vendor and daemon. Reviewer model override is not yet supported — the vendor's own default model is always used. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex').")
                 },
                 ["target_kind", "target_ref", "target_title", "context"]
             )
@@ -989,7 +1078,12 @@ record StartReviewFlowDto(
     [property: JsonPropertyName("mode")]                   string? Mode,
     [property: JsonPropertyName("async")]                  bool    Async,
     [property: JsonPropertyName("requester_machine_id")]  string? RequesterMachineId = null,
-    [property: JsonPropertyName("definition_yaml")]        string? DefinitionYaml = null
+    [property: JsonPropertyName("definition_yaml")]        string? DefinitionYaml = null,
+    // Reviewer vendor override: optional, single-participant catalog flow kinds only. Omitted
+    // (null) leaves the server's existing no-override behavior byte-identical on any server
+    // version — see StartFlowAsync's route-selection logic, which only posts this alongside a
+    // request to the versioned start route.
+    [property: JsonPropertyName("vendor")]                 string? Vendor = null
 );
 
 /// <summary>
