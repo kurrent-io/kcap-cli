@@ -757,6 +757,18 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     }
                     break;
 
+                case AcpUpdateKind.SessionInfo:
+                    // Session-title metadata is not transcript content: it must NOT close an open
+                    // chunk run. A session_info_update interleaved between two message/thought
+                    // chunks would otherwise flush the run mid-stream and split one contiguous
+                    // assistant message into two envelopes. Emit it standalone, leaving
+                    // _openRunKind/_openRunText untouched so the surrounding chunks still aggregate
+                    // into one run (the title is orderless metadata — its relative seq is immaterial).
+                    var titleEnvelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
+                    if (titleEnvelope is { } t)
+                        EmitEnvelope(t);
+                    break;
+
                 default:
                     FlushOpenRunLocked(); // kind-transition — the open run (if any) ends here
                     var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);

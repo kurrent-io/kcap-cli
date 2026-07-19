@@ -183,6 +183,35 @@ public class AcpTranscriptAggregationTests {
     }
 
     [Test]
+    public async Task A_session_info_update_mid_run_does_not_split_the_message_run() {
+        // A native session-title update (session_info_update) interleaved between two message
+        // chunks must NOT flush the open run: the title is orderless metadata, not transcript
+        // content. It is emitted standalone and the surrounding chunks still coalesce into ONE
+        // AssistantText envelope (regression for the aggregation-split bug).
+        await using var h = new Harness();
+
+        var chunk1    = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, FakeAcpAgent.BuildAgentMessageChunkUpdate("Hello "));
+        var infoTitle = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, FakeAcpAgent.BuildSessionInfoUpdate("Shell Reporter"));
+        var chunk2    = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, FakeAcpAgent.BuildAgentMessageChunkUpdate("world"));
+        h.Fake.EnqueuePromptScript(new[] { chunk1, infoTitle, chunk2 }, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "hi", h.Cts.Token).WaitAsync(HangGuard);
+
+        await ReadEnvelopeAsync(h.Runtime); // UserMessage
+
+        // The title is emitted standalone (it did NOT flush the open run)...
+        var title = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That(title.Kind).IsEqualTo(AcpEventKind.SessionTitle);
+        await Assert.That(title.Text).IsEqualTo("Shell Reporter");
+
+        // ...and the two message chunks still coalesce into ONE AssistantText run.
+        var message = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That(message.Kind).IsEqualTo(AcpEventKind.AssistantText);
+        await Assert.That(message.Text).IsEqualTo("Hello world");
+    }
+
+    [Test]
     public async Task UserMessage_envelope_is_emitted_once_per_turn_before_that_turns_assistant_envelopes() {
         await using var h = new Harness();
 
