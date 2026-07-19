@@ -13,22 +13,6 @@ internal static partial class UnixPtyInterop {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial int forkpty(out int master, IntPtr name, IntPtr termp, ref WinSize winp);
 
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int execvp(string file, string?[] argv);
-
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int chdir(string path);
-
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int setenv(string name, string value, int overwrite);
-
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int unsetenv(string name);
-
     [LibraryImport("libc", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial int kill(int pid, int sig);
@@ -72,7 +56,8 @@ internal static partial class UnixPtyInterop {
     internal static partial int pty_probe_execveat();
 
     // argv/envp are NULL-terminated string arrays; a `string?[]` with a trailing `null` element
-    // marshals correctly via LibraryImport's array marshaller (mirrors the existing execvp import).
+    // marshals correctly via LibraryImport's array marshaller (a trailing null sentinel, no
+    // length prefix — the same shape execve/execvp expect).
     [LibraryImport("libpty_shim", EntryPoint = "pty_preflight", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int pty_preflight(

@@ -1,6 +1,14 @@
+// pipe2() is a GNU/Linux extension; its declaration in <unistd.h> is gated behind _GNU_SOURCE
+// (or _DEFAULT_SOURCE) on glibc. Define it BEFORE the first system header is pulled in (via
+// pty_shim.h below). Linux-only so macOS/BSD feature-test semantics are untouched.
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "pty_shim.h"
 
 #include <sys/ioctl.h>
+#include <stddef.h> // offsetof
 #include <sys/stat.h>
 #include <sys/xattr.h>
 #include <sys/syscall.h>
@@ -445,6 +453,13 @@ struct pty_proc_uniqidentifierinfo_prefix {
     // by OS version (see note above); we never read them, so their shape doesn't matter here.
 };
 
+// Spec §4.3: pin the vendored prefix's size/offset at COMPILE time. memcpy() below reads exactly
+// these bytes at these offsets out of the kernel's buffer, so any ABI drift (a padding change, a
+// field-order change) must fail the build here rather than silently mis-read the identity at
+// runtime. p_uuid[16] + p_uniqueid(8) + p_puniqueid(8) = 32, with p_uniqueid at offset 16.
+_Static_assert(sizeof(struct pty_proc_uniqidentifierinfo_prefix) == 32, "mac identity prefix ABI drift");
+_Static_assert(offsetof(struct pty_proc_uniqidentifierinfo_prefix, p_uniqueid) == 16, "p_uniqueid offset drift");
+
 int pty_capture_mac_identity(pid_t pid, char *out, size_t outlen) {
     unsigned char raw[PTY_UNIQIDENTIFIERINFO_BUFSIZE];
     int n = proc_pidinfo(pid, PTY_PROC_PIDUNIQIDENTIFIERINFO, 0, raw, sizeof(raw));
@@ -504,9 +519,23 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
     // Self-pipe for child-failure reporting — BOTH ends CLOEXEC-flagged BEFORE the fork so a
     // successful exec closes the child's copy of the write end automatically (EOF => success).
     int errpipe[2];
+#ifdef __linux__
+    // pipe2(O_CLOEXEC) sets CLOEXEC ATOMICALLY at creation. The two-step pipe()+fcntl() leaves a
+    // window in which a concurrent fork/exec on another daemon thread inherits errpipe[1]; that
+    // stray copy of the write end keeps the pipe from reaching EOF on the child's exec, delaying
+    // the exec-success signal until the 30s handshake deadline kills an otherwise-healthy agent.
+    if (pipe2(errpipe, O_CLOEXEC) != 0) { out->err_no = errno; out->failed_step = PTY_STEP_FORK; return -1; }
+#else
+    // macOS/BSD have no pipe2; fall back to pipe() + explicit CLOEXEC on each end. A failed fcntl
+    // means an fd could leak into a concurrently-forked child, so treat it as a spawn failure
+    // (fail closed) rather than proceeding with an inheritable error pipe.
     if (pipe(errpipe) != 0) { out->err_no = errno; out->failed_step = PTY_STEP_FORK; return -1; }
-    fcntl(errpipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(errpipe[1], F_SETFD, FD_CLOEXEC);
+    if (fcntl(errpipe[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(errpipe[1], F_SETFD, FD_CLOEXEC) != 0) {
+        out->err_no = errno; out->failed_step = PTY_STEP_FORK;
+        close(errpipe[0]); close(errpipe[1]);
+        return -1;
+    }
+#endif
 
     struct winsize ws = {0};
     ws.ws_row = rows; ws.ws_col = cols;
@@ -523,7 +552,7 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
     if (pid == 0) {
         // ── CHILD ── async-signal-safe calls only from here to exec (or _exit): no malloc,
         // no stdio, no non-reentrant libc — only the syscalls/functions on the POSIX
-        // async-signal-safe list (close, write, _exit, chdir, execve, raise, prctl, getppid).
+        // async-signal-safe list (close, write, _exit, chdir, execve, kill, getpid, prctl, getppid).
         close(errpipe[0]);
         // cancel_fd is caller-owned and only meaningful to the PARENT's poll loop; close our
         // inherited copy defensively (in case the caller didn't mark it CLOEXEC) rather than
@@ -542,7 +571,9 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
         if (getppid() != expected_parent) {
             struct { int step; int err; } msg = { PTY_STEP_PARENT_DIED, 0 };
             write(errpipe[1], &msg, sizeof(msg));
-            raise(SIGKILL);
+            // kill(getpid(), SIGKILL) rather than raise(SIGKILL): raise() is NOT on the POSIX
+            // async-signal-safe list, kill()/getpid() are. Same "die by signal" semantics.
+            kill(getpid(), SIGKILL);
             _exit(127); // unreachable unless SIGKILL is somehow blocked
         }
 #endif
@@ -589,6 +620,7 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
     if (cancel_fd >= 0) { fds[1].fd = cancel_fd; fds[1].events = POLLIN; nfds = 2; }
 
     int poll_rc;
+    int poll_errno = 0;
     for (;;) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
@@ -599,17 +631,20 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
         poll_rc = poll(fds, (nfds_t)nfds, (int)remaining_ms);
         if (poll_rc >= 0) break;
         if (errno == EINTR) continue;
+        poll_errno = errno; // capture the real poll() failure before any later call clobbers errno
         break; // some other poll() failure — treated like a timeout below, not left hanging
     }
 
     if (poll_rc <= 0) {
-        // Deadline reached, or an unrecoverable poll() error: either way we can no longer
+        // Deadline reached (poll_rc == 0, poll_errno stays 0), or an unrecoverable poll() error
+        // (poll_rc < 0, poll_errno carries the diagnostic errno): either way we can no longer
         // trust the handshake, so kill + reap and report a bounded failure rather than
         // block indefinitely or return success for an unobserved child.
         kill(pid, SIGKILL);
         reap_blocking(pid);
         close(errpipe[0]);
         close(master_fd);
+        out->err_no = poll_errno; // 0 on a pure timeout; poll()'s errno on a poll() error
         out->failed_step = PTY_STEP_HANDSHAKE_TIMEOUT;
         return -1;
     }

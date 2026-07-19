@@ -52,7 +52,7 @@
          start of evaluation; unlike $(OutputPath) itself (see the note below), nothing later
          in this file (or in the SDK's own imported targets) changes them out from under a
          property defined here. -->
-    <PropertyGroup Condition="'$(RuntimeIdentifier)' != 'win-x64' And !$([MSBuild]::IsOSPlatform('Windows'))">
+    <PropertyGroup Condition="!$(RuntimeIdentifier.StartsWith('win')) And !$([MSBuild]::IsOSPlatform('Windows'))">
         <PtyShimExt Condition="$([MSBuild]::IsOSPlatform('OSX'))">dylib</PtyShimExt>
         <PtyShimExt Condition="!$([MSBuild]::IsOSPlatform('OSX'))">so</PtyShimExt>
         <!-- musl targets need the musl C library/toolchain, not glibc's cc -->
@@ -70,13 +70,13 @@
          varies per RID once -r is specified (verified locally: a plain build lands at
          bin/Debug/net10.0/, a `-r osx-arm64` publish at bin/Release/net10.0/osx-arm64/); adding
          another $(RuntimeIdentifier) segment on top would double-nest and break the copy step. -->
-    <Target Name="CompilePtyShim" BeforeTargets="Build;Publish" Condition="'$(RuntimeIdentifier)' != 'win-x64' And !$([MSBuild]::IsOSPlatform('Windows'))">
+    <Target Name="CompilePtyShim" BeforeTargets="Build;Publish" Condition="!$(RuntimeIdentifier.StartsWith('win')) And !$([MSBuild]::IsOSPlatform('Windows'))">
         <!-- -fPIC is harmless on macOS and required for a correctly-relocatable .so on Linux
              (the old macOS-only target never needed it; position-independence is the default
              there). -->
         <Exec Command="$(PtyShimCc) -shared -fPIC -O2 -o $(OutputPath)libpty_shim.$(PtyShimExt) Native/pty_shim.c" />
     </Target>
-    <ItemGroup Condition="'$(RuntimeIdentifier)' != 'win-x64' And !$([MSBuild]::IsOSPlatform('Windows'))">
+    <ItemGroup Condition="!$(RuntimeIdentifier.StartsWith('win')) And !$([MSBuild]::IsOSPlatform('Windows'))">
         <None Include="$(OutputPath)libpty_shim.$(PtyShimExt)" CopyToOutputDirectory="PreserveNewest" Link="libpty_shim.$(PtyShimExt)" />
     </ItemGroup>
 </Project>
