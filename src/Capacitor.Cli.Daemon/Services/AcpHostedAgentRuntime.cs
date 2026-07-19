@@ -686,7 +686,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             : null;
 
     static string? GetStringOrNull(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) ? value.GetString() : null;
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null; // guard the ValueKind: GetString() THROWS on a non-string value (number/object/
+                    // array), which would let a schema-drift frame bubble an exception up and skip
+                    // the entire notification. A wrong-typed field is treated as absent instead.
 
     /// <summary>
     /// Verbatim JSON text of <paramref name="propertyName"/> when it's a JSON object (e.g. a

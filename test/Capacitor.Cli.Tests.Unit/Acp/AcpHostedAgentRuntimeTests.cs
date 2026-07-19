@@ -199,6 +199,27 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(received.Title).IsEqualTo("Shell Reporter");
     }
 
+    [Test]
+    public async Task SessionInfo_update_with_a_non_string_title_reduces_to_null_title_without_dropping_the_frame() {
+        await using var h = new Harness();
+
+        // A schema-drift session_info_update whose title is a NUMBER, not a string. GetStringOrNull
+        // must treat it as absent (Title=null) rather than throwing — a thrown GetString() would
+        // bubble up and make the read loop skip the whole notification frame.
+        var badTitle     = System.Text.Json.JsonDocument.Parse("""{"sessionUpdate":"session_info_update","title":123}""").RootElement.Clone();
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, badTitle);
+        var result       = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.Kind).IsEqualTo(AcpUpdateKind.SessionInfo);
+        await Assert.That(received.Title).IsNull();
+    }
+
     // ── Option B task 1: Reduce() tool-call/tool-result field capture ──────────────
 
     [Test]
