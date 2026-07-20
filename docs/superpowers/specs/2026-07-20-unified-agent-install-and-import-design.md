@@ -127,6 +127,10 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
 - No change to detection logic or the set of supported harnesses.
 - No new "import everything on disk" scope — import is scoped to the current
   repo.
+- **No change to `kcap import --private` semantics.** Existing per-source
+  force-private handling is left as-is; we do not unify it or newly privatize
+  `AlreadyLoaded` lifecycle replays. The visibility change is additive (a
+  New-session default stamp only).
 
 ## Decisions (resolved during design + spec-review)
 
@@ -174,10 +178,10 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
     and the routed sources — which DO re-post session-start on Partial/
     AlreadyLoaded for lifecycle healing — stamp the default only when the
     session's classification is `New`, so existing sessions retain their prior
-    visibility (a full idempotent visibility rewrite is out of scope). Force-private
-    is orthogonal and keeps its existing topology-specific behavior — routed
-    sources stamp `"private"` on every status; the chain applies it post-hoc over
-    successfully-imported IDs and never touches file-based `AlreadyLoaded`.
+    visibility (a full idempotent visibility rewrite is out of scope). The change
+    is purely additive: **each source's existing force-private handling is left
+    untouched** (it is inconsistent across sources today), and the New-default
+    stamp is guarded by `!ForcePrivate` so it never interacts with it.
 12. **AppConfig is refreshed with the EXACT saved server URL + profile** (a
     setter, not a precedence re-resolution), and `HandleImport` binds auth to its
     explicit `baseUrl` (see Change 2 → Refresh).
@@ -357,53 +361,64 @@ behavior. The server falls back to org visibility only when the field is
 (`{"cliVersion": ...}`, `SetupCommand.cs:632-635`), so setup cannot set it
 server-side.
 
-Fix — thread the chosen visibility through the importer, **with topology-specific
-rules** (the chain and the routed sources handle session lifecycle differently).
-Add `string? DefaultVisibility` to `ImportContext` (`ImportCommand.cs:1339`,
-alongside `ForcePrivate`) and a `string? defaultVisibility` parameter to
-`HandleImport`; setup passes the Step 3 visibility read from the **refreshed**
+Fix — the change is **purely additive and forcePrivate-preserving**: we add a
+New-session `default_visibility` stamp and **do not touch any existing
+force-private handling** (which today is inconsistent across sources — Pi,
+OpenCode, Antigravity stamp `"private"` in their session-start builder under
+`forcePrivate`; Copilot, Gemini, Kiro do not; Cursor is privatized post-hoc via
+`privateScopeSessionIds`). Uniformly folding `forcePrivate` into a shared rule
+would newly privatize Copilot/Gemini/Kiro `AlreadyLoaded` lifecycle replays and
+add a Cursor payload mechanism — a standalone-`--private` semantic expansion we
+explicitly avoid (Non-goal). Setup passes `forcePrivate:false` anyway.
+
+Add `string? DefaultVisibility` to `ImportContext` (defined in
+`src/Capacitor.Cli/Commands/IImportSource.cs`; constructed for the routed phase at
+`ImportCommand.cs:1339`) and a `string? defaultVisibility` parameter to
+`HandleImport`. Setup passes the Step 3 visibility read from the **refreshed**
 profile (Refresh above); standalone `kcap import` passes `null` (unchanged).
-`forcePrivate` remains orthogonal and its existing behavior is unchanged.
 
 - **Routed sources** re-post session-start for `New`, `Partial`, **and**
-  `AlreadyLoaded` (routed classifications, `ImportCommand.cs:1039-1043`), so each
-  computes a per-session value from the classification `Status` (available in
-  `ImportSessionAsync`) and stamps `node["default_visibility"]` only when
-  non-null:
+  `AlreadyLoaded` (routed classifications, `ImportCommand.cs:1039-1043`). In each
+  source's `ImportSessionAsync`, add — **guarded so it never overrides existing
+  force-private behavior and only affects New sessions**:
   ```
-  effectiveVisibility = ctx.ForcePrivate ? "private"
-                      : status == New     ? ctx.DefaultVisibility
-                      :                     null
+  if (!ctx.ForcePrivate && status == New && ctx.DefaultVisibility is not null)
+      node["default_visibility"] = ctx.DefaultVisibility;
+  // each source's existing forcePrivate handling stays exactly as-is
   ```
   Sources: `CursorImportSource`, `CopilotImportSource`
   (`BuildSessionStartPayload ~277/321`), `GeminiImportSource` (`~212/261`),
   `KiroImportSource` (`~242/306`), `PiImportSource`, `OpenCodeImportSource`,
-  `AntigravityImportSource`. This keeps `forcePrivate` rewriting on every routed
-  status while restricting the Step 3 default to New sessions.
+  `AntigravityImportSource`. Because the source computes the value from the
+  session's `Status`, Partial/AlreadyLoaded replays get no default stamp.
 - **Claude/Codex chain** builds a session-start payload **only for New** sessions
   (`BuildImportChains` excludes file-based `AlreadyLoaded`; the `Partial` branch
-  posts only transcript-tail + session-end, `ImportCommand.cs:2613-2652`).
-  Therefore:
-  - **Chain New:** stamp `node["default_visibility"] = ctx.DefaultVisibility`
-    (when non-null) into the New session-start payload (`~2671-2726`).
+  posts only transcript-tail + session-end, `ImportCommand.cs:2613-2652`), and
+  that path does **not** receive an `ImportContext`. Thread the value explicitly:
+  `HandleImport(defaultVisibility)` → both (TTY and non-TTY) `ImportChainsAsync`
+  calls → `ImportSingleSessionAsync` (add a `string? defaultVisibility = null`
+  parameter so existing direct test callers are unaffected). In the New
+  session-start payload (`~2671-2726`) stamp `default_visibility` when the value
+  is non-null and `forcePrivate` is false.
   - **Chain `forcePrivate` is unchanged** — it stays the existing post-hoc
     visibility update over successfully-imported IDs (`SetVisibilityNoneForAll`),
-    which covers New + successfully-resumed Partial but does **not** touch
-    file-based `AlreadyLoaded` (they never enter the chain / imported-ID set). Do
-    **not** stamp `forcePrivate` into a chain session-start payload. Setup passes
-    `DefaultVisibility` (not `forcePrivate`), so the two never collide here.
+    covering New + successfully-resumed Partial but never file-based
+    `AlreadyLoaded`. Do **not** stamp `forcePrivate` into a chain session-start
+    payload.
 - **Scope (Decision 11):** existing sessions keep their prior visibility — routed
-  Partial/AlreadyLoaded reassertions stamp `null`, and the chain never reasserts a
+  Partial/AlreadyLoaded replays get no default stamp; the chain never reasserts a
   Partial/AlreadyLoaded session-start. Making `forcePrivate` rewrite file-based
-  `AlreadyLoaded` sessions would be a **separate standalone-import behavior
-  change** (collect + update those IDs) and is out of scope here.
+  `AlreadyLoaded` sessions (or unifying per-source force-private handling) is a
+  **separate standalone-import behavior change** and is out of scope here.
 
 Tests — **topology-specific**, driven through the source/orchestrator entry
 point (not builders in isolation):
-- **Each routed source × {New, Partial, AlreadyLoaded}:** New ⇒ chosen default;
-  Partial/AlreadyLoaded ⇒ no default field (prior visibility preserved);
-  `forcePrivate` ⇒ `"private"` on every status. Explicitly include Cursor (the
-  import-side default-visibility is new for Cursor).
+- **Each routed source × {New, Partial, AlreadyLoaded}** with `forcePrivate:false`:
+  New ⇒ chosen default; Partial/AlreadyLoaded ⇒ no default field (prior
+  visibility preserved). Explicitly include Cursor (the import-side
+  default-visibility stamp is new for Cursor). Assert `forcePrivate:true` leaves
+  each source's **existing** privacy behavior unchanged (no new `AlreadyLoaded`
+  privatization) and suppresses the default stamp.
 - **Chain New** ⇒ session-start carries the chosen default. **Chain Partial** ⇒
   no session-start payload; the existing post-hoc privacy update still applies
   under `forcePrivate`. **Chain AlreadyLoaded** ⇒ excluded; no visibility change.
@@ -491,13 +506,19 @@ Per `CLAUDE.md` and the `vendor-surface-sync` memory:
   downstream success/`selected` distinction and existing `--skip-*` semantics.
 - `src/Capacitor.Cli/Commands/ImportCommand.cs` — add `autoSkipExclusions` (never
   `Console.ReadLine()` when set) and `defaultVisibility` params to `HandleImport`;
-  add `DefaultVisibility` to `ImportContext`; bind auth to
-  `CreateAuthenticatedClientAsync(baseUrl)`; stamp `default_visibility` into the
-  chain-path New session-start payload (`~:2671-2726`).
+  bind auth to `CreateAuthenticatedClientAsync(baseUrl)`; thread
+  `defaultVisibility` → both `ImportChainsAsync` calls → `ImportSingleSessionAsync`
+  (new `string? defaultVisibility = null` param; null default keeps existing
+  direct test callers working) and stamp it into the chain New session-start
+  payload (`~:2671-2726`) when non-null and `!forcePrivate`.
+- `src/Capacitor.Cli/Commands/IImportSource.cs` — add `DefaultVisibility` to
+  `ImportContext` (the routed-phase context).
 - **All seven routed import sources** — `CursorImportSource.cs`,
   `CopilotImportSource.cs`, `GeminiImportSource.cs`, `KiroImportSource.cs`,
-  `PiImportSource.cs`, `OpenCodeImportSource.cs`, `AntigravityImportSource.cs`:
-  stamp `ctx.DefaultVisibility` into each `BuildSessionStartPayload`
+  `PiImportSource.cs`, `OpenCodeImportSource.cs`, `AntigravityImportSource.cs`: in
+  each `ImportSessionAsync`, add the guarded New-only default stamp
+  (`!ctx.ForcePrivate && status == New && ctx.DefaultVisibility is not null`)
+  without altering the source's existing force-private handling
   (`default_visibility` is new for Cursor's import payload).
 - `src/Capacitor.Cli.Core/.../AppConfig.cs` — add
   `SetResolvedState(serverUrl, profile)` (exact setter — no precedence
