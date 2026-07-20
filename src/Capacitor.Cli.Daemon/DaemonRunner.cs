@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Pty.Unix;
 using Capacitor.Cli.Daemon.Pty.Windows;
@@ -132,6 +133,18 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_CURSOR_MODEL") is { Length: > 0 } envCursorModel)
             config.CursorModel = envCursorModel;
 
+        if (Environment.GetEnvironmentVariable("KCAP_COPILOT_PATH") is { Length: > 0 } envCopilotPath)
+            config.CopilotPath = envCopilotPath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_KIRO_PATH") is { Length: > 0 } envKiroPath)
+            config.KiroPath = envKiroPath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_PATH") is { Length: > 0 } envOpenCodePath)
+            config.OpenCodePath = envOpenCodePath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
+            config.GeminiPath = envGeminiPath;
+
         config.DebugFrames = ParseDebugFramesFlag(Environment.GetEnvironmentVariable("KCAP_ACP_DEBUG_FRAMES"));
 
         // Shared name resolution with the CLI supervisor — the CLI's
@@ -236,6 +249,7 @@ public static partial class DaemonRunner {
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.Cursor,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>() // spec-review Finding 4 — real production wiring

@@ -107,6 +107,7 @@ public class AcpHostedAgentRuntimeFactoryToolUseLiveTests {
             var connection = new AutoApproveServerConnection();
 
             var factory = new AcpHostedAgentRuntimeFactory(
+                descriptor: AcpVendorDescriptors.Cursor,
                 config: new DaemonConfig(), // CursorPath="cursor-agent"
                 loggerFactory: liveLoggerFactory,
                 connection: connection,

@@ -88,6 +88,19 @@ public class DaemonConfig {
     /// </summary>
     public string CursorModel { get; set; } = "claude-sonnet-4-5";
 
+    /// <summary>Reserved for a future AcpVendorDescriptor (this change adds the plumbing; no
+    /// descriptor consumes this yet). Overridable via KCAP_COPILOT_PATH, mirroring CursorPath.</summary>
+    public string CopilotPath { get; set; } = "copilot";
+
+    /// <summary>Reserved — see CopilotPath. Overridable via KCAP_KIRO_PATH.</summary>
+    public string KiroPath { get; set; } = "kiro";
+
+    /// <summary>Reserved — see CopilotPath. Overridable via KCAP_OPENCODE_PATH.</summary>
+    public string OpenCodePath { get; set; } = "opencode";
+
+    /// <summary>Reserved — see CopilotPath. Overridable via KCAP_GEMINI_PATH.</summary>
+    public string GeminiPath { get; set; } = "gemini";
+
     /// <summary>
     /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When
     /// <see langword="false"/> (the default), the ACP layers (<c>AcpEventTranslator</c>,

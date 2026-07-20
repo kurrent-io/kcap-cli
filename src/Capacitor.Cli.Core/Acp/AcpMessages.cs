@@ -58,10 +58,38 @@ public sealed record FsCapabilities(
     [property: JsonPropertyName("writeTextFile")] bool WriteTextFile
 );
 
-/// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).</summary>
+/// <summary>One MCP server <c>session/new</c> can hand the agent — stdio transport only (no
+/// caller needs http/sse yet; add a discriminated Transport field if/when one does).
+/// <see cref="Args"/> and <see cref="Env"/> are always sent as arrays on the wire, never
+/// <see langword="null"/> — the constructor normalizes a <see langword="null"/> input to <c>[]</c>
+/// and defensively clones a non-null input so a caller can't mutate this record's serialized
+/// payload after construction.</summary>
+public sealed record AcpMcpServerSpec {
+    [JsonPropertyName("name")]    public string               Name    { get; }
+    [JsonPropertyName("command")] public string               Command { get; }
+    [JsonPropertyName("args")]    public string[]             Args    { get; }
+    [JsonPropertyName("env")]     public AcpMcpServerEnvVar[] Env     { get; }
+
+    public AcpMcpServerSpec(string Name, string Command, string[]? Args, AcpMcpServerEnvVar[]? Env) {
+        this.Name    = Name;
+        this.Command = Command;
+        this.Args    = Args is null ? [] : [.. Args];
+        this.Env     = Env  is null ? [] : [.. Env];
+    }
+}
+
+public sealed record AcpMcpServerEnvVar(
+    [property: JsonPropertyName("name")]  string Name,
+    [property: JsonPropertyName("value")] string Value
+);
+
+/// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).
+/// <c>McpServers</c> is always sent as an array (never omitted) — empty for every launch until a
+/// caller populates RuntimeStartContext.McpServers (no caller does yet — the reviewer path is
+/// the first planned consumer).</summary>
 public sealed record SessionNewParams(
-    [property: JsonPropertyName("cwd")]        string        Cwd,
-    [property: JsonPropertyName("mcpServers")] object[]      McpServers
+    [property: JsonPropertyName("cwd")]        string             Cwd,
+    [property: JsonPropertyName("mcpServers")] AcpMcpServerSpec[] McpServers
 );
 
 /// <summary><c>session/prompt</c> params — a content-block array, per the probe (not a bare string).</summary>

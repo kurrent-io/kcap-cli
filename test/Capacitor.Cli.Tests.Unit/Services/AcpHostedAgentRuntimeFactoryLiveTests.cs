@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// against a REAL <c>cursor-agent acp</c> child process (no <c>FakeAcpAgent</c>, no in-memory pipe —
 /// see <see cref="AcpHostedAgentRuntimeFactoryTests"/> for that coverage of the same code path) to
 /// prove that model selection (<c>session/set_config_option</c>, sent from
-/// <c>AcpHostedAgentRuntime.TrySelectModelAsync</c> before the first turn) and a real
+/// <c>ConfigOptionModelSelector.TrySelectAsync</c> before the first turn) and a real
 /// <c>session/prompt</c> turn actually work end-to-end against the live Cursor CLI at the daemon
 /// level: real process spawn (<see cref="AcpHostedAgentRuntimeFactory"/>'s default
 /// <c>connectionSource</c>, i.e. <c>connectionSource: null</c>) → real stdio JSON-RPC → real
@@ -70,8 +70,8 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
 
         // A real (console) logger factory rather than NullLoggerFactory — AcpHostedAgentRuntime logs
         // a warning if the requested model can't be resolved against session/new's availableModels,
-        // or if session/set_config_option itself fails (both non-fatal — see TrySelectModelAsync's
-        // remarks) — so a real logger is the only way this test can surface those failures instead
+        // or if session/set_config_option itself fails (both non-fatal — see
+        // ConfigOptionModelSelector.TrySelectAsync's remarks) — so a real logger is the only way this test can surface those failures instead
         // of silently swallowing them.
         using var liveLoggerFactory = LoggerFactory.Create(b => b
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; })
@@ -84,6 +84,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             // below is "" so AcpHostedAgentRuntimeFactory.ResolveRequestedModel falls back to it,
             // proving the daemon-wide default reaches a real cursor-agent process, not just the fake.
             var factory = new AcpHostedAgentRuntimeFactory(
+                descriptor: AcpVendorDescriptors.Cursor,
                 config: new DaemonConfig(), // CursorPath="cursor-agent", CursorModel="claude-sonnet-4-5"
                 loggerFactory: liveLoggerFactory,
                 connection: connection,
