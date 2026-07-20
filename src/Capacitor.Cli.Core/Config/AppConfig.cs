@@ -244,9 +244,9 @@ public static class AppConfig {
     /// <c>KCAP_URL</c>/<c>KCAP_PROFILE</c> override picking a different
     /// server/profile than the one setup just wrote).
     /// </summary>
-    public static void SetResolvedState(string serverUrl, Profile profile) {
+    public static void SetResolvedState(string serverUrl, string profileName, Profile profile) {
         ResolvedServerUrl = serverUrl;
-        ResolvedProfile   = new ResolvedProfile(serverUrl, null, profile, null);
+        ResolvedProfile   = new ResolvedProfile(serverUrl, profileName, profile, null);
     }
 
     public static async Task<ProfileConfig> LoadProfileConfig() {

@@ -454,7 +454,7 @@ public static class SetupCommand {
         // saved, so any same-process work after this point (e.g. the import
         // step) observes this server URL + profile rather than re-resolving
         // CLI/env/repo precedence and possibly landing on something else.
-        AppConfig.SetResolvedState(serverUrl, defaultProfile);
+        AppConfig.SetResolvedState(serverUrl, activeName, defaultProfile);
 
         var finalTokens = await TokenStore.LoadAsync();
 

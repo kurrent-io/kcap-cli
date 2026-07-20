@@ -18,10 +18,11 @@ public class AppConfigResolvedStateTests {
     public async Task SetResolvedState_AssignsExactServerUrlAndProfile() {
         var profile = TestProfile("http://example.test");
 
-        AppConfig.SetResolvedState("http://example.test", profile);
+        AppConfig.SetResolvedState("http://example.test", "default", profile);
 
         await Assert.That(AppConfig.ResolvedServerUrl).IsEqualTo("http://example.test");
         await Assert.That(await AppConfig.GetActiveProfileAsync()).IsEqualTo(profile);
+        await Assert.That(AppConfig.ResolvedProfile?.ProfileName).IsEqualTo("default");
     }
 
     [Test]
@@ -38,7 +39,7 @@ public class AppConfigResolvedStateTests {
         try {
             var profile = TestProfile("http://example.test");
 
-            AppConfig.SetResolvedState("http://example.test", profile);
+            AppConfig.SetResolvedState("http://example.test", "default", profile);
 
             await Assert.That(AppConfig.ResolvedServerUrl).IsEqualTo("http://example.test");
             await Assert.That((await AppConfig.GetActiveProfileAsync())?.ServerUrl).IsEqualTo("http://example.test");
