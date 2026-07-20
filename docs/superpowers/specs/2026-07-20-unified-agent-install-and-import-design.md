@@ -155,17 +155,25 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
    preserved unchanged** — including the Kiro flag coupling detailed in the
    truth table (`--skip-kiro-hooks` alone still registers Kiro MCP + skills, but
    `--skip-kiro-hooks --skip-kiro-mcp` suppresses Kiro **skills** too via
-   `selected=false`), and shared `~/.agents/skills` installing whenever a
-   non-Claude agent is detected. (Corrects the round-1 spec's incorrect "a
-   skipped harness is not installed at all.")
+   `selected=false`), and shared `~/.agents/skills` installing whenever a harness
+   **that consumes `~/.agents/skills`** is detected — the eligible set is exactly
+   **Codex, Cursor, Copilot, Gemini, Pi, OpenCode** (`HandleAgentSkills`
+   deliberately excludes Kiro and Antigravity, which use their own skills dirs).
+   (Corrects the round-1 spec's incorrect "a skipped harness is not installed at
+   all.")
 8. **Import eligibility gates on a resolved `currentRepo` tuple** (owner+name from
    origin), not merely on being inside a working tree.
 9. **Import eligibility gates on "auth requirements satisfied"** (provider `None`,
    or an authenticated provider with a usable token) — not `provider != None`.
 10. **Embedded import auto-skips excluded repos/paths** (we intentionally scoped
     to the current repo) and never blocks on `Console.ReadLine()`.
-11. **Imported historical sessions honor the Step 3 default visibility**, sent
-    client-side exactly like live recording does (see Change 2 → Visibility).
+11. **Newly-created imported sessions honor the Step 3 default visibility**, sent
+    client-side in the import session-start payload (see Change 2 → Visibility).
+    The contract is deliberately scoped to **newly-created** sessions: Partial
+    (resumed) imports do not reassert session-start, and AlreadyLoaded sessions
+    are skipped, so those retain their prior visibility (a full idempotent
+    visibility rewrite is explicitly out of scope; `forcePrivate` remains the
+    only bulk-rewrite lever).
 12. **AppConfig is refreshed with the EXACT saved server URL + profile** (a
     setter, not a precedence re-resolution), and `HandleImport` binds auth to its
     explicit `baseUrl` (see Change 2 → Refresh).
@@ -209,7 +217,8 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
   existing `--skip-<vendor>` / per-artifact `--skip-*` semantics unchanged**
   (Decision 7). The shared `"Install kcap agent skills?"` prompt (`:870`) folds
   into the same `InstallAgents` decision (it now installs when reached, i.e. when
-  `InstallAgents` is true and a non-Claude agent is detected).
+  `InstallAgents` is true and a `~/.agents/skills`-consuming agent
+  (Codex/Cursor/Copilot/Gemini/Pi/OpenCode) is detected).
 - **Preserve all downstream gating distinctions** listed under Current state:
   Codex network/MCP require `codexHooksInstalled`; Cursor/Copilot/OpenCode
   downstream require their primary `*Installed` bool; Gemini MCP requires
@@ -228,7 +237,7 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
 | true  | not set | not set | Primary artifact installed; downstream installed subject to its existing success/`selected` gate. |
 | true  | not set | set | Primary installed; that specific downstream artifact skipped. |
 | true  | set (Codex) | (any) | Hooks skipped ⇒ Codex network-access + MCP not reached (both require `codexHooksInstalled`). |
-| true  | all detected vendors set | (any) | Shared `~/.agents/skills` still installs when a non-Claude agent is detected (documented, accepted). |
+| true  | all detected vendors set | (any) | Shared `~/.agents/skills` still installs when a `~/.agents/skills`-consuming agent (Codex/Cursor/Copilot/Gemini/Pi/OpenCode) is detected (documented, accepted). |
 
 **Kiro flag coupling (verified — must be preserved exactly; assumes Kiro
 detected, kcap on PATH):**
@@ -330,28 +339,43 @@ pass it for the embedded call. This keeps interactive setup from sprouting
 "include repo X?" questions (we deliberately scoped to the current repo) and
 prevents `--no-prompt` setup from blocking on `ReadLine`.
 
-**Visibility — imported sessions honor the Step 3 choice (Decision 11).**
-Verified mechanics: live recording sends `default_visibility` (from
-`activeProfile.DefaultVisibility`) client-side in every session-start hook
-payload (e.g. `CodexHookCommand.cs:193-203`, `ClaudeHookCommand.cs:451-456`, and
-the other seven vendors), and the server only falls back to org visibility when
-that field is **absent**. The import path currently omits `default_visibility`
-entirely — its session-start payloads (`ImportCommand.cs:2671-2726` for the
-Claude/Codex chain, plus the routed sources `AntigravityImportSource.cs`,
-`PiImportSource.cs`, `OpenCodeImportSource.cs`, and the Cursor post-hoc path)
-only set `"private"` under `forcePrivate`. `PingCliSetupAsync` does **not** carry
-visibility (its body is `{"cliVersion": ...}`, `SetupCommand.cs:632-635`), so the
-server default is not updated by setup.
+**Visibility — newly-created imported sessions honor the Step 3 choice
+(Decision 11).** Verified mechanics: live recording sends `default_visibility`
+(from `activeProfile.DefaultVisibility`) client-side in the session-start hook
+payload for **eight of nine** vendors — Claude, Codex, Copilot, Gemini, Kiro, Pi,
+OpenCode, Antigravity (e.g. `CodexHookCommand.cs:193-203`,
+`ClaudeHookCommand.cs:451-456`). **Cursor's live hook does NOT inject it**
+(`CursorHookCommand` has no `default_visibility`) — so this is not fully
+symmetric today, and honoring visibility on the Cursor *import* path is new
+behavior. The server falls back to org visibility only when the field is
+**absent**. The import path currently omits `default_visibility` entirely (only
+`"private"` under `forcePrivate`). `PingCliSetupAsync` does not carry visibility
+(`{"cliVersion": ...}`, `SetupCommand.cs:632-635`), so setup cannot set it
+server-side.
 
-Fix (symmetric with the live path): add an optional
-`string? defaultVisibility` parameter to `HandleImport` (alongside `forcePrivate`)
-and stamp it into the import session-start payloads exactly as the live hooks do
-(`node["default_visibility"] = defaultVisibility` when non-null), threaded through
-the chain path and each routed source. Setup passes the Step 3 visibility
-(read from the **refreshed** profile — see Refresh above, so it is the just-saved
-value, not the stale snapshot). `forcePrivate` continues to take precedence when
-set. Standalone `kcap import` passes `null` and is unchanged. Test that an
-imported session-start payload carries the chosen visibility.
+Fix — thread the chosen visibility through the whole importer:
+
+- Add `string? defaultVisibility` to `ImportContext` (`ImportCommand.cs:1339`),
+  alongside `ForcePrivate`.
+- Add a `string? defaultVisibility` parameter to `HandleImport`; setup passes the
+  Step 3 visibility read from the **refreshed** profile (Refresh above), so it is
+  the just-saved value; standalone `kcap import` passes `null` (unchanged).
+- Stamp `node["default_visibility"] = ctx.DefaultVisibility` (when non-null) into
+  the **session-start** payload of every path that creates a new imported
+  session: the Claude/Codex chain (New branch, `ImportCommand.cs:~2671-2726`) and
+  **all seven routed sources** — `CursorImportSource`, `CopilotImportSource`
+  (`BuildSessionStartPayload ~277/321`), `GeminiImportSource` (`~212/261`),
+  `KiroImportSource` (`~242/306`), `PiImportSource`, `OpenCodeImportSource`,
+  `AntigravityImportSource`. `forcePrivate` continues to take precedence.
+- **Scope (Decision 11):** only the **New**-session start payload is stamped.
+  Partial (resumed) imports post transcript-tail + session-end and never reassert
+  session-start (`ImportCommand.cs:2613-2652`); AlreadyLoaded file-based sessions
+  are excluded from the chains. Those keep their prior visibility by design.
+
+Tests: each of the eight payload builders/paths stamps the chosen visibility;
+`defaultVisibility: null` stamps nothing; `forcePrivate` precedence holds; and
+New/Partial/AlreadyLoaded pin the "newly-created only" semantics. Explicitly test
+the Cursor import session-start payload/handling, since it is new for Cursor.
 
 ### Non-interactive behavior (deliberate change — Decision 5)
 
@@ -395,10 +419,17 @@ without running the whole login/config wizard:
   early-return (no `Handle*`/sweep/`selected` reached, zero-value `Result`), and
   that `InstallAgents=true` preserves each downstream gate — including the three
   Kiro flag-coupling rows from the truth table.
-- **Import seam** tests: an imported session-start payload carries the chosen
-  `defaultVisibility`; the exact-refresh setter makes the seam observe the saved
-  normalized URL + profile under raw scheme-less `--server-url` and conflicting
-  `KCAP_URL`/`KCAP_PROFILE`; `autoSkipExclusions` prevents any `Console.ReadLine`.
+- **Import seam** tests: **each of the eight session-start payload
+  builders/paths** (Claude/Codex chain + the seven routed sources, Cursor
+  included) stamps the chosen `defaultVisibility`; `defaultVisibility: null`
+  stamps nothing and `forcePrivate` takes precedence; New/Partial/AlreadyLoaded
+  pin the newly-created-only semantics; the exact-refresh setter makes the seam
+  observe the saved normalized URL + profile under raw scheme-less `--server-url`
+  and conflicting `KCAP_URL`/`KCAP_PROFILE`; `autoSkipExclusions` prevents any
+  `Console.ReadLine`.
+- **Shared-skills eligibility** tests: Kiro-only and Antigravity-only detection
+  do NOT trigger a `~/.agents/skills` install (only the six-vendor eligible set
+  does), so the unified refactor introduces no unwanted shared-skills install.
 - Verify no `IL3050`/`IL2026` AOT warnings via
   `dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release`.
 
@@ -430,11 +461,14 @@ Per `CLAUDE.md` and the `vendor-surface-sync` memory:
   downstream success/`selected` distinction and existing `--skip-*` semantics.
 - `src/Capacitor.Cli/Commands/ImportCommand.cs` — add `autoSkipExclusions` (never
   `Console.ReadLine()` when set) and `defaultVisibility` params to `HandleImport`;
-  bind auth to `CreateAuthenticatedClientAsync(baseUrl)`; stamp
-  `default_visibility` into the chain-path session-start payload
-  (`~:2671-2726`). Routed sources `AntigravityImportSource.cs`,
-  `PiImportSource.cs`, `OpenCodeImportSource.cs` (and the Cursor path) — thread
-  `defaultVisibility` into their session-start payloads.
+  add `DefaultVisibility` to `ImportContext`; bind auth to
+  `CreateAuthenticatedClientAsync(baseUrl)`; stamp `default_visibility` into the
+  chain-path New session-start payload (`~:2671-2726`).
+- **All seven routed import sources** — `CursorImportSource.cs`,
+  `CopilotImportSource.cs`, `GeminiImportSource.cs`, `KiroImportSource.cs`,
+  `PiImportSource.cs`, `OpenCodeImportSource.cs`, `AntigravityImportSource.cs`:
+  stamp `ctx.DefaultVisibility` into each `BuildSessionStartPayload`
+  (`default_visibility` is new for Cursor's import payload).
 - `src/Capacitor.Cli.Core/.../AppConfig.cs` — add
   `SetResolvedState(serverUrl, profile)` (exact setter — no precedence
   re-resolution) and call it after the setup save.
@@ -454,4 +488,19 @@ Per `CLAUDE.md` and the `vendor-surface-sync` memory:
   semantics and compose with the single `InstallAgents` decision (truth table).
 - The npm postinstall refresh path (`plugin install --if-installed`) is
   unaffected — it does not run full `kcap setup`.
+
+## Out of scope (follow-ups)
+
+- **Cursor live-capture visibility gap.** `CursorHookCommand` does not inject
+  `default_visibility` on live session-start (unlike the other eight vendors), so
+  live Cursor sessions rely on the server's org fallback. This spec only fixes
+  the *import* side for Cursor; making Cursor's live path symmetric is a separate
+  follow-up issue.
+- **Idempotent visibility rewrite for existing imported sessions.** Honoring a
+  changed Step 3 visibility on Partial/AlreadyLoaded sessions (a setup re-run
+  after changing the default) would need a per-session visibility PUT; deferred
+  (Decision 11).
+- **Server-side propagation of the default visibility** via the `cli-setup` ping
+  (so it governs future non-import sessions without a per-session field) — a
+  server concern, not addressed here.
 ```
