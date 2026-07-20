@@ -450,6 +450,12 @@ public static class SetupCommand {
         profileConfig = profileConfig with { Profiles = profiles };
         await AppConfig.SaveProfileConfig(profileConfig);
 
+        // Refresh the in-process resolved state to the exact values just
+        // saved, so any same-process work after this point (e.g. the import
+        // step) observes this server URL + profile rather than re-resolving
+        // CLI/env/repo precedence and possibly landing on something else.
+        AppConfig.SetResolvedState(serverUrl, defaultProfile);
+
         var finalTokens = await TokenStore.LoadAsync();
 
         // tell the server this user has finished CLI setup, so the dashboard
