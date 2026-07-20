@@ -396,24 +396,28 @@ above); standalone `kcap import` passes `null` (unchanged).
 - **Claude/Codex chain** builds a session-start payload **only for New** sessions
   (`BuildImportChains` excludes file-based `AlreadyLoaded`; the `Partial` branch
   posts only transcript-tail + session-end, `ImportCommand.cs:2613-2652`), and
-  that path does **not** receive an `ImportContext` (nor `forcePrivate`). Thread
-  the value explicitly: `HandleImport(defaultVisibility)` → both (TTY and non-TTY)
-  `internal ImportChainsAsync` calls → the `private ImportSingleSessionAsync`,
-  giving the new `ImportChainsAsync` parameter a `string? defaultVisibility = null`
-  default so the six existing unit-test calls to `ImportChainsAsync` stay
-  source-compatible. In the New session-start payload (`~2671-2726`) stamp
-  `default_visibility` whenever the value is non-null — **no `forcePrivate` guard
-  on this path**, because the chain path never sees `forcePrivate`, and the
-  production invariant makes a guard unnecessary (see below).
-  - **Chain `forcePrivate` is unchanged** — it stays the existing post-hoc
-    visibility update over successfully-imported IDs (`SetVisibilityNoneForAll`),
-    covering New + successfully-resumed Partial but never file-based
-    `AlreadyLoaded`. Do **not** stamp `forcePrivate` into a chain session-start
-    payload. **Invariant:** production callers never set both — setup passes
-    `forcePrivate:false` + a non-null `defaultVisibility`; standalone passes
-    `defaultVisibility:null`. Even if both were somehow set, the post-hoc
-    `SetVisibilityNoneForAll` runs after session-start and wins, so `forcePrivate`
-    still takes precedence.
+  that path does **not** receive an `ImportContext` (nor `forcePrivate`).
+  **Enforce the `forcePrivate` precedence in the orchestrator, not via a caller
+  invariant:** in `HandleImport`, derive `chainDefaultVisibility = forcePrivate ?
+  null : defaultVisibility` and thread *that* → both (TTY and non-TTY) `internal
+  ImportChainsAsync` calls → the `private ImportSingleSessionAsync` (new
+  `string? defaultVisibility = null` param on `ImportChainsAsync`, null default so
+  the six existing unit-test callers stay source-compatible). The New
+  session-start payload (`~2671-2726`) then stamps `default_visibility` whenever
+  its received value is non-null — no separate `forcePrivate` check needed,
+  because the orchestrator already zeroed it out under force-private.
+  - **Why orchestrator-level, not "post-hoc wins":** a New chain session can POST
+    session-start (creating it with the default visibility) and then fail while
+    streaming the transcript or posting session-end; `OnSessionEnded` never runs,
+    the ID is not added to `importedSessionIds`, and the final
+    `SetVisibilityNoneForAll` never privatizes it — so relying on post-hoc
+    privatization is unsafe. Deriving `forcePrivate ? null : defaultVisibility`
+    up front guarantees a force-private import never stamps a non-private default,
+    even on partial failure.
+  - **Chain `forcePrivate` itself is unchanged** — it remains the existing
+    post-hoc `SetVisibilityNoneForAll` over successfully-imported IDs (covering
+    New + successfully-resumed Partial, never file-based `AlreadyLoaded`); we only
+    ensure our new default stamp does not fire under it.
 - **Scope (Decision 11):** existing sessions keep their prior visibility — routed
   Partial/AlreadyLoaded replays get no default stamp; the chain never reasserts a
   Partial/AlreadyLoaded session-start. Making `forcePrivate` rewrite file-based
@@ -431,6 +435,11 @@ point (not builders in isolation):
 - **Chain New** ⇒ session-start carries the chosen default. **Chain Partial** ⇒
   no session-start payload; the existing post-hoc privacy update still applies
   under `forcePrivate`. **Chain AlreadyLoaded** ⇒ excluded; no visibility change.
+- **Chain force-private precedence:** with both `forcePrivate:true` and a non-null
+  `defaultVisibility`, and a simulated failure *after* session-start (before
+  session-end / `importedSessionIds`), assert the New session-start payload never
+  stamps the default (the orchestrator zeroed it), so no non-private session can
+  leak.
 - `defaultVisibility: null` **with `forcePrivate:false`** ⇒ no `default_visibility`
   field on any path. (Under `forcePrivate:true`, Pi/OpenCode/Antigravity still
   legitimately emit `default_visibility:"private"` per their preserved behavior.)
@@ -517,12 +526,13 @@ Per `CLAUDE.md` and the `vendor-surface-sync` memory:
   downstream success/`selected` distinction and existing `--skip-*` semantics.
 - `src/Capacitor.Cli/Commands/ImportCommand.cs` — add `autoSkipExclusions` (never
   `Console.ReadLine()` when set) and `defaultVisibility` params to `HandleImport`;
-  bind auth to `CreateAuthenticatedClientAsync(baseUrl)`; thread
-  `defaultVisibility` → both `internal ImportChainsAsync` calls (new
-  `string? defaultVisibility = null` param — null default keeps the six existing
-  unit-test callers source-compatible) → `private ImportSingleSessionAsync`, and
-  stamp it into the chain New session-start payload (`~:2671-2726`) when non-null
-  (no `forcePrivate` guard needed on this path — see the invariant).
+  bind auth to `CreateAuthenticatedClientAsync(baseUrl)`; derive
+  `chainDefaultVisibility = forcePrivate ? null : defaultVisibility` and thread it
+  → both `internal ImportChainsAsync` calls (new `string? defaultVisibility = null`
+  param — null default keeps the six existing unit-test callers source-compatible)
+  → `private ImportSingleSessionAsync`, stamping it into the chain New
+  session-start payload (`~:2671-2726`) when non-null (force-private already
+  zeroed at the orchestrator, so no per-payload guard and no partial-failure leak).
 - `src/Capacitor.Cli/Commands/IImportSource.cs` — add `DefaultVisibility` to
   `ImportContext` (the routed-phase context).
 - **All seven routed import sources** — `CursorImportSource.cs`,
