@@ -200,17 +200,23 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
   ```
   Install kcap for these agents (hooks, skills, instructions, MCP)?
   ```
-- **Setting the gate (explicit):** in `SetupCommand`, when at least one agent is
-  detected, `InstallAgents = options.NoPrompt || PromptYesNo(unifiedPrompt)`.
+- **Setting the gate (explicit).** In `SetupCommand`, the decision is made
+  *before* `CodingAgentsStep.Options` is constructed, so it uses the local
+  `noPrompt` (there is no `options` object yet): when at least one agent is
+  detected, `InstallAgents = noPrompt || PromptYesNo(unifiedPrompt)`. Then build
+  `CodingAgentsStep.Options` with both `InstallAgents` and `NoPrompt: noPrompt`.
   This preserves today's unattended behavior — `kcap setup --no-prompt` installs
   all detected agents with no prompt — which the old per-vendor
-  `options.NoPrompt || prompt(...)` gates provided implicitly. Simply retaining
-  `Options.NoPrompt` (still needed for the separate Codex network-access prompt)
-  would NOT set `InstallAgents`, so the boolean must be set here explicitly, or
-  `--no-prompt` would silently stop installing agents. When no agent is detected,
-  no prompt is shown and `RunAsync`'s no-agents early-return owns the warning.
-- `Options.NoPrompt` continues to drive the retained sub-prompts (Codex
-  network-access, provider API keys) non-interactively, exactly as today.
+  `options.NoPrompt || prompt(...)` gates provided implicitly. Setting
+  `NoPrompt` alone would NOT set `InstallAgents`, so the boolean must be assigned
+  here explicitly, or `--no-prompt` would silently stop installing agents. When
+  no agent is detected, no prompt is shown and `RunAsync`'s no-agents
+  early-return owns the warning.
+- The retained sub-prompts stay non-interactive under `--no-prompt` via their
+  existing seams — the **Codex network-access** prompt through
+  `CodingAgentsStep.Options.NoPrompt`, and the **provider-API-key** prompt via the
+  local `noPrompt` branch inside `SetupCommand` (it does not go through
+  `CodingAgentsStep`).
 
 ### Implementation (Approach B, with a hard consent gate)
 
