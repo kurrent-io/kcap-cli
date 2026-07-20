@@ -36,12 +36,16 @@ internal sealed record ClassifyContext(
 /// <summary>
 /// Dependencies passed to ImportSessionAsync. ForcePrivate carries the
 /// effective --private flag from the orchestrator (so each source can
-/// stamp visibility consistently).
+/// stamp visibility consistently). DefaultVisibility carries the Step 3
+/// setup visibility choice (or null for standalone `kcap import`) — sources
+/// stamp it onto New sessions only, guarded by !ForcePrivate (see the
+/// unified-agent-install-and-import spec's Visibility section).
 /// </summary>
 internal sealed record ImportContext(
     HttpClient HttpClient,
     string     BaseUrl,
-    bool       ForcePrivate);
+    bool       ForcePrivate,
+    string?    DefaultVisibility = null);
 
 internal enum ImportOutcome { Loaded, Resumed, Skipped, Failed }
 

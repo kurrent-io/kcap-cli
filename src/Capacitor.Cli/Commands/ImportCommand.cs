@@ -578,9 +578,11 @@ static class ImportCommand {
             string                        activeProfile           = "default",
             (string Owner, string Name)?  currentRepo             = null,
             bool                          needOrgPick             = false,
-            string?                       storedOrg               = null
+            string?                       storedOrg               = null,
+            bool                          autoSkipExclusions      = false,
+            string?                       defaultVisibility       = null
         ) {
-        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
         var       display    = ImportDisplay.Create();
 
         // --- Sources ---
