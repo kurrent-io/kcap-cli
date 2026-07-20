@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
@@ -26,6 +27,27 @@ public class ClaudeLauncherReviewFlowTests {
             Review:        null,
             ReviewLaunch:  null
         );
+
+    // review-detail branch (IsReview: true) — mirrors CodexLauncherTests' NewReviewCtx.
+    static LauncherContext NewReviewCtx(string model) {
+        var mcp = new ReviewLaunchBuilder.ReviewMcpServer(
+            Command: "/opt/kcap",
+            Args: ["mcp", "review", "--owner", "acme", "--repo", "widgets", "--pr", "42"],
+            Env: new Dictionary<string, string> { ["KCAP_URL"] = "https://srv" });
+
+        return new(
+            AgentId: "a-rev",
+            SourceRepoPath: "/tmp/repo",
+            Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+            Prompt: null,
+            Model: model,
+            Effort: null,
+            Tools: null,
+            IsReview: true,
+            IsReviewFlow: false,
+            Review: new ReviewLaunchInfo("acme", "widgets", 42),
+            ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: "Review PR acme/widgets#42", Mcp: mcp));
+    }
 
     [Test]
     public async Task Review_flow_launch_bypasses_permissions() {
@@ -97,6 +119,51 @@ public class ClaudeLauncherReviewFlowTests {
     [Test]
     public async Task Claude_launcher_supports_unattended() {
         await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
+    }
+
+    // === Required bugfix: "default" model sentinel must never reach the real `claude` binary ===
+    // Mirrors CodexLauncher.AddModelArg's existing sentinel check. Every catalog reviewer vendor
+    // override necessarily carries this sentinel (there is no model-override mechanism yet), so
+    // this fix is load-bearing the moment a review flow ever launches Claude.
+
+    [Test]
+    [Arguments("default")]
+    [Arguments("Default")]
+    [Arguments("DEFAULT")]
+    public async Task Review_flow_launch_omits_model_when_default_sentinel(string model) {
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true, model: model)).Args;
+
+        await Assert.That(args).DoesNotContain("--model");
+        await Assert.That(args).DoesNotContain(model);
+    }
+
+    [Test]
+    public async Task Review_flow_launch_still_emits_model_when_concrete() {
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true, model: "claude-sonnet-4-5")).Args;
+
+        await Assert.That(args).Contains("--model");
+        var i = Array.IndexOf(args, "--model");
+        await Assert.That(args[i + 1]).IsEqualTo("claude-sonnet-4-5");
+    }
+
+    [Test]
+    [Arguments("default")]
+    [Arguments("Default")]
+    [Arguments("DEFAULT")]
+    public async Task Review_detail_launch_omits_model_when_default_sentinel(string model) {
+        var args = NewLauncher().BuildArgs(NewReviewCtx(model)).Args;
+
+        await Assert.That(args).DoesNotContain("--model");
+        await Assert.That(args).DoesNotContain(model);
+    }
+
+    [Test]
+    public async Task Review_detail_launch_still_emits_model_when_concrete() {
+        var args = NewLauncher().BuildArgs(NewReviewCtx("claude-sonnet-4-5")).Args;
+
+        await Assert.That(args).Contains("--model");
+        var i = Array.IndexOf(args, "--model");
+        await Assert.That(args[i + 1]).IsEqualTo("claude-sonnet-4-5");
     }
 
     // === D-c: definition MCP allowlist materialization ===

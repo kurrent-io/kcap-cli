@@ -60,6 +60,18 @@ public class DaemonConfig {
     /// </summary>
     public string[]? SupportedVendors { get; set; }
 
+    /// <summary>
+    /// Vendor tokens this daemon can run fully unattended (a subset of
+    /// <see cref="SupportedVendors"/>) — populated in
+    /// <c>DaemonRunner.RunAsync</c> by probing each registered
+    /// <c>IHostedAgentRuntimeFactory.IsAvailable()</c> and
+    /// <c>.SupportsUnattended</c>. Sent over <c>DaemonConnect</c> so the
+    /// server can gate a reviewer-vendor override on unattended capability,
+    /// not merely installation. <c>null</c> when the host hasn't been built
+    /// yet or in tests that bypass the runner.
+    /// </summary>
+    public string[]? UnattendedVendors { get; set; }
+
     public string WorktreeRoot { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".capacitor",

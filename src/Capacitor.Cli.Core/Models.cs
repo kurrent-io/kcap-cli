@@ -1393,7 +1393,12 @@ public readonly record struct DaemonConnect(
         string?   MachineId        = null,
         // Phase B (D2): richer live-agent metadata alongside the existing LiveAgentIds
         // (kept for back-compat). Trailing/optional — old servers ignore it, old daemons never set it.
-        LiveAgentInfo[]? LiveAgents = null
+        LiveAgentInfo[]? LiveAgents = null,
+        // Reviewer vendor override support: vendor tokens this daemon can run fully UNATTENDED (a
+        // subset of SupportedVendors — every entry here MUST also appear there). Null from a daemon
+        // build that predates this field — that daemon is simply not an override-eligible target for
+        // ANY vendor. There is deliberately no fallback that widens a null to anything non-null.
+        string[]? UnattendedVendors = null
     );
 
 public readonly record struct AgentRegistered(

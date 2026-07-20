@@ -79,7 +79,10 @@ internal sealed partial class ClaudeLauncher(
             args.Add("--system-prompt");
             args.Add(launch.SystemPrompt);
 
-            if (!string.IsNullOrEmpty(ctx.Model)) {
+            // Mirrors CodexLauncher.AddModelArg's sentinel check: "default" means "let the
+            // vendor resolve its own configured default model" and must never be forwarded
+            // literally — the real Claude CLI has no model named "default".
+            if (!string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)) {
                 args.Add("--model");
                 args.Add(ctx.Model);
             }
@@ -129,7 +132,9 @@ internal sealed partial class ClaudeLauncher(
                 args.Add(ctx.Effort);
             }
 
-            if (!string.IsNullOrEmpty(ctx.Model)) {
+            // Mirrors CodexLauncher.AddModelArg's sentinel check — see the review-detail branch
+            // above for why "default" must never be forwarded literally.
+            if (!string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)) {
                 args.Add("--model");
                 args.Add(ctx.Model);
             }
