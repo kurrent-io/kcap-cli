@@ -1,7 +1,7 @@
 # Unified agent install + repo import in `kcap setup`
 
 - **Date:** 2026-07-20
-- **Status:** Approved design, pre-implementation
+- **Status:** Approved design, pre-implementation (revised after spec-review round 1)
 - **Branch:** `worktree-import-and-unified-install`
 
 ## Summary
@@ -23,53 +23,96 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
   `src/Capacitor.Cli/Commands/SetupCommand.cs` (`HandleAsync`, line 21). Steps:
   1/5 Server, 2/5 Login, 3/5 Default session visibility, 4/5 Coding agents,
   5/5 Agent Daemon. Headers are `new Rule("[yellow]Step N/5 — Title[/]")`
-  (lines 95, 138, 172, 205, 406).
-- **Step 4 (Coding agents)** is orchestrated by
-  `CodingAgentsStep.RunAsync` (`src/Capacitor.Cli/Commands/CodingAgentsStep.cs`,
-  lines 125-209). It runs a dedicated `Handle*` method per vendor and asks a
-  **separate yes/no per vendor** for that vendor's primary (hooks) artifact,
-  e.g.:
-  - Claude — `prompt("Install Claude Code plugin (hooks, skills, memory)?")` (1352)
-  - Codex — `prompt("Install Codex CLI hooks?")` (928)
-  - Cursor (1059), Copilot (378), Gemini (438), Kiro (258), Pi (502),
-    OpenCode (622), Antigravity (684)
-  - plus a final shared `prompt("Install kcap agent skills?")` (870).
-  Each gate is `options.NoPrompt || prompt(...)`. MCP registration and agent
-  instructions are **not** separately prompted — they are non-destructive and
-  auto-applied when a vendor is selected, gated only by their `--skip-*` flags.
-- Two other prompts live in/around Step 4:
-  - **Codex network access** — an extra `prompt(...)` inside the Codex handler
-    (`CodingAgentsStep.cs:976`).
-  - **Provider API keys** — whether to retain `ANTHROPIC_API_KEY` /
-    `OPENAI_API_KEY` for headless daemon spawns (`SetupCommand.cs:360-401`),
-    shown only when those env vars are set.
-- The yes/no helper is a local function in `SetupCommand.HandleAsync`:
-  `bool PromptYesNo(string text) => AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });`
-  (`SetupCommand.cs:352-353`), threaded into `RunAsync` as the `prompt` delegate.
-  There is no shared prompt-utility module; `ConfirmationPrompt` is constructed
-  inline per call.
+  (lines 95, 138, 172, 205, 406). `HandleAsync` is a single ~470-line method
+  with signature `public static async Task<int> HandleAsync(string[] args)` and
+  **no injected I/O seam** — every prompt/read/write is inline against
+  `AnsiConsole` / `AppConfig` / `TokenStore` / `HttpClientExtensions`.
+- **Step 4 (Coding agents)** is orchestrated by `CodingAgentsStep.RunAsync`
+  (`src/Capacitor.Cli/Commands/CodingAgentsStep.cs:125-209`), which **is** built
+  for testing: it takes injected `Func<string,bool> prompt` and
+  `Action<string> writeLine` delegates plus installer delegates. It runs a
+  dedicated `Handle*` per vendor and asks a **separate yes/no per vendor** for
+  that vendor's primary (hooks) artifact:
+  - Claude (1352), Codex (928), Cursor (1059), Copilot (378), Gemini (438),
+    Kiro (258), Pi (502), OpenCode (622), Antigravity (684), plus a final
+    shared `prompt("Install kcap agent skills?")` (870).
+  - Each gate is `options.NoPrompt || prompt(...)`.
+- **Per-vendor downstream artifacts are gated with deliberate distinctions**
+  (verified against the code — these MUST be preserved):
+  - Codex network-access requires hooks success (`:966 !codexHooksInstalled`);
+    Codex MCP requires hooks success (`:1017`).
+  - Cursor MCP (`:1106`), Copilot MCP (`:1140`) + instructions (`:1174`),
+    OpenCode MCP (`:1277`) + instructions (`:1310`) require the primary write
+    succeeding (`!*HooksInstalled` / `!*ExtensionInstalled`).
+  - Gemini MCP requires hook success (`:1209`), but Gemini **instructions** use
+    a `selected` out-param (`:1244`) that stays true even if the hook write
+    fails (`:455`).
+  - Kiro / Pi / Antigravity downstream use `selected` out-params (Kiro MCP `:293`,
+    skills `:327`; Pi MCP `:550`, instructions `:578`; Antigravity MCP `:729`,
+    instructions `:760`, skills `:792`) — these stay true even when the primary
+    hook write fails (`:520`, `:701`).
+- **Mutations that happen without/around the prompt** (verified — these are the
+  reason a naive gate swap is insufficient):
+  - `HandleAgentSkills` checks "already current" and early-returns **before** the
+    prompt (`:853-862`), and on that fast path calls `SweepLegacyCodexSkills`
+    (`:859`) which **deletes** legacy Codex skills. It also runs the sweep after
+    a successful install (`:890`). The sweep is gated only on `detected.Codex`.
+  - `HandleKiroHooks` handles `SkipKiro` **before** the prompt by setting
+    `selected = true` and returning (`:251-256`) — so `--skip-kiro-hooks` still
+    registers Kiro MCP + installs Kiro skills. Its prompt string discloses:
+    `"Install Kiro CLI hooks? (clones your default agent and sets it as default)"`.
+  - The shared `~/.agents/skills` install is gated only on **detection** of a
+    non-Claude agent (`:842-848`), independent of any `--skip-<vendor>` flag
+    (Kiro + Antigravity are excluded from that detection set — they use their
+    own dirs).
+- Two other prompts live in/around Step 4: **Codex network access** (an extra
+  `prompt(...)` inside the Codex handler, `:966+`) and **provider API keys**
+  (`SetupCommand.cs:360-401`, shown only when `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`
+  are set; independent of agent installs).
 - **Nine supported harnesses:** claude, codex, cursor, copilot, gemini, kiro,
   pi, opencode, antigravity. Install-time detection builds a
   `CodingAgentsStep.DetectedAgents` record (config-dir presence **OR** PATH
   probe) at `SetupCommand.cs:210-233`.
-- **A full `kcap import` command already exists.** Orchestrator:
-  `ImportCommand.HandleImport(...)`
-  (`src/Capacitor.Cli/Commands/ImportCommand.cs:566-582`). It is multi-vendor
-  (all nine `IImportSource` implementations, constructed in
-  `Program.cs:547-557`), scope-based (`ImportScope.All` / `.Org(owner)` /
-  `.Repo(owner, name)` — `ImportScope.cs:6-9`), streaming with its own Spectre
-  progress UI, blocks until done, and is idempotent via a server-side
-  watermark. `HandleImport` is coupled to console I/O (it renders its own
-  phases and prompts), so embedding it means it draws its own progress.
-- Today setup only **suggests** import at the very end via a text hint:
-  `Optional: import past sessions with kcap import --org` (`SetupCommand.cs:487`).
-- `kcap setup` parses a large flag set including `--no-prompt`, `--device`, and
+- **A full `kcap import` command exists.** Orchestrator:
+  `ImportCommand.HandleImport(...)` (`ImportCommand.cs:566-582`) — signature:
+  ```csharp
+  Task<int> HandleImport(string baseUrl, string? filterCwd, string? filterSession = null,
+    int minLines = 15, bool generateSummaries = false, IReadOnlyList<IImportSource>? sources = null,
+    bool explicitVendorSelection = false, DateOnly? since = null, ImportScope? scope = null,
+    bool skipConfirmation = false, bool forcePrivate = false, string activeProfile = "default",
+    (string Owner, string Name)? currentRepo = null, bool needOrgPick = false, string? storedOrg = null)
+  ```
+  It is multi-vendor (all nine `IImportSource`, built in `Program.cs:547-557`),
+  scope-based (`ImportScope.All`/`.Org(owner)`/`.Repo(owner,name)`), streaming
+  with its own Spectre progress UI, blocks until done, idempotent via a
+  server-side watermark, and **returns an exit code** (several expected failures
+  return `1` without throwing). It renders its own phases and, importantly, has
+  its own console interactions beyond the confirmation prompt (see the
+  exclusion-prompt hazard in Change 2).
+- The standalone command enforces non-interactive safety via
+  `ImportScopeArgs.Resolve` (`ImportScopeArgs.cs:55-148`): a non-interactive run
+  (`!Console.IsInputRedirected && !Console.IsOutputRedirected` is false) requires
+  **both** an explicit scope **and** `--yes`; `--repo .` requires
+  `currentRepo` resolved from a parseable origin remote, else it errors with
+  `"--repo . requires the current directory to be in a git repo with an origin remote."`.
+- **`AppConfig` resolves server/profile ONCE, pre-dispatch.** `Program.cs:61`
+  calls `AppConfig.ResolveServerUrl(args, ...)` before the dispatch switch, and
+  `AppConfig.ResolvedServerUrl` / `AppConfig.ResolvedProfile` are process-global
+  cached snapshots (`AppConfig.cs:53-55`). `GetActiveProfileAsync()` **prefers**
+  the cached `ResolvedProfile.Profile` (`:348-352`).
+  `HttpClientExtensions.CreateAuthenticatedClientAsync(string? baseUrl = null)`
+  resolves auth against `baseUrl ?? AppConfig.ResolvedServerUrl ?? $KCAP_URL ?? localhost`
+  (`:40`). `HandleImport` calls `CreateAuthenticatedClientAsync()` **without**
+  `baseUrl` (`ImportCommand.cs:583`), so post-setup it would use the stale
+  pre-setup snapshot unless that snapshot is refreshed.
+- Today setup only **suggests** import at the very end via a text hint
+  (`SetupCommand.cs:487`). `kcap setup` parses `--no-prompt`, `--device`, and
   per-vendor / per-artifact `--skip-*` flags (`SetupCommand.cs:28-53`).
 
 ## Goals
 
 - Ask **once** whether to install kcap agent artifacts, and on yes install them
-  for every detected harness.
+  for every detected harness (per each vendor's existing skip-flag semantics).
 - Add a **final step** that offers to import the current repo's past sessions
   across all detected harnesses.
 - Match the existing default-yes `ConfirmationPrompt` prompt style.
@@ -78,39 +121,51 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
 
 ## Non-goals
 
-- No change to *what* each vendor's installer writes (hooks/MCP/instructions/
-  skills payloads, marker files, self-healing logic).
-- No change to the standalone `kcap plugin` or `kcap import` command surfaces
-  (beyond setup calling into `HandleImport`).
+- No change to *what* each vendor's installer writes (payloads, marker files,
+  self-healing logic) beyond adding one non-interactive option to the importer.
+- No change to the standalone `kcap plugin` command surface.
 - No change to detection logic or the set of supported harnesses.
 - No new "import everything on disk" scope — import is scoped to the current
-  repo (see Decisions).
+  repo.
 
-## Decisions (resolved during design)
+## Decisions (resolved during design + spec-review)
 
-1. **Import scope on "yes" = current repo only** (`ImportScope.Repo`, i.e.
-   `kcap import --repo .` semantics). Not `--all`, not `--org`.
-2. **The single install prompt covers artifacts only.** The Codex
-   network-access and provider-API-key opt-ins remain as their own separate
-   prompts (distinct security/privacy decisions, not install artifacts).
+1. **Import scope on "yes" = current repo only** (`ImportScope.Repo(owner,name)`,
+   i.e. `kcap import --repo .` semantics).
+2. **The single install prompt covers artifacts only.** The Codex network-access
+   and provider-API-key opt-ins remain separate prompts.
 3. **Approach B** for restructuring Step 4: one explicit `InstallAgents`
-   decision threaded into `Options`, reusing every existing `Handle*` method.
-   (Rejected: Approach A — the `NoPrompt` seam alone cannot express "no";
-   Approach C — a full rewrite via `PluginCommand` throws away tested seams.)
-4. **Import is offered regardless** of the Step 4 answer. Importing past
-   sessions is independent of installing agent configs.
-5. **`--no-prompt` auto-imports** the current repo (consistent default-yes),
-   subject to the import gates below. Opt out with a new `--skip-import` flag
-   (mirrors the `--skip-<vendor>` convention).
+   decision threaded into `Options`, reusing every existing `Handle*`.
+4. **Import is offered regardless** of the Step 4 answer.
+5. **`--no-prompt` auto-imports the current repo — a deliberate behavior
+   change.** Existing unattended `kcap setup --no-prompt` invocations will begin
+   uploading current-repo history. This is intentional; mitigations: prominent
+   help/README warnings, rollout notes (below), a `--skip-import` opt-out, and an
+   acceptance test pinning the new scripted behavior. (Considered and rejected:
+   opt-in `--import`.)
+6. **`InstallAgents = false` performs ZERO artifact mutations.** The consent gate
+   sits at the top of `RunAsync`, before any self-heal / cleanup / selection.
+7. **Under `InstallAgents = true`, existing per-vendor `--skip-*` semantics are
+   preserved unchanged** — including `--skip-kiro-hooks` still registering Kiro
+   MCP + skills, and shared `~/.agents/skills` installing whenever a non-Claude
+   agent is detected. (Corrects the round-1 spec's incorrect "a skipped harness
+   is not installed at all.")
+8. **Import eligibility gates on a resolved `currentRepo` tuple** (owner+name from
+   origin), not merely on being inside a working tree.
+9. **Import eligibility gates on "auth requirements satisfied"** (provider `None`,
+   or an authenticated provider with a usable token) — not `provider != None`.
+10. **Embedded import auto-skips excluded repos/paths** (we intentionally scoped
+    to the current repo) and never blocks on `Console.ReadLine()`.
 
 ## Change 1 — Step 4 "Coding agents": one install prompt
 
 ### Behavior
 
 - After detection (`SetupCommand.cs:210-233`), print the detected harnesses in
-  human-readable form, e.g.:
+  human-readable form, **annotating harnesses whose install makes a material
+  change** so consent stays informed — specifically Kiro:
   ```
-  Detected coding agents: Claude Code, Codex, Cursor
+  Detected coding agents: Claude Code, Codex, Kiro (installing sets kcap as your default Kiro agent)
   ```
 - Ask one default-yes prompt:
   ```
@@ -118,146 +173,206 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
   ```
 - The result becomes a single `InstallAgents` boolean.
 
-### Implementation
+### Implementation (Approach B, with a hard consent gate)
 
 - Add `bool InstallAgents` to `CodingAgentsStep.Options`.
-- In each `Handle*`, change the primary-artifact gate from
-  `options.NoPrompt || prompt("Install <vendor> ...?")` to `options.InstallAgents`,
-  still AND-ed with that vendor's existing `--skip-<vendor>` flag. Detected but
-  `--skip-<vendor>`-flagged harnesses are still not installed even when
-  `InstallAgents` is true.
-- The shared `prompt("Install kcap agent skills?")` gate
-  (`CodingAgentsStep.cs:870`) folds into the same `InstallAgents` decision.
-- **Kept as separate prompts:**
-  - Codex network access (`CodingAgentsStep.cs:976`) — reached only when
-    `InstallAgents` is true **and** Codex is detected and not `--skip`-ped.
-  - Provider API keys (`SetupCommand.cs:360-401`) — unchanged and independent;
-    still shown when the relevant env vars are set, regardless of
-    `InstallAgents`.
-- The `prompt` delegate stays wired for those two remaining prompts; only the
-  nine per-vendor gates and the agent-skills gate stop calling it.
+- **Hard gate:** at the top of `RunAsync`, if `!options.InstallAgents`, print a
+  one-line "skipping agent setup" note and **return an empty `InstallResult`
+  immediately** — before any `Handle*`, before `HandleAgentSkills` /
+  `SweepLegacyCodexSkills`, before any `selected` assignment. This guarantees a
+  "no" answer mutates nothing on disk. (`SetupCommand` still proceeds to the
+  provider-API-key prompt and Steps 5-6 afterward.)
+- **No-agents case:** if no supported harness is detected, skip the prompt
+  entirely and keep the existing "no supported agent CLI detected" warning
+  (`CodingAgentsStep.cs:175-177`).
+- When `InstallAgents` is true, each `Handle*` primary-artifact gate changes from
+  `options.NoPrompt || prompt("Install <vendor> ...?")` to simply proceeding
+  (equivalent to today's `NoPrompt` path), **still honoring each vendor's
+  existing `--skip-<vendor>` / per-artifact `--skip-*` semantics unchanged**
+  (Decision 7). The shared `"Install kcap agent skills?"` prompt (`:870`) folds
+  into the same `InstallAgents` decision (it now installs when reached, i.e. when
+  `InstallAgents` is true and a non-Claude agent is detected).
+- **Preserve all downstream gating distinctions** listed under Current state:
+  Codex network/MCP require `codexHooksInstalled`; Cursor/Copilot/OpenCode
+  downstream require their primary `*Installed` bool; Gemini MCP requires
+  `geminiHooksInstalled` while Gemini instructions use `geminiSelected`;
+  Kiro/Pi/Antigravity downstream use their `selected` out-params. Collapsing the
+  prompts must not flatten these into "detected ⇒ install everything."
+- **Kept as separate prompts:** Codex network access (reached only when
+  `InstallAgents` is true and `codexHooksInstalled`) and provider API keys
+  (unchanged, independent of `InstallAgents`).
 
-### Edge cases
+### Per-vendor truth table (the contract to implement + test)
 
-- **No agents detected:** skip the install prompt entirely; keep the existing
-  "no supported agent CLI detected" warning (`CodingAgentsStep.cs:175-177`).
-- **`--no-prompt`:** `InstallAgents = true` — install for all detected harnesses
-  (honoring `--skip-<vendor>`), preserving current scripted behavior.
-- **User answers no:** no artifacts installed for any harness; the Codex
-  network-access prompt is not reached; the provider-key prompt still shows if
-  applicable.
+| `InstallAgents` | vendor `--skip-<vendor>` | per-artifact `--skip-*` | Result |
+|---|---|---|---|
+| false | (any) | (any) | Nothing installed; no sweeps; no `selected`; no shared skills. |
+| true  | not set | not set | Primary artifact installed; downstream installed subject to its existing success/`selected` gate. |
+| true  | not set | set | Primary installed; that specific downstream artifact skipped. |
+| true  | set | (any) | Existing per-vendor semantics preserved (e.g. Kiro: hooks skipped, MCP+skills still installed; Codex: hooks skipped ⇒ network+MCP not reached). |
+| true  | all detected vendors set | (any) | Shared `~/.agents/skills` still installs when a non-Claude agent is detected (documented, accepted). |
 
 ## Change 2 — New Step 6 "Import past sessions"
 
 ### Placement & numbering
 
 - Insert after config save + `PingCliSetupAsync` (`SetupCommand.cs:423-446`) and
-  **before** the completion summary (`SetupCommand.cs:448-465`).
-- Renumber the five existing headers from `/5` to `/6` (lines 95, 138, 172,
-  205, 406) and add `Step 6/6 — Import past sessions`.
+  **before** the completion summary (`:448-465`).
+- Renumber the five existing headers `/5` → `/6` (lines 95, 138, 172, 205, 406)
+  and add `Step 6/6 — Import past sessions`.
 
-### Gate (all must hold to offer the step)
+### Refresh AppConfig before importing (fixes stale profile/URL/auth)
 
-- A git repository was detected (`gitRoot != null` — already resolved in
-  `HandleAsync`).
-- The user is authenticated (auth provider ≠ `None`, i.e. login was not
-  skipped) — import uploads to the server.
+Because `AppConfig.ResolvedServerUrl` / `ResolvedProfile` are captured
+pre-dispatch and `GetActiveProfileAsync()` / `CreateAuthenticatedClientAsync()`
+prefer those snapshots, **immediately after the config is saved
+(`SetupCommand.cs:439`) refresh `AppConfig`'s resolved state** (re-run
+`AppConfig.ResolveServerUrl(args, ...)`, or add an explicit
+`AppConfig.RefreshResolvedState(...)`) so the embedded import resolves auth and
+profile against the just-selected server URL + profile. Add a regression test
+where setup changes both server URL and visibility in one process and the import
+seam observes the new values.
+
+### Eligibility gate (all must hold to offer the step)
+
+- A **`currentRepo` tuple** resolves via
+  `RepositoryDetection.DetectRepositoryAsync(cwd)` with both owner and name from a
+  parseable origin remote (mirroring `Program.cs:567-570`). Resolve it **before**
+  showing the prompt. Being inside a working tree (`gitRoot != null`) is not
+  sufficient.
+- **Auth requirements are satisfied:** provider `None`, or an authenticated
+  provider with a usable token (reuse the login state setup already tracks).
 
 If either fails: skip the step and keep the existing `kcap import` text hint
-(`SetupCommand.cs:487`).
+(`SetupCommand.cs:487`), with a one-line reason (e.g. "no origin remote — skipping
+import").
 
 ### Prompt
 
-Default-yes:
+Default-yes, offered **regardless** of the Step 4 install answer:
 ```
 Import past sessions from this repository?
 ```
-Offered **regardless** of the Step 4 install answer.
 
-### On "yes" — call the existing importer
+### On "yes" — call the existing importer with a pinned contract
 
-Invoke `ImportCommand.HandleImport(...)` with:
+Invoke `ImportCommand.HandleImport(...)` with every argument pinned (no reliance
+on defaults changing under us):
 
-- `sources`: all nine `IImportSource` instances (as constructed in
-  `Program.cs:547-557`).
-- `scope: ImportScope.Repo(owner, name)` for the current repo — reusing the same
-  current-repo resolution the `kcap import --repo .` path uses (derive
-  owner/name from the git remote; do not reimplement).
-- `currentRepo: (owner, name)` to match.
-- `skipConfirmation: true` — the yes/no already served as confirmation.
-- `explicitVendorSelection: false` — import every available harness (the
-  importer's own `IsAvailable` session-data probe naturally restricts to
-  harnesses with data on disk).
-- `baseUrl` and `activeProfile` from the values already resolved in Steps 1-3.
-  Imported sessions inherit the profile's default visibility chosen in Step 3
-  (no extra visibility argument).
+- `baseUrl`: the normalized post-setup server URL.
+- `filterCwd: null` (required positional — no default).
+- `filterSession: null`, `minLines: 15`, `generateSummaries: false`,
+  `since: null`, `forcePrivate: false`, `needOrgPick: false`, `storedOrg: null`.
+- `sources`: all nine `IImportSource` instances (as in `Program.cs:547-557`).
+- `scope: ImportScope.Repo(owner, name)` from the resolved `currentRepo`;
+  `currentRepo: (owner, name)` to match.
+- `skipConfirmation: true` (the yes/no already served as confirmation).
+- `explicitVendorSelection: false` (import every available harness).
+- `activeProfile`: the profile setup just saved.
 
-`HandleImport` renders its own Discovering / Plan / Importing / Done progress UI.
+**Auto-skip exclusions:** `skipConfirmation` only suppresses the final
+"Continue?" prompt; the excluded-repo/path loop (`ImportCommand.cs:956-975`)
+still calls `Console.ReadLine()` whenever stdout is a TTY. Add an explicit
+importer option (e.g. `autoSkipExclusions` / a non-interactive flag on
+`HandleImport`) that **auto-skips** excluded repos/paths without prompting, and
+pass it for the embedded call. This keeps interactive setup from sprouting
+"include repo X?" questions (we deliberately scoped to the current repo) and
+prevents `--no-prompt` setup from blocking on `ReadLine`.
 
-### Non-interactive behavior
+**Visibility:** import does **not** send a visibility field on the wire — the
+server stamps its per-session default at session-start. So imported sessions
+follow the **server-side default**, not the local Step 3 choice directly. Action
+item for the plan: verify whether the `PingCliSetupAsync` → `/api/users/me/cli-setup`
+call propagates the chosen default visibility server-side; if it does not and we
+want imported sessions to honor Step 3, that is a separate server concern (out of
+scope here) — do not claim local-profile visibility governs imported sessions.
 
-- **`--no-prompt`:** auto-import the current repo (default-yes), subject to the
-  gates above (git repo present + authenticated).
-- **`--skip-import`:** new flag to opt out of the import step in scripted
-  contexts. Parsed alongside the other `--skip-*` flags in
-  `SetupCommand.cs:28-53`.
+### Non-interactive behavior (deliberate change — Decision 5)
 
-### Error handling
+- **`--no-prompt`:** auto-import the current repo, subject to the eligibility
+  gate above, using the auto-skip-exclusions option so it never blocks.
+- **`--skip-import`:** new flag to opt out, parsed alongside the other `--skip-*`
+  flags (`SetupCommand.cs:28-53`).
+- **Rollout notes:** this changes the behavior of existing unattended
+  `kcap setup --no-prompt` scripts (they will start uploading current-repo
+  history). Call this out in `help-setup.txt`, `help-usage.txt`, `README.md`, and
+  the PR description, and cover it with an acceptance test.
 
-Import is **best-effort**, like the existing `PingCliSetupAsync` call: wrap the
-`HandleImport` invocation in try/catch. On failure, print a warning plus the
-manual `kcap import` hint and continue to the completion summary — never fail
-`kcap setup` because import failed.
+### Error handling (return code AND exceptions)
+
+Import is **best-effort**. Wrap the `HandleImport` call in try/catch **and**
+inspect its return value: a non-zero exit code (import returns `1` on several
+expected failures without throwing) is treated the same as a thrown exception —
+print a warning plus the manual `kcap import` hint and continue to the completion
+summary. Never fail `kcap setup` because import failed. Test both the thrown and
+the non-zero-return paths.
 
 ## Testability
 
-- **Change 1** is directly unit-testable: `CodingAgentsStep` already takes
-  injected I/O delegates (`prompt`, `writeLine`, installer funcs). Add tests:
-  - unified-yes installs all detected harnesses;
-  - unified-no installs none;
-  - `--skip-<vendor>` honored under unified-yes;
-  - Codex network-access prompt reached only when Codex detected + unified-yes;
-  - no agents detected → warning shown, no install prompt.
-- **Change 2:** inject the import invocation behind a delegate (mirroring the
-  existing installer delegates) so the **gating logic** — git repo present,
-  authenticated, `--no-prompt`, `--skip-import` — is unit-testable without
-  running a real import. The real `HandleImport` sits behind that seam.
+`SetupCommand.HandleAsync` is a monolithic method with no injectable seam, so the
+new logic must be extracted into **pure/injectable helpers** to be unit-testable
+without running the whole login/config wizard:
+
+- **Agent-install decision helper** — given `DetectedAgents` (+ flags), returns
+  the display list (with the Kiro annotation) and the `InstallAgents` gate. Test:
+  no agents ⇒ no prompt; unified-no ⇒ empty `InstallResult` and (via
+  `CodingAgentsStep`) zero mutations; all-detected-vendors-skipped ⇒ shared-skills
+  behavior per the truth table.
+- **Import eligibility/execution policy helper** — given `currentRepo`, auth
+  state, `--no-prompt`, `--skip-import`, and (injected) an import-runner delegate
+  returning an exit code, decides whether/what to import and how to react. Test:
+  no origin ⇒ skip + hint; provider `None` ⇒ eligible; `--skip-import` ⇒ skip;
+  `--no-prompt` ⇒ auto-import; importer returns non-zero ⇒ warn + continue;
+  importer throws ⇒ warn + continue; stale-vs-fresh profile/URL after save.
+- **`CodingAgentsStep`** already takes injected delegates; add tests for the hard
+  `InstallAgents=false` gate (no `Handle*`/sweep/selected reached) and that
+  `InstallAgents=true` preserves each downstream gate.
 - Verify no `IL3050`/`IL2026` AOT warnings via
-  `dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release`
-  (build alone does not surface these).
+  `dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release`.
 
 ## Documentation (same PR)
 
-Per `CLAUDE.md` and the `vendor-surface-sync` memory, update user-facing docs in
-the same PR:
+Per `CLAUDE.md` and the `vendor-surface-sync` memory:
 
-- `README.md` — the getting-started/quick-start walkthrough and the `setup`
-  entry under CLI commands: describe the single agent-install prompt and the
-  new import step + `--skip-import` flag.
-- `src/Capacitor.Cli.Core/Resources/help-setup.txt` — reflect the single agent
-  prompt, the import step, and `--skip-import`.
-- `src/Capacitor.Cli.Core/Resources/help-usage.txt` — if it documents setup
-  flags, add `--skip-import`.
+- `README.md` — getting-started walkthrough + `setup` under CLI commands:
+  the single agent-install prompt, the import step, `--skip-import`, and a
+  **prominent warning** that `kcap setup --no-prompt` now imports current-repo
+  history.
+- `src/Capacitor.Cli.Core/Resources/help-setup.txt` — single agent prompt,
+  import step, `--skip-import`, and the `--no-prompt` behavior-change warning.
+- `src/Capacitor.Cli.Core/Resources/help-usage.txt` — add `--skip-import` if it
+  documents setup flags.
 
 ## Files touched
 
-- `src/Capacitor.Cli/Commands/SetupCommand.cs` — detected-harness display +
-  single install prompt; `InstallAgents` wiring; new Step 6 (gate, prompt,
-  `HandleImport` call behind an injectable seam); `--skip-import` parsing;
-  renumber step headers to `/6`.
+- `src/Capacitor.Cli/Commands/SetupCommand.cs` — detected-harness display (with
+  Kiro annotation) + single install prompt; `InstallAgents` wiring; AppConfig
+  resolved-state refresh after save; new Step 6 (currentRepo + auth eligibility,
+  prompt, pinned `HandleImport` call behind an injectable runner seam, return-code
+  + exception handling); `--skip-import` parsing; renumber headers to `/6`;
+  extract the two decision helpers.
 - `src/Capacitor.Cli/Commands/CodingAgentsStep.cs` — add `Options.InstallAgents`;
-  collapse the nine per-vendor gates and the agent-skills gate into that single
-  decision; leave the Codex network-access prompt and its reachability intact.
-- `src/Capacitor.Cli.Core/Resources/help-setup.txt`,
-  `src/Capacitor.Cli.Core/Resources/help-usage.txt`, `README.md` — docs.
-- `test/Capacitor.Cli.Tests.Unit/` — unit tests for both changes (and
-  integration coverage if a natural seam exists).
+  top-of-`RunAsync` hard gate returning zero-mutation `InstallResult` on false;
+  route the per-vendor gates through the single decision while preserving every
+  downstream success/`selected` distinction and existing `--skip-*` semantics.
+- `src/Capacitor.Cli/Commands/ImportCommand.cs` — add an auto-skip-exclusions /
+  non-interactive option so the embedded import never calls `Console.ReadLine()`.
+- `src/Capacitor.Cli.Core/.../AppConfig.cs` — optional explicit
+  `RefreshResolvedState(...)` (if re-calling `ResolveServerUrl` is not preferred).
+- `src/Capacitor.Cli.Core/Resources/help-setup.txt`, `help-usage.txt`,
+  `README.md` — docs + `--no-prompt` warning.
+- `test/Capacitor.Cli.Tests.Unit/` — decision-helper + `CodingAgentsStep` gate
+  tests; acceptance test for the `--no-prompt` import behavior change.
 
 ## Rollout / compatibility notes
 
-- `kcap plugin install|remove --<vendor>` and `kcap import` command surfaces are
-  unchanged.
-- Existing `--skip-<vendor>` and per-artifact `--skip-*` flags continue to work
-  and now compose with the single `InstallAgents` decision.
+- **Behavior change:** `kcap setup --no-prompt` now imports current-repo history
+  (Decision 5). Documented in help text, README, and the PR; opt out with
+  `--skip-import`.
+- `kcap plugin install|remove --<vendor>` and the standalone `kcap import`
+  command surfaces are unchanged (the new importer option defaults off there).
+- Existing `--skip-<vendor>` and per-artifact `--skip-*` flags keep today's
+  semantics and compose with the single `InstallAgents` decision (truth table).
 - The npm postinstall refresh path (`plugin install --if-installed`) is
   unaffected — it does not run full `kcap setup`.
+```
