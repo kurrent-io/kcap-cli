@@ -174,8 +174,10 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
     and the routed sources — which DO re-post session-start on Partial/
     AlreadyLoaded for lifecycle healing — stamp the default only when the
     session's classification is `New`, so existing sessions retain their prior
-    visibility (a full idempotent visibility rewrite is out of scope;
-    `forcePrivate` remains the only bulk-rewrite lever, applied on all statuses).
+    visibility (a full idempotent visibility rewrite is out of scope). Force-private
+    is orthogonal and keeps its existing topology-specific behavior — routed
+    sources stamp `"private"` on every status; the chain applies it post-hoc over
+    successfully-imported IDs and never touches file-based `AlreadyLoaded`.
 12. **AppConfig is refreshed with the EXACT saved server URL + profile** (a
     setter, not a precedence re-resolution), and `HandleImport` binds auth to its
     explicit `baseUrl` (see Change 2 → Refresh).
@@ -355,47 +357,57 @@ behavior. The server falls back to org visibility only when the field is
 (`{"cliVersion": ...}`, `SetupCommand.cs:632-635`), so setup cannot set it
 server-side.
 
-Fix — thread the chosen visibility through the whole importer:
+Fix — thread the chosen visibility through the importer, **with topology-specific
+rules** (the chain and the routed sources handle session lifecycle differently).
+Add `string? DefaultVisibility` to `ImportContext` (`ImportCommand.cs:1339`,
+alongside `ForcePrivate`) and a `string? defaultVisibility` parameter to
+`HandleImport`; setup passes the Step 3 visibility read from the **refreshed**
+profile (Refresh above); standalone `kcap import` passes `null` (unchanged).
+`forcePrivate` remains orthogonal and its existing behavior is unchanged.
 
-- Add `string? defaultVisibility` to `ImportContext` (`ImportCommand.cs:1339`),
-  alongside `ForcePrivate`.
-- Add a `string? defaultVisibility` parameter to `HandleImport`; setup passes the
-  Step 3 visibility read from the **refreshed** profile (Refresh above), so it is
-  the just-saved value; standalone `kcap import` passes `null` (unchanged).
-- Add `string? DefaultVisibility` to `ImportContext`, but **the value stamped
-  into any session-start payload is computed per-session by classification
-  status**, because the routed sources re-post session-start for lifecycle
-  healing on `New`, `Partial`, **and** `AlreadyLoaded` (routed classifications at
-  `ImportCommand.cs:1039-1043`) — an unconditional stamp would rewrite existing
-  sessions and violate Decision 11. The rule, applied at every session-start
-  build site:
+- **Routed sources** re-post session-start for `New`, `Partial`, **and**
+  `AlreadyLoaded` (routed classifications, `ImportCommand.cs:1039-1043`), so each
+  computes a per-session value from the classification `Status` (available in
+  `ImportSessionAsync`) and stamps `node["default_visibility"]` only when
+  non-null:
   ```
   effectiveVisibility = ctx.ForcePrivate ? "private"
                       : status == New     ? ctx.DefaultVisibility
                       :                     null
   ```
-  Stamp `node["default_visibility"] = effectiveVisibility` only when non-null.
-  This preserves `forcePrivate`'s intentional bulk rewrite (all statuses) while
-  restricting the Step 3 default to newly-created sessions.
-- Apply this at the Claude/Codex chain New-branch payload
-  (`ImportCommand.cs:~2671-2726`, already New-only) and in **all seven routed
-  sources** — `CursorImportSource`, `CopilotImportSource`
+  Sources: `CursorImportSource`, `CopilotImportSource`
   (`BuildSessionStartPayload ~277/321`), `GeminiImportSource` (`~212/261`),
   `KiroImportSource` (`~242/306`), `PiImportSource`, `OpenCodeImportSource`,
-  `AntigravityImportSource` — each of which must consult the session's
-  classification `Status` (available in `ImportSessionAsync`) when computing
-  `effectiveVisibility`.
-- **Scope (Decision 11):** Partial (resumed) imports post transcript-tail +
-  session-end without reasserting session-start on the chain path
-  (`ImportCommand.cs:2613-2652`), and routed Partial/AlreadyLoaded reassertions
-  now stamp `null` for the default (per the rule above), so existing sessions
-  keep their prior visibility by design; `forcePrivate` remains the only lever
-  that rewrites them.
+  `AntigravityImportSource`. This keeps `forcePrivate` rewriting on every routed
+  status while restricting the Step 3 default to New sessions.
+- **Claude/Codex chain** builds a session-start payload **only for New** sessions
+  (`BuildImportChains` excludes file-based `AlreadyLoaded`; the `Partial` branch
+  posts only transcript-tail + session-end, `ImportCommand.cs:2613-2652`).
+  Therefore:
+  - **Chain New:** stamp `node["default_visibility"] = ctx.DefaultVisibility`
+    (when non-null) into the New session-start payload (`~2671-2726`).
+  - **Chain `forcePrivate` is unchanged** — it stays the existing post-hoc
+    visibility update over successfully-imported IDs (`SetVisibilityNoneForAll`),
+    which covers New + successfully-resumed Partial but does **not** touch
+    file-based `AlreadyLoaded` (they never enter the chain / imported-ID set). Do
+    **not** stamp `forcePrivate` into a chain session-start payload. Setup passes
+    `DefaultVisibility` (not `forcePrivate`), so the two never collide here.
+- **Scope (Decision 11):** existing sessions keep their prior visibility — routed
+  Partial/AlreadyLoaded reassertions stamp `null`, and the chain never reasserts a
+  Partial/AlreadyLoaded session-start. Making `forcePrivate` rewrite file-based
+  `AlreadyLoaded` sessions would be a **separate standalone-import behavior
+  change** (collect + update those IDs) and is out of scope here.
 
-Tests: each of the eight payload builders/paths stamps the chosen visibility;
-`defaultVisibility: null` stamps nothing; `forcePrivate` precedence holds; and
-New/Partial/AlreadyLoaded pin the "newly-created only" semantics. Explicitly test
-the Cursor import session-start payload/handling, since it is new for Cursor.
+Tests — **topology-specific**, driven through the source/orchestrator entry
+point (not builders in isolation):
+- **Each routed source × {New, Partial, AlreadyLoaded}:** New ⇒ chosen default;
+  Partial/AlreadyLoaded ⇒ no default field (prior visibility preserved);
+  `forcePrivate` ⇒ `"private"` on every status. Explicitly include Cursor (the
+  import-side default-visibility is new for Cursor).
+- **Chain New** ⇒ session-start carries the chosen default. **Chain Partial** ⇒
+  no session-start payload; the existing post-hoc privacy update still applies
+  under `forcePrivate`. **Chain AlreadyLoaded** ⇒ excluded; no visibility change.
+- `defaultVisibility: null` ⇒ no field on any path.
 
 ### Non-interactive behavior (deliberate change — Decision 5)
 
@@ -439,16 +451,12 @@ without running the whole login/config wizard:
   early-return (no `Handle*`/sweep/`selected` reached, zero-value `Result`), and
   that `InstallAgents=true` preserves each downstream gate — including the three
   Kiro flag-coupling rows from the truth table.
-- **Import seam** tests: drive **each of the eight session-start paths**
-  (Claude/Codex chain + the seven routed sources, Cursor included) through all
-  three classification statuses via the source/orchestrator entry point (not just
-  the builder in isolation), asserting the `effectiveVisibility` rule — `New` ⇒
-  the chosen default, `Partial`/`AlreadyLoaded` ⇒ null (existing visibility
-  preserved), and `forcePrivate` ⇒ `"private"` on every status (precedence). Also
-  `defaultVisibility: null` ⇒ no field. Plus: the exact-refresh setter makes the
-  seam observe the saved normalized URL + profile under raw scheme-less
-  `--server-url` and conflicting `KCAP_URL`/`KCAP_PROFILE`; `autoSkipExclusions`
-  prevents any `Console.ReadLine`.
+- **Import seam** tests: the topology-specific visibility matrix defined in
+  Change 2 → Visibility (routed sources × New/Partial/AlreadyLoaded; chain
+  New/Partial/AlreadyLoaded; `forcePrivate`; `defaultVisibility: null`). Plus: the
+  exact-refresh setter makes the seam observe the saved normalized URL + profile
+  under raw scheme-less `--server-url` and conflicting `KCAP_URL`/`KCAP_PROFILE`;
+  `autoSkipExclusions` prevents any `Console.ReadLine`.
 - **Shared-skills eligibility** tests: Kiro-only and Antigravity-only detection
   do NOT trigger a `~/.agents/skills` install (only the six-vendor eligible set
   does), so the unified refactor introduces no unwanted shared-skills install.
