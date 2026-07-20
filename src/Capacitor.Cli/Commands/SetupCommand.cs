@@ -232,6 +232,20 @@ public static class SetupCommand {
             // probe covers a CLI/fresh install that hasn't created it yet.
             Antigravity: AntigravityPaths.IsInstalled() || AgentDetector.IsInstalled("antigravity"));
 
+        bool PromptYesNo(string text) =>
+            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
+
+        var detectedSummary = SetupDecisions.DetectedAgentsSummary(detected);
+
+        if (detectedSummary is not null)
+            await Console.Out.WriteLineAsync($"  Detected coding agents: {detectedSummary}");
+
+        // The single install-consent decision, replacing the nine per-vendor prompts. Made
+        // BEFORE CodingAgentsStep.Options is constructed, so it uses the LOCAL `noPrompt` (there
+        // is no `options` object yet). NoPrompt alone would not imply InstallAgents, so this must
+        // be set explicitly here or `--no-prompt` would silently stop installing agents.
+        var installAgents = SetupDecisions.DecideInstallAgents(detected, noPrompt, PromptYesNo);
+
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
         var claudeSettingsPath = legacyProjectScope
@@ -263,7 +277,8 @@ public static class SetupCommand {
             SkipKiroMcp: skipKiroMcpFlag,
             SkipKiroSkills: skipKiroSkillsFlag,
             SkipPiMcp: skipPiMcpFlag,
-            SkipPiInstructions: skipPiInstructionsFlag);
+            SkipPiInstructions: skipPiInstructionsFlag,
+            InstallAgents: installAgents);
 
         // allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -348,9 +363,6 @@ public static class SetupCommand {
             InstallPiMcp:             PiMcpExtensionInstaller.Install,
             InstallPiInstructions:    () => AgentInstructionsWriter.Write(
                 PiPaths.AgentsMd(), KcapAgentInstructions.Body));
-
-        bool PromptYesNo(string text) =>
-            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
