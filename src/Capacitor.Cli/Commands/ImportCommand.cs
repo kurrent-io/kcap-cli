@@ -960,8 +960,10 @@ static class ImportCommand {
             var includedPathKeys = new HashSet<string>(StringComparer.Ordinal);
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
-            // meaningfully without a TTY on stdin.
-            var canPrompt = display.Tty && !Console.IsInputRedirected;
+            // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
+            // path regardless of TTY state (e.g. the embedded `kcap setup` import call, which must
+            // never block on stdin).
+            var canPrompt = display.Tty && !Console.IsInputRedirected && !autoSkipExclusions;
 
             if (canPrompt) {
                 foreach (var (key, sessions) in excludedByRepo) {
