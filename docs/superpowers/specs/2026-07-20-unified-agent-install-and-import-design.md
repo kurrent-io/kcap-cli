@@ -200,7 +200,17 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
   ```
   Install kcap for these agents (hooks, skills, instructions, MCP)?
   ```
-- The result becomes a single `InstallAgents` boolean.
+- **Setting the gate (explicit):** in `SetupCommand`, when at least one agent is
+  detected, `InstallAgents = options.NoPrompt || PromptYesNo(unifiedPrompt)`.
+  This preserves today's unattended behavior — `kcap setup --no-prompt` installs
+  all detected agents with no prompt — which the old per-vendor
+  `options.NoPrompt || prompt(...)` gates provided implicitly. Simply retaining
+  `Options.NoPrompt` (still needed for the separate Codex network-access prompt)
+  would NOT set `InstallAgents`, so the boolean must be set here explicitly, or
+  `--no-prompt` would silently stop installing agents. When no agent is detected,
+  no prompt is shown and `RunAsync`'s no-agents early-return owns the warning.
+- `Options.NoPrompt` continues to drive the retained sub-prompts (Codex
+  network-access, provider API keys) non-interactively, exactly as today.
 
 ### Implementation (Approach B, with a hard consent gate)
 
@@ -472,9 +482,12 @@ without running the whole login/config wizard:
 
 - **Agent-install decision helper** — given `DetectedAgents` (+ flags), returns
   the display list (with the Kiro annotation) and the `InstallAgents` gate. Test:
-  no agents ⇒ no prompt; unified-no ⇒ zero-value `CodingAgentsStep.Result` and (via
-  `CodingAgentsStep`) zero mutations; all-detected-vendors-skipped ⇒ shared-skills
-  behavior per the truth table.
+  no agents ⇒ no prompt (warning path); unified-no ⇒ zero-value
+  `CodingAgentsStep.Result` and (via `CodingAgentsStep`) zero mutations;
+  **`--no-prompt` + ≥1 detected ⇒ no unified prompt shown, `InstallAgents=true`
+  (auto-install preserved), with all per-vendor/per-artifact skips still honored
+  and Codex network-access handled non-interactively**; all-detected-vendors-
+  skipped ⇒ shared-skills behavior per the truth table.
 - **Import eligibility/execution policy helper** — given `currentRepo`, auth
   state, `--no-prompt`, `--skip-import`, and (injected) an import-runner delegate
   returning an exit code, decides whether/what to import and how to react. Test:
