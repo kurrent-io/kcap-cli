@@ -1349,7 +1349,8 @@ static class ImportCommand {
             var importCtx = new ImportContext(
                 HttpClient: httpClient,
                 BaseUrl: baseUrl,
-                ForcePrivate: forcePrivate
+                ForcePrivate: forcePrivate,
+                DefaultVisibility: defaultVisibility
             );
 
             async Task<ImportSessionResult> ImportOne(SessionClassification c) {

@@ -182,8 +182,14 @@ internal sealed class OpenCodeImportSource : IImportSource {
         var lineOffset = repair ? checked(c.ResumeFromLine + 1) : 0;
 
         // 1. session-start (lifecycle-before-transcript; idempotent server-side).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode",
-                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+        var startPayload = BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate);
+        // Step 3 visibility stamp — New-only, and never overrides the existing forcePrivate
+        // "private" stamp above (mutually exclusive: this only fires when !ctx.ForcePrivate).
+        if (!ctx.ForcePrivate && c.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
+        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode", startPayload, ct))
             return ImportOutcome.Failed;
 
         // 2. parent transcript (synthesize to a temp file; SendTranscriptBatches needs a path).

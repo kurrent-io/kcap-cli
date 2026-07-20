@@ -238,9 +238,16 @@ internal sealed class KiroImportSource : IImportSource {
         // would leave the session permanently lifecycle-less.
         var lifecycleId = dashed ?? classification.SessionId;
 
+        var startPayload = BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp);
+        // Step 3 visibility stamp — New-only, and never overrides an existing force-private
+        // choice (Kiro has none of its own today; this guard keeps it that way).
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/kiro",
-            BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 

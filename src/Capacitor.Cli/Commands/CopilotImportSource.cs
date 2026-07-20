@@ -273,9 +273,16 @@ internal sealed class CopilotImportSource : IImportSource {
         // the watermark past a failed lifecycle POST would leave the session
         // permanently lifecycle-less. Re-runs are idempotent server-side
         // (deterministic lifecycle event ids).
+        var startPayload = BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp);
+        // Step 3 visibility stamp — New-only, and never overrides an existing force-private
+        // choice (Copilot has none of its own today; this guard keeps it that way).
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/copilot",
-            BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 

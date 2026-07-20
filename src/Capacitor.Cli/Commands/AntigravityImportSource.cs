@@ -236,8 +236,15 @@ internal sealed class AntigravityImportSource : IImportSource {
         // Lifecycle-before-transcript (mirrors Gemini): a transcript that advances the
         // watermark past a failed lifecycle POST would leave the session lifecycle-less.
         // Re-runs are idempotent server-side (deterministic lifecycle ids).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
-                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+        var startPayload = BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate);
+        // Step 3 visibility stamp — New-only (this branch handles New + Partial; AlreadyLoaded
+        // returned above), and never overrides the existing forcePrivate "private" stamp above
+        // (mutually exclusive: this only fires when !ctx.ForcePrivate).
+        if (!ctx.ForcePrivate && c.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
+        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity", startPayload, ct))
             return ImportOutcome.Failed;
 
         var startLine = c.Status == ImportCommand.ClassificationStatus.Partial ? c.ResumeFromLine : 0;

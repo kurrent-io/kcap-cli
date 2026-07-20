@@ -237,9 +237,16 @@ internal sealed class PiImportSource : IImportSource {
         // Lifecycle-before-transcript ordering: a transcript that advanced the
         // watermark past a failed lifecycle POST would leave the session
         // permanently lifecycle-less. Idempotent server-side (deterministic ids).
+        var startPayload = BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp, ctx.ForcePrivate);
+        // Step 3 visibility stamp — New-only, and never overrides the existing forcePrivate
+        // "private" stamp above (mutually exclusive: this only fires when !ctx.ForcePrivate).
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/pi",
-            BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp, ctx.ForcePrivate),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
