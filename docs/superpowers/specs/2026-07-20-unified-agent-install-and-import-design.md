@@ -373,9 +373,11 @@ explicitly avoid (Non-goal). Setup passes `forcePrivate:false` anyway.
 
 Add `string? DefaultVisibility` to `ImportContext` (defined in
 `src/Capacitor.Cli/Commands/IImportSource.cs`; constructed for the routed phase at
-`ImportCommand.cs:1339`) and a `string? defaultVisibility` parameter to
-`HandleImport`. Setup passes the Step 3 visibility read from the **refreshed**
-profile (Refresh above); standalone `kcap import` passes `null` (unchanged).
+`ImportCommand.cs:1339`) **with a `= null` default on the record** so the ~25
+existing three-argument `ImportContext` constructions in tests stay
+source-compatible, and a `string? defaultVisibility` parameter to `HandleImport`.
+Setup passes the Step 3 visibility read from the **refreshed** profile (Refresh
+above); standalone `kcap import` passes `null` (unchanged).
 
 - **Routed sources** re-post session-start for `New`, `Partial`, **and**
   `AlreadyLoaded` (routed classifications, `ImportCommand.cs:1039-1043`). In each
@@ -394,17 +396,24 @@ profile (Refresh above); standalone `kcap import` passes `null` (unchanged).
 - **Claude/Codex chain** builds a session-start payload **only for New** sessions
   (`BuildImportChains` excludes file-based `AlreadyLoaded`; the `Partial` branch
   posts only transcript-tail + session-end, `ImportCommand.cs:2613-2652`), and
-  that path does **not** receive an `ImportContext`. Thread the value explicitly:
-  `HandleImport(defaultVisibility)` → both (TTY and non-TTY) `ImportChainsAsync`
-  calls → `ImportSingleSessionAsync` (add a `string? defaultVisibility = null`
-  parameter so existing direct test callers are unaffected). In the New
-  session-start payload (`~2671-2726`) stamp `default_visibility` when the value
-  is non-null and `forcePrivate` is false.
+  that path does **not** receive an `ImportContext` (nor `forcePrivate`). Thread
+  the value explicitly: `HandleImport(defaultVisibility)` → both (TTY and non-TTY)
+  `internal ImportChainsAsync` calls → the `private ImportSingleSessionAsync`,
+  giving the new `ImportChainsAsync` parameter a `string? defaultVisibility = null`
+  default so the six existing unit-test calls to `ImportChainsAsync` stay
+  source-compatible. In the New session-start payload (`~2671-2726`) stamp
+  `default_visibility` whenever the value is non-null — **no `forcePrivate` guard
+  on this path**, because the chain path never sees `forcePrivate`, and the
+  production invariant makes a guard unnecessary (see below).
   - **Chain `forcePrivate` is unchanged** — it stays the existing post-hoc
     visibility update over successfully-imported IDs (`SetVisibilityNoneForAll`),
     covering New + successfully-resumed Partial but never file-based
     `AlreadyLoaded`. Do **not** stamp `forcePrivate` into a chain session-start
-    payload.
+    payload. **Invariant:** production callers never set both — setup passes
+    `forcePrivate:false` + a non-null `defaultVisibility`; standalone passes
+    `defaultVisibility:null`. Even if both were somehow set, the post-hoc
+    `SetVisibilityNoneForAll` runs after session-start and wins, so `forcePrivate`
+    still takes precedence.
 - **Scope (Decision 11):** existing sessions keep their prior visibility — routed
   Partial/AlreadyLoaded replays get no default stamp; the chain never reasserts a
   Partial/AlreadyLoaded session-start. Making `forcePrivate` rewrite file-based
@@ -422,7 +431,9 @@ point (not builders in isolation):
 - **Chain New** ⇒ session-start carries the chosen default. **Chain Partial** ⇒
   no session-start payload; the existing post-hoc privacy update still applies
   under `forcePrivate`. **Chain AlreadyLoaded** ⇒ excluded; no visibility change.
-- `defaultVisibility: null` ⇒ no field on any path.
+- `defaultVisibility: null` **with `forcePrivate:false`** ⇒ no `default_visibility`
+  field on any path. (Under `forcePrivate:true`, Pi/OpenCode/Antigravity still
+  legitimately emit `default_visibility:"private"` per their preserved behavior.)
 
 ### Non-interactive behavior (deliberate change — Decision 5)
 
@@ -507,10 +518,11 @@ Per `CLAUDE.md` and the `vendor-surface-sync` memory:
 - `src/Capacitor.Cli/Commands/ImportCommand.cs` — add `autoSkipExclusions` (never
   `Console.ReadLine()` when set) and `defaultVisibility` params to `HandleImport`;
   bind auth to `CreateAuthenticatedClientAsync(baseUrl)`; thread
-  `defaultVisibility` → both `ImportChainsAsync` calls → `ImportSingleSessionAsync`
-  (new `string? defaultVisibility = null` param; null default keeps existing
-  direct test callers working) and stamp it into the chain New session-start
-  payload (`~:2671-2726`) when non-null and `!forcePrivate`.
+  `defaultVisibility` → both `internal ImportChainsAsync` calls (new
+  `string? defaultVisibility = null` param — null default keeps the six existing
+  unit-test callers source-compatible) → `private ImportSingleSessionAsync`, and
+  stamp it into the chain New session-start payload (`~:2671-2726`) when non-null
+  (no `forcePrivate` guard needed on this path — see the invariant).
 - `src/Capacitor.Cli/Commands/IImportSource.cs` — add `DefaultVisibility` to
   `ImportContext` (the routed-phase context).
 - **All seven routed import sources** — `CursorImportSource.cs`,
