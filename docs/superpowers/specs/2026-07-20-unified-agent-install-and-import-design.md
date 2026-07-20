@@ -143,19 +143,32 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
    help/README warnings, rollout notes (below), a `--skip-import` opt-out, and an
    acceptance test pinning the new scripted behavior. (Considered and rejected:
    opt-in `--import`.)
-6. **`InstallAgents = false` performs ZERO artifact mutations.** The consent gate
-   sits at the top of `RunAsync`, before any self-heal / cleanup / selection.
+6. **`InstallAgents = false` performs ZERO artifact mutations**, and the
+   no-agents case is a distinct path. Ordering inside `RunAsync` (see Change 1):
+   (1) no supported agent detected ⇒ existing warning + return; (2) else
+   `!InstallAgents` ⇒ "skipping agent setup" note + return with a zero-value
+   `CodingAgentsStep.Result` (before any `Handle*` / `HandleAgentSkills` /
+   `SweepLegacyCodexSkills` / `selected` assignment); (3) else install. The
+   consent prompt is only shown by `SetupCommand` when at least one agent is
+   detected. (The return type is `CodingAgentsStep.Result`, not "InstallResult".)
 7. **Under `InstallAgents = true`, existing per-vendor `--skip-*` semantics are
-   preserved unchanged** — including `--skip-kiro-hooks` still registering Kiro
-   MCP + skills, and shared `~/.agents/skills` installing whenever a non-Claude
-   agent is detected. (Corrects the round-1 spec's incorrect "a skipped harness
-   is not installed at all.")
+   preserved unchanged** — including the Kiro flag coupling detailed in the
+   truth table (`--skip-kiro-hooks` alone still registers Kiro MCP + skills, but
+   `--skip-kiro-hooks --skip-kiro-mcp` suppresses Kiro **skills** too via
+   `selected=false`), and shared `~/.agents/skills` installing whenever a
+   non-Claude agent is detected. (Corrects the round-1 spec's incorrect "a
+   skipped harness is not installed at all.")
 8. **Import eligibility gates on a resolved `currentRepo` tuple** (owner+name from
    origin), not merely on being inside a working tree.
 9. **Import eligibility gates on "auth requirements satisfied"** (provider `None`,
    or an authenticated provider with a usable token) — not `provider != None`.
 10. **Embedded import auto-skips excluded repos/paths** (we intentionally scoped
     to the current repo) and never blocks on `Console.ReadLine()`.
+11. **Imported historical sessions honor the Step 3 default visibility**, sent
+    client-side exactly like live recording does (see Change 2 → Visibility).
+12. **AppConfig is refreshed with the EXACT saved server URL + profile** (a
+    setter, not a precedence re-resolution), and `HandleImport` binds auth to its
+    explicit `baseUrl` (see Change 2 → Refresh).
 
 ## Change 1 — Step 4 "Coding agents": one install prompt
 
@@ -176,15 +189,20 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
 ### Implementation (Approach B, with a hard consent gate)
 
 - Add `bool InstallAgents` to `CodingAgentsStep.Options`.
-- **Hard gate:** at the top of `RunAsync`, if `!options.InstallAgents`, print a
-  one-line "skipping agent setup" note and **return an empty `InstallResult`
-  immediately** — before any `Handle*`, before `HandleAgentSkills` /
-  `SweepLegacyCodexSkills`, before any `selected` assignment. This guarantees a
-  "no" answer mutates nothing on disk. (`SetupCommand` still proceeds to the
-  provider-API-key prompt and Steps 5-6 afterward.)
-- **No-agents case:** if no supported harness is detected, skip the prompt
-  entirely and keep the existing "no supported agent CLI detected" warning
-  (`CodingAgentsStep.cs:175-177`).
+- **Two ordered early-returns at the top of `RunAsync`** (the return type is
+  `CodingAgentsStep.Result`; there is no "InstallResult"):
+  1. **No agents detected** ⇒ emit the existing "no supported agent CLI detected"
+     warning (`CodingAgentsStep.cs:175-177`, relocated to the top) and return a
+     zero-value `Result`.
+  2. **`!options.InstallAgents`** (agents detected but user declined) ⇒ print a
+     one-line "skipping agent setup" note and return a zero-value `Result`
+     **before** any `Handle*`, `HandleAgentSkills` / `SweepLegacyCodexSkills`, or
+     `selected` assignment. This guarantees a "no" answer mutates nothing on disk.
+  Only after both pass does installation run. (`SetupCommand` still proceeds to
+  the provider-API-key prompt and Steps 5-6 afterward regardless.)
+- **`SetupCommand` shows the unified prompt only when at least one agent is
+  detected** — the no-agents warning is owned by early-return (1), so no prompt
+  is shown and `InstallAgents` is effectively false in that case.
 - When `InstallAgents` is true, each `Handle*` primary-artifact gate changes from
   `options.NoPrompt || prompt("Install <vendor> ...?")` to simply proceeding
   (equivalent to today's `NoPrompt` path), **still honoring each vendor's
@@ -209,8 +227,22 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
 | false | (any) | (any) | Nothing installed; no sweeps; no `selected`; no shared skills. |
 | true  | not set | not set | Primary artifact installed; downstream installed subject to its existing success/`selected` gate. |
 | true  | not set | set | Primary installed; that specific downstream artifact skipped. |
-| true  | set | (any) | Existing per-vendor semantics preserved (e.g. Kiro: hooks skipped, MCP+skills still installed; Codex: hooks skipped ⇒ network+MCP not reached). |
+| true  | set (Codex) | (any) | Hooks skipped ⇒ Codex network-access + MCP not reached (both require `codexHooksInstalled`). |
 | true  | all detected vendors set | (any) | Shared `~/.agents/skills` still installs when a non-Claude agent is detected (documented, accepted). |
+
+**Kiro flag coupling (verified — must be preserved exactly; assumes Kiro
+detected, kcap on PATH):**
+
+| Kiro flags | `kiroSelected` | Hooks | MCP | Skills |
+|---|---|---|---|---|
+| none | true | installed | installed | installed |
+| `--skip-kiro-hooks` only | true (`CodingAgentsStep.cs:253`) | not installed | **installed** | **installed** |
+| `--skip-kiro-hooks --skip-kiro-mcp` | **false** (short-circuit `:233-237`) | not installed | not installed | **not installed** (blocked by `!kiroSelected`, even though `--skip-kiro-skills` was not passed) |
+| `--skip-kiro-hooks --skip-kiro-skills` | true | not installed | **installed** | not installed |
+
+The naive collapse must not disturb this: the `SkipKiro && SkipKiroMcp`
+short-circuit leaves `selected=false`, transitively suppressing skills. Add a
+test per row.
 
 ## Change 2 — New Step 6 "Import past sessions"
 
@@ -223,15 +255,31 @@ default-yes `ConfirmationPrompt` style already used elsewhere in the flow:
 
 ### Refresh AppConfig before importing (fixes stale profile/URL/auth)
 
-Because `AppConfig.ResolvedServerUrl` / `ResolvedProfile` are captured
-pre-dispatch and `GetActiveProfileAsync()` / `CreateAuthenticatedClientAsync()`
-prefer those snapshots, **immediately after the config is saved
-(`SetupCommand.cs:439`) refresh `AppConfig`'s resolved state** (re-run
-`AppConfig.ResolveServerUrl(args, ...)`, or add an explicit
-`AppConfig.RefreshResolvedState(...)`) so the embedded import resolves auth and
-profile against the just-selected server URL + profile. Add a regression test
-where setup changes both server URL and visibility in one process and the import
-seam observes the new values.
+`AppConfig.ResolvedServerUrl` / `ResolvedProfile` are captured pre-dispatch
+(`Program.cs:61`), and `GetActiveProfileAsync()` / `LoadProfileConfig()` /
+`CreateAuthenticatedClientAsync()` prefer those snapshots. Two concrete fixes are
+**required** (a plain re-resolution is NOT sufficient):
+
+- **Exact refresh, not re-resolution.** Do **not** re-run
+  `AppConfig.ResolveServerUrl(args, ...)` — that re-applies CLI/env/repo
+  precedence and can produce a *different* result than setup just saved (e.g. a
+  raw `--server-url localhost:5108` that setup normalized to
+  `http://localhost:5108` would re-resolve back to the scheme-less form; `KCAP_URL`
+  / `KCAP_PROFILE` / repo-profile matching could pick a different server/profile).
+  Add an explicit setter — `AppConfig.SetResolvedState(normalizedServerUrl, savedProfile)`
+  — that stores the **exact normalized server URL and the just-saved active
+  profile object**, and call it immediately after the save (`SetupCommand.cs:439`).
+- **Bind auth to the explicit `baseUrl`.** Change `HandleImport`'s auth call from
+  `CreateAuthenticatedClientAsync()` to `CreateAuthenticatedClientAsync(baseUrl)`
+  (`ImportCommand.cs:583`) so discovery uses the passed, normalized URL rather
+  than the process-global fallback. (Standalone `kcap import` is unaffected — it
+  passes the same value it would have resolved.) Note `DiscoverProviderAsync`
+  calls `EnsureAbsolute` which `Environment.Exit(2)`s on a scheme-less URL, so the
+  normalized URL must be absolute — another reason the exact setter matters.
+
+Regression tests: raw scheme-less `--server-url`, a conflicting `KCAP_URL` /
+`KCAP_PROFILE` in the environment, and a server-URL + visibility change in one
+process — the import seam must observe the exact saved values in every case.
 
 ### Eligibility gate (all must hold to offer the step)
 
@@ -268,7 +316,10 @@ on defaults changing under us):
   `currentRepo: (owner, name)` to match.
 - `skipConfirmation: true` (the yes/no already served as confirmation).
 - `explicitVendorSelection: false` (import every available harness).
-- `activeProfile`: the profile setup just saved.
+- `activeProfile`: the profile name setup just saved (used only to persist org
+  selection — irrelevant here since scope is Repo, but pass it correctly anyway).
+- `defaultVisibility`: the Step 3 visibility (new param — see Visibility below).
+- `autoSkipExclusions: true` (new param — see below).
 
 **Auto-skip exclusions:** `skipConfirmation` only suppresses the final
 "Continue?" prompt; the excluded-repo/path loop (`ImportCommand.cs:956-975`)
@@ -279,13 +330,28 @@ pass it for the embedded call. This keeps interactive setup from sprouting
 "include repo X?" questions (we deliberately scoped to the current repo) and
 prevents `--no-prompt` setup from blocking on `ReadLine`.
 
-**Visibility:** import does **not** send a visibility field on the wire — the
-server stamps its per-session default at session-start. So imported sessions
-follow the **server-side default**, not the local Step 3 choice directly. Action
-item for the plan: verify whether the `PingCliSetupAsync` → `/api/users/me/cli-setup`
-call propagates the chosen default visibility server-side; if it does not and we
-want imported sessions to honor Step 3, that is a separate server concern (out of
-scope here) — do not claim local-profile visibility governs imported sessions.
+**Visibility — imported sessions honor the Step 3 choice (Decision 11).**
+Verified mechanics: live recording sends `default_visibility` (from
+`activeProfile.DefaultVisibility`) client-side in every session-start hook
+payload (e.g. `CodexHookCommand.cs:193-203`, `ClaudeHookCommand.cs:451-456`, and
+the other seven vendors), and the server only falls back to org visibility when
+that field is **absent**. The import path currently omits `default_visibility`
+entirely — its session-start payloads (`ImportCommand.cs:2671-2726` for the
+Claude/Codex chain, plus the routed sources `AntigravityImportSource.cs`,
+`PiImportSource.cs`, `OpenCodeImportSource.cs`, and the Cursor post-hoc path)
+only set `"private"` under `forcePrivate`. `PingCliSetupAsync` does **not** carry
+visibility (its body is `{"cliVersion": ...}`, `SetupCommand.cs:632-635`), so the
+server default is not updated by setup.
+
+Fix (symmetric with the live path): add an optional
+`string? defaultVisibility` parameter to `HandleImport` (alongside `forcePrivate`)
+and stamp it into the import session-start payloads exactly as the live hooks do
+(`node["default_visibility"] = defaultVisibility` when non-null), threaded through
+the chain path and each routed source. Setup passes the Step 3 visibility
+(read from the **refreshed** profile — see Refresh above, so it is the just-saved
+value, not the stale snapshot). `forcePrivate` continues to take precedence when
+set. Standalone `kcap import` passes `null` and is unchanged. Test that an
+imported session-start payload carries the chosen visibility.
 
 ### Non-interactive behavior (deliberate change — Decision 5)
 
@@ -315,7 +381,7 @@ without running the whole login/config wizard:
 
 - **Agent-install decision helper** — given `DetectedAgents` (+ flags), returns
   the display list (with the Kiro annotation) and the `InstallAgents` gate. Test:
-  no agents ⇒ no prompt; unified-no ⇒ empty `InstallResult` and (via
+  no agents ⇒ no prompt; unified-no ⇒ zero-value `CodingAgentsStep.Result` and (via
   `CodingAgentsStep`) zero mutations; all-detected-vendors-skipped ⇒ shared-skills
   behavior per the truth table.
 - **Import eligibility/execution policy helper** — given `currentRepo`, auth
@@ -324,9 +390,15 @@ without running the whole login/config wizard:
   no origin ⇒ skip + hint; provider `None` ⇒ eligible; `--skip-import` ⇒ skip;
   `--no-prompt` ⇒ auto-import; importer returns non-zero ⇒ warn + continue;
   importer throws ⇒ warn + continue; stale-vs-fresh profile/URL after save.
-- **`CodingAgentsStep`** already takes injected delegates; add tests for the hard
-  `InstallAgents=false` gate (no `Handle*`/sweep/selected reached) and that
-  `InstallAgents=true` preserves each downstream gate.
+- **`CodingAgentsStep`** already takes injected delegates; add tests for: the
+  no-agents early-return (warning emitted, no prompt), the `InstallAgents=false`
+  early-return (no `Handle*`/sweep/`selected` reached, zero-value `Result`), and
+  that `InstallAgents=true` preserves each downstream gate — including the three
+  Kiro flag-coupling rows from the truth table.
+- **Import seam** tests: an imported session-start payload carries the chosen
+  `defaultVisibility`; the exact-refresh setter makes the seam observe the saved
+  normalized URL + profile under raw scheme-less `--server-url` and conflicting
+  `KCAP_URL`/`KCAP_PROFILE`; `autoSkipExclusions` prevents any `Console.ReadLine`.
 - Verify no `IL3050`/`IL2026` AOT warnings via
   `dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release`.
 
@@ -352,13 +424,20 @@ Per `CLAUDE.md` and the `vendor-surface-sync` memory:
   + exception handling); `--skip-import` parsing; renumber headers to `/6`;
   extract the two decision helpers.
 - `src/Capacitor.Cli/Commands/CodingAgentsStep.cs` — add `Options.InstallAgents`;
-  top-of-`RunAsync` hard gate returning zero-mutation `InstallResult` on false;
+  top-of-`RunAsync` ordered early-returns (no-agents warning; zero-value
+  `CodingAgentsStep.Result` on `InstallAgents=false`);
   route the per-vendor gates through the single decision while preserving every
   downstream success/`selected` distinction and existing `--skip-*` semantics.
-- `src/Capacitor.Cli/Commands/ImportCommand.cs` — add an auto-skip-exclusions /
-  non-interactive option so the embedded import never calls `Console.ReadLine()`.
-- `src/Capacitor.Cli.Core/.../AppConfig.cs` — optional explicit
-  `RefreshResolvedState(...)` (if re-calling `ResolveServerUrl` is not preferred).
+- `src/Capacitor.Cli/Commands/ImportCommand.cs` — add `autoSkipExclusions` (never
+  `Console.ReadLine()` when set) and `defaultVisibility` params to `HandleImport`;
+  bind auth to `CreateAuthenticatedClientAsync(baseUrl)`; stamp
+  `default_visibility` into the chain-path session-start payload
+  (`~:2671-2726`). Routed sources `AntigravityImportSource.cs`,
+  `PiImportSource.cs`, `OpenCodeImportSource.cs` (and the Cursor path) — thread
+  `defaultVisibility` into their session-start payloads.
+- `src/Capacitor.Cli.Core/.../AppConfig.cs` — add
+  `SetResolvedState(serverUrl, profile)` (exact setter — no precedence
+  re-resolution) and call it after the setup save.
 - `src/Capacitor.Cli.Core/Resources/help-setup.txt`, `help-usage.txt`,
   `README.md` — docs + `--no-prompt` warning.
 - `test/Capacitor.Cli.Tests.Unit/` — decision-helper + `CodingAgentsStep` gate
