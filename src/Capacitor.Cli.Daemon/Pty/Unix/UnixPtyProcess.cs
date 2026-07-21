@@ -56,15 +56,22 @@ public sealed class UnixPtyProcess : IPtyProcess {
         throw new InvalidOperationException($"'{command}' not found on PATH");
     }
 
-    /// <summary>True iff <paramref name="path"/> is an existing regular file with at least one
-    /// execute bit set (owner/group/other) — mirroring execvp, which skips PATH matches it can't
-    /// execute. <see cref="File.GetUnixFileMode(string)"/> is the Unix execute-bit accessor and is
-    /// only ever reached on Unix (this whole resolver is the Unix PTY path; Windows uses the ConPty
-    /// resolver), so its Windows-unsupported behavior is never hit.</summary>
+    /// <summary>True iff <paramref name="path"/> is an existing regular file that <c>access(X_OK)</c>
+    /// accepts — matching execvp, which selects the first PATH candidate it can ACTUALLY execute.
+    /// "Any execute bit set" is NOT that test: a daemon-owned file with mode 0010 carries a group
+    /// execute bit its owner can't use, and ACLs / noexec mounts diverge from the raw mode bits too,
+    /// so a bit-mask check could select an earlier candidate the child then fails to exec instead of
+    /// continuing down PATH the way execvp does. Any <c>access</c>/stat error (file gone, unreadable,
+    /// wrong permission class, noexec mount) is treated as a SKIPPED candidate — return false and let
+    /// the caller fall through to the next PATH entry. Unix-only (this whole resolver is the Unix PTY
+    /// path; Windows uses the ConPty resolver).</summary>
     static bool IsExecutableRegularFile(string path) {
-        if (!File.Exists(path)) return false; // File.Exists is false for directories, matching S_ISREG
-        var mode = File.GetUnixFileMode(path);
-        return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
+        // Retain the regular-file requirement: access(X_OK) also succeeds on a SEARCHABLE directory
+        // (X on a dir means "search"), which execvp rejects — File.Exists is false for directories,
+        // matching S_ISREG. Then apply execvp's own permission-class-aware executability test; 0 ==
+        // accessible, any error (EACCES wrong class / noexec mount, ENOENT raced-away, …) → skip.
+        if (!File.Exists(path)) return false;
+        return UnixPtyInterop.access(path, UnixPtyInterop.X_OK) == 0;
     }
 
     static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {

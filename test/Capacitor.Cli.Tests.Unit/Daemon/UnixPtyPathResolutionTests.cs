@@ -91,6 +91,28 @@ public class UnixPtyPathResolutionTests {
     }
 
     [Test]
+    public async Task Exec_bit_wrong_permission_class_is_skipped_like_access_x_ok() {
+        if (OperatingSystem.IsWindows()) return;
+        // execvp uses access(X_OK) — permission-CLASS-aware — not "any execute bit set". A file the
+        // owner can't execute (mode 0010: group-execute only) must be SKIPPED even though it carries
+        // an execute bit, so the resolver falls through to a genuinely runnable candidate later on
+        // PATH, exactly as execvp would. Under root access(X_OK) bypasses the class check, so skip.
+        if (DummyProcess.IsEffectiveRoot()) return;
+
+        var earlier = Directory.CreateTempSubdirectory("kcap-resolve-a-").FullName;
+        var later   = Directory.CreateTempSubdirectory("kcap-resolve-b-").FullName;
+        var wrongClass = Path.Combine(earlier, "tool");
+        var runnable   = Path.Combine(later, "tool");
+        File.WriteAllText(wrongClass, "");
+        File.SetUnixFileMode(wrongClass, UnixFileMode.GroupExecute); // 0010: has an exec bit, but NOT for the owner
+        WriteExecutable(runnable);
+        try {
+            var r = UnixPtyProcess.ResolveExecutableAbsolutePath("tool", "/no/such/cwd", EnvWithPath($"{earlier}:{later}"));
+            await Assert.That(r).IsEqualTo(Path.GetFullPath(runnable));
+        } finally { Directory.Delete(earlier, true); Directory.Delete(later, true); }
+    }
+
+    [Test]
     public async Task Empty_path_field_resolves_against_cwd_not_dropped() {
         if (OperatingSystem.IsWindows()) return;
         // A command living ONLY in cwd must be found via an EMPTY PATH field (POSIX cwd) — the

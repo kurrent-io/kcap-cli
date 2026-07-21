@@ -100,6 +100,15 @@ internal sealed partial class DummyProcess : IDisposable {
 
     static void MakeExecutable(string path) => Chmod(path, 0b111_101_101 /* 0755 */);
 
+    /// <summary>True when the effective user is root — access(X_OK) bypasses permission-class checks
+    /// for root (it succeeds if ANY execute bit is set), so tests that rely on a wrong-class execute
+    /// bit being REJECTED must skip under root to stay meaningful.</summary>
+    public static bool IsEffectiveRoot() => !OperatingSystem.IsWindows() && geteuid_native() == 0;
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "geteuid")]
+    [System.Runtime.InteropServices.UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    private static partial uint geteuid_native();
+
     [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "chmod", SetLastError = true,
         StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
     [System.Runtime.InteropServices.UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]

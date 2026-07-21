@@ -75,6 +75,17 @@ internal static partial class UnixPtyInterop {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int pipe(int[] fds);
 
+    // access(2): the permission-CLASS-aware executability test execvp itself uses to pick the first
+    // runnable PATH candidate — owner vs group vs other bits, ACLs, and noexec mounts all factored
+    // in, unlike a raw "any execute bit set" mode-mask. Returns 0 when the mode is granted, -1 (with
+    // errno) otherwise. Used by the pre-fork PATH resolver so it skips exactly the candidates the
+    // child's own exec would skip.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int access(string path, int mode);
+
+    public const int X_OK = 1; // access(2) execute-permission test
+
     // forkpty + child sequence + error-pipe handshake (L1-shim(b)). `plan` is the opaque
     // pty_exec_plan* from pty_preflight; envp/cwd cross the boundary the same way argv does
     // for pty_preflight — a NULL-terminated `string?[]`/UTF-8 string, no length prefix.
