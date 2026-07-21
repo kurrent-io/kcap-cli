@@ -35,6 +35,7 @@ internal sealed partial class LocalPermissionBridge(
     CancellationTokenSource? _cts;
     string?                  _sharedToken;
     int                      _port;
+    int                      _listenerClosed;
 
     // Live per-reviewer tokens → each token's bound (read-only) kcap allowlist servers. A request on
     // a reviewer token auto-approves that reviewer's kcap tools; the shared token keeps the
@@ -66,6 +67,7 @@ internal sealed partial class LocalPermissionBridge(
             try {
                 listener.Start();
                 _listener    = listener;
+                _listenerClosed = 0;
                 _sharedToken = token;
                 _port        = port;
                 BaseUrl      = $"http://127.0.0.1:{port}/{token}";
@@ -103,7 +105,14 @@ internal sealed partial class LocalPermissionBridge(
 
     public async Task StopAsync(CancellationToken cancellationToken) {
         if (_cts is not null) await _cts.CancelAsync();
-        _listener?.Stop();
+
+        // Close exactly once, before awaiting the accept loop. Stop() alone releases the port but
+        // leaves HttpListener's prefix registered until a later Close(); another bridge can claim
+        // that port in between, making the old listener's eventual Close() throw EADDRINUSE.
+        // Close() both stops the listener and unregisters its prefix as one shutdown operation.
+        var listener = _listener;
+        if (listener is not null && Interlocked.Exchange(ref _listenerClosed, 1) == 0)
+            listener.Close();
 
         if (_acceptLoop is not null) {
             try {
@@ -116,7 +125,6 @@ internal sealed partial class LocalPermissionBridge(
 
     public async ValueTask DisposeAsync() {
         await StopAsync(CancellationToken.None);
-        _listener?.Close();
         _cts?.Dispose();
     }
 

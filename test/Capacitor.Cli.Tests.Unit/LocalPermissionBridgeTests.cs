@@ -240,6 +240,8 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StopAsyncReleasesPort() {
         var (bridge, _) = CreateBridge();
+        TcpListener? probe    = null;
+        var          disposed = false;
 
         try {
             await bridge.StartAsync(CancellationToken.None);
@@ -249,17 +251,20 @@ public class LocalPermissionBridgeTests {
 
             // After stop, the port should accept a fresh bind. If StopAsync didn't release
             // it, this would either throw or hang.
-            var probe = new TcpListener(IPAddress.Loopback, port);
+            probe = new TcpListener(IPAddress.Loopback, port);
+            probe.Start();
 
-            try {
-                probe.Start();
-            } finally {
-                probe.Stop();
-            }
-        } finally {
-            // Ensure DisposeAsync runs even if the probe.Start() above throws — otherwise the
-            // listener / CTS leak into later tests in the same process.
+            // Keep the replacement listener bound while disposing the bridge. This reproduces
+            // the suite-level race where StopAsync released the port, another fixture claimed it,
+            // and the old listener's later Close() threw EADDRINUSE.
             await bridge.DisposeAsync();
+            disposed = true;
+        } finally {
+            probe?.Stop();
+
+            // Ensure cleanup still runs if setup or the assertion above fails. Dispose is
+            // intentionally idempotent, so retrying after a partial shutdown is safe.
+            if (!disposed) await bridge.DisposeAsync();
         }
     }
 
