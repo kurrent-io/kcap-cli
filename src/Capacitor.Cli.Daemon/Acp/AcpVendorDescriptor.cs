@@ -99,4 +99,18 @@ internal static class AcpVendorDescriptors {
         ModelSelector:       ConfigOptionModelSelector.Instance,
         SupportsMcpServers:  true
     );
+
+    /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
+    /// <c>SupportsMcpServers</c> is <c>false</c>: copilot 1.0.69 advertises MCP over http/sse only,
+    /// not stdio, and <see cref="Capacitor.Cli.Core.Acp.AcpMcpServerSpec"/> is stdio-only.</summary>
+    public static readonly AcpVendorDescriptor Copilot = new(
+        Vendor:              "copilot",
+        ResolveBinaryPath:   cfg => cfg.CopilotPath,
+        ResolveDefaultModel: _ => null,
+        Argv:                ["--acp", "--stdio"],
+        UnattendedTrustArgv: [],
+        SupportsUnattended:  false,
+        ModelSelector:       NoOpModelSelector.Instance,
+        SupportsMcpServers:  false
+    );
 }

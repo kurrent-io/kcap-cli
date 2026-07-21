@@ -255,6 +255,14 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ServerConnection>() // spec-review Finding 4 — real production wiring
             )
         );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.Copilot,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<ServerConnection>()
+            )
+        );
 
         builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp =>
             sp.GetServices<IHostedAgentRuntimeFactory>().ToDictionary(f => f.Vendor)
