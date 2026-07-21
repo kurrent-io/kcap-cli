@@ -100,8 +100,9 @@ create one for you (organization name + workspace slug) and wait for it to go li
 As a final step, setup offers to import this repository's past sessions across
 every detected agent (equivalent to `kcap import --repo .`). It's only offered
 when the current directory is a git repo with a resolvable origin remote and
-you're authenticated; otherwise it's skipped with a one-line reason and the
-usual `kcap import` hint. Opt out with --skip-import.
+authentication requirements are satisfied (including no-auth servers, auth
+provider None); otherwise it's skipped with a one-line reason and the usual
+`kcap import` hint. Opt out with --skip-import.
 
 Behavior change: --no-prompt now auto-imports the current repository's past
 sessions too, matching the wizard's default-yes answer for this step. Existing
