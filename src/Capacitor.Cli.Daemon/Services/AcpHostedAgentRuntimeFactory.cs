@@ -54,8 +54,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // a non-review launch; the built MCP list for a valid review flow.
         var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor);
 
-        var autoApproveUnattended =
-            ctx.IsReviewFlow && ctx.Work == WorkLocation.OwnedWorktree && descriptor.SupportsUnattended;
+        var autoApproveUnattended = ctx.IsReviewFlow && descriptor.SupportsUnattended;
 
         var runtimeLogger = loggerFactory.CreateLogger<AcpHostedAgentRuntime>();
         var connLogger    = loggerFactory.CreateLogger<AcpConnection>();
@@ -109,9 +108,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// <see cref="StartAsync"/> — before <c>_connectionSource</c> can spawn a child. Returns
     /// <see langword="null"/> for a non-review launch; for a review flow it throws unless the launch
     /// is safe to run unattended AND has a deliverable result channel AND every allowlist entry is an
-    /// auto-approvable read-only server, then returns the built list. Owned-worktree is a launch
-    /// precondition (a daemon-owned throwaway cwd + no trust-at-spawn on a borrowed cwd), NOT a
-    /// filesystem sandbox — containment is a per-vendor concern (see the design spec).
+    /// auto-approvable read-only server, then returns the built list. Work-location safety is
+    /// descriptor-gated: most vendors require a daemon-owned worktree, while a borrowed-review
+    /// vendor must provide its own capability clamp. Neither location is itself a filesystem sandbox.
     /// </summary>
     static IReadOnlyList<AcpMcpServerSpec>? ValidateAndBuildReviewFlowMcp(
             RuntimeStartContext ctx, AcpVendorDescriptor descriptor) {

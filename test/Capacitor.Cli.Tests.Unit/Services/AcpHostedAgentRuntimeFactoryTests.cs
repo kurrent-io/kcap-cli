@@ -845,8 +845,23 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// autoApprove=true and threads it to the bridge — an inbound permission request is auto-approved
     /// (least-privilege allow) WITHOUT ever routing to the injected server connection (no human).</summary>
     [Test]
-    public async Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() {
-        var descriptor = SyntheticDescriptor(supportsMcpServers: true); // SupportsUnattended: true
+    public Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
+        AssertReviewFlowAutoApprovesPermissionAsync(
+            SyntheticDescriptor(supportsMcpServers: true),
+            ReviewContext());
+
+    /// <summary>A borrowed Copilot reviewer passed the descriptor's capability-clamp gate and is
+    /// just as unattended as an owned-worktree reviewer. Its ACP permission request must therefore
+    /// resolve locally rather than waiting forever on a human interaction decision.</summary>
+    [Test]
+    public Task ReviewFlow_CopilotBorrowedCwd_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
+        AssertReviewFlowAutoApprovesPermissionAsync(
+            AcpVendorDescriptors.Copilot,
+            ReviewContext(["kcap-review"]) with { Work = WorkLocation.BorrowedCwd });
+
+    static async Task AssertReviewFlowAutoApprovesPermissionAsync(
+            AcpVendorDescriptor descriptor,
+            RuntimeStartContext context) {
         var fake        = new FakeAcpAgent();
         var connection  = new CaptureServerConnection();
 
@@ -860,7 +875,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
 
-        var started = await factory.StartAsync(ReviewContext(), cts.Token).WaitAsync(HangGuard);
+        var started = await factory.StartAsync(context, cts.Token).WaitAsync(HangGuard);
 
         fake.EnqueuePermissionRequestDuringNextPrompt(
             toolCallJson: """{"toolCallId":"call-1","title":"Read file"}""",
