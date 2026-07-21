@@ -482,8 +482,12 @@ public static class SetupCommand {
         // None), or the login this run just did (or already had) produced a usable,
         // non-expired token — not merely "provider != None" (Decision 9).
         // "usable token" = refresh-aware (mirrors the import path's own auth): an expired but
-        // refreshable token still counts, so we don't skip the auto-import for those users.
-        var authSatisfied = provider == AuthProvider.None || await TokenStore.GetValidTokensAsync() is not null;
+        // refreshable token still counts. The probe is wrapped so a token I/O / refresh failure
+        // degrades to an ineligible (best-effort) skip rather than throwing out of setup — the
+        // import path's own errors are caught inside RunImportStepAsync, and this eligibility
+        // probe (awaited outside that boundary) must be equally non-fatal.
+        var authSatisfied = await IsAuthSatisfiedAsync(
+            provider, static async () => await TokenStore.GetValidTokensAsync() is not null);
 
         await RunImportStepAsync(
             currentRepo, authSatisfied, skipImport, noPrompt,
@@ -546,6 +550,23 @@ public static class SetupCommand {
     /// exit code is reported with a warning and swallowed — this method never throws and never
     /// fails setup.
     /// </summary>
+    /// <summary>
+    /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
+    /// token; any other provider needs a usable (valid-or-refreshable) token. The token probe is
+    /// injected so it's testable, and any exception it throws is treated as "not satisfied" — this
+    /// probe is awaited OUTSIDE <see cref="RunImportStepAsync"/>'s try/catch, so it must never
+    /// throw out of setup (the optional import failing must not fail <c>kcap setup</c>).
+    /// </summary>
+    internal static async Task<bool> IsAuthSatisfiedAsync(string provider, Func<Task<bool>> hasUsableToken) {
+        if (provider == AuthProvider.None) return true;
+
+        try {
+            return await hasUsableToken();
+        } catch {
+            return false;
+        }
+    }
+
     internal static async Task RunImportStepAsync(
             (string Owner, string Name)? currentRepo,
             bool                          authSatisfied,

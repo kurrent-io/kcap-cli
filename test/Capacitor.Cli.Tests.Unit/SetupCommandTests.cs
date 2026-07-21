@@ -11,6 +11,47 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class SetupCommandTests {
+    // --- Step 6 import auth-eligibility probe (IsAuthSatisfiedAsync) ---
+
+    [Test]
+    public async Task IsAuthSatisfied_ProviderNone_TrueAndNeverProbesToken() {
+        var probed = false;
+
+        var ok = await SetupCommand.IsAuthSatisfiedAsync(AuthProvider.None, () => {
+            probed = true;
+
+            return Task.FromResult(false);
+        });
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(probed).IsFalse(); // provider None short-circuits — no token probe
+    }
+
+    [Test]
+    public async Task IsAuthSatisfied_AuthedProvider_UsableToken_True() {
+        // Models an expired-but-refreshable (or valid) token: the probe resolves to true.
+        var ok = await SetupCommand.IsAuthSatisfiedAsync("github", () => Task.FromResult(true));
+
+        await Assert.That(ok).IsTrue();
+    }
+
+    [Test]
+    public async Task IsAuthSatisfied_AuthedProvider_NoUsableToken_False() {
+        var ok = await SetupCommand.IsAuthSatisfiedAsync("github", () => Task.FromResult(false));
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task IsAuthSatisfied_AuthedProvider_ProbeThrows_FalseNotThrow() {
+        // A token I/O / refresh failure (e.g. non-writable token dir) must degrade to an
+        // ineligible skip, NOT propagate out of setup.
+        var ok = await SetupCommand.IsAuthSatisfiedAsync(
+            "github", () => throw new UnauthorizedAccessException("token dir not writable"));
+
+        await Assert.That(ok).IsFalse();
+    }
+
     [Test]
     public async Task InstallPlugin_CreatesNewSettingsFile() {
         using var tmp          = new TempDir();
