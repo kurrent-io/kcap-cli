@@ -29,7 +29,8 @@ namespace Capacitor.Cli.Daemon.Acp;
 internal sealed partial class AcpInteractionBridge(
         Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
         string                                                                       agentId,
-        ILogger                                                                      logger
+        ILogger                                                                      logger,
+        bool                                                                         autoApproveUnattended = false
     ) {
     /// <summary>
     /// Handles one inbound <see cref="AcpRequest"/>. Returns <see langword="null"/> for any method
@@ -95,6 +96,29 @@ internal sealed partial class AcpInteractionBridge(
         // separate null-checks that could drift.
         var options = parsed.Options?.Where(o => o is not null).ToArray() ?? [];
 
+        // Unattended review-flow reviewer: never route a permission request to a human. This is an
+        // unconditional TRUST decision — it selects a least-privilege allow option and does NOT
+        // inspect or confine the tool or its target (there is no OS sandbox; the owned-worktree gate
+        // is a launch precondition, not a per-operation boundary — see AcpReviewFlowMcp / the factory).
+        // Fail closed (cancelled) when there is no unambiguous allow option to select.
+        if (autoApproveUnattended) {
+            var chosen = TrySelectLeastPrivilegeAllow(options);
+
+            if (chosen is not null) {
+                // Audit fields are pinned: agentId + the selected allow Kind, plus the tool title
+                // as EXPLICITLY-untrusted, agent-supplied context. No path is logged — the bridge
+                // has no trustworthy path field (ToolCall is opaque), so a path would be a
+                // fabricated assurance of what the operation touched.
+                LogUnattendedAutoApproved(agentId, chosen.Kind ?? "", TryGetToolTitle(parsed.ToolCall) ?? "(untitled)");
+
+                return SelectedResult(chosen);
+            }
+
+            LogUnattendedAutoApproveDeclined(agentId, "no unambiguous allow option offered");
+
+            return CancelledResult();
+        }
+
         var interactionRequest = new AcpInteractionRequest(
             AgentId: agentId,
             AcpSessionId: parsed.SessionId,
@@ -154,6 +178,15 @@ internal sealed partial class AcpInteractionBridge(
     }
 
     async Task<JsonElement?> HandleElicitationAsync(AcpRequest request, CancellationToken ct) {
+        // Unattended review-flow reviewer: there is no human to answer an elicitation, and a reviewer
+        // should proceed on its own assumptions (and state them in its findings) rather than block.
+        // Decline deterministically without routing anywhere.
+        if (autoApproveUnattended) {
+            LogUnattendedElicitationDeclined(agentId);
+
+            return CancelledResult();
+        }
+
         // Never advertised in `initialize` (see AcpHostedAgentRuntime.StartAsync's minimal
         // ClientCapabilities, unchanged by this plan) — handled defensively in case a real agent
         // sends it unprompted, per R3's open question on whether Cursor uses a vendor-specific
@@ -309,6 +342,34 @@ internal sealed partial class AcpInteractionBridge(
         return matched is not null ? SelectedResult(matched) : CancelledResult()!.Value;
     }
 
+    /// <summary>
+    /// Auto-selects the least-privilege ALLOW option among the request's OFFERED options, by exact
+    /// <see cref="PermissionOptionDto.Kind"/> — never by <see cref="PermissionOptionDto.Name"/>/label,
+    /// which a hostile agent controls. Least-privilege = prefer a single <c>allow_once</c> over
+    /// <c>allow_always</c>; exactly one <c>allow_once</c> wins even when <c>allow_always</c> options
+    /// are also offered. Returns <see langword="null"/> (→ caller returns <c>cancelled</c>) when there
+    /// is no allow option, the allow set is ambiguous (≥2 <c>allow_once</c>, or 0 <c>allow_once</c>
+    /// with ≥2 <c>allow_always</c>), or the chosen option's <see cref="PermissionOptionDto.OptionId"/>
+    /// is blank or not unique across the offered options. <c>OptionId</c> is non-nullable in C# but
+    /// the wire deserializer enforces neither non-null nor uniqueness, so both are validated here — a
+    /// blank or colliding id can't address an unambiguous option and echoing it risks selecting the
+    /// wrong one server-side.
+    /// </summary>
+    static PermissionOptionDto? TrySelectLeastPrivilegeAllow(IReadOnlyList<PermissionOptionDto> options) {
+        var once   = options.Where(o => o.Kind == "allow_once").ToArray();
+        var always = options.Where(o => o.Kind == "allow_always").ToArray();
+
+        var chosen =
+            once.Length   == 1                          ? once[0]   :
+            once.Length   == 0 && always.Length == 1    ? always[0] :
+            null;
+
+        if (chosen is null || string.IsNullOrWhiteSpace(chosen.OptionId)) return null;
+        if (options.Count(o => o.OptionId == chosen.OptionId) != 1)       return null;
+
+        return chosen;
+    }
+
     static JsonElement SelectedResult(PermissionOptionDto chosen) =>
         JsonSerializer.SerializeToElement(
             new PermissionOutcomeResult(new PermissionOutcomeDto("selected", chosen.OptionId)),
@@ -346,4 +407,18 @@ internal sealed partial class AcpInteractionBridge(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP blocking request resolved: agentId={AgentId} kind={Kind} decision={Decision}")]
     partial void LogInteractionResolved(string agentId, string kind, string decision);
+
+    // ── Unattended review-flow auto-approve audit ───────────────────────────────────────────────
+    // Pinned fields only: agentId + the selected allow Kind, plus the tool title as EXPLICITLY
+    // untrusted, agent-supplied context. Deliberately NO path field — the bridge has no trustworthy
+    // path (ToolCall is opaque), so a path would be a fabricated assurance of what was touched.
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP unattended review-flow: auto-approved '{Kind}' permission for agent {AgentId} (tool title, untrusted: {ToolTitle})")]
+    partial void LogUnattendedAutoApproved(string agentId, string kind, string toolTitle);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP unattended review-flow: declined permission for agent {AgentId} ({Reason}); returning cancelled")]
+    partial void LogUnattendedAutoApproveDeclined(string agentId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP unattended review-flow: declined elicitation for agent {AgentId} (reviewers state assumptions in findings); returning cancelled")]
+    partial void LogUnattendedElicitationDeclined(string agentId);
 }

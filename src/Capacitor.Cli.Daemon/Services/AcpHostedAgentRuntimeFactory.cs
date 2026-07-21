@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Microsoft.Extensions.Logging;
 
@@ -48,6 +50,21 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
         AcpMetrics.Launches.Add(1);
 
+        // Validate + build the review-flow result channel BEFORE anything spawns. _connectionSource
+        // spawns the child process for the default (real) source, so validation placed near
+        // runtime.StartAsync below would throw AFTER spawn and leak a child; a non-default
+        // connectionSource never reaches BuildProcessStartInfo at all. This is the primary gate:
+        // it fails closed (throws) for an IsReviewFlow launch that isn't unattended-capable, isn't
+        // an owned worktree, has no ACP mcpServers support, or can't build a deliverable result
+        // channel. Returns null for a non-review launch (mcpServers stay exactly as before).
+        var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor);
+
+        // Auto-approve is enabled only for an owned-worktree, unattended-capable review flow. The
+        // pre-spawn validation above already refuses the other IsReviewFlow rows, so this predicate
+        // is a belt-and-suspenders recomputation of the same conditions.
+        var autoApproveUnattended =
+            ctx.IsReviewFlow && ctx.Work == WorkLocation.OwnedWorktree && descriptor.SupportsUnattended;
+
         var runtimeLogger = loggerFactory.CreateLogger<AcpHostedAgentRuntime>();
         var connLogger    = loggerFactory.CreateLogger<AcpConnection>();
 
@@ -64,8 +81,16 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             requestInteraction: connection.RequestAcpInteractionAsync,
             debugFrames: config.DebugFrames,
             vendor: descriptor.Vendor,
-            modelSelector: descriptor.ModelSelector
+            modelSelector: descriptor.ModelSelector,
+            autoApproveUnattended: autoApproveUnattended
         );
+
+        // A review flow sends the injected result channel + resolved allowlist; every other launch
+        // keeps the prior behavior (ctx.McpServers when the descriptor supports it, else null —
+        // null for every launch today, since no non-review caller populates ctx.McpServers).
+        var mcpServers = ctx.IsReviewFlow
+            ? reviewMcp
+            : descriptor.SupportsMcpServers ? ctx.McpServers : null;
 
         try {
             await runtime.StartAsync(
@@ -73,7 +98,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 ctx.Prompt,
                 ct,
                 ResolveRequestedModel(descriptor, config, ctx),
-                descriptor.SupportsMcpServers ? ctx.McpServers : null
+                mcpServers
             ).ConfigureAwait(false);
         } catch {
             // The runtime owns both the connection and the process; dispose on a failed handshake
@@ -87,6 +112,45 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // IAcpTranscriptSource directly) — hand it back on HostedRuntimeStart so the orchestrator can
         // bind + forward without downcasting Runtime.
         return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
+    }
+
+    /// <summary>
+    /// Fail-closed validation + build of the review-flow result channel, run as the FIRST thing in
+    /// <see cref="StartAsync"/> (before any spawn). Returns <see langword="null"/> for a non-review
+    /// launch (leaving mcpServers untouched); for an <see cref="RuntimeStartContext.IsReviewFlow"/>
+    /// launch it throws unless the launch is safe to run unattended AND has a deliverable result
+    /// channel, then returns the built MCP list.
+    ///
+    /// The owned-worktree requirement is a launch precondition, NOT a filesystem sandbox: an ACP
+    /// reviewer performs its own file/shell operations with no OS containment, so confining what an
+    /// auto-approved tool can touch is a per-vendor property each reviewer child must verify live.
+    /// This gate only guarantees the reviewer's cwd is a daemon-owned throwaway, and that the
+    /// trust-at-spawn argv (appended for IsReviewFlow) is never handed to a borrowed-cwd launch.
+    /// </summary>
+    static IReadOnlyList<AcpMcpServerSpec>? ValidateAndBuildReviewFlowMcp(
+            RuntimeStartContext ctx, AcpVendorDescriptor descriptor) {
+        if (!ctx.IsReviewFlow) return null;
+
+        if (!descriptor.SupportsUnattended)
+            throw new InvalidOperationException(
+                $"Vendor '{descriptor.Vendor}' cannot host an unattended (review-flow) agent.");
+
+        if (ctx.Work != WorkLocation.OwnedWorktree)
+            throw new InvalidOperationException(
+                $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
+
+        if (!descriptor.SupportsMcpServers)
+            throw new InvalidOperationException(
+                $"Vendor '{descriptor.Vendor}' cannot host a review-flow reviewer: no ACP mcpServers support (needed for the kcap-flow-result channel).");
+
+        // All three inputs the result channel needs must be present and non-blank, or the reviewer
+        // would start with a dead channel and wedge the round. A blank agent id in particular would
+        // still yield a non-empty server list and slip past a count-only guard, so it is checked here.
+        if (string.IsNullOrWhiteSpace(ctx.ServerUrl) || string.IsNullOrWhiteSpace(ctx.CapacitorPath) || string.IsNullOrWhiteSpace(ctx.AgentId))
+            throw new InvalidOperationException(
+                "Review-flow launch cannot inject the kcap-flow-result channel (missing server url / kcap path / agent id).");
+
+        return AcpReviewFlowMcp.Build(ctx);
     }
 
     /// <summary>
@@ -121,6 +185,14 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (ctx.IsReviewFlow && !descriptor.SupportsUnattended)
             throw new InvalidOperationException(
                 $"Vendor '{descriptor.Vendor}' does not support unattended (review-flow) launches.");
+
+        // Defense-in-depth for the trust-at-spawn argv appended just below: a borrowed-cwd reviewer
+        // would run in the requester's live checkout, so this refuses it here too. StartAsync's
+        // pre-spawn validation is the primary gate; this backstops the default spawn path (a
+        // non-default connectionSource never reaches this builder).
+        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree)
+            throw new InvalidOperationException(
+                $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
 
         var argv = ctx.IsReviewFlow
             ? [.. descriptor.Argv, .. descriptor.UnattendedTrustArgv]

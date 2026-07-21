@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -646,6 +647,196 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await Assert.That(calls[1].Method).IsEqualTo("session/new");
         await Assert.That(calls[2].Method).IsEqualTo("session/set_config_option");
         await Assert.That(calls[3].Method).IsEqualTo("session/prompt");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    // ── Review-flow reviewer foundation: result-channel MCP + fail-closed pre-spawn validation ───
+
+    /// <summary>A review-flow launch context: unattended-capable synthetic vendor, owned worktree
+    /// (the default), a resolvable server url + kcap path, plus an optional MCP allowlist.</summary>
+    static RuntimeStartContext ReviewContext(string[]? allowlist = null) =>
+        MakeContext("agent-1") with {
+            IsReviewFlow = true,
+            ServerUrl    = "http://kcap.test",
+            McpAllowlist = allowlist
+        };
+
+    /// <summary>A factory whose connectionSource INCREMENTS a counter (never throws — a throw would
+    /// be swallowed by StartAsync's own handshake catch and mask the assertion) so a test can prove
+    /// the child process was never spawned when pre-spawn validation refuses a launch.</summary>
+    static (AcpHostedAgentRuntimeFactory Factory, Func<int> SpawnCount) CountingSpawnFactory(AcpVendorDescriptor descriptor) {
+        var spawns = 0;
+        var fake   = new FakeAcpAgent();
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: descriptor,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new CaptureServerConnection(),
+            connectionSource: _ => { Interlocked.Increment(ref spawns); return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()); });
+
+        return (factory, () => Volatile.Read(ref spawns));
+    }
+
+    /// <summary>Test plan 2: session/new carries kcap-flow-result (both env vars) + one server per
+    /// resolvable non-flow allowlist name (KCAP_URL only), with pinned command/args, exact JSON.</summary>
+    [Test]
+    public async Task ReviewFlow_SessionNew_CarriesFlowResultAndAllowlistServers_ExactJson() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
+        var fake        = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started = await RunSyntheticStartAsync(descriptor, fake, ReviewContext(["kcap-review"]), cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo(
+            """[{"name":"kcap-flow-result","command":"/usr/local/bin/kcap","args":["mcp","flow-result"],"env":[{"name":"KCAP_URL","value":"http://kcap.test"},{"name":"KCAP_FLOW_AGENT_ID","value":"agent-1"}]},{"name":"kcap-review","command":"/usr/local/bin/kcap","args":["mcp","review"],"env":[{"name":"KCAP_URL","value":"http://kcap.test"}]}]""");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Test plan 3: kcap-flows (and a case-variant) are stripped, unknown names skipped, and
+    /// a repeated/case-varied canonical id collapses to a single server (JsonObject-keying parity).</summary>
+    [Test]
+    public async Task ReviewFlow_RecursionGuard_StripsFlows_SkipsUnknown_AndDedupsByCanonicalId() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
+        var fake        = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var allowlist = new[] { "kcap-flows", "KCAP-FLOWS", "kcap-sessions", "KCAP-SESSIONS", "totally-unknown" };
+        var started = await RunSyntheticStartAsync(descriptor, fake, ReviewContext(allowlist), cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo(
+            """[{"name":"kcap-flow-result","command":"/usr/local/bin/kcap","args":["mcp","flow-result"],"env":[{"name":"KCAP_URL","value":"http://kcap.test"},{"name":"KCAP_FLOW_AGENT_ID","value":"agent-1"}]},{"name":"kcap-sessions","command":"/usr/local/bin/kcap","args":["mcp","sessions"],"env":[{"name":"KCAP_URL","value":"http://kcap.test"}]}]""");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Test plan 4: a review flow missing the server url or kcap path can't build a result
+    /// channel — StartAsync throws BEFORE the connectionSource is ever invoked (no leaked child).</summary>
+    [Test]
+    public async Task ReviewFlow_MissingServerUrl_ThrowsBeforeSpawn() {
+        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));
+
+        await Assert.That(async () => await factory.StartAsync(ReviewContext() with { ServerUrl = null }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ReviewFlow_WhitespaceCapacitorPath_ThrowsBeforeSpawn() {
+        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));
+
+        await Assert.That(async () => await factory.StartAsync(ReviewContext() with { CapacitorPath = "   " }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
+    }
+
+    /// <summary>Test plan 5: an unattended-capable vendor with no ACP mcpServers support can't carry
+    /// the result channel — throws before spawn.</summary>
+    [Test]
+    public async Task ReviewFlow_NoMcpServerSupport_ThrowsBeforeSpawn() {
+        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: false));
+
+        await Assert.That(async () => await factory.StartAsync(ReviewContext(), CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
+    }
+
+    /// <summary>Test plan 6: a borrowed cwd, and separately a non-unattended vendor, both fail closed
+    /// before spawn. Plus BuildProcessStartInfo's defense-in-depth borrowed-cwd refusal.</summary>
+    [Test]
+    public async Task ReviewFlow_BorrowedCwd_ThrowsBeforeSpawn() {
+        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));
+
+        await Assert.That(async () => await factory.StartAsync(ReviewContext() with { Work = WorkLocation.BorrowedCwd }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ReviewFlow_NotUnattended_ThrowsBeforeSpawn() {
+        // Cursor's SupportsUnattended is false.
+        var (factory, spawns) = CountingSpawnFactory(AcpVendorDescriptors.Cursor);
+
+        await Assert.That(async () => await factory.StartAsync(ReviewContext(), CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task BuildProcessStartInfo_Throws_ForReviewFlow_WhenBorrowedCwd_NoTrustArgvBuilt() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true); // SupportsUnattended: true
+        var config     = new DaemonConfig();
+
+        await Assert.That(() => AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            descriptor, config, MakeContext("agent-1") with { IsReviewFlow = true, Work = WorkLocation.BorrowedCwd }
+        )).Throws<InvalidOperationException>();
+    }
+
+    /// <summary>Test plan 7: a blank/whitespace agent id would still yield a non-empty MCP list and
+    /// slip past a count-only guard — it must fail closed before spawn.</summary>
+    [Test]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task ReviewFlow_BlankAgentId_ThrowsBeforeSpawn(string agentId) {
+        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));
+
+        await Assert.That(async () => await factory.StartAsync(ReviewContext() with { AgentId = agentId }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
+    }
+
+    /// <summary>Test plan 11: for an owned-worktree unattended review flow, the factory computes
+    /// autoApprove=true and threads it to the bridge — an inbound permission request is auto-approved
+    /// (least-privilege allow) WITHOUT ever routing to the injected server connection (no human).</summary>
+    [Test]
+    public async Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true); // SupportsUnattended: true
+        var fake        = new FakeAcpAgent();
+        var connection  = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: descriptor,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started = await factory.StartAsync(ReviewContext(), cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Read file"}""",
+            optionsJson: """[{"optionId":"ao","name":"Allow once","kind":"allow_once"},{"optionId":"d","name":"Deny","kind":"reject_once"}]""");
+
+        await started.Runtime.SendUserInputAsync("review").WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (fake.LastServerRequestResponse is null && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var outcome = fake.LastServerRequestResponse!.Value.GetProperty("outcome");
+        await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("selected");
+        await Assert.That(outcome.GetProperty("optionId").GetString()).IsEqualTo("ao");
+        // The bridge auto-approved locally: the server connection was never consulted.
+        await Assert.That(connection.RequestAcpInteractionAsyncCalled).IsFalse();
 
         cts.Cancel();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }

@@ -199,7 +199,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             int?                                                                           pendingTurnsCapacity = null,
             bool                                                                           debugFrames = false,
             string                                                                         vendor = "cursor",
-            IAcpModelSelector?                                                             modelSelector = null
+            IAcpModelSelector?                                                             modelSelector = null,
+            bool                                                                           autoApproveUnattended = false
         ) {
         _connection    = connection;
         _process       = process;
@@ -231,7 +232,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _connection.OnNotification += HandleNotification;
 
         if (requestInteraction is not null) {
-            _interactionBridge = new AcpInteractionBridge(requestInteraction, agentId, logger);
+            _interactionBridge = new AcpInteractionBridge(requestInteraction, agentId, logger, autoApproveUnattended);
             _connection.OnServerRequest = (request, ct) => _interactionBridge.HandleAsync(request, ct);
         }
     }
