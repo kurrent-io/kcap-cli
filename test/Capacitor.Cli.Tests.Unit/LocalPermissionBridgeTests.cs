@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+[NotInParallel]
 public class LocalPermissionBridgeTests {
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
             Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null,
