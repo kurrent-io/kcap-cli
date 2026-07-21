@@ -942,8 +942,12 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-autoskip");
         var cwdDir      = Path.Combine(projectsDir, "-excluded-proj");
         Directory.CreateDirectory(cwdDir);
+        // Serialize the cwd so a Windows path's backslashes are JSON-escaped — a raw interpolation
+        // produces invalid JSON on Windows (\a, \e … aren't valid escapes), which would leave cwd
+        // unparsed, the session un-excluded, and the "Auto-skipping" branch never reached.
+        var cwdJson = System.Text.Json.JsonSerializer.Serialize(excludedDir);
         File.WriteAllLines(Path.Combine(cwdDir, "autoskip-sess.jsonl"), Enumerable.Range(0, 20).Select(i =>
-            $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"{{{excludedDir}}}","message":{"content":"line-{{{i}}}"}}"""
+            $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":{{{cwdJson}}},"message":{"content":"line-{{{i}}}"}}"""
         ));
 
         AppConfig.SetResolvedState(_server.Url!, "autoskip-test", new Profile { ExcludedPaths = [excludedDir] });
