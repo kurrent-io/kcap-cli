@@ -46,10 +46,25 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     : Path.IsPathRooted(entry)     ? entry
                     :                                Path.GetFullPath(entry, cwd);
             var candidate = Path.GetFullPath(Path.Combine(dir, command));
-            if (File.Exists(candidate)) return candidate;
+            // execvp selects the first EXECUTABLE file, not the first that merely EXISTS. A
+            // non-executable file earlier on PATH must be SKIPPED here, or we'd preflight (and
+            // hand the child) a different inode than the one the child's own exec-time resolution
+            // would land on — a non-executable match is invisible to execvp, which keeps scanning.
+            if (IsExecutableRegularFile(candidate)) return candidate;
         }
 
         throw new InvalidOperationException($"'{command}' not found on PATH");
+    }
+
+    /// <summary>True iff <paramref name="path"/> is an existing regular file with at least one
+    /// execute bit set (owner/group/other) — mirroring execvp, which skips PATH matches it can't
+    /// execute. <see cref="File.GetUnixFileMode(string)"/> is the Unix execute-bit accessor and is
+    /// only ever reached on Unix (this whole resolver is the Unix PTY path; Windows uses the ConPty
+    /// resolver), so its Windows-unsupported behavior is never hit.</summary>
+    static bool IsExecutableRegularFile(string path) {
+        if (!File.Exists(path)) return false; // File.Exists is false for directories, matching S_ISREG
+        var mode = File.GetUnixFileMode(path);
+        return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
     }
 
     static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {

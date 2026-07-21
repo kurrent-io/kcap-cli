@@ -78,6 +78,20 @@ internal sealed class AgentPidRecordStore(string stateDir, ILogger logger) {
 
             var token = record.StartIdentity;
 
+            // An UNKNOWN numeric identity_kind (e.g. a corrupt `identity_kind: 99`, or a value a
+            // future daemon writes) deserializes to an out-of-range enum that is NEITHER Present
+            // NOR IdentityUnavailable, so it slips past BOTH consistency predicates below and would
+            // be treated as a valid new shape. Reject any undefined value outright. NOTE: a LEGACY
+            // record with no identity_kind key decodes to Present (the zero value), which IS defined
+            // — so this never fires on the backward-compat path.
+            if (!Enum.IsDefined(record.IdentityKind)) {
+                logger.LogWarning(
+                    "AgentPidRecordStore: record {Path} has an unknown identity_kind ({Kind}); quarantining as .corrupt",
+                    path, (int)record.IdentityKind);
+                TryQuarantine(path);
+                continue;
+            }
+
             // M1-A (spec §4.3): the only rejected shapes are NEW-schema-inconsistent combinations —
             // Present claiming a comparable identity with an empty token, or IdentityUnavailable
             // claiming NO comparable identity while still carrying a nonempty one. A LEGACY record

@@ -179,6 +179,35 @@ public class AgentPidRecordStoreTests {
     }
 
     [Test]
+    public async Task ReadAll_quarantines_a_record_with_an_unknown_identity_kind() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        var agentsDir = Path.Combine(dir, "agents");
+        Directory.CreateDirectory(agentsDir);
+
+        // An out-of-range numeric identity_kind (99) is neither Present nor IdentityUnavailable, so
+        // it passes BOTH consistency predicates and would be silently accepted without an explicit
+        // Enum.IsDefined guard. Build via the real serializer, then rewrite the value to 99 (a raw
+        // number JsonStringEnumConverter binds to (PidIdentityKind)99) so the wire name/casing can't
+        // drift. AgentId + token stay well-formed so the ONLY defect is the unknown kind.
+        var current = new AgentPidRecord("unknownkind1", 7, "lx:boot:1", PidIdentityKind.Present,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
+        var json = System.Text.Json.JsonSerializer.Serialize(current, CapacitorJsonContext.Default.AgentPidRecord);
+        var unknownJson = System.Text.RegularExpressions.Regex.Replace(
+            json, "\"identity_kind\"\\s*:\\s*\"[A-Za-z]+\"", "\"identity_kind\":99");
+        await Assert.That(unknownJson).Contains("\"identity_kind\":99");
+
+        // A healthy record alongside proves the sweep CONTINUES past the bad one.
+        store.Write(Rec("healthy"));
+        File.WriteAllText(Path.Combine(agentsDir, "unknownkind.json"), unknownJson);
+
+        var all = store.ReadAll();
+        await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "healthy" });
+        await Assert.That(File.Exists(Path.Combine(agentsDir, "unknownkind.json.corrupt"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(agentsDir, "unknownkind.json"))).IsFalse();
+    }
+
+    [Test]
     public async Task ReadAll_quarantines_identity_unavailable_with_nonempty_token_as_corrupt() {
         var dir   = NewStateDir();
         var store = new AgentPidRecordStore(dir, NullLogger.Instance);
