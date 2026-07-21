@@ -703,18 +703,17 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await fake.DisposeAsync();
     }
 
-    /// <summary>Test plan 3: kcap-flows (and a case-variant) are stripped, unknown names skipped, and
-    /// a repeated/case-varied canonical id collapses to a single server (JsonObject-keying parity).</summary>
+    /// <summary>Test plan 3a: a repeated/case-varied auto-approvable id collapses to a single server
+    /// (JsonObject-keying parity).</summary>
     [Test]
-    public async Task ReviewFlow_RecursionGuard_StripsFlows_SkipsUnknown_AndDedupsByCanonicalId() {
+    public async Task ReviewFlow_DedupsAllowlistByCanonicalId() {
         var descriptor = SyntheticDescriptor(supportsMcpServers: true);
         var fake        = new FakeAcpAgent();
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
 
-        var allowlist = new[] { "kcap-flows", "KCAP-FLOWS", "kcap-sessions", "KCAP-SESSIONS", "totally-unknown" };
-        var started = await RunSyntheticStartAsync(descriptor, fake, ReviewContext(allowlist), cts.Token);
+        var started = await RunSyntheticStartAsync(descriptor, fake, ReviewContext(["kcap-sessions", "KCAP-SESSIONS"]), cts.Token);
         var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
 
         await Assert.That(mcpServersJson).IsEqualTo(
@@ -724,6 +723,25 @@ public class AcpHostedAgentRuntimeFactoryTests {
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await started.Runtime.DisposeAsync();
         await fake.DisposeAsync();
+    }
+
+    /// <summary>Test plan 3b: an allowlist entry that is flow-starting (recursion guard), unknown, or a
+    /// non-auto-approvable write server (kcap-memory) fails the launch BEFORE spawn — the reviewer
+    /// runs under the auto-approve bridge, so a write server must never reach it. Matches the
+    /// authoritative read-only reviewer policy the orchestrator enforces for Codex.</summary>
+    [Test]
+    [Arguments("kcap-flows")]
+    [Arguments("KCAP-FLOWS")]
+    [Arguments("kcap-memory")]
+    [Arguments("kcap-workitems")]
+    [Arguments("totally-unknown")]
+    public async Task ReviewFlow_NonAutoApprovableAllowlistEntry_ThrowsBeforeSpawn(string entry) {
+        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));
+
+        // kcap-sessions is auto-approvable; the offending entry must still fail the whole launch.
+        await Assert.That(async () => await factory.StartAsync(ReviewContext(["kcap-sessions", entry]), CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(spawns()).IsEqualTo(0);
     }
 
     /// <summary>Test plan 4: a review flow missing the server url or kcap path can't build a result

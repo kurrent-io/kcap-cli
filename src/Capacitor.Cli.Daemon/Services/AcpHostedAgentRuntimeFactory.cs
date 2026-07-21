@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
@@ -50,18 +51,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
         AcpMetrics.Launches.Add(1);
 
-        // Validate + build the review-flow result channel BEFORE anything spawns. _connectionSource
-        // spawns the child process for the default (real) source, so validation placed near
-        // runtime.StartAsync below would throw AFTER spawn and leak a child; a non-default
-        // connectionSource never reaches BuildProcessStartInfo at all. This is the primary gate:
-        // it fails closed (throws) for an IsReviewFlow launch that isn't unattended-capable, isn't
-        // an owned worktree, has no ACP mcpServers support, or can't build a deliverable result
-        // channel. Returns null for a non-review launch (mcpServers stay exactly as before).
+        // Fail closed BEFORE _connectionSource spawns a child (a later gate would leak one). Null for
+        // a non-review launch; the built MCP list for a valid review flow.
         var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor);
 
-        // Auto-approve is enabled only for an owned-worktree, unattended-capable review flow. The
-        // pre-spawn validation above already refuses the other IsReviewFlow rows, so this predicate
-        // is a belt-and-suspenders recomputation of the same conditions.
         var autoApproveUnattended =
             ctx.IsReviewFlow && ctx.Work == WorkLocation.OwnedWorktree && descriptor.SupportsUnattended;
 
@@ -85,9 +78,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             autoApproveUnattended: autoApproveUnattended
         );
 
-        // A review flow sends the injected result channel + resolved allowlist; every other launch
-        // keeps the prior behavior (ctx.McpServers when the descriptor supports it, else null —
-        // null for every launch today, since no non-review caller populates ctx.McpServers).
+        // Review flow: the injected result channel + allowlist. Otherwise unchanged (null today).
         var mcpServers = ctx.IsReviewFlow
             ? reviewMcp
             : descriptor.SupportsMcpServers ? ctx.McpServers : null;
@@ -115,17 +106,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     }
 
     /// <summary>
-    /// Fail-closed validation + build of the review-flow result channel, run as the FIRST thing in
-    /// <see cref="StartAsync"/> (before any spawn). Returns <see langword="null"/> for a non-review
-    /// launch (leaving mcpServers untouched); for an <see cref="RuntimeStartContext.IsReviewFlow"/>
-    /// launch it throws unless the launch is safe to run unattended AND has a deliverable result
-    /// channel, then returns the built MCP list.
-    ///
-    /// The owned-worktree requirement is a launch precondition, NOT a filesystem sandbox: an ACP
-    /// reviewer performs its own file/shell operations with no OS containment, so confining what an
-    /// auto-approved tool can touch is a per-vendor property each reviewer child must verify live.
-    /// This gate only guarantees the reviewer's cwd is a daemon-owned throwaway, and that the
-    /// trust-at-spawn argv (appended for IsReviewFlow) is never handed to a borrowed-cwd launch.
+    /// Fail-closed validation + build of the review-flow MCP list, run as the FIRST thing in
+    /// <see cref="StartAsync"/> — before <c>_connectionSource</c> can spawn a child. Returns
+    /// <see langword="null"/> for a non-review launch; for a review flow it throws unless the launch
+    /// is safe to run unattended AND has a deliverable result channel AND every allowlist entry is an
+    /// auto-approvable read-only server, then returns the built list. Owned-worktree is a launch
+    /// precondition (a daemon-owned throwaway cwd + no trust-at-spawn on a borrowed cwd), NOT a
+    /// filesystem sandbox — containment is a per-vendor concern (see the design spec).
     /// </summary>
     static IReadOnlyList<AcpMcpServerSpec>? ValidateAndBuildReviewFlowMcp(
             RuntimeStartContext ctx, AcpVendorDescriptor descriptor) {
@@ -143,14 +130,22 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 $"Vendor '{descriptor.Vendor}' cannot host a review-flow reviewer: no ACP mcpServers support (needed for the kcap-flow-result channel).");
 
-        // All three inputs the result channel needs must be present and non-blank, or the reviewer
-        // would start with a dead channel and wedge the round. A blank agent id in particular would
-        // still yield a non-empty server list and slip past a count-only guard, so it is checked here.
+        // A blank agent id would still yield a non-empty server list and slip past a count-only guard,
+        // so all three result-channel inputs are checked (a dead channel wedges the round).
         if (string.IsNullOrWhiteSpace(ctx.ServerUrl) || string.IsNullOrWhiteSpace(ctx.CapacitorPath) || string.IsNullOrWhiteSpace(ctx.AgentId))
             throw new InvalidOperationException(
                 "Review-flow launch cannot inject the kcap-flow-result channel (missing server url / kcap path / agent id).");
 
-        return AcpReviewFlowMcp.Build(ctx);
+        // The reviewer runs under the auto-approve bridge, so the injected MCP set IS its capability
+        // boundary: resolve the allowlist through the SAME authoritative read-only reviewer policy the
+        // orchestrator applies to Codex — an unknown, flow-starting, or non-auto-approvable entry
+        // (e.g. a write server) fails the launch fast rather than being handed to an auto-approving
+        // reviewer or silently dropped.
+        if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(ctx.McpAllowlist, out var allowlistServerIds, out var rejected))
+            throw new InvalidOperationException(
+                $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
+
+        return AcpReviewFlowMcp.Build(ctx, allowlistServerIds);
     }
 
     /// <summary>

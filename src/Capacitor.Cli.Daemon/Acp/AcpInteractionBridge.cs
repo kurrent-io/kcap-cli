@@ -96,19 +96,13 @@ internal sealed partial class AcpInteractionBridge(
         // separate null-checks that could drift.
         var options = parsed.Options?.Where(o => o is not null).ToArray() ?? [];
 
-        // Unattended review-flow reviewer: never route a permission request to a human. This is an
-        // unconditional TRUST decision — it selects a least-privilege allow option and does NOT
-        // inspect or confine the tool or its target (there is no OS sandbox; the owned-worktree gate
-        // is a launch precondition, not a per-operation boundary — see AcpReviewFlowMcp / the factory).
-        // Fail closed (cancelled) when there is no unambiguous allow option to select.
+        // Unattended reviewer: auto-approve a least-privilege allow option without a human, fail
+        // closed when there's no unambiguous one. A trust decision — it does not inspect the tool.
         if (autoApproveUnattended) {
             var chosen = TrySelectLeastPrivilegeAllow(options);
 
             if (chosen is not null) {
-                // Audit fields are pinned: agentId + the selected allow Kind, plus the tool title
-                // as EXPLICITLY-untrusted, agent-supplied context. No path is logged — the bridge
-                // has no trustworthy path field (ToolCall is opaque), so a path would be a
-                // fabricated assurance of what the operation touched.
+                // Pinned audit fields; tool title is untrusted (ToolCall is opaque). No path logged.
                 LogUnattendedAutoApproved(agentId, chosen.Kind ?? "", TryGetToolTitle(parsed.ToolCall) ?? "(untitled)");
 
                 return SelectedResult(chosen);
