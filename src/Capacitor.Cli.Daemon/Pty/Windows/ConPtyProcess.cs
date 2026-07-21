@@ -177,6 +177,15 @@ public sealed class ConPtyProcess : IPtyProcess {
         var hr   = CreatePseudoConsole(size, ptyInputRead, ptyOutputWrite, 0, out var hPC);
 
         if (hr != 0) {
+            // CreatePseudoConsole takes ownership of ptyInputRead/ptyOutputWrite ONLY on success
+            // (they're closed just below in that case). On failure it owns nothing, and this throw is
+            // BEFORE the committed/try-catch cleanup scope that guards the parent pipe ends — so close
+            // ALL FOUR handles here or every failed CreatePseudoConsole leaks both ends of both pipes.
+            CloseHandle(ptyInputRead);
+            CloseHandle(ptyInputWrite);
+            CloseHandle(ptyOutputRead);
+            CloseHandle(ptyOutputWrite);
+
             throw new InvalidOperationException($"CreatePseudoConsole failed: HRESULT 0x{hr:X8}");
         }
 
@@ -310,21 +319,36 @@ public sealed class ConPtyProcess : IPtyProcess {
                     throw new InvalidOperationException($"CreateProcessW failed: {err}");
                 }
 
+                // OWNERSHIP-TRANSFER DISCIPLINE (declared outside the try so the catch can dispose
+                // whatever was constructed): each raw pipe end is transferred into its SafeFileHandle
+                // and its raw local zeroed in the SAME step, BEFORE the next owner is constructed — so
+                // the outermost catch (which closes any still-nonzero raw local) can never double-close
+                // a handle a SafeFileHandle already owns, no matter which step throws (the second wrap,
+                // a FileStream ctor, or the ConPtyProcess ctor). On any failure the catch explicitly
+                // disposes every owner it DID construct so a pipe end / stream is never leaked to GC on
+                // this fail-closed path; a FileStream owns and closes its SafeFileHandle on Dispose, and
+                // Dispose is idempotent, so disposing the stream (when present) and only otherwise the
+                // bare SafeFileHandle releases each handle exactly once.
+                SafeFileHandle? outputSafeHandle = null;
+                SafeFileHandle? inputSafeHandle  = null;
+                FileStream?     outputStream     = null;
+                FileStream?     inputStream      = null;
+
                 try {
                     CloseHandle(pi.hThread);
 
-                    var outputSafeHandle = new SafeFileHandle(ptyOutputRead, ownsHandle: true);
-                    var inputSafeHandle  = new SafeFileHandle(ptyInputWrite, ownsHandle: true);
-                    // Ownership of the two raw pipe ends is now the SafeFileHandles' — zero the raw
-                    // locals so the outermost catch can never ALSO close them (double-close) should
-                    // the FileStream wiring throw; the SafeFileHandles (then the FileStreams) own
-                    // teardown from here. Keep the output-read value in a separate local for the
-                    // _hOutputPipe peek/read alias the returned object needs.
+                    // Keep the output-read value as a plain alias for the _hOutputPipe peek/read the
+                    // returned object needs; ownership still moves to outputSafeHandle below.
                     var outputPipeRaw = ptyOutputRead;
-                    ptyOutputRead     = IntPtr.Zero;
-                    ptyInputWrite     = IntPtr.Zero;
-                    var outputStream  = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
-                    var inputStream   = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
+
+                    outputSafeHandle = new SafeFileHandle(ptyOutputRead, ownsHandle: true);
+                    ptyOutputRead    = IntPtr.Zero; // ownership moved — outer catch must not close it
+
+                    inputSafeHandle  = new SafeFileHandle(ptyInputWrite, ownsHandle: true);
+                    ptyInputWrite    = IntPtr.Zero; // ownership moved — outer catch must not close it
+
+                    outputStream = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
+                    inputStream  = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
 
                     var process = new ConPtyProcess(hPC, pi.hProcess, outputPipeRaw, outputStream, inputStream, jobHandle) { Pid = pi.dwProcessId };
                     committed = true; // hPC + both pipe ends now owned by `process` / its streams
@@ -344,6 +368,13 @@ public sealed class ConPtyProcess : IPtyProcess {
                     }
 
                     CloseHandle(pi.hProcess);
+
+                    // Release each pipe-end owner exactly once: prefer the FileStream (it owns and
+                    // closes its SafeFileHandle), else the bare SafeFileHandle if its stream was never
+                    // constructed. Ends still held as raw non-zero locals are closed by the outer catch.
+                    if (outputStream is not null) outputStream.Dispose(); else outputSafeHandle?.Dispose();
+                    if (inputStream  is not null) inputStream.Dispose();  else inputSafeHandle?.Dispose();
+
                     jobHandle.Dispose();
 
                     throw;
