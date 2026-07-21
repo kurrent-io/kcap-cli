@@ -23,6 +23,7 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
     readonly Process                 _process;
     readonly ILogger                 _logger;
     readonly bool                    _debugFrames;
+    readonly string                  _vendor;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
 
@@ -33,10 +34,11 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
     /// on, <see cref="DrainStderrAsync"/> logs full (length-capped) stderr line text at Debug instead
     /// of just its length; cursor-agent stderr can carry paths/prompt fragments/error detail.
     /// </param>
-    public AcpChildProcess(Process process, ILogger logger, bool debugFrames = false) {
+    public AcpChildProcess(Process process, ILogger logger, bool debugFrames = false, string vendor = "cursor") {
         _process     = process;
         _logger      = logger;
         _debugFrames = debugFrames;
+        _vendor      = vendor;
 
         // Fire-and-forget from the ctor's perspective — DisposeAsync cancels and (best-effort)
         // awaits it. Never let this task fault unobserved; DrainStderrAsync swallows everything
@@ -65,9 +67,9 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
                 // fragments, or error detail, so it is only logged verbatim when explicitly opted in;
                 // otherwise only its length is logged.
                 if (_debugFrames)
-                    LogStderrLineFull(AcpDebugFrameLog.Cap(line));
+                    LogStderrLineFull(_vendor, AcpDebugFrameLog.Cap(line));
                 else
-                    LogStderrLineShape(line.Length);
+                    LogStderrLineShape(_vendor, line.Length);
             }
         } catch (OperationCanceledException) {
             // Disposal requested the drain stop — expected, not an error.
@@ -176,9 +178,9 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "cursor-agent stderr: {Line}")]
-    partial void LogStderrLineFull(string line);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "{Vendor} stderr: {Line}")]
+    partial void LogStderrLineFull(string vendor, string line);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "cursor-agent stderr: {Length} chars")]
-    partial void LogStderrLineShape(int length);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "{Vendor} stderr: {Length} chars")]
+    partial void LogStderrLineShape(string vendor, int length);
 }

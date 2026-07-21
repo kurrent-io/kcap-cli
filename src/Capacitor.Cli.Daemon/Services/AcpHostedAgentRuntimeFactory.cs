@@ -222,7 +222,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
          ?? throw new InvalidOperationException($"Failed to start '{psi.FileName} {string.Join(' ', psi.ArgumentList)}' (Process.Start returned null).");
 
         var processLogger = loggerFactory.CreateLogger<AcpChildProcess>();
-        var acpProcess    = new AcpChildProcess(process, processLogger, config.DebugFrames);
+        var acpProcess    = new AcpChildProcess(process, processLogger, config.DebugFrames, descriptor.Vendor);
 
         return (process.StandardInput.BaseStream, process.StandardOutput.BaseStream, acpProcess);
     }

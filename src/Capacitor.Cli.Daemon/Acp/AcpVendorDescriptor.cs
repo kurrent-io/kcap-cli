@@ -100,19 +100,9 @@ internal static class AcpVendorDescriptors {
         SupportsMcpServers:  true
     );
 
-    /// <summary>GitHub Copilot CLI as an ACP hosted agent — spawns <c>{CopilotPath} --acp --stdio</c>
-    /// (stdio, one child per hosted agent, matching the daemon's process-ownership model). Model
-    /// selection is left to <see cref="NoOpModelSelector"/> (Copilot's ACP model surface is
-    /// unverified). <c>SupportsUnattended</c> stays <c>false</c> — the reviewer flip + trust argv are
-    /// a follow-up.
-    ///
-    /// <b>SupportsMcpServers is FALSE</b> per the live capability probe (copilot 1.0.69): its
-    /// <c>initialize</c> response advertises <c>agentCapabilities.mcpCapabilities = {http, sse}</c>
-    /// with NO stdio transport, but <see cref="Capacitor.Cli.Core.Acp.AcpMcpServerSpec"/> is
-    /// stdio-only. Advertising a capability the vendor lacks would let a reviewer launch inject a
-    /// stdio <c>kcap-flow-result</c> server Copilot can't consume, so the flag reflects reality —
-    /// the Copilot reviewer path is blocked until Copilot gains stdio MCP support or the ACP layer
-    /// gains http/sse MCP transport + a matching flow-result endpoint.</summary>
+    /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
+    /// <c>SupportsMcpServers</c> is <c>false</c>: copilot 1.0.69 advertises MCP over http/sse only,
+    /// not stdio, and <see cref="Capacitor.Cli.Core.Acp.AcpMcpServerSpec"/> is stdio-only.</summary>
     public static readonly AcpVendorDescriptor Copilot = new(
         Vendor:              "copilot",
         ResolveBinaryPath:   cfg => cfg.CopilotPath,
