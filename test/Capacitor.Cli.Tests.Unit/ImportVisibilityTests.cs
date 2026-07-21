@@ -712,6 +712,219 @@ public class ImportVisibilityTests : IDisposable {
     }
 
     // =====================================================================
+    // Section E — matrix completion (review finding): AlreadyLoaded gaps,
+    // forcePrivate × replay-status (Partial), and defaultVisibility:null,
+    // for EACH of the 7 routed sources. DRY via RoutedSourceCase + shared
+    // assertion helpers across the 6 "uniform-shaped" sources (Copilot,
+    // Gemini, Kiro, Pi, Antigravity, Cursor) — all driven the same way as
+    // Section C above (RoutedClassification + ImportSessionAsync directly).
+    // OpenCode needs a real sqlite fixture (see OpenCodeImportSourceTests /
+    // Section C above) so it's covered separately, right after this table.
+    //
+    // New + defaultVisibility set, and Partial ⇒ omit, are already fully
+    // covered for all 7 sources in Section C — not repeated here.
+    // =====================================================================
+
+    /// <summary>
+    /// One routed source's shape for the generic matrix helpers below.
+    /// <see cref="OwnPrivateStamp"/> is true for the 3 sources (Pi, Antigravity,
+    /// OpenCode — see Section C's per-vendor header comments) whose
+    /// BuildSessionStartPayload stamps a literal <c>"private"</c> whenever
+    /// <c>ForcePrivate</c> is true, REGARDLESS of classification status — vs. the
+    /// other 4, which never stamp anything under ForcePrivate (the field is
+    /// simply absent) and only ever omit vs. stamp the Step-3 org default.
+    /// </summary>
+    sealed record RoutedSourceCase(
+        string                                      Vendor,
+        Func<IImportSource>                          MakeSource,
+        Func<string, Dictionary<string, object?>>    MakeSourceMeta,
+        bool                                          OwnPrivateStamp);
+
+    static RoutedSourceCase CopilotCase() =>
+        new("copilot", () => new CopilotImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: false);
+
+    static RoutedSourceCase GeminiCase() =>
+        new("gemini", () => new GeminiImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: false);
+
+    static RoutedSourceCase KiroCase() =>
+        new("kiro", () => new KiroImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: false);
+
+    static RoutedSourceCase PiCase() =>
+        new("pi", () => new PiImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: true);
+
+    static RoutedSourceCase AntigravityCase() =>
+        new("antigravity", () => new AntigravityImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: true);
+
+    RoutedSourceCase CursorCase() =>
+        new("cursor",
+            () => new CursorImportSource(
+                Path.Combine(_tempDir, $"unused-cursor-projects-{Guid.NewGuid():N}"),
+                Path.Combine(_tempDir, $"unused-cursor-workspace-storage-{Guid.NewGuid():N}")),
+            p => new() { ["TranscriptPath"] = p, ["WorkspaceFolder"] = "/Users/me/proj" },
+            OwnPrivateStamp: false);
+
+    async Task AssertAlreadyLoadedOmitsDefaultVisibility(RoutedSourceCase rc) {
+        StubAllHookEndpoints();
+        var path = WriteTranscript($"{rc.Vendor}-already-matrix.jsonl");
+        var c = RoutedClassification($"{rc.Vendor}-already-matrix-1", ImportCommand.ClassificationStatus.AlreadyLoaded,
+            rc.MakeSourceMeta(path), totalLines: 5, vendor: rc.Vendor);
+
+        using var client = new HttpClient();
+        var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
+        await rc.MakeSource().ImportSessionAsync(c, ctx, CancellationToken.None);
+
+        await Assert.That(SessionStartBody(rc.Vendor).ContainsKey("default_visibility")).IsFalse();
+    }
+
+    async Task AssertForcePrivateWithPartialStatusUnchanged(RoutedSourceCase rc) {
+        StubAllHookEndpoints();
+        var path = WriteTranscript($"{rc.Vendor}-fp-replay-matrix.jsonl");
+        var c = RoutedClassification($"{rc.Vendor}-fp-replay-matrix-1", ImportCommand.ClassificationStatus.Partial,
+            rc.MakeSourceMeta(path), resumeFromLine: 2, vendor: rc.Vendor);
+
+        using var client = new HttpClient();
+        var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
+        await rc.MakeSource().ImportSessionAsync(c, ctx, CancellationToken.None);
+
+        var body = SessionStartBody(rc.Vendor);
+        if (rc.OwnPrivateStamp) {
+            // forcePrivate's own stamp doesn't gate on status — a replay session under
+            // forcePrivate still gets "private", same as New (Section C already pins New).
+            await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
+        } else {
+            // No own stamp: forcePrivate never injects anything for a replay status either —
+            // the field stays entirely absent, exactly like the non-forcePrivate Partial case.
+            await Assert.That(body.ContainsKey("default_visibility")).IsFalse();
+        }
+    }
+
+    async Task AssertNullDefaultVisibilityOmitsField(RoutedSourceCase rc) {
+        StubAllHookEndpoints();
+        var path = WriteTranscript($"{rc.Vendor}-null-default-matrix.jsonl");
+        var c = RoutedClassification($"{rc.Vendor}-null-default-matrix-1", ImportCommand.ClassificationStatus.New,
+            rc.MakeSourceMeta(path), vendor: rc.Vendor);
+
+        using var client = new HttpClient();
+        var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: null);
+        await rc.MakeSource().ImportSessionAsync(c, ctx, CancellationToken.None);
+
+        await Assert.That(SessionStartBody(rc.Vendor).ContainsKey("default_visibility")).IsFalse();
+    }
+
+    // --- AlreadyLoaded: missing for Gemini, Kiro, Pi, Cursor (Copilot/Antigravity/OpenCode
+    //     already have one in Section C). ---
+
+    [Test]
+    public async Task Gemini_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(GeminiCase());
+
+    [Test]
+    public async Task Kiro_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(KiroCase());
+
+    [Test]
+    public async Task Pi_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(PiCase());
+
+    [Test]
+    public async Task Cursor_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(CursorCase());
+
+    // --- forcePrivate × replay status (Partial): all 7 sources (Section C only exercised
+    //     forcePrivate with New). OpenCode's own version follows after this table. ---
+
+    [Test]
+    public async Task Copilot_forcePrivate_with_partial_status_omits_default_visibility() => await AssertForcePrivateWithPartialStatusUnchanged(CopilotCase());
+
+    [Test]
+    public async Task Gemini_forcePrivate_with_partial_status_omits_default_visibility() => await AssertForcePrivateWithPartialStatusUnchanged(GeminiCase());
+
+    [Test]
+    public async Task Kiro_forcePrivate_with_partial_status_omits_default_visibility() => await AssertForcePrivateWithPartialStatusUnchanged(KiroCase());
+
+    [Test]
+    public async Task Pi_forcePrivate_with_partial_status_keeps_existing_private_stamp() => await AssertForcePrivateWithPartialStatusUnchanged(PiCase());
+
+    [Test]
+    public async Task Antigravity_forcePrivate_with_partial_status_keeps_existing_private_stamp() => await AssertForcePrivateWithPartialStatusUnchanged(AntigravityCase());
+
+    [Test]
+    public async Task Cursor_forcePrivate_with_partial_status_omits_default_visibility() => await AssertForcePrivateWithPartialStatusUnchanged(CursorCase());
+
+    // --- defaultVisibility:null (forcePrivate:false), New: all 7 sources. OpenCode's own
+    //     version follows after this table. ---
+
+    [Test]
+    public async Task Copilot_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(CopilotCase());
+
+    [Test]
+    public async Task Gemini_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(GeminiCase());
+
+    [Test]
+    public async Task Kiro_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(KiroCase());
+
+    [Test]
+    public async Task Pi_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(PiCase());
+
+    [Test]
+    public async Task Antigravity_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(AntigravityCase());
+
+    [Test]
+    public async Task Cursor_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(CursorCase());
+
+    // --- OpenCode: needs a real sqlite fixture (own ImportSessionAsync reads the db
+    //     directly), so it's not part of the RoutedSourceCase table above. ---
+
+    [Test]
+    public async Task OpenCode_forcePrivate_with_partial_status_keeps_existing_private_stamp() {
+        using var fix = new OpenCodeDbFixture();
+        fix.AddSession("ses_vis_fp_partial", null, "/w", "T", 100);
+        fix.AddMessageWithText("ses_vis_fp_partial", "m1", "hello", 100);
+
+        // last_line_number:0 with the fixture's message present means one importable line
+        // already landed on the server (repair-replay, not New) → Partial.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+        StubAllHookEndpoints();
+        using var client = new HttpClient();
+
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
+
+        var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
+        await source.ImportSessionAsync(classified[0], ctx, CancellationToken.None);
+
+        // Same "private" stamp as the New case (OpenCode_forcePrivate_keeps_existing_private_stamp
+        // in Section C) — BuildSessionStartPayload's forcePrivate branch doesn't gate on status.
+        var body = SessionStartBody("opencode");
+        await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
+    }
+
+    [Test]
+    public async Task OpenCode_new_session_omits_default_visibility_when_null() {
+        using var fix = new OpenCodeDbFixture();
+        fix.AddSession("ses_vis_null_default", null, "/w", "T", 100);
+        fix.AddMessageWithText("ses_vis_null_default", "m1", "hello", 100);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        StubAllHookEndpoints();
+        using var client = new HttpClient();
+
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+
+        var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: null);
+        await source.ImportSessionAsync(classified[0], ctx, CancellationToken.None);
+
+        await Assert.That(SessionStartBody("opencode").ContainsKey("default_visibility")).IsFalse();
+    }
+
+    // =====================================================================
     // Section D — autoSkipExclusions never blocks on stdin.
     // =====================================================================
 
