@@ -470,7 +470,10 @@ public static class SetupCommand {
         // Step 6: Import past sessions
         AnsiConsole.Write(new Rule("[yellow]Step 6/6 — Import past sessions[/]").LeftJustified());
 
-        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(Environment.CurrentDirectory);
+        // detectPullRequest:false — Step 6 only needs (owner, name) to scope the repo import;
+        // PR/MR detection would run extra provider probes/subprocesses for nothing here.
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
+            Environment.CurrentDirectory, detectPullRequest: false);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;
@@ -478,7 +481,9 @@ public static class SetupCommand {
         // Auth requirements are satisfied when no login is required at all (provider
         // None), or the login this run just did (or already had) produced a usable,
         // non-expired token — not merely "provider != None" (Decision 9).
-        var authSatisfied = provider == AuthProvider.None || (finalTokens is not null && !finalTokens.IsExpired);
+        // "usable token" = refresh-aware (mirrors the import path's own auth): an expired but
+        // refreshable token still counts, so we don't skip the auto-import for those users.
+        var authSatisfied = provider == AuthProvider.None || await TokenStore.GetValidTokensAsync() is not null;
 
         await RunImportStepAsync(
             currentRepo, authSatisfied, skipImport, noPrompt,
