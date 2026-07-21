@@ -60,4 +60,64 @@ public class SetupDecisionsTests {
 
         await Assert.That(summary).IsEqualTo("Claude Code, Codex");
     }
+
+    // --- DecideImport (Step 6 — import past sessions) ---
+
+    [Test]
+    public async Task DecideImport_NoCurrentRepo_SkipsWithReason() {
+        var decision = SetupDecisions.DecideImport(
+            hasCurrentRepo: false, authSatisfied: true, skipImport: false, noPrompt: false,
+            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
+
+        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
+        await Assert.That(decision.SkipReason).IsEqualTo("no origin remote — skipping import");
+    }
+
+    [Test]
+    public async Task DecideImport_AuthNotSatisfied_SkipsWithReason() {
+        var decision = SetupDecisions.DecideImport(
+            hasCurrentRepo: true, authSatisfied: false, skipImport: false, noPrompt: false,
+            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
+
+        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
+        await Assert.That(decision.SkipReason).IsEqualTo("not authenticated — skipping import");
+    }
+
+    [Test]
+    public async Task DecideImport_SkipImportFlag_SkipsWithReason() {
+        var decision = SetupDecisions.DecideImport(
+            hasCurrentRepo: true, authSatisfied: true, skipImport: true, noPrompt: false,
+            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
+
+        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
+        await Assert.That(decision.SkipReason).IsEqualTo("--skip-import");
+    }
+
+    [Test]
+    public async Task DecideImport_NoPromptTrue_RunsWithoutPrompting() {
+        var decision = SetupDecisions.DecideImport(
+            hasCurrentRepo: true, authSatisfied: true, skipImport: false, noPrompt: true,
+            promptYesNo: () => throw new InvalidOperationException("must not prompt"));
+
+        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Run);
+    }
+
+    [Test]
+    public async Task DecideImport_Interactive_UserAccepts_Runs() {
+        var decision = SetupDecisions.DecideImport(
+            hasCurrentRepo: true, authSatisfied: true, skipImport: false, noPrompt: false,
+            promptYesNo: () => true);
+
+        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Run);
+    }
+
+    [Test]
+    public async Task DecideImport_Interactive_UserDeclines_SkipsWithNoReason() {
+        var decision = SetupDecisions.DecideImport(
+            hasCurrentRepo: true, authSatisfied: true, skipImport: false, noPrompt: false,
+            promptYesNo: () => false);
+
+        await Assert.That(decision.Outcome).IsEqualTo(SetupDecisions.ImportOutcome.Skip);
+        await Assert.That(decision.SkipReason).IsNull();
+    }
 }

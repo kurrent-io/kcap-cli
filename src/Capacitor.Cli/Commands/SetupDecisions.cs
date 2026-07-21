@@ -40,4 +40,29 @@ internal static class SetupDecisions {
 
         return noPrompt || promptYesNo("Install kcap for these agents (hooks, skills, instructions, MCP)?");
     }
+
+    /// <summary>Whether Step 6 (import past sessions) ran, or was skipped and why.</summary>
+    public enum ImportOutcome { Skip, Run }
+
+    /// <summary><paramref name="SkipReason"/> is null when the user simply declined the prompt.</summary>
+    public record ImportDecision(ImportOutcome Outcome, string? SkipReason);
+
+    /// <summary>
+    /// The eligibility + policy decision for Step 6 (import past sessions from the current
+    /// repository). Guard order: no resolvable current repo (no origin remote) → skip; auth
+    /// requirements unsatisfied → skip; <c>--skip-import</c> → skip; <c>--no-prompt</c> → run
+    /// without prompting (mirrors the Step-4 unified-install auto-yes under unattended setup);
+    /// otherwise the caller's interactive yes/no prompt decides.
+    /// </summary>
+    public static ImportDecision DecideImport(
+            bool hasCurrentRepo, bool authSatisfied, bool skipImport, bool noPrompt, Func<bool> promptYesNo) {
+        if (!hasCurrentRepo) return new ImportDecision(ImportOutcome.Skip, "no origin remote — skipping import");
+        if (!authSatisfied)  return new ImportDecision(ImportOutcome.Skip, "not authenticated — skipping import");
+        if (skipImport)       return new ImportDecision(ImportOutcome.Skip, "--skip-import");
+        if (noPrompt)         return new ImportDecision(ImportOutcome.Run, null);
+
+        return promptYesNo()
+            ? new ImportDecision(ImportOutcome.Run, null)
+            : new ImportDecision(ImportOutcome.Skip, null);
+    }
 }
