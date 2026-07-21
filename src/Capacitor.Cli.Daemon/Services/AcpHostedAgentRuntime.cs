@@ -239,6 +239,18 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     public string Vendor              => _vendor;
     public int    Pid                 => _process.Pid;
+
+    // Vendor-aware handshake/auth diagnostic labels. `_vendor` is the vendor KEY (e.g. "cursor"),
+    // not the binary name — so Cursor keeps its exact prior strings (binary "cursor-agent" +
+    // Team-tier hint) via an explicit branch, while any other vendor gets vendor-named generic text.
+    string DiagnosticBinary =>
+        _vendor == AcpVendorDescriptors.Cursor.Vendor ? "cursor-agent" : _vendor;
+
+    string DiagnosticAuthHint =>
+        _vendor == AcpVendorDescriptors.Cursor.Vendor
+            ? "run `cursor-agent login` and verify a Team-tier subscription"
+            : $"authenticate `{_vendor}` and verify your subscription/entitlement";
+
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;
     public bool   EmitsTerminalOutput => false;
@@ -341,12 +353,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             if (initializeResult is null) {
                 AcpMetrics.RecordFailure("handshake");
                 throw new AcpProtocolVersionException(
-                    "cursor-agent's initialize response was malformed or omitted protocolVersion; this build supports ACP protocol version 1 — update kcap or cursor-agent.");
+                    $"{DiagnosticBinary}'s initialize response was malformed or omitted protocolVersion; this build supports ACP protocol version 1 — update kcap or {DiagnosticBinary}.");
             }
             if (initializeResult.ProtocolVersion != 1) {
                 AcpMetrics.RecordFailure("handshake");
                 throw new AcpProtocolVersionException(
-                    $"cursor-agent negotiated ACP protocol version {initializeResult.ProtocolVersion}; this build supports version 1 — update kcap or cursor-agent.");
+                    $"{DiagnosticBinary} negotiated ACP protocol version {initializeResult.ProtocolVersion}; this build supports version 1 — update kcap or {DiagnosticBinary}.");
             }
 
             _negotiatedProtocolVersion = initializeResult.ProtocolVersion;
@@ -384,7 +396,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // failure is unverified, so this does NOT pattern-match specific error text (a live
             // logged-out probe is a follow-up). Never masks the original error, only annotates it.
             throw new InvalidOperationException(
-                $"ACP handshake (initialize/session-new) failed: {SanitizeForForward(ex.Message)} — if this is an auth/subscription issue, run `cursor-agent login` and verify a Team-tier subscription.",
+                $"ACP handshake (initialize/session-new) failed: {SanitizeForForward(ex.Message)} — if this is an auth/subscription issue, {DiagnosticAuthHint}.",
                 ex);
         }
 

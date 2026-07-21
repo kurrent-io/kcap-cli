@@ -772,7 +772,7 @@ KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 KCAP_CURSOR_MODEL=claude-opus-4-8 kcap daemon
 ```
 
-`KCAP_COPILOT_PATH`, `KCAP_KIRO_PATH`, `KCAP_OPENCODE_PATH`, and `KCAP_GEMINI_PATH` are **reserved** binary-path overrides for Copilot, Kiro, OpenCode, and Gemini, mirroring `KCAP_CURSOR_PATH`. They exist as plumbing for future ACP-hosted vendors — today the daemon only spawns Claude, Codex, and Cursor as hosted agents, so setting these has no observable effect yet.
+`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon now hosts Claude, Codex, Cursor, and Copilot. `KCAP_KIRO_PATH`, `KCAP_OPENCODE_PATH`, and `KCAP_GEMINI_PATH` remain **reserved** plumbing for the not-yet-hosted Kiro, OpenCode, and Gemini vendors, so setting those three has no observable effect yet.
 
 ```bash
 KCAP_COPILOT_PATH=/opt/copilot/bin/copilot kcap daemon

@@ -240,6 +240,8 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StopAsyncReleasesPort() {
         var (bridge, _) = CreateBridge();
+        TcpListener? probe    = null;
+        var          disposed = false;
 
         try {
             await bridge.StartAsync(CancellationToken.None);
@@ -249,17 +251,20 @@ public class LocalPermissionBridgeTests {
 
             // After stop, the port should accept a fresh bind. If StopAsync didn't release
             // it, this would either throw or hang.
-            var probe = new TcpListener(IPAddress.Loopback, port);
+            probe = new TcpListener(IPAddress.Loopback, port);
+            probe.Start();
 
-            try {
-                probe.Start();
-            } finally {
-                probe.Stop();
-            }
-        } finally {
-            // Ensure DisposeAsync runs even if the probe.Start() above throws — otherwise the
-            // listener / CTS leak into later tests in the same process.
+            // Keep the replacement listener bound while disposing the bridge. This reproduces
+            // the suite-level race where StopAsync released the port, another fixture claimed it,
+            // and the old listener's later Close() threw EADDRINUSE.
             await bridge.DisposeAsync();
+            disposed = true;
+        } finally {
+            probe?.Stop();
+
+            // Ensure cleanup still runs if setup or the assertion above fails. Dispose is
+            // intentionally idempotent, so retrying after a partial shutdown is safe.
+            if (!disposed) await bridge.DisposeAsync();
         }
     }
 
@@ -792,6 +797,44 @@ public class LocalPermissionBridgeTests {
             await Assert.That((int)r.StatusCode).IsEqualTo(400);
             await Assert.That(server.Calls.Count).IsEqualTo(0);
         } finally { await bridge.DisposeAsync(); }
+    }
+
+    /// <summary>Deterministic regression for the parallel-bind flake: force the FIRST bind attempt
+    /// onto an already-occupied loopback port (via the test seam) so <c>HttpListener.Start</c> throws
+    /// "address already in use" — exactly the collision concurrent starts hit — then assert the retry
+    /// recovers on a fresh port. Pre-fix behavior (no retry / retry exhausted) would leave the bridge
+    /// unbound and throw; the widened, jittered retry recovers. Serialized because it mutates a shared
+    /// static seam.</summary>
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task StartAsync_FirstAttemptAddressInUse_RetriesAndRecovers() {
+        // Hold a real loopback port open so the first HttpListener.Start on it collides.
+        var occupied     = new TcpListener(IPAddress.Loopback, 0);
+        occupied.Start();
+        var occupiedPort = ((IPEndPoint)occupied.LocalEndpoint).Port;
+
+        var reservations = 0;
+        LocalPermissionBridge.ReserveLoopbackPortOverrideForTest = () => {
+            // Attempt 1 → the occupied port (forces the address-in-use throw); later attempts → a
+            // genuinely free port so the retry can succeed.
+            if (Interlocked.Increment(ref reservations) == 1) return occupiedPort;
+
+            var probe = new TcpListener(IPAddress.Loopback, 0);
+            probe.Start();
+            try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
+        };
+
+        var (bridge, _) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            await Assert.That(bridge.BaseUrl).IsNotNull();                    // recovered despite the first collision
+            await Assert.That(reservations).IsGreaterThanOrEqualTo(2);        // it actually retried past the collision
+            await Assert.That(new Uri(bridge.BaseUrl!).Port).IsNotEqualTo(occupiedPort);
+        } finally {
+            LocalPermissionBridge.ReserveLoopbackPortOverrideForTest = null;
+            occupied.Stop();
+            await bridge.DisposeAsync();
+        }
     }
 }
 

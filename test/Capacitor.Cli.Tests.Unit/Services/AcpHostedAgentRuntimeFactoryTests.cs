@@ -885,4 +885,67 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await started.Runtime.DisposeAsync();
         await fake.DisposeAsync();
     }
+
+    // ── Copilot descriptor (hosted-agent registration) ───────────────────────────────────────────
+
+    /// <summary>Copilot spawns `copilot --acp --stdio` from `DaemonConfig.CopilotPath`.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_SpawnsAcpStdioArgv() {
+        var config = new DaemonConfig { CopilotPath = "/opt/homebrew/bin/copilot" };
+        var ctx    = MakeContext("agent-1");
+
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(AcpVendorDescriptors.Copilot, config, ctx);
+
+        await Assert.That(psi.FileName).IsEqualTo("/opt/homebrew/bin/copilot");
+        await Assert.That(psi.ArgumentList.SequenceEqual(["--acp", "--stdio"])).IsTrue();
+        await Assert.That(psi.WorkingDirectory).IsEqualTo(ctx.Worktree.Path);
+    }
+
+    /// <summary>A full StartAsync for the Copilot descriptor: handshake completes, the started
+    /// runtime's Vendor is `copilot`, and an interactive launch sends `mcpServers: []`.</summary>
+    [Test]
+    public async Task StartAsync_Copilot_Handshake_VendorCopilot_AndEmptyMcpServers() {
+        var fake = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started        = await RunSyntheticStartAsync(AcpVendorDescriptors.Copilot, fake, MakeContext("agent-1"), cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(started.Runtime.Vendor).IsEqualTo("copilot");
+        await Assert.That(mcpServersJson).IsEqualTo("[]");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Test plan item 6 (false branch): Copilot ships `SupportsMcpServers: false` (live
+    /// probe — Copilot advertises http/sse MCP, not stdio), so even a populated `ctx.McpServers` is
+    /// gated out and `session/new.mcpServers` stays `[]` — the descriptor never forwards a stdio
+    /// server the vendor can't consume.</summary>
+    [Test]
+    public async Task StartAsync_Copilot_SupportsMcpServersFalse_PopulatedContext_GatedOut() {
+        var fake = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        AcpMcpServerSpec[] mcpServers = [
+            new AcpMcpServerSpec(Name: "kcap-flow-result", Command: "kcap", Args: ["mcp", "flow-result"], Env: [])
+        ];
+        var ctx = MakeContext("agent-1") with { McpServers = mcpServers };
+
+        var started        = await RunSyntheticStartAsync(AcpVendorDescriptors.Copilot, fake, ctx, cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo("[]");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
 }

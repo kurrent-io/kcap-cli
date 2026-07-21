@@ -27,7 +27,7 @@ internal sealed partial class LocalPermissionBridge(
         ServerConnection               server,
         ILogger<LocalPermissionBridge> logger
     ) : IHostedService, IAsyncDisposable {
-    const int    MaxBindAttempts = 8;
+    const int    MaxBindAttempts = 15;
     const string PathSuffix      = "/permission-request";
 
     HttpListener?            _listener;
@@ -35,6 +35,7 @@ internal sealed partial class LocalPermissionBridge(
     CancellationTokenSource? _cts;
     string?                  _sharedToken;
     int                      _port;
+    int                      _listenerClosed;
 
     // Live per-reviewer tokens → each token's bound (read-only) kcap allowlist servers. A request on
     // a reviewer token auto-approves that reviewer's kcap tools; the shared token keeps the
@@ -66,6 +67,7 @@ internal sealed partial class LocalPermissionBridge(
             try {
                 listener.Start();
                 _listener    = listener;
+                _listenerClosed = 0;
                 _sharedToken = token;
                 _port        = port;
                 BaseUrl      = $"http://127.0.0.1:{port}/{token}";
@@ -74,6 +76,11 @@ internal sealed partial class LocalPermissionBridge(
             } catch (HttpListenerException ex) when (attempt < MaxBindAttempts && IsAddressInUse(ex)) {
                 LogBindRetry(logger, attempt, port, ex.Message);
                 listener.Close();
+                // Jittered backoff: concurrent binders (e.g. parallel tests each starting a bridge)
+                // that lose the TOCTOU race would otherwise re-probe and re-bind the same contended
+                // ephemeral port in lockstep and exhaust every attempt. A short random delay
+                // desynchronizes them so each next attempt reserves a fresh, uncontended port.
+                Thread.Sleep(Random.Shared.Next(10, 60));
             }
         }
 
@@ -89,16 +96,24 @@ internal sealed partial class LocalPermissionBridge(
 
     /// <summary>
     /// Detects "address already in use" across platforms. HttpListenerException's ErrorCode
-    /// is the underlying socket/Win32 error: 10048 = WSAEADDRINUSE (Windows), 48 = EADDRINUSE
-    /// (macOS), 98 = EADDRINUSE (Linux). Anything else (URLACL denial code 5, etc.) is not
-    /// transient and shouldn't be retried.
+    /// is the underlying socket/Win32 error: 10048 = WSAEADDRINUSE (Windows sockets), 32 =
+    /// ERROR_SHARING_VIOLATION (Windows HttpListener prefix already occupied), 48 = EADDRINUSE
+    /// (macOS), 98 = EADDRINUSE (Linux). Anything else (URLACL denial code 5, etc.) is not transient
+    /// and shouldn't be retried.
     /// </summary>
     static bool IsAddressInUse(HttpListenerException ex) =>
-        ex.ErrorCode is 10048 or 48 or 98;
+        ex.ErrorCode is 10048 or 32 or 48 or 98;
 
     public async Task StopAsync(CancellationToken cancellationToken) {
         if (_cts is not null) await _cts.CancelAsync();
-        _listener?.Stop();
+
+        // Close exactly once, before awaiting the accept loop. Stop() alone releases the port but
+        // leaves HttpListener's prefix registered until a later Close(); another bridge can claim
+        // that port in between, making the old listener's eventual Close() throw EADDRINUSE.
+        // Close() both stops the listener and unregisters its prefix as one shutdown operation.
+        var listener = _listener;
+        if (listener is not null && Interlocked.Exchange(ref _listenerClosed, 1) == 0)
+            listener.Close();
 
         if (_acceptLoop is not null) {
             try {
@@ -111,7 +126,6 @@ internal sealed partial class LocalPermissionBridge(
 
     public async ValueTask DisposeAsync() {
         await StopAsync(CancellationToken.None);
-        _listener?.Close();
         _cts?.Dispose();
     }
 
@@ -167,7 +181,14 @@ internal sealed partial class LocalPermissionBridge(
             : urlOrToken.Trim('/');
     }
 
+    /// <summary>Test seam: when set, overrides the ephemeral-port reservation so a test can force a
+    /// first-attempt "address already in use" collision and assert the retry recovers. Null in
+    /// production (no effect on the real probe). Set/reset it inside a non-parallel test.</summary>
+    internal static Func<int>? ReserveLoopbackPortOverrideForTest;
+
     static int ReserveFreeLoopbackPort() {
+        if (ReserveLoopbackPortOverrideForTest is { } overridePort) return overridePort();
+
         // HttpListener doesn't accept port 0 in its prefix; reserve a free ephemeral
         // port via TcpListener and immediately release. There's a TOCTOU window before
         // HttpListener.Start binds the same port, but on a single-user developer machine
