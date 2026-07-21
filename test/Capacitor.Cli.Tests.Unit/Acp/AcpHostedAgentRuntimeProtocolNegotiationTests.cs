@@ -44,11 +44,11 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
 
         Task _fakeRunTask = Task.CompletedTask;
 
-        public Harness(ILogger? logger = null, string agentId = "") {
+        public Harness(ILogger? logger = null, string agentId = "", string vendor = "cursor") {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, logger ?? NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, agentId: agentId);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, agentId: agentId, vendor: vendor);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
@@ -146,6 +146,65 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
         await Assert.That(ex.Message).Contains("version 1");
         await Assert.That(ex.Message).DoesNotContain("version 0");
         await Assert.That(ex.Message).DoesNotContain("cursor-agent login");
+    }
+
+    // ── Vendor-aware diagnostics: all three paths, both vendors (full-message) ────────────────────
+    // Cursor's exact strings must be byte-for-byte unchanged; a non-Cursor vendor (Copilot) must be
+    // named and carry no cursor-agent/Team-tier wording — so no single path stays hardcoded to the
+    // Cursor literal. The binary label is derived from the vendor KEY, not `_vendor` verbatim.
+
+    static async Task<string> HandshakeErrorMessage(string vendor, Action<FakeAcpAgent> arrange) {
+        await using var h = new Harness(vendor: vendor);
+        arrange(h.Fake);
+        h.StartFakeAgentLoop();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard));
+        return ex!.Message;
+    }
+
+    static readonly JsonElement MalformedInit =
+        JsonDocument.Parse("""{"protocolVersion":"not-a-number","agentCapabilities":{"loadSession":true}}""").RootElement.Clone();
+
+    [Test]
+    public async Task Diagnostics_Cursor_ProtocolMismatch_ExactMessage() {
+        var msg = await HandshakeErrorMessage("cursor", f => f.SetInitializeResult(FakeAcpAgent.BuildInitializeResult(protocolVersion: 2, loadSession: true)));
+        await Assert.That(msg).IsEqualTo("cursor-agent negotiated ACP protocol version 2; this build supports version 1 — update kcap or cursor-agent.");
+    }
+
+    [Test]
+    public async Task Diagnostics_Copilot_ProtocolMismatch_NamesCopilot() {
+        var msg = await HandshakeErrorMessage("copilot", f => f.SetInitializeResult(FakeAcpAgent.BuildInitializeResult(protocolVersion: 2, loadSession: true)));
+        await Assert.That(msg).IsEqualTo("copilot negotiated ACP protocol version 2; this build supports version 1 — update kcap or copilot.");
+        await Assert.That(msg).DoesNotContain("cursor-agent");
+    }
+
+    [Test]
+    public async Task Diagnostics_Cursor_Malformed_ExactMessage() {
+        var msg = await HandshakeErrorMessage("cursor", f => f.SetInitializeResult(MalformedInit));
+        await Assert.That(msg).IsEqualTo("cursor-agent's initialize response was malformed or omitted protocolVersion; this build supports ACP protocol version 1 — update kcap or cursor-agent.");
+    }
+
+    [Test]
+    public async Task Diagnostics_Copilot_Malformed_NamesCopilot() {
+        var msg = await HandshakeErrorMessage("copilot", f => f.SetInitializeResult(MalformedInit));
+        await Assert.That(msg).IsEqualTo("copilot's initialize response was malformed or omitted protocolVersion; this build supports ACP protocol version 1 — update kcap or copilot.");
+        await Assert.That(msg).DoesNotContain("cursor-agent");
+    }
+
+    [Test]
+    public async Task Diagnostics_Cursor_AuthFailure_KeepsExactHint() {
+        var msg = await HandshakeErrorMessage("cursor", f => f.FailNextInitialize(-32000, "Unauthorized: no active session"));
+        await Assert.That(msg).Contains("Unauthorized: no active session");
+        await Assert.That(msg).Contains("run `cursor-agent login` and verify a Team-tier subscription");
+    }
+
+    [Test]
+    public async Task Diagnostics_Copilot_AuthFailure_NamedNoCursorText() {
+        var msg = await HandshakeErrorMessage("copilot", f => f.FailNextInitialize(-32000, "Unauthorized: no active session"));
+        await Assert.That(msg).Contains("Unauthorized: no active session");
+        await Assert.That(msg).Contains("authenticate `copilot` and verify your subscription/entitlement");
+        await Assert.That(msg).DoesNotContain("cursor-agent");
+        await Assert.That(msg).DoesNotContain("Team-tier");
     }
 
     // ── Payload-free handshake/session-lifecycle Info logging ──────────────────────────────────

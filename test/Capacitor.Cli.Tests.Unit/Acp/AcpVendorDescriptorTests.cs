@@ -28,6 +28,27 @@ public class AcpVendorDescriptorTests {
     }
 
     [Test]
+    public async Task Copilot_MatchesTodaysHardCodedConstants() {
+        var descriptor = AcpVendorDescriptors.Copilot;
+
+        await Assert.That(descriptor.Vendor).IsEqualTo("copilot");
+        await Assert.That(descriptor.Argv.SequenceEqual(["--acp", "--stdio"])).IsTrue();
+        await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([])).IsTrue();
+        await Assert.That(descriptor.SupportsUnattended).IsFalse();
+        // FALSE per the live capability probe: copilot 1.0.69 advertises mcpCapabilities {http,sse}
+        // but not stdio, and AcpMcpServerSpec is stdio-only. See the descriptor's own remarks.
+        await Assert.That(descriptor.SupportsMcpServers).IsFalse();
+        await Assert.That(descriptor.ModelSelector).IsEqualTo(NoOpModelSelector.Instance);
+    }
+
+    [Test]
+    public async Task Copilot_ResolveBinaryPath_ReadsConfigCopilotPath() {
+        var config = new DaemonConfig { CopilotPath = "/opt/copilot/copilot" };
+
+        await Assert.That(AcpVendorDescriptors.Copilot.ResolveBinaryPath(config)).IsEqualTo("/opt/copilot/copilot");
+    }
+
+    [Test]
     public async Task Cursor_ResolveBinaryPath_ReadsConfigCursorPath() {
         var config = new DaemonConfig { CursorPath = "/opt/cursor/cursor-agent" };
 

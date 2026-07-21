@@ -58,6 +58,18 @@ public class DaemonRunnerCursorAvailabilityTests {
     // === Reviewer vendor override: UnattendedVendors computation ===
 
     [Test]
+    public async Task ComputeUnattendedVendors_ExcludesAvailableCopilot_SupportsUnattendedFalse() {
+        // Copilot ACP hosting is available (binary installed) but SupportsUnattended stays false
+        // until the reviewer child flips it — so it must not be override-eligible even when present.
+        IHostedAgentRuntimeFactory[] factories = [
+            new FakeRuntimeFactory("claude", isAvailable: true, supportsUnattended: true),
+            new FakeRuntimeFactory("copilot", isAvailable: true, supportsUnattended: false),
+        ];
+
+        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories)).IsEquivalentTo(["claude"]);
+    }
+
+    [Test]
     public async Task ComputeUnattendedVendors_ExcludesAvailableVendorThatCannotRunUnattended() {
         // Claude/Codex are unattended-capable PTY launchers; the (Cursor) ACP factory is
         // available (cursor-agent installed) but has no permission bridge yet, so it must be
