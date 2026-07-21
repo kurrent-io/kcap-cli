@@ -29,13 +29,23 @@ public sealed class UnixPtyProcess : IPtyProcess {
     /// managed branch's <c>chdir(cwd)</c> ran before <c>execvp</c> — a relative path with a slash
     /// must resolve the same way now that resolution happens pre-fork/pre-chdir); a bare name is
     /// searched on PATH.</summary>
-    static string ResolveExecutableAbsolutePath(string command, string cwd, IReadOnlyDictionary<string, string> childEnv) {
+    internal static string ResolveExecutableAbsolutePath(string command, string cwd, IReadOnlyDictionary<string, string> childEnv) {
         if (Path.IsPathRooted(command)) return command;
         if (command.Contains('/')) return Path.GetFullPath(command, cwd);
 
         var path = childEnv.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries)) {
-            var candidate = Path.Combine(dir, command);
+        // Split with StringSplitOptions.None (NOT RemoveEmptyEntries): POSIX treats an EMPTY
+        // PATH field (a leading/trailing ':' or an internal '::') as the current directory, and
+        // the native child does chdir(cwd) before exec — so an empty field, and any relative
+        // field, must resolve against `cwd`, matching exec-time resolution rather than dropping
+        // the field. RemoveEmptyEntries silently discarded exactly those cwd fields, so a
+        // command that only lives in cwd would have gone unfound here while the child would have
+        // exec'd it fine.
+        foreach (var entry in path.Split(':', StringSplitOptions.None)) {
+            var dir = entry.Length == 0            ? cwd
+                    : Path.IsPathRooted(entry)     ? entry
+                    :                                Path.GetFullPath(entry, cwd);
+            var candidate = Path.GetFullPath(Path.Combine(dir, command));
             if (File.Exists(candidate)) return candidate;
         }
 

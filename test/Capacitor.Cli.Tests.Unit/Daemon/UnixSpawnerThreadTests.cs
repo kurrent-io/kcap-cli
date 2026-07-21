@@ -80,6 +80,22 @@ public class UnixSpawnerThreadTests {
         }
     }
 
+    [Test]
+    public async Task Dispose_joins_the_spawner_thread_before_returning() {
+        // Regression for the dispose race (Q2): Dispose must not return — and must not dispose
+        // the BlockingCollection — until the loop thread has actually exited, otherwise it could
+        // free the queue out from under a still-running GetConsumingEnumerable(). With no spawn
+        // in flight the CompleteAdding()+Join() completes near-instantly; the assertion is that
+        // the thread is provably gone once Dispose returns. Pure managed lifecycle (the loop only
+        // parks on the empty queue — no pty_spawn, no shim), so it runs on any platform.
+        var spawner = new UnixSpawnerThread();
+        await Assert.That(spawner.IsThreadAlive).IsTrue();
+
+        spawner.Dispose();
+
+        await Assert.That(spawner.IsThreadAlive).IsFalse();
+    }
+
     static bool IsAlive(int pid) => UnixPtyInterop.kill(pid, 0) == 0;
 
     static Process StartHost(string mode) {

@@ -88,12 +88,29 @@ public sealed class UnixSpawnerThread : IDisposable {
     }
 
     /// <summary>Normal shutdown ONLY — call after every hosted agent has already been stopped.
-    /// Signals the loop to drain and stop, then joins it.</summary>
+    /// Signals the loop to drain and stop, then joins it.
+    ///
+    /// The <see cref="BlockingCollection{T}"/> is disposed ONLY once the loop thread has actually
+    /// exited. A single <c>pty_spawn</c> can block up to the native ~30s handshake deadline
+    /// (plus kill+reap), so the old 5s join could return while the loop was still inside
+    /// <c>GetConsumingEnumerable()</c> and then dispose <c>_queue</c> out from under it — a race
+    /// (and, since the run loop's outer catch is disabled while <see cref="_stopping"/>, an
+    /// unobserved <see cref="ObjectDisposedException"/>). Normal shutdown stops every agent
+    /// first, so no spawn should be in flight here and the join returns near-instantly; the
+    /// generous bound only guards the pathological in-flight case. If the bound elapses we
+    /// deliberately do NOT dispose <c>_queue</c> (leaving it to process exit) rather than free it
+    /// under a thread that may still touch it.</summary>
     public void Dispose() {
         _stopping = true;
         _queue.CompleteAdding();
-        _thread.Join(TimeSpan.FromSeconds(5));
-        _queue.Dispose();
+        // Bound comfortably above the native worst case (~30s handshake + kill/reap). Only
+        // dispose the queue once the thread is truly gone.
+        if (_thread.Join(TimeSpan.FromSeconds(45))) {
+            _queue.Dispose();
+        } else {
+            Console.Error.WriteLine(
+                "[kcap] warning: UnixSpawnerThread did not exit within 45s at dispose; leaving its queue undisposed (process is exiting).");
+        }
     }
 
     /// <summary>Test-only seam (the "unexpected spawner-thread termination fail-fasts" case):

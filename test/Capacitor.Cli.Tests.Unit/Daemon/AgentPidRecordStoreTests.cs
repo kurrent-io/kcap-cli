@@ -149,6 +149,36 @@ public class AgentPidRecordStoreTests {
     }
 
     [Test]
+    public async Task ReadAll_quarantines_a_record_with_null_start_identity_without_throwing() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        var agentsDir = Path.Combine(dir, "agents");
+        Directory.CreateDirectory(agentsDir);
+
+        // A parseable record whose start_identity is JSON null — System.Text.Json binds null to
+        // the non-nullable positional string parameter, so ReadAll used to NRE on the subsequent
+        // .Length check and abort the WHOLE sweep (OrphanReaper enumerates ReadAll() directly).
+        // Build it from the real serializer, then null the token, so this can't drift from the
+        // wire name/casing. AgentId stays non-empty and IdentityKind Present so the ONLY defect
+        // is the null token.
+        var current = new AgentPidRecord("nulltoken1", 5, "lx:boot:1", PidIdentityKind.Present,
+            "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
+        var json = System.Text.Json.JsonSerializer.Serialize(current, CapacitorJsonContext.Default.AgentPidRecord);
+        var nulledJson = System.Text.RegularExpressions.Regex.Replace(
+            json, "\"start_identity\"\\s*:\\s*\"[^\"]*\"", "\"start_identity\":null");
+        await Assert.That(nulledJson).Contains("\"start_identity\":null");
+
+        // Also drop a healthy record so we prove the sweep CONTINUES past the null one.
+        store.Write(Rec("healthy"));
+        File.WriteAllText(Path.Combine(agentsDir, "nulltoken.json"), nulledJson);
+
+        var all = store.ReadAll(); // must NOT throw
+        await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "healthy" });
+        await Assert.That(File.Exists(Path.Combine(agentsDir, "nulltoken.json.corrupt"))).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(agentsDir, "nulltoken.json"))).IsFalse();
+    }
+
+    [Test]
     public async Task ReadAll_quarantines_identity_unavailable_with_nonempty_token_as_corrupt() {
         var dir   = NewStateDir();
         var store = new AgentPidRecordStore(dir, NullLogger.Instance);
