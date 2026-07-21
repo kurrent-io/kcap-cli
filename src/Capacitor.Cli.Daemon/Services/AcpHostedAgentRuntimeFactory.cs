@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
@@ -224,14 +225,14 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
         foreach (var server in servers) {
             var args = new JsonArray();
-            foreach (var arg in server.Args) args.Add((JsonNode?)arg);
+            foreach (var arg in server.Args) args.Add(AotSafeJsonString(arg));
 
             var env = new JsonObject();
-            foreach (var item in server.Env) env[item.Name] = item.Value;
+            foreach (var item in server.Env) env[item.Name] = AotSafeJsonString(item.Value);
 
             mcpServers[server.Name] = new JsonObject {
-                ["type"]    = "stdio",
-                ["command"] = server.Command,
+                ["type"]    = AotSafeJsonString("stdio"),
+                ["command"] = AotSafeJsonString(server.Command),
                 ["args"]    = args,
                 ["env"]     = env
             };
@@ -239,6 +240,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
         return new JsonObject { ["mcpServers"] = mcpServers }.ToJsonString();
     }
+
+    /// <summary>NativeAOT has no reflection metadata for JsonValue.Create&lt;string&gt;, which is
+    /// reached by JsonObject/JsonArray string assignment even though that code works under JIT.
+    /// Parse a correctly escaped JSON string fragment so the published daemon stays on the
+    /// reflection-free JsonNode path.</summary>
+    static JsonNode AotSafeJsonString(string value) =>
+        JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 
     /// <summary>Copilot's availability filter uses flattened runtime ids (<c>server-tool</c>),
     /// not its permission-pattern syntax (<c>server(tool)</c>). Keep the result tool plus only the

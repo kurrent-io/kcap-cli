@@ -945,6 +945,31 @@ public class AcpHostedAgentRuntimeFactoryTests {
         ])).IsTrue();
     }
 
+    /// <summary>The Copilot config builder must use the NativeAOT-safe JsonNode.Parse string path,
+    /// while still escaping every server-controlled string correctly. Values chosen here cover
+    /// quotes, backslashes, and newlines in the command and environment values.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_McpConfig_AotSafeStringsRemainValidJson() {
+        var ctx = ReviewContext() with {
+            AgentId      = "agent-\"quoted\"\\line\nnext",
+            ServerUrl    = "https://kcap.test/\"quoted\"\\line\nnext",
+            CapacitorPath = "/path/with \"quote\"/kcap"
+        };
+
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx);
+        var argv = psi.ArgumentList.ToArray();
+        var configIndex = Array.IndexOf(argv, "--additional-mcp-config");
+        var root = System.Text.Json.Nodes.JsonNode.Parse(argv[configIndex + 1])!.AsObject();
+        var server = root["mcpServers"]!["kcap-flow-result"]!.AsObject();
+
+        await Assert.That(server["command"]!.GetValue<string>()).IsEqualTo("/path/with \"quote\"/kcap");
+        await Assert.That(server["env"]!["KCAP_URL"]!.GetValue<string>())
+            .IsEqualTo("https://kcap.test/\"quoted\"\\line\nnext");
+        await Assert.That(server["env"]!["KCAP_FLOW_AGENT_ID"]!.GetValue<string>())
+            .IsEqualTo("agent-\"quoted\"\\line\nnext");
+    }
+
     /// <summary>Copilot's process-level available-tools clamp removes every ambient shell/file
     /// tool, so its unattended reviewer can safely use the server's default same-machine borrowed
     /// checkout. Other ACP descriptors remain owned-worktree-only.</summary>
