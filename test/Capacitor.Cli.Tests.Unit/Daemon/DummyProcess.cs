@@ -16,8 +16,13 @@ internal sealed partial class DummyProcess : IDisposable {
     public bool HasExited => _proc.HasExited;
 
     public static DummyProcess StartSleep(int seconds, IDictionary<string, string>? env = null) {
+        // Windows: NOT `timeout /t` — it fails immediately ("ERROR: Input redirection is not
+        // supported") whenever stdin isn't a console (headless CI, redirected/closed stdin under
+        // parallel test execution), so the "sleep" process exits at once and any liveness-dependent
+        // test sees it already dead. `ping -n {N+1} 127.0.0.1` has no stdin dependency and waits ~1s
+        // between echoes (≈ N seconds), so the dummy reliably stays alive on a CI runner.
         var psi = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("cmd.exe", $"/c timeout /t {seconds} >NUL")
+            ? new ProcessStartInfo("cmd.exe", $"/c ping -n {seconds + 1} 127.0.0.1 >NUL")
             : new ProcessStartInfo("sleep", seconds.ToString());
 
         psi.UseShellExecute = false;
