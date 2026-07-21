@@ -1,6 +1,4 @@
-using System.Runtime.InteropServices;
 using Capacitor.Cli.Daemon.Pty.Unix;
-using Capacitor.Cli.Daemon.Pty.Windows;
 
 // A tiny, disposable process the OUTER test can kill and observe from the outside — the
 // mechanism the PDEATHSIG and spawner-thread-FailFast tests need (you cannot safely assert
@@ -74,23 +72,6 @@ switch (mode) {
         }
         break;
     }
-    case "win-ui-restricted-fail-closed": {
-        // Windows-only: proves ConPtyProcess.Spawn fails CLOSED when the daemon process is
-        // already inside a UI-restricted job (the classic job-nesting blocker). This MUST run
-        // out-of-process: assigning a process to a UI-restricted job is IRREVERSIBLE (Windows
-        // has no un-assign API), so doing it in the shared test host would permanently poison
-        // every later job-NESTING test in that process. This whole process is a disposable
-        // one-shot the outer test launches purely to read its exit code. Exit codes:
-        //   0  = failed CLOSED (Spawn threw, no uncontained child was created) — the GOOD case
-        //   20 = LEAKED (Spawn returned a live child despite the UI-restricted job)
-        //   30 = could not even set up the poison job (inconclusive / environment error)
-        if (!OperatingSystem.IsWindows()) {
-            Console.Error.WriteLine("win-ui-restricted-fail-closed is Windows-only");
-            return 1;
-        }
-
-        return WinUiRestrictedFailClosed.Run();
-    }
     default:
         Console.Error.WriteLine($"unknown mode: {mode}");
         return 1;
@@ -112,98 +93,5 @@ static unsafe string? CaptureOwnMacIdentity() {
         var len = 0;
         while (len < buf.Length && p[len] != 0) len++;
         return System.Text.Encoding.UTF8.GetString(p, len);
-    }
-}
-
-// Out-of-process body for the "win-ui-restricted-fail-closed" mode. Kept Windows-guarded so the
-// kernel32 P/Invokes and the ConPtyProcess.Spawn call are only reached on Windows; the whole
-// class still COMPILES on macOS/Linux (the mode's caller early-returns off-Windows, and none of
-// these bodies run there).
-[System.Runtime.Versioning.SupportedOSPlatform("windows")]
-static class WinUiRestrictedFailClosed {
-    internal static int Run() {
-        IntPtr job;
-
-        try {
-            job = CreateUiRestrictedJobAndAssignSelf();
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"SETUP-FAIL: {ex.Message}");
-
-            return 30; // could not establish the poison job — inconclusive, not a leak
-        }
-
-        try {
-            ConPtyProcess proc;
-
-            try {
-                // A UI-restricted outer job blocks a nested job from forming, so CreateProcessW
-                // (with the PROC_THREAD_ATTRIBUTE_JOB_LIST attribute) fails and Spawn throws
-                // BEFORE any child exists — the fail-closed guarantee under test.
-                proc = ConPtyProcess.Spawn("cmd.exe", ["/c", "exit"], Directory.GetCurrentDirectory());
-            } catch (Exception ex) {
-                Console.WriteLine($"FAIL-CLOSED: {ex.Message}");
-
-                return 0; // Spawn threw, no uncontained child — correct
-            }
-
-            // Reached only if Spawn returned a live process despite the UI-restricted job — an
-            // uncontained child leaked. Kill it via its own killing job before reporting.
-            Console.Error.WriteLine($"LEAKED: uncontained child pid {proc.Pid}");
-
-            try { proc.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { /* already exiting */ }
-
-            return 20;
-        } finally {
-            ConPtyInterop.CloseHandle(job);
-        }
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern IntPtr GetCurrentProcess();
-
-    // JobObjectBasicUIRestrictions (JOBOBJECTINFOCLASS = 4) with JOB_OBJECT_UILIMIT_HANDLES is the
-    // one job-limit family that genuinely blocks job nesting (it depends on desktop/window-station
-    // isolation, which conflicts with a nested job's parent already owning it). Mirrors
-    // ConPtyJobObjectTestHelper.CreateUiRestrictedJobAndAssignSelf — duplicated here because that
-    // helper lives in the test assembly, which this NativeTestHost does not reference.
-    const int  JobObjectBasicUIRestrictions = 4;
-    const uint JOB_OBJECT_UILIMIT_HANDLES   = 0x00000001;
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct JOBOBJECT_BASIC_UI_RESTRICTIONS {
-        public uint UIRestrictionsClass;
-    }
-
-    [DllImport("kernel32.dll", EntryPoint = "SetInformationJobObject", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    static extern bool SetInformationJobObjectUi(
-        IntPtr hJob, int JobObjectInformationClass, ref JOBOBJECT_BASIC_UI_RESTRICTIONS lpJobObjectInfo, uint cbJobObjectInfoLength);
-
-    static IntPtr CreateUiRestrictedJobAndAssignSelf() {
-        var job = ConPtyInterop.CreateJobObjectW(IntPtr.Zero, null);
-
-        if (job == IntPtr.Zero) {
-            throw new InvalidOperationException($"CreateJobObjectW failed: {Marshal.GetLastWin32Error()}");
-        }
-
-        var uiRestrictions = new JOBOBJECT_BASIC_UI_RESTRICTIONS { UIRestrictionsClass = JOB_OBJECT_UILIMIT_HANDLES };
-
-        if (!SetInformationJobObjectUi(
-                job, JobObjectBasicUIRestrictions, ref uiRestrictions,
-                (uint)Marshal.SizeOf<JOBOBJECT_BASIC_UI_RESTRICTIONS>())) {
-            var err = Marshal.GetLastWin32Error();
-            ConPtyInterop.CloseHandle(job);
-
-            throw new InvalidOperationException($"SetInformationJobObject (UI restrictions) failed: {err}");
-        }
-
-        if (!ConPtyInterop.AssignProcessToJobObject(job, GetCurrentProcess())) {
-            var err = Marshal.GetLastWin32Error();
-            ConPtyInterop.CloseHandle(job);
-
-            throw new InvalidOperationException($"AssignProcessToJobObject (self) failed: {err}");
-        }
-
-        return job;
     }
 }

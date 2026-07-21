@@ -17,7 +17,11 @@ internal static class ConPtyJobObjectTestHelper {
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GetCurrentProcess();
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    // EntryPoint MUST be the real kernel32 export "IsProcessInJob" — the managed name
+    // "IsProcessInJobNative" is a local alias (chosen so the public wrapper below can be named
+    // IsProcessInJob), and without an explicit EntryPoint the marshaller looks up a
+    // "IsProcessInJobNative" export that does not exist (EntryPointNotFoundException at call).
+    [DllImport("kernel32.dll", EntryPoint = "IsProcessInJob", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsProcessInJobNative(IntPtr processHandle, IntPtr jobHandle, [MarshalAs(UnmanagedType.Bool)] out bool result);
 
@@ -25,23 +29,6 @@ internal static class ConPtyJobObjectTestHelper {
     private static extern IntPtr OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, int dwProcessId);
 
     const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-
-    // JobObjectBasicUIRestrictions (JOBOBJECTINFOCLASS = 4): the one job-limit family that
-    // genuinely blocks nesting — it depends on desktop/window-station isolation, which
-    // conflicts with a nested job's parent already owning that isolation. Used only to
-    // simulate "nesting genuinely prevented" for the fail-closed test.
-    const int  JobObjectBasicUIRestrictions = 4;
-    const uint JOB_OBJECT_UILIMIT_HANDLES   = 0x00000001;
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct JOBOBJECT_BASIC_UI_RESTRICTIONS {
-        public uint UIRestrictionsClass;
-    }
-
-    [DllImport("kernel32.dll", EntryPoint = "SetInformationJobObject", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetInformationJobObjectUiRestrictions(
-        IntPtr hJob, int JobObjectInformationClass, ref JOBOBJECT_BASIC_UI_RESTRICTIONS lpJobObjectInfo, uint cbJobObjectInfoLength);
 
     /// <summary>
     /// Assigns the CURRENT (test) process into <paramref name="job"/>.
@@ -60,37 +47,6 @@ internal static class ConPtyJobObjectTestHelper {
         if (!AssignProcessToJobObject(job, GetCurrentProcess())) {
             throw new InvalidOperationException($"AssignProcessToJobObject (self) failed: {Marshal.GetLastWin32Error()}");
         }
-    }
-
-    /// <summary>
-    /// Creates a job carrying a UI-restriction limit (the classic nesting blocker) and assigns
-    /// the CURRENT process to it, so a subsequently spawned <see cref="ConPtyProcess"/> cannot
-    /// nest its own job underneath — <c>Spawn</c> must then fail closed rather than launch
-    /// uncontained.
-    /// </summary>
-    internal static IntPtr CreateUiRestrictedJobAndAssignSelf() {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-
-        var job = CreateJobObjectW(IntPtr.Zero, null);
-
-        if (job == IntPtr.Zero) {
-            throw new InvalidOperationException($"CreateJobObjectW failed: {Marshal.GetLastWin32Error()}");
-        }
-
-        var uiRestrictions = new JOBOBJECT_BASIC_UI_RESTRICTIONS { UIRestrictionsClass = JOB_OBJECT_UILIMIT_HANDLES };
-
-        if (!SetInformationJobObjectUiRestrictions(
-                job, JobObjectBasicUIRestrictions, ref uiRestrictions,
-                (uint)Marshal.SizeOf<JOBOBJECT_BASIC_UI_RESTRICTIONS>())) {
-            var err = Marshal.GetLastWin32Error();
-            CloseHandle(job);
-
-            throw new InvalidOperationException($"SetInformationJobObject (UI restrictions) failed: {err}");
-        }
-
-        AssignSelfToJob(job);
-
-        return job;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

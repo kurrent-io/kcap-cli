@@ -83,59 +83,33 @@ public class ConPtyJobObjectTests {
     }
 
     [Test]
-    public async Task Job_creation_failure_fails_the_spawn_closed() {
+    public async Task Spawn_fails_closed_when_create_process_fails() {
         if (!OperatingSystem.IsWindows()) return;
 
-        // "Nesting genuinely prevented": a process inside a UI-restricted job cannot form a
-        // nested job, so ConPtyProcess.Spawn must fail CLOSED (throw, no uncontained child)
-        // rather than silently launch one.
-        //
-        // This assertion runs OUT-OF-PROCESS, in a disposable NativeTestHost, precisely because
-        // assigning a process to a UI-restricted job is IRREVERSIBLE (Windows has no un-assign
-        // API). Doing it in THIS shared test host — as an earlier in-process version did — would
-        // permanently poison later job NESTING and make Disposing_the_process_kills_child_and_grandchild
-        // and Job_sets_no_breakaway_flag... throw whenever they were scheduled after it. [NotInParallel]
-        // + ordering cannot fix an irreversible mutation, so the poisoning lives in its own process
-        // (the same pattern the Linux PDEATHSIG/FailFast tests use). The child assigns ITSELF to a
-        // UI-restricted job, attempts a real Spawn, and exits: 0 = failed closed (Spawn threw),
-        // 20 = leaked an uncontained child, 30 = could not set up the poison job.
-        using var host   = StartHost("win-ui-restricted-fail-closed");
-        var       exited = host.WaitForExit(30000);
+        // Fail-closed guarantee: when CreateProcessW fails, ConPtyProcess.Spawn disposes the job
+        // handle and throws BEFORE returning — a hosted agent is NEVER left spawned uncontained.
+        // We force CreateProcessW to fail deterministically by pointing at a NONEXISTENT
+        // executable. That exercises the SAME `if (!CreateProcessW(...)) { jobHandle.Dispose();
+        // throw; }` arm the old UI-restricted-job scenario aimed at — but without that scenario's
+        // FALSE premise (on Windows 8+ a UI-restricted job does NOT block nested-job containment;
+        // CI proved the child was actually contained and the scenario's "leak" verdict was wrong).
+        // A bad-exe failure creates NO process (nothing to leak) and mutates NO global job state,
+        // so unlike the UI-restricted job (irreversible, host-poisoning) this runs safely
+        // in-process rather than in a disposable NativeTestHost.
+        var missing = $"C:\\kcap-nonexistent-{Guid.NewGuid():N}.exe";
 
-        await Assert.That(exited).IsTrue();
-        await Assert.That(host.ExitCode).IsEqualTo(0); // 0 == proven fail-closed
+        var threw = false;
+        try {
+            await using var proc = ConPtyProcess.Spawn(missing, [], Directory.GetCurrentDirectory());
+        } catch (InvalidOperationException) {
+            threw = true; // Spawn threw → failed closed, no uncontained child created
+        }
+
+        await Assert.That(threw).IsTrue();
     }
 
     static bool IsProcessAlive(int pid) {
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch { return false; }
-    }
-
-    // Launches the sibling NativeTestHost project as a separate process running <paramref
-    // name="mode"/>. Mirrors UnixSpawnerThreadTests' helper (kept local rather than shared to
-    // avoid touching those tests); the fail-closed proof reads only the child's exit code.
-    static Process StartHost(string mode) {
-        var dll = ResolveNativeHostDll();
-        var psi = new ProcessStartInfo("dotnet", $"\"{dll}\" {mode}") {
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-        };
-
-        return Process.Start(psi) ?? throw new InvalidOperationException("failed to start NativeTestHost");
-    }
-
-    static string ResolveNativeHostDll() {
-        var dir      = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-        var tfm      = Path.GetFileName(dir);
-        var config   = Path.GetFileName(Path.GetDirectoryName(dir)!);
-        var testRoot = Path.GetFullPath(Path.Combine(dir, "..", "..", "..", ".."));
-        var hostDll  = Path.Combine(testRoot, "Capacitor.Cli.Tests.Unit.NativeTestHost", "bin", config, tfm,
-            "Capacitor.Cli.Tests.Unit.NativeTestHost.dll");
-
-        if (!File.Exists(hostDll))
-            throw new InvalidOperationException($"NativeTestHost not built at {hostDll} — build Capacitor.slnx first");
-
-        return hostDll;
     }
 }
