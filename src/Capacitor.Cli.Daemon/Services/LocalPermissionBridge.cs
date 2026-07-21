@@ -172,7 +172,14 @@ internal sealed partial class LocalPermissionBridge(
             : urlOrToken.Trim('/');
     }
 
+    /// <summary>Test seam: when set, overrides the ephemeral-port reservation so a test can force a
+    /// first-attempt "address already in use" collision and assert the retry recovers. Null in
+    /// production (no effect on the real probe). Set/reset it inside a non-parallel test.</summary>
+    internal static Func<int>? ReserveLoopbackPortOverrideForTest;
+
     static int ReserveFreeLoopbackPort() {
+        if (ReserveLoopbackPortOverrideForTest is { } overridePort) return overridePort();
+
         // HttpListener doesn't accept port 0 in its prefix; reserve a free ephemeral
         // port via TcpListener and immediately release. There's a TOCTOU window before
         // HttpListener.Start binds the same port, but on a single-user developer machine

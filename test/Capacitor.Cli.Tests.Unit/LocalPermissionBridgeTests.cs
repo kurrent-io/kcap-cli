@@ -794,24 +794,41 @@ public class LocalPermissionBridgeTests {
         } finally { await bridge.DisposeAsync(); }
     }
 
-    /// <summary>Regression for the parallel-bind flake: many bridges starting at once (as the full
-    /// parallel test suite does) must each reserve a distinct loopback port without an
-    /// "Address already in use" throw. Pre-fix, the zero-backoff bind retry let concurrent starts
-    /// re-race the same contended ephemeral port in lockstep and exhaust every attempt; the jittered
-    /// backoff desynchronizes them. Deliberately NOT serialized — the concurrency IS the test.</summary>
-    [Test]
-    public async Task ConcurrentStarts_AllBindDistinctPorts_WithoutAddressInUse() {
-        const int N = 12;
-        var bridges = Enumerable.Range(0, N).Select(_ => CreateBridge().bridge).ToArray();
+    /// <summary>Deterministic regression for the parallel-bind flake: force the FIRST bind attempt
+    /// onto an already-occupied loopback port (via the test seam) so <c>HttpListener.Start</c> throws
+    /// "address already in use" — exactly the collision concurrent starts hit — then assert the retry
+    /// recovers on a fresh port. Pre-fix behavior (no retry / retry exhausted) would leave the bridge
+    /// unbound and throw; the widened, jittered retry recovers. Serialized because it mutates a shared
+    /// static seam.</summary>
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task StartAsync_FirstAttemptAddressInUse_RetriesAndRecovers() {
+        // Hold a real loopback port open so the first HttpListener.Start on it collides.
+        var occupied     = new TcpListener(IPAddress.Loopback, 0);
+        occupied.Start();
+        var occupiedPort = ((IPEndPoint)occupied.LocalEndpoint).Port;
 
+        var reservations = 0;
+        LocalPermissionBridge.ReserveLoopbackPortOverrideForTest = () => {
+            // Attempt 1 → the occupied port (forces the address-in-use throw); later attempts → a
+            // genuinely free port so the retry can succeed.
+            if (Interlocked.Increment(ref reservations) == 1) return occupiedPort;
+
+            var probe = new TcpListener(IPAddress.Loopback, 0);
+            probe.Start();
+            try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
+        };
+
+        var (bridge, _) = CreateBridge();
         try {
-            await Task.WhenAll(bridges.Select(b => b.StartAsync(CancellationToken.None)));
+            await bridge.StartAsync(CancellationToken.None);
 
-            var ports = bridges.Select(b => new Uri(b.BaseUrl!).Port).ToArray();
-            await Assert.That(ports.All(p => p > 0)).IsTrue();       // every bridge bound
-            await Assert.That(ports.Distinct().Count()).IsEqualTo(N); // and to distinct ports
+            await Assert.That(bridge.BaseUrl).IsNotNull();                    // recovered despite the first collision
+            await Assert.That(reservations).IsGreaterThanOrEqualTo(2);        // it actually retried past the collision
+            await Assert.That(new Uri(bridge.BaseUrl!).Port).IsNotEqualTo(occupiedPort);
         } finally {
-            foreach (var b in bridges) await b.DisposeAsync();
+            LocalPermissionBridge.ReserveLoopbackPortOverrideForTest = null;
+            occupied.Stop();
+            await bridge.DisposeAsync();
         }
     }
 }
