@@ -14,11 +14,16 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>ctx</c> fields (validated non-blank) rather than <c>DaemonConfig</c>, matching the factory.
 /// </summary>
 internal static class AcpReviewFlowMcp {
+    /// <summary>The reserved result-channel server id. Always injected here, so it is NOT a
+    /// <see cref="KcapMcpRegistry"/> entry — callers drop it from the reviewer allowlist as a no-op
+    /// before validating the rest (the server's dynamic-flow policy may list it explicitly).</summary>
+    internal const string ResultChannelId = "kcap-flow-result";
+
     internal static IReadOnlyList<AcpMcpServerSpec> Build(RuntimeStartContext ctx, IReadOnlyList<string> allowlistServerIds) {
         // The result channel: both env vars are mandatory (the flow-result MCP server exits when
         // KCAP_FLOW_AGENT_ID is absent). KCAP_FLOW_AGENT_ID is exclusive to it.
         var servers = new List<AcpMcpServerSpec> {
-            new("kcap-flow-result", ctx.CapacitorPath, ["mcp", "flow-result"],
+            new(ResultChannelId, ctx.CapacitorPath, ["mcp", "flow-result"],
                 [new("KCAP_URL", ctx.ServerUrl!), new("KCAP_FLOW_AGENT_ID", ctx.AgentId)])
         };
 

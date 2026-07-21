@@ -140,8 +140,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // boundary: resolve the allowlist through the SAME authoritative read-only reviewer policy the
         // orchestrator applies to Codex — an unknown, flow-starting, or non-auto-approvable entry
         // (e.g. a write server) fails the launch fast rather than being handed to an auto-approving
-        // reviewer or silently dropped.
-        if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(ctx.McpAllowlist, out var allowlistServerIds, out var rejected))
+        // reviewer or silently dropped. The reserved kcap-flow-result id (always injected by Build,
+        // and legitimately listed by the server's dynamic-flow policy) is a no-op, not a rejection.
+        var reviewerAllowlist = ctx.McpAllowlist?
+            .Where(n => !string.Equals(n?.Trim(), AcpReviewFlowMcp.ResultChannelId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(reviewerAllowlist, out var allowlistServerIds, out var rejected))
             throw new InvalidOperationException(
                 $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
 

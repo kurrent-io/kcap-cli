@@ -725,6 +725,30 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await fake.DisposeAsync();
     }
 
+    /// <summary>The reserved `kcap-flow-result` id (always injected separately; the server's
+    /// dynamic-flow policy legitimately lists it) is a no-op in the allowlist — not a rejection —
+    /// and is not double-injected.</summary>
+    [Test]
+    public async Task ReviewFlow_ReservedFlowResultIdInAllowlist_IsNoOp_NotRejected() {
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
+        var fake        = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started = await RunSyntheticStartAsync(descriptor, fake, ReviewContext(["kcap-flow-result", "KCAP-FLOW-RESULT", "kcap-review"]), cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        // Exactly one flow-result server + kcap-review; the redundant allowlist entries are dropped.
+        await Assert.That(mcpServersJson).IsEqualTo(
+            """[{"name":"kcap-flow-result","command":"/usr/local/bin/kcap","args":["mcp","flow-result"],"env":[{"name":"KCAP_URL","value":"http://kcap.test"},{"name":"KCAP_FLOW_AGENT_ID","value":"agent-1"}]},{"name":"kcap-review","command":"/usr/local/bin/kcap","args":["mcp","review"],"env":[{"name":"KCAP_URL","value":"http://kcap.test"}]}]""");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
     /// <summary>Test plan 3b: an allowlist entry that is flow-starting (recursion guard), unknown, or a
     /// non-auto-approvable write server (kcap-memory) fails the launch BEFORE spawn — the reviewer
     /// runs under the auto-approve bridge, so a write server must never reach it. Matches the
