@@ -82,6 +82,16 @@ public static class HttpClientExtensions {
 
     static string? cachedProvider;
 
+    /// <summary>
+    /// Test seam: clears the in-process discovery cache above. The cache is keyed by
+    /// nothing but process lifetime (unlike <see cref="AuthProviderCache"/>'s on-disk,
+    /// per-<c>baseUrl</c> store) — the FIRST call to <see cref="DiscoverProviderAsync"/>
+    /// in a process wins for every subsequent call regardless of <c>baseUrl</c>. A test
+    /// whose SUT calls this against its own WireMock stub must reset it first, or it can
+    /// silently observe a value cached by an earlier call against a different server.
+    /// </summary>
+    internal static void ResetProviderCacheForTesting() => cachedProvider = null;
+
     public static async Task<string> DiscoverProviderAsync(string baseUrl, CancellationToken ct = default) {
         if (cachedProvider is not null) {
             return cachedProvider;

@@ -77,6 +77,9 @@ Options:
                               error. Omit the flag to preserve the existing
                               profile setting. Default scrub keeps
                               subscription auth working.
+  --skip-import               Don't offer the Step 6 import of this repo's
+                              past sessions. Also disables the auto-import
+                              that --no-prompt now performs by default.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
@@ -85,12 +88,26 @@ copilot binary on PATH; Gemini CLI via ~/.gemini/ or the gemini binary on PATH;
 AWS Kiro CLI via ~/.kiro/ or the kiro/kiro-cli binary on PATH; Pi (badlogic/pi-mono)
 via ~/.pi/ or the pi binary on PATH; SST OpenCode via ~/.config/opencode/ (or
 ~/.local/share/opencode/) or the opencode binary on PATH; Google Antigravity via
-~/.gemini/antigravity/ or the antigravity binary on PATH. One yes/no prompt is
-shown per detected agent. Hooks are installed user-wide (Pi, OpenCode, and
-Antigravity install a plugin/hooks-block rather than a shell-hooks file).
+~/.gemini/antigravity/ or the antigravity binary on PATH. Setup lists the
+detected agents, then asks a single yes/no prompt to install kcap (hooks,
+skills, instructions, MCP) for all of them, instead of one prompt per agent.
+Hooks are installed user-wide (Pi, OpenCode, and Antigravity install a
+plugin/hooks-block rather than a shell-hooks file).
 
 When you sign in with Kurrent's hosted auth and have no tenant yet, setup can
 create one for you (organization name + workspace slug) and wait for it to go live.
+
+As a final step, setup offers to import this repository's past sessions across
+every detected agent (equivalent to `kcap import --repo .`). It's only offered
+when the current directory is a git repo with a resolvable origin remote and
+authentication requirements are satisfied (including no-auth servers, auth
+provider None); otherwise it's skipped with a one-line reason and the usual
+`kcap import` hint. Opt out with --skip-import.
+
+Behavior change: --no-prompt now auto-imports the current repository's past
+sessions too, matching the wizard's default-yes answer for this step. Existing
+unattended/scripted `kcap setup --no-prompt` invocations will start uploading
+current-repo session history unless they add --skip-import.
 
 For project-scope or post-setup re-installs, use:
 

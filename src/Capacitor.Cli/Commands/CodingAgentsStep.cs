@@ -14,7 +14,12 @@ internal static class CodingAgentsStep {
     // New-vendor fields are appended with defaults so existing (named-arg) call
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini,
     // Kiro, and Pi were all added after the original four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false, bool SkipPiMcp = false, bool SkipPiInstructions = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false, bool SkipPiMcp = false, bool SkipPiInstructions = false,
+            // Single unified install-consent decision (replaces the nine per-vendor prompts —
+            // see SetupDecisions.DecideInstallAgents). Defaults true so the pre-existing test
+            // suite (which never set this) stays source- and behavior-compatible; SetupCommand
+            // always sets it explicitly from the single detected-agents prompt.
+            bool InstallAgents = true);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -130,36 +135,51 @@ internal static class CodingAgentsStep {
             Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
-        var claudeInstalled       = HandleClaude(options, detected, paths, installers, prompt, writeLine);
-        var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
+        // Ordered early-returns — BEFORE any Handle*/HandleAgentSkills/selected work — so a
+        // decline (or a no-agents machine) guarantees zero artifact mutations. See
+        // SetupDecisions.DecideInstallAgents for how SetupCommand derives InstallAgents.
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, or Antigravity to start capturing sessions.");
+
+            return Task.FromResult(new Result(false, false, false, false, false));
+        }
+
+        if (!options.InstallAgents) {
+            writeLine("  [dim]· Skipping kcap agent setup[/]");
+
+            return Task.FromResult(new Result(false, false, false, false, false));
+        }
+
+        var claudeInstalled       = HandleClaude(options, detected, paths, installers, writeLine);
+        var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, writeLine);
         var codexNetworkApplied   = HandleCodexNetworkAccess(options, paths, installers, prompt, writeLine, codexHooksInstalled);
         var codexMcpRegistered    = HandleCodexMcp(paths, installers, writeLine, codexHooksInstalled);
-        var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
+        var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, writeLine);
         var cursorMcpRegistered   = HandleCursorMcp(options, paths, installers, writeLine, cursorHooksInstalled);
-        var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
+        var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, writeLine);
         var copilotMcpRegistered  = HandleCopilotMcp(options, paths, installers, writeLine, copilotHooksInstalled);
         var copilotInstructionsInstalled = HandleCopilotInstructions(options, paths, installers, writeLine, copilotHooksInstalled);
-        var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine, out var geminiSelected);
+        var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, writeLine, out var geminiSelected);
         var geminiMcpRegistered   = HandleGeminiMcp(options, paths, installers, writeLine, geminiHooksInstalled);
         // Instructions live in the independent ~/.gemini/GEMINI.md — gate them on the user having
         // SELECTED Gemini (not on hook-write success), so a malformed settings.json that fails the
         // shared hooks/MCP write doesn't also block healing GEMINI.md.
         var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiSelected);
-        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine, out var kiroSelected);
+        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, writeLine, out var kiroSelected);
         var kiroMcpRegistered     = HandleKiroMcp(options, paths, installers, writeLine, kiroSelected);
         // Kiro's skills live in ~/.kiro/skills (Kiro doesn't read ~/.agents/skills) and steer it toward
         // the kcap MCP tools — gate on the user having SELECTED Kiro, like the MCP registration.
         var kiroSkillsInstalled   = HandleKiroSkills(options, paths, installers, writeLine, kiroSelected);
-        var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine, out var piSelected);
+        var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, writeLine, out var piSelected);
         // Pi has no JSON MCP config: the "MCP" is a second extension file (kcap-mcp.ts) and the
         // instructions live in the independent ~/.pi/agent/AGENTS.md — gate both on the user having
         // SELECTED Pi (not on the ingest-write result) so a failed ingest write doesn't block them.
         var piMcpInstalled        = HandlePiMcp(options, paths, installers, writeLine, piSelected);
         var piInstructionsInstalled = HandlePiInstructions(options, paths, installers, writeLine, piSelected);
-        var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
+        var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, writeLine);
         var openCodeMcpRegistered      = HandleOpenCodeMcp(options, paths, installers, writeLine, openCodeExtensionInstalled);
         var openCodeInstructionsInstalled = HandleOpenCodeInstructions(options, paths, installers, writeLine, openCodeExtensionInstalled);
-        var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, prompt, writeLine, out var antigravitySelected);
+        var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, writeLine, out var antigravitySelected);
         // Antigravity's MCP (own mcp_config.json), instructions (shared GEMINI.md) and skills
         // (~/.gemini/skills) live in files SEPARATE from its hooks.json, so gate them on the user
         // having SELECTED Antigravity (opted-in + kcap on PATH), not on the hook-write succeeding.
@@ -169,12 +189,8 @@ internal static class CodingAgentsStep {
 
         // the shared ~/.agents/skills/ install is decoupled from Codex: run it
         // once when any non-Claude agent is detected, independent of that agent's hook
-        // install. Placed last so the single skills prompt follows the per-agent steps.
-        var agentSkillsInstalled  = HandleAgentSkills(options, detected, paths, installers, prompt, writeLine);
-
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, or Antigravity to start capturing sessions.");
-        }
+        // install. Placed last so it follows the per-agent steps.
+        var agentSkillsInstalled  = HandleAgentSkills(detected, paths, installers, writeLine);
 
         return Task.FromResult(
             new Result(
@@ -213,7 +229,6 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine,
             out bool           selected
         ) {
@@ -255,16 +270,8 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        var shouldInstall = options.NoPrompt || prompt("Install Kiro CLI hooks? (clones your default agent and sets it as default)");
-
-        if (!shouldInstall) {
-            // Interactive decline of the (only) Kiro prompt → skip hooks AND MCP.
-            writeLine("  [dim]· Kiro hooks not installed (you can run kcap plugin install --kiro later)[/]");
-
-            return false;
-        }
-
-        // Opted into Kiro + kcap on PATH → hooks + MCP. MCP still registers even if the clone below fails.
+        // Opted into Kiro (InstallAgents true, not skipped) + kcap on PATH → hooks + MCP. MCP still
+        // registers even if the clone below fails.
         selected = true;
 
         var ok = installers.InstallKiroHooks?.Invoke(paths.KiroHooksPath) ?? false;
@@ -358,7 +365,6 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
         if (!detected.Copilot) {
@@ -371,14 +377,6 @@ internal static class CodingAgentsStep {
 
         if (options.SkipCopilot) {
             writeLine("  [dim]· Copilot CLI hooks skipped by flag[/]");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install Copilot CLI hooks?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Copilot hooks not installed (you can run kcap plugin install --copilot later)[/]");
 
             return false;
         }
@@ -411,11 +409,10 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine,
             out bool           selected
         ) {
-        // `selected` = the user opted into Gemini (detected + not skipped + prompt-yes/NoPrompt) AND
+        // `selected` = the user opted into Gemini (detected + not skipped, InstallAgents true) AND
         // kcap is on PATH — i.e. a full Gemini integration was requested. It stays true even when the
         // hook WRITE fails (malformed shared settings.json), so the independent ~/.gemini/GEMINI.md can
         // still be healed; the bool return still reflects only actual hook-write success.
@@ -431,14 +428,6 @@ internal static class CodingAgentsStep {
 
         if (options.SkipGemini) {
             writeLine("  [dim]· Gemini CLI hooks skipped by flag[/]");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install Gemini CLI hooks?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Gemini hooks not installed (you can run kcap plugin install --gemini later)[/]");
 
             return false;
         }
@@ -473,11 +462,10 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine,
             out bool           selected
         ) {
-        // `selected` = the user opted into Pi (detected + not skipped + prompt-yes/NoPrompt) AND
+        // `selected` = the user opted into Pi (detected + not skipped, InstallAgents true) AND
         // kcap is on PATH — i.e. a full Pi integration was requested. It stays true even when the
         // ingest-extension WRITE fails, so the independent MCP-bridge extension + ~/.pi/agent/AGENTS.md
         // can still be installed; the bool return still reflects only actual ingest-write success.
@@ -498,14 +486,6 @@ internal static class CodingAgentsStep {
         }
 
         if (installers.InstallPiExtension is null) return false;
-
-        var shouldInstall = options.NoPrompt || prompt("Install the Pi extension (live session capture)?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Pi extension not installed (you can run kcap plugin install --pi later)[/]");
-
-            return false;
-        }
 
         // Pi has no shell hooks — the extensions (kcap.ts / kcap-mcp.ts) shell out to
         // the bare "kcap" command, so pi must find kcap on PATH (same precheck as the
@@ -600,7 +580,6 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
         if (!detected.OpenCode) {
@@ -618,14 +597,6 @@ internal static class CodingAgentsStep {
         }
 
         if (installers.InstallOpenCodeExtension is null) return false;
-
-        var shouldInstall = options.NoPrompt || prompt("Install the OpenCode plugin (live session capture)?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· OpenCode plugin not installed (you can run kcap plugin install --opencode later)[/]");
-
-            return false;
-        }
 
         // OpenCode has no shell hooks — the plugin (kcap.ts) shells out to the bare
         // "kcap hook --opencode" command, so OpenCode must find kcap on PATH (same
@@ -656,11 +627,10 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine,
             out bool           selected
         ) {
-        // `selected` = Antigravity opted-in (detected + not skipped + prompt-yes/NoPrompt) AND kcap on
+        // `selected` = Antigravity opted-in (detected + not skipped, InstallAgents true) AND kcap on
         // PATH; stays true even if the hooks.json write fails, so the SEPARATE mcp_config.json / shared
         // GEMINI.md / ~/.gemini/skills still install. The bool return reflects only hook-write success.
         selected = false;
@@ -680,14 +650,6 @@ internal static class CodingAgentsStep {
         }
 
         if (installers.InstallAntigravityHooks is null) return false;
-
-        var shouldInstall = options.NoPrompt || prompt("Install Antigravity hooks (live session capture)?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Antigravity hooks not installed (you can run kcap plugin install --antigravity later)[/]");
-
-            return false;
-        }
 
         // Antigravity's hooks.json runs the bare "kcap hook --antigravity" command, so
         // Antigravity must find kcap on PATH (same precheck as the OpenCode/Pi branches).
@@ -823,16 +785,14 @@ internal static class CodingAgentsStep {
     /// decoupled from Codex. Every non-Claude coding agent reads (or may read) the
     /// cross-agent skills tree, so install once when any is detected — independent of
     /// whether that agent's hooks were installed. Claude is excluded: it gets skills
-    /// through the bundled plugin, not this directory. Idempotent: skips the prompt and
-    /// the copy when the on-disk skills already match this build. The legacy
+    /// through the bundled plugin, not this directory. Idempotent: skips the copy when the
+    /// on-disk skills already match this build. The legacy
     /// <c>~/.codex/skills</c> sweep stays Codex-specific.
     /// </summary>
     static bool HandleAgentSkills(
-            Options            options,
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
         // Antigravity AND Kiro are intentionally EXCLUDED here: they read their own skills dirs
@@ -848,8 +808,8 @@ internal static class CodingAgentsStep {
         if (!anyNonClaudeDetected) return false;
 
         // Idempotent: a marker matching this build means the on-disk skills are already
-        // current — no prompt, no re-copy (mirrors PluginCommand's npm-postinstall fast
-        // path). Checked before the plugin-dir probe: current skills need no source.
+        // current — no re-copy (mirrors PluginCommand's npm-postinstall fast path).
+        // Checked before the plugin-dir probe: current skills need no source.
         if (installers.AgentSkillsCurrent?.Invoke(paths.AgentsSkillsDir) == true) {
             writeLine("  [dim]· Agent skills already up to date — no change needed[/]");
 
@@ -863,14 +823,6 @@ internal static class CodingAgentsStep {
 
         if (paths.PluginDir is null) {
             writeLine("  [yellow]⚠[/] Agent skills could not be installed (plugin directory not found).");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install kcap agent skills?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Agent skills not installed (you can run kcap plugin install --skills later)[/]");
 
             return false;
         }
@@ -908,7 +860,6 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
         if (!detected.Codex) {
@@ -921,14 +872,6 @@ internal static class CodingAgentsStep {
 
         if (options.SkipCodex) {
             writeLine("  [dim]· Codex CLI hooks skipped by flag[/]");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Codex CLI hooks not installed (you can run kcap plugin install --codex later)[/]");
 
             return false;
         }
@@ -1039,7 +982,6 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
         if (!detected.Cursor) {
@@ -1052,14 +994,6 @@ internal static class CodingAgentsStep {
 
         if (options.SkipCursor) {
             writeLine("  [dim]· Cursor hooks skipped by flag[/]");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install Cursor IDE hooks?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Cursor hooks not installed (you can run kcap plugin install --cursor later)[/]");
 
             return false;
         }
@@ -1332,7 +1266,6 @@ internal static class CodingAgentsStep {
             DetectedAgents     detected,
             Paths              paths,
             Installers         installers,
-            Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
         if (!detected.Claude) {
@@ -1345,14 +1278,6 @@ internal static class CodingAgentsStep {
 
         if (options.SkipClaude) {
             writeLine("  [dim]· Claude Code plugin skipped by flag[/]");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install Claude Code plugin (hooks, skills, memory)?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Claude Code plugin not installed (you can run kcap plugin install later)[/]");
 
             return false;
         }

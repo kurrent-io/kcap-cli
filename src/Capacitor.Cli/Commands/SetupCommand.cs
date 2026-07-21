@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
@@ -51,6 +52,7 @@ public static class SetupCommand {
         var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
         var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
+        var skipImport       = args.Contains("--skip-import");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -92,7 +94,7 @@ public static class SetupCommand {
         }
 
         // Step 1: Server
-        AnsiConsole.Write(new Rule("[yellow]Step 1/5 — Server[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 1/6 — Server[/]").LeftJustified());
         string serverUrl;
         string? preAuthToken = null;
         string  provider;
@@ -135,7 +137,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 2: Login
-        AnsiConsole.Write(new Rule("[yellow]Step 2/5 — Login[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
         if (loginComplete) {
             // WorkOS discovery already authenticated + saved the active (picked) profile.
@@ -169,7 +171,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 3: Default session visibility
-        AnsiConsole.Write(new Rule("[yellow]Step 3/5 — Default session visibility[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 3/6 — Default session visibility[/]").LeftJustified());
 
         string defaultVisibility;
 
@@ -202,7 +204,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 4: Coding agents
-        AnsiConsole.Write(new Rule("[yellow]Step 4/5 — Coding agents[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 4/6 — Coding agents[/]").LeftJustified());
         await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your coding agent CLIs.");
         await Console.Out.WriteLineAsync();
 
@@ -231,6 +233,20 @@ public static class SetupCommand {
             // Antigravity (GUI IDE) keeps state under ~/.gemini/antigravity; the PATH
             // probe covers a CLI/fresh install that hasn't created it yet.
             Antigravity: AntigravityPaths.IsInstalled() || AgentDetector.IsInstalled("antigravity"));
+
+        bool PromptYesNo(string text) =>
+            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
+
+        var detectedSummary = SetupDecisions.DetectedAgentsSummary(detected);
+
+        if (detectedSummary is not null)
+            await Console.Out.WriteLineAsync($"  Detected coding agents: {detectedSummary}");
+
+        // The single install-consent decision, replacing the nine per-vendor prompts. Made
+        // BEFORE CodingAgentsStep.Options is constructed, so it uses the LOCAL `noPrompt` (there
+        // is no `options` object yet). NoPrompt alone would not imply InstallAgents, so this must
+        // be set explicitly here or `--no-prompt` would silently stop installing agents.
+        var installAgents = SetupDecisions.DecideInstallAgents(detected, noPrompt, PromptYesNo);
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -263,7 +279,8 @@ public static class SetupCommand {
             SkipKiroMcp: skipKiroMcpFlag,
             SkipKiroSkills: skipKiroSkillsFlag,
             SkipPiMcp: skipPiMcpFlag,
-            SkipPiInstructions: skipPiInstructionsFlag);
+            SkipPiInstructions: skipPiInstructionsFlag,
+            InstallAgents: installAgents);
 
         // allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -349,9 +366,6 @@ public static class SetupCommand {
             InstallPiInstructions:    () => AgentInstructionsWriter.Write(
                 PiPaths.AgentsMd(), KcapAgentInstructions.Body));
 
-        bool PromptYesNo(string text) =>
-            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
-
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
         var installResult = await CodingAgentsStep.RunAsync(
@@ -403,7 +417,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 5: Daemon name + save
-        AnsiConsole.Write(new Rule("[yellow]Step 5/5 — Agent Daemon[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
         var    defaultName = Environment.UserName.ToLowerInvariant();
         string daemonName;
@@ -438,12 +452,49 @@ public static class SetupCommand {
         profileConfig = profileConfig with { Profiles = profiles };
         await AppConfig.SaveProfileConfig(profileConfig);
 
+        // Refresh the in-process resolved state to the exact values just
+        // saved, so any same-process work after this point (e.g. the import
+        // step) observes this server URL + profile rather than re-resolving
+        // CLI/env/repo precedence and possibly landing on something else.
+        AppConfig.SetResolvedState(serverUrl, activeName, defaultProfile);
+
         var finalTokens = await TokenStore.LoadAsync();
 
         // tell the server this user has finished CLI setup, so the dashboard
         // can flip the new-tenant welcome modal from "Waiting for CLI to register"
         // to "Registered". Best-effort — never block setup completion on this.
         await PingCliSetupAsync(serverUrl);
+
+        await Console.Out.WriteLineAsync();
+
+        // Step 6: Import past sessions
+        AnsiConsole.Write(new Rule("[yellow]Step 6/6 — Import past sessions[/]").LeftJustified());
+
+        // detectPullRequest:false — Step 6 only needs (owner, name) to scope the repo import;
+        // PR/MR detection would run extra provider probes/subprocesses for nothing here.
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
+            Environment.CurrentDirectory, detectPullRequest: false);
+        (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
+            ? (o, n)
+            : null;
+
+        // Auth requirements are satisfied when no login is required at all (provider
+        // None), or the login this run just did (or already had) produced a usable,
+        // non-expired token — not merely "provider != None" (Decision 9).
+        // "usable token" = refresh-aware (mirrors the import path's own auth): an expired but
+        // refreshable token still counts. The probe is wrapped so a token I/O / refresh failure
+        // degrades to an ineligible (best-effort) skip rather than throwing out of setup — the
+        // import path's own errors are caught inside RunImportStepAsync, and this eligibility
+        // probe (awaited outside that boundary) must be equally non-fatal.
+        var authSatisfied = await IsAuthSatisfiedAsync(
+            provider, static async () => await TokenStore.GetValidTokensAsync() is not null);
+
+        await RunImportStepAsync(
+            currentRepo, authSatisfied, skipImport, noPrompt,
+            () => AnsiConsole.Prompt(new ConfirmationPrompt("Import past sessions from this repository?") { DefaultValue = true }),
+            serverUrl, activeName, defaultVisibility);
+
+        await Console.Out.WriteLineAsync();
 
         AnsiConsole.Write(new Rule("[green]Setup complete[/]").LeftJustified());
 
@@ -488,6 +539,128 @@ public static class SetupCommand {
 
         return 0;
     }
+
+    /// <summary>
+    /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
+    /// token; any other provider needs a usable (valid-or-refreshable) token. The token probe is
+    /// injected so it's testable, and any exception it throws is treated as "not satisfied" — this
+    /// probe is awaited OUTSIDE <see cref="RunImportStepAsync"/>'s try/catch, so it must never
+    /// throw out of setup (the optional import failing must not fail <c>kcap setup</c>).
+    /// </summary>
+    internal static async Task<bool> IsAuthSatisfiedAsync(string provider, Func<Task<bool>> hasUsableToken) {
+        if (provider == AuthProvider.None) return true;
+
+        try {
+            return await hasUsableToken();
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Step 6 (import past sessions) decision + best-effort execution, extracted from
+    /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
+    /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
+    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
+    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
+    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
+    /// exit code is reported with a warning and swallowed — this method never throws and never
+    /// fails setup.
+    /// </summary>
+    internal static async Task RunImportStepAsync(
+            (string Owner, string Name)? currentRepo,
+            bool                          authSatisfied,
+            bool                          skipImport,
+            bool                          noPrompt,
+            Func<bool>                    promptYesNo,
+            string                        serverUrl,
+            string                        activeProfile,
+            string                        defaultVisibility) {
+        var decision = SetupDecisions.DecideImport(
+            currentRepo is not null, authSatisfied, skipImport, noPrompt, promptYesNo);
+
+        if (decision.Outcome == SetupDecisions.ImportOutcome.Skip) {
+            if (decision.SkipReason is not null)
+                AnsiConsole.MarkupLine($"  [dim]Skipping import — {Markup.Escape(decision.SkipReason)}.[/]");
+
+            return;
+        }
+
+        // Run: DecideImport only returns Run when hasCurrentRepo was true, so currentRepo is
+        // guaranteed non-null here.
+        var invocation = new ImportInvocation(
+            BaseUrl:            serverUrl,
+            Repo:               currentRepo!.Value,
+            DefaultVisibility:  defaultVisibility,
+            AutoSkipExclusions: true,
+            ForcePrivate:       false,
+            ActiveProfile:      activeProfile);
+
+        try {
+            var exitCode = await (ImportRunnerOverride ?? DefaultImportRunner)(invocation);
+
+            if (exitCode != 0) {
+                AnsiConsole.MarkupLine(
+                    "  [yellow]⚠[/] Import of past sessions did not complete. Run [cyan]kcap import[/] manually to retry.");
+            }
+        } catch (Exception ex) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(ex.Message)}. Run [cyan]kcap import[/] manually to retry.");
+        }
+    }
+
+    /// <summary>
+    /// The arguments Step 6 pins into its embedded <see cref="ImportCommand.HandleImport"/> call.
+    /// A record (not a bare argument list) so tests can capture and assert on it via
+    /// <see cref="ImportRunnerOverride"/> without running a real import.
+    /// </summary>
+    internal sealed record ImportInvocation(
+        string                       BaseUrl,
+        (string Owner, string Name) Repo,
+        string?                      DefaultVisibility,
+        bool                         AutoSkipExclusions,
+        bool                         ForcePrivate,
+        string                       ActiveProfile);
+
+    /// <summary>
+    /// Test seam: when set, replaces the real <see cref="ImportCommand.HandleImport"/> call made
+    /// by <see cref="RunImportStepAsync"/>. Process-global static state — tests must reset it to
+    /// null (in a finally block) after use.
+    /// </summary>
+    internal static Func<ImportInvocation, Task<int>>? ImportRunnerOverride;
+
+    static Task<int> DefaultImportRunner(ImportInvocation inv) =>
+        ImportCommand.HandleImport(
+            baseUrl:                 inv.BaseUrl,
+            filterCwd:               null,
+            filterSession:           null,
+            minLines:                15,
+            generateSummaries:       false,
+            sources:                 BuildImportSources(),
+            explicitVendorSelection: false,
+            since:                   null,
+            scope:                   new ImportScope.Repo(inv.Repo.Owner, inv.Repo.Name),
+            skipConfirmation:        true,
+            forcePrivate:            inv.ForcePrivate,
+            activeProfile:           inv.ActiveProfile,
+            currentRepo:             inv.Repo,
+            needOrgPick:             false,
+            storedOrg:               null,
+            autoSkipExclusions:      inv.AutoSkipExclusions,
+            defaultVisibility:       inv.DefaultVisibility);
+
+    /// <summary>The nine supported import sources — mirrors Program.cs's `kcap import` construction.</summary>
+    static IReadOnlyList<IImportSource> BuildImportSources() => new IImportSource[] {
+        new ClaudeImportSource(),
+        new CodexImportSource(),
+        new CursorImportSource(),
+        new CopilotImportSource(),
+        new GeminiImportSource(),
+        new KiroImportSource(),
+        new PiImportSource(),
+        new OpenCodeImportSource(),
+        new AntigravityImportSource(),
+    };
 
     static async Task<(string ServerUrl, string? PreAuthToken, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
             string[] args, bool forceDevice) {

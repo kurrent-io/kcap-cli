@@ -578,9 +578,11 @@ static class ImportCommand {
             string                        activeProfile           = "default",
             (string Owner, string Name)?  currentRepo             = null,
             bool                          needOrgPick             = false,
-            string?                       storedOrg               = null
+            string?                       storedOrg               = null,
+            bool                          autoSkipExclusions      = false,
+            string?                       defaultVisibility       = null
         ) {
-        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
         var       display    = ImportDisplay.Create();
 
         // --- Sources ---
@@ -958,8 +960,10 @@ static class ImportCommand {
             var includedPathKeys = new HashSet<string>(StringComparer.Ordinal);
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
-            // meaningfully without a TTY on stdin.
-            var canPrompt = display.Tty && !Console.IsInputRedirected;
+            // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
+            // path regardless of TTY state (e.g. the embedded `kcap setup` import call, which must
+            // never block on stdin).
+            var canPrompt = display.Tty && !Console.IsInputRedirected && !autoSkipExclusions;
 
             if (canPrompt) {
                 foreach (var (key, sessions) in excludedByRepo) {
@@ -1196,6 +1200,15 @@ static class ImportCommand {
             _                                             => (prev.Loaded, prev.Skipped, prev.Failed + 1),
         };
 
+        // The chain path builds its own New-session-start payload (ImportSingleSessionAsync)
+        // and has no ImportContext/ForcePrivate of its own to guard against — so the
+        // force-private precedence is enforced HERE, up front, rather than via a per-call
+        // invariant. Zeroing it out before a New session's session-start POST guarantees a
+        // force-private import never stamps a non-private default, even if the session later
+        // fails mid-stream (before session-end / importedSessionIds, i.e. before the post-hoc
+        // SetVisibilityNoneForAll below would ever see it).
+        var chainDefaultVisibility = forcePrivate ? null : defaultVisibility;
+
         if (chains.Count > 0) {
             display.BeginPhase($"Importing {chains.Sum(c => c.Count)} sessions");
 
@@ -1295,7 +1308,7 @@ static class ImportCommand {
                                 },
                             };
 
-                            r = await ImportChainsAsync(httpClient, baseUrl, chains, wrappedEvents, CancellationToken.None, sessionCwds);
+                            r = await ImportChainsAsync(httpClient, baseUrl, chains, wrappedEvents, CancellationToken.None, sessionCwds, chainDefaultVisibility);
 
                             // After the await, all workers have drained; mark every slot idle.
                             for (var i = 0; i < ImportWorkerCount; i++) IdleSlot(i);
@@ -1318,7 +1331,7 @@ static class ImportCommand {
                     );
                 importResult = r!;
             } else {
-                importResult = await ImportChainsAsync(httpClient, baseUrl, chains, events, CancellationToken.None, sessionCwds);
+                importResult = await ImportChainsAsync(httpClient, baseUrl, chains, events, CancellationToken.None, sessionCwds, chainDefaultVisibility);
             }
         } else {
             importResult = new(0, 0, 0);
@@ -1336,7 +1349,8 @@ static class ImportCommand {
             var importCtx = new ImportContext(
                 HttpClient: httpClient,
                 BaseUrl: baseUrl,
-                ForcePrivate: forcePrivate
+                ForcePrivate: forcePrivate,
+                DefaultVisibility: defaultVisibility
             );
 
             async Task<ImportSessionResult> ImportOne(SessionClassification c) {
@@ -2499,7 +2513,8 @@ static class ImportCommand {
             List<List<SessionClassification>> chains,
             ChainWorkerEvents                 events,
             CancellationToken                 ct,
-            IReadOnlyDictionary<string, string>? sessionCwds = null
+            IReadOnlyDictionary<string, string>? sessionCwds       = null,
+            string?                              defaultVisibility = null
         ) {
         var loaded  = 0;
         var resumed = 0;
@@ -2533,7 +2548,7 @@ static class ImportCommand {
                                 var linesSent = 0;
 
                                 try {
-                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds);
+                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds, defaultVisibility);
                                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                                     throw;
                                 } catch (Exception ex) {
@@ -2585,7 +2600,8 @@ static class ImportCommand {
             int                   slot,
             ChainWorkerEvents     events,
             CancellationToken     ct,
-            IReadOnlyDictionary<string, string>? sessionCwds = null
+            IReadOnlyDictionary<string, string>? sessionCwds       = null,
+            string?                              defaultVisibility = null
         ) {
         // Denominator for the per-slot progress bar: the number of parent-transcript
         // lines this import will POST. For a resume, only the lines past the server's
@@ -2680,6 +2696,10 @@ static class ImportCommand {
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
+        // Step 3 visibility stamp (New-only — this branch only runs for ClassificationStatus.New;
+        // Partial returned above). The caller (HandleImport) already zeroed this out under
+        // forcePrivate, so no separate check is needed here.
+        if (defaultVisibility is not null) startHook["default_visibility"]          = defaultVisibility;
 
         // best-effort git-root discovery from the (already remap-resolved) cwd, so
         // historical imports carry the same workspace_root the live hooks do. Fail-open:

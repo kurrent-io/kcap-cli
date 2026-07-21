@@ -29,7 +29,10 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Claude_detected_and_declined_skips_installer() {
+    public async Task Claude_installs_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — SetupCommand's single InstallAgents decision is the
+        // only gate now, so Claude installs regardless of what a (no longer consulted) prompt
+        // delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
@@ -44,9 +47,9 @@ public class CodingAgentsStepTests {
             writeLine: sink.Write
         );
 
-        await Assert.That(result.ClaudeInstalled).IsFalse();
-        await Assert.That(calls.ClaudeCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code") && l.Contains("not installed"));
+        await Assert.That(result.ClaudeInstalled).IsTrue();
+        await Assert.That(calls.ClaudeCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code plugin installed"));
     }
 
     [Test]
@@ -55,7 +58,9 @@ public class CodingAgentsStepTests {
         var calls       = new InstallerCalls();
         var promptCount = 0;
         var options     = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
-        var detected    = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
+        // Codex: true keeps at least one agent detected so this exercises Claude's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected    = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -120,7 +125,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Codex_detected_and_declined_skips_installer_and_trust_hint() {
+    public async Task Codex_installs_and_shows_trust_hint_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — Codex hooks install (and the trust hint prints)
+        // regardless of what a (no longer consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
@@ -135,9 +142,9 @@ public class CodingAgentsStepTests {
             writeLine: sink.Write
         );
 
-        await Assert.That(result.CodexHooksInstalled).IsFalse();
-        await Assert.That(calls.CodexHooksCalled).IsFalse();
-        await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("/hooks") && l.Contains("trust"));
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(calls.CodexHooksCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
     }
 
     [Test]
@@ -145,7 +152,9 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
+        // Claude: true keeps at least one agent detected so this exercises Codex's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -298,21 +307,23 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Agent_skills_declined_emits_hint_and_skips_install() {
+    public async Task Agent_skills_install_even_if_prompt_would_decline() {
+        // The standalone "Install kcap agent skills?" prompt is gone — folded into the single
+        // InstallAgents decision — so skills install regardless of what a (no longer consulted)
+        // prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
 
-        // Accept Cursor hooks, decline only the skills prompt.
         var result = await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
             prompt: t => !t.Contains("agent skills", StringComparison.OrdinalIgnoreCase),
             writeLine: sink.Write);
 
-        await Assert.That(result.AgentSkillsInstalled).IsFalse();
-        await Assert.That(calls.AgentSkillsCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills not installed"));
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
     }
 
     [Test]
@@ -357,9 +368,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Agent_skills_prompted_once_across_multiple_detected_agents() {
-        // A single "Install kcap agent skills?" prompt covers every skills-capable
-        // agent — not one per agent.
+    public async Task Agent_skills_installed_without_prompting_across_multiple_detected_agents() {
+        // The standalone "Install kcap agent skills?" prompt is gone — a single install covers
+        // every skills-capable agent, with no prompt call at all (not one per agent).
         var sink        = new Sink();
         var promptCount = 0;
         var calls       = new InstallerCalls();
@@ -375,7 +386,7 @@ public class CodingAgentsStepTests {
             },
             writeLine: sink.Write);
 
-        await Assert.That(promptCount).IsEqualTo(1);
+        await Assert.That(promptCount).IsEqualTo(0);
         await Assert.That(calls.AgentSkillsCalled).IsTrue();
     }
 
@@ -439,31 +450,15 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Legacy_codex_cleanup_not_invoked_when_skills_declined() {
-        // Declining the skills prompt means the new skills are NOT in place — don't
-        // strand a Codex user by sweeping their legacy folders with no replacement.
-        var sink     = new Sink();
-        var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
-
-        await RunAsync(
-            options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: t => !t.Contains("agent skills", StringComparison.OrdinalIgnoreCase),
-            writeLine: sink.Write);
-
-        await Assert.That(calls.AgentSkillsCalled).IsFalse();
-        await Assert.That(calls.LegacyCleanupCalled).IsFalse();
-    }
-
-    [Test]
-    public async Task Codex_hooks_prompt_no_longer_mentions_skills() {
-        // Skills got their own standalone prompt, so the Codex hooks prompt must
-        // not double-ask about skills.
+    public async Task Codex_hooks_no_longer_prompt_for_install_or_skills() {
+        // Per-vendor consent prompts are gone (folded into SetupCommand's single InstallAgents
+        // decision) — Codex hooks and the shared agent-skills install must proceed without ever
+        // calling `prompt` for either. (Codex's SEPARATE network-access prompt still fires once
+        // hooks install — that one intentionally remains.)
         var sink     = new Sink();
         var prompts  = new List<string>();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipCodexNetworkAccess: true);
         var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         await RunAsync(
@@ -475,8 +470,9 @@ public class CodingAgentsStepTests {
             },
             writeLine: sink.Write);
 
-        await Assert.That(prompts).Contains(p => p.Contains("Install Codex CLI hooks?"));
-        await Assert.That(prompts).DoesNotContain(p => p.Contains("agent skills", StringComparison.OrdinalIgnoreCase) && p.Contains("Codex"));
+        await Assert.That(prompts).IsEmpty();
+        await Assert.That(calls.CodexHooksCalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
     }
 
     // ── Codex sandbox network access ────────────────────────────────
@@ -1425,7 +1421,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Cursor_detected_and_declined_skips_installer() {
+    public async Task Cursor_installs_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — Cursor hooks install regardless of what a (no longer
+        // consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
@@ -1435,9 +1433,9 @@ public class CodingAgentsStepTests {
             options, detected, TestPaths(), calls.AsInstallers(),
             prompt: _ => false, writeLine: sink.Write);
 
-        await Assert.That(result.CursorHooksInstalled).IsFalse();
-        await Assert.That(calls.CursorHooksCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Cursor hooks not installed"));
+        await Assert.That(result.CursorHooksInstalled).IsTrue();
+        await Assert.That(calls.CursorHooksCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Cursor hooks installed"));
     }
 
     [Test]
@@ -1445,7 +1443,9 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
+        // Claude: true keeps at least one agent detected so this exercises Cursor's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -1521,7 +1521,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Copilot_detected_and_declined_skips_installer() {
+    public async Task Copilot_installs_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — Copilot hooks install regardless of what a (no longer
+        // consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
@@ -1531,9 +1533,9 @@ public class CodingAgentsStepTests {
             options, detected, TestPaths(), calls.AsInstallers(),
             prompt: _ => false, writeLine: sink.Write);
 
-        await Assert.That(result.CopilotHooksInstalled).IsFalse();
-        await Assert.That(calls.CopilotHooksCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot hooks not installed"));
+        await Assert.That(result.CopilotHooksInstalled).IsTrue();
+        await Assert.That(calls.CopilotHooksCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot hooks installed"));
     }
 
     [Test]
@@ -1541,7 +1543,9 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
+        // Claude: true keeps at least one agent detected so this exercises Copilot's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -1617,7 +1621,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Kiro_detected_and_declined_skips_installer() {
+    public async Task Kiro_installs_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — Kiro hooks install regardless of what a (no longer
+        // consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
@@ -1627,9 +1633,9 @@ public class CodingAgentsStepTests {
             options, detected, TestPaths(), calls.AsInstallers(),
             prompt: _ => false, writeLine: sink.Write);
 
-        await Assert.That(result.KiroHooksInstalled).IsFalse();
-        await Assert.That(calls.KiroHooksCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Kiro hooks not installed"));
+        await Assert.That(result.KiroHooksInstalled).IsTrue();
+        await Assert.That(calls.KiroHooksCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Kiro hooks installed"));
     }
 
     [Test]
@@ -1637,7 +1643,9 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: false);
+        // Claude: true keeps at least one agent detected so this exercises Kiro's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false, Kiro: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -1849,8 +1857,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Kiro_mcp_not_registered_when_hooks_declined_interactively() {
-        // An interactive "no" to the (only) Kiro prompt skips both hooks and MCP.
+    public async Task Kiro_mcp_registered_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — Kiro MCP registers (alongside hooks) regardless of
+        // what a (no longer consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
@@ -1858,9 +1867,9 @@ public class CodingAgentsStepTests {
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => false, writeLine: sink.Write);
 
-        await Assert.That(result.KiroHooksInstalled).IsFalse();
-        await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();    // decline → no MCP
-        await Assert.That(result.KiroMcpRegistered).IsFalse();
+        await Assert.That(result.KiroHooksInstalled).IsTrue();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsTrue();
+        await Assert.That(result.KiroMcpRegistered).IsTrue();
     }
 
     [Test]
@@ -1897,7 +1906,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Pi_detected_and_declined_skips_installer() {
+    public async Task Pi_installs_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — the Pi extension installs regardless of what a (no
+        // longer consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
@@ -1907,9 +1918,9 @@ public class CodingAgentsStepTests {
             options, detected, TestPaths(), calls.AsInstallers(),
             prompt: _ => false, writeLine: sink.Write);
 
-        await Assert.That(result.PiExtensionInstalled).IsFalse();
-        await Assert.That(calls.PiExtensionCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi extension not installed"));
+        await Assert.That(result.PiExtensionInstalled).IsTrue();
+        await Assert.That(calls.PiExtensionCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi extension installed"));
     }
 
     [Test]
@@ -1917,7 +1928,9 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: false);
+        // Claude: true keeps at least one agent detected so this exercises Pi's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false, Pi: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -2014,7 +2027,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task OpenCode_detected_and_declined_skips_installer() {
+    public async Task OpenCode_installs_even_if_prompt_would_decline() {
+        // The per-vendor prompt is gone — the OpenCode plugin installs regardless of what a (no
+        // longer consulted) prompt delegate would return.
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
@@ -2024,9 +2039,9 @@ public class CodingAgentsStepTests {
             options, detected, TestPaths(), calls.AsInstallers(),
             prompt: _ => false, writeLine: sink.Write);
 
-        await Assert.That(result.OpenCodeExtensionInstalled).IsFalse();
-        await Assert.That(calls.OpenCodeExtensionCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("OpenCode plugin not installed"));
+        await Assert.That(result.OpenCodeExtensionInstalled).IsTrue();
+        await Assert.That(calls.OpenCodeExtensionCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("OpenCode plugin installed"));
     }
 
     [Test]
@@ -2034,7 +2049,9 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: false);
+        // Claude: true keeps at least one agent detected so this exercises OpenCode's own
+        // "not detected" skip line rather than the distinct all-agents-absent early return.
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false, OpenCode: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -2151,6 +2168,136 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register OpenCode MCP"));
     }
 
+    // ── InstallAgents gate (single unified consent decision) ───────────────────
+
+    [Test]
+    public async Task RunAsync_InstallAgentsFalse_InstallsNothing() {
+        // A "no" to the single detected-agents prompt (InstallAgents = false) must mutate
+        // NOTHING on disk, even with every agent detected and no --skip-* flags set — every
+        // installer delegate below throws if invoked, proving none of them are reached.
+        var sink     = new Sink();
+        var detected = new DetectedAgents(Claude: true, Codex: true, Cursor: true, Copilot: true, Gemini: true, Kiro: true, Pi: true, OpenCode: true, Antigravity: true);
+        var options  = new Options(SkipClaude: false, SkipCodex: false, SkipCursor: false, SkipCopilot: false, NoPrompt: false, InstallAgents: false);
+
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            ThrowingInstallers(),
+            prompt: _ => throw new InvalidOperationException("must not prompt"),
+            writeLine: sink.Write
+        );
+
+        await Assert.That(result).IsEqualTo(new Result(false, false, false, false, false));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Skipping kcap agent setup"));
+    }
+
+    [Test]
+    public async Task RunAsync_NoAgentsDetected_EmitsWarningAndNeverPrompts() {
+        var sink         = new Sink();
+        var calls        = new InstallerCalls();
+        var detected     = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
+        var options      = new Options(SkipClaude: false, SkipCodex: false, SkipCursor: false, SkipCopilot: false, NoPrompt: false);
+        var promptCalled = false;
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => { promptCalled = true; return true; },
+            writeLine: sink.Write);
+
+        await Assert.That(result).IsEqualTo(new Result(false, false, false, false, false));
+        await Assert.That(promptCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("No supported agent CLI detected"));
+    }
+
+    // ── Kiro flag-coupling truth table (InstallAgents=true, Kiro detected, kcap on PATH) ──
+    // See spec "Per-vendor truth table" / "Kiro flag coupling" — the SkipKiro+SkipKiroMcp
+    // short-circuit must keep suppressing Kiro skills too, via `selected=false`.
+
+    [Test]
+    public async Task Kiro_truth_table_skip_hooks_only_keeps_mcp_and_skills() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();
+        await Assert.That(result.KiroMcpRegistered).IsTrue();
+        await Assert.That(result.KiroSkillsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_truth_table_skip_hooks_and_mcp_installs_nothing() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true, SkipKiroMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+        await Assert.That(result.KiroSkillsInstalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Kiro_truth_table_skip_hooks_and_skills_keeps_mcp_only() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true, SkipKiroSkills: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroMcpRegistered).IsTrue();
+        await Assert.That(result.KiroSkillsInstalled).IsFalse();
+    }
+
+    // ── Shared ~/.agents/skills eligibility ─────────────────────────────────────
+    // Kiro and Antigravity read their OWN skills dirs, not ~/.agents/skills — so their
+    // presence alone (with nothing else detected) must never trigger this shared install.
+
+    [Test]
+    public async Task Shared_skills_not_installed_when_only_kiro_detected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain("/fake/.agents/skills");
+    }
+
+    [Test]
+    public async Task Shared_skills_not_installed_when_only_antigravity_detected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Antigravity: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain("/fake/.agents/skills");
+    }
+
+    [Test]
+    public async Task Shared_skills_installed_when_only_codex_detected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).Contains("/fake/.agents/skills");
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
@@ -2178,6 +2325,38 @@ public class CodingAgentsStepTests {
         KiroSkillsDir:        "/fake/.kiro/skills",
         PiMcpExtensionPath:   "/fake/.pi/agent/extensions/kcap-mcp.ts",
         PiAgentsMdPath:       "/fake/.pi/agent/AGENTS.md"
+    );
+
+    // Every delegate throws — used to prove InstallAgents=false short-circuits RunAsync
+    // before any installer is ever invoked.
+    static Installers ThrowingInstallers() => new(
+        InstallClaudePlugin:    (_, _) => throw new InvalidOperationException("must not install Claude plugin"),
+        InstallCodexHooks:      _ => throw new InvalidOperationException("must not install Codex hooks"),
+        InstallCursorHooks:     _ => throw new InvalidOperationException("must not install Cursor hooks"),
+        InstallCopilotHooks:    _ => throw new InvalidOperationException("must not install Copilot hooks"),
+        InstallGeminiHooks:     _ => throw new InvalidOperationException("must not install Gemini hooks"),
+        CapacitorOnPath:        () => throw new InvalidOperationException("must not probe kcap on PATH"),
+        InstallAgentSkills:     (_, _) => throw new InvalidOperationException("must not install agent skills"),
+        CleanLegacyCodexSkills: _ => throw new InvalidOperationException("must not sweep legacy Codex skills"),
+        InstallKiroHooks:       _ => throw new InvalidOperationException("must not install Kiro hooks"),
+        InstallPiExtension:     _ => throw new InvalidOperationException("must not install Pi extension"),
+        InstallOpenCodeExtension: _ => throw new InvalidOperationException("must not install OpenCode extension"),
+        EnableCodexNetworkAccess: () => throw new InvalidOperationException("must not enable Codex network access"),
+        RegisterCodexMcp:         () => throw new InvalidOperationException("must not register Codex MCP"),
+        InstallAntigravityHooks:  _ => throw new InvalidOperationException("must not install Antigravity hooks"),
+        RegisterCursorMcp:        () => throw new InvalidOperationException("must not register Cursor MCP"),
+        RegisterCopilotMcp:       () => throw new InvalidOperationException("must not register Copilot MCP"),
+        InstallCopilotInstructions: () => throw new InvalidOperationException("must not install Copilot instructions"),
+        AgentSkillsCurrent:       _ => throw new InvalidOperationException("must not check agent skills marker"),
+        RegisterGeminiMcp:        () => throw new InvalidOperationException("must not register Gemini MCP"),
+        InstallGeminiInstructions: () => throw new InvalidOperationException("must not install Gemini instructions"),
+        RegisterAntigravityMcp:   () => throw new InvalidOperationException("must not register Antigravity MCP"),
+        InstallAntigravityInstructions: () => throw new InvalidOperationException("must not install Antigravity instructions"),
+        RegisterOpenCodeMcp:      () => throw new InvalidOperationException("must not register OpenCode MCP"),
+        InstallOpenCodeInstructions: () => throw new InvalidOperationException("must not install OpenCode instructions"),
+        RegisterKiroMcp:          () => throw new InvalidOperationException("must not register Kiro MCP"),
+        InstallPiMcp:             _ => throw new InvalidOperationException("must not install Pi MCP"),
+        InstallPiInstructions:    () => throw new InvalidOperationException("must not install Pi instructions")
     );
 
     sealed class Sink {
