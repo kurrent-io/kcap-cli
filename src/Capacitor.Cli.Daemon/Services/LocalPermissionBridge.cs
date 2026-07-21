@@ -27,7 +27,7 @@ internal sealed partial class LocalPermissionBridge(
         ServerConnection               server,
         ILogger<LocalPermissionBridge> logger
     ) : IHostedService, IAsyncDisposable {
-    const int    MaxBindAttempts = 8;
+    const int    MaxBindAttempts = 15;
     const string PathSuffix      = "/permission-request";
 
     HttpListener?            _listener;
@@ -74,6 +74,11 @@ internal sealed partial class LocalPermissionBridge(
             } catch (HttpListenerException ex) when (attempt < MaxBindAttempts && IsAddressInUse(ex)) {
                 LogBindRetry(logger, attempt, port, ex.Message);
                 listener.Close();
+                // Jittered backoff: concurrent binders (e.g. parallel tests each starting a bridge)
+                // that lose the TOCTOU race would otherwise re-probe and re-bind the same contended
+                // ephemeral port in lockstep and exhaust every attempt. A short random delay
+                // desynchronizes them so each next attempt reserves a fresh, uncontended port.
+                Thread.Sleep(Random.Shared.Next(10, 60));
             }
         }
 
