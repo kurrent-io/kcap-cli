@@ -202,6 +202,16 @@ static const char *find_env(char *const envp[], const char *key) {
     return NULL;
 }
 
+// Returns 1 if the open regular-file `fd` itself begins with a shebang ("#!"), else 0 (a short
+// read or any read error counts as "not a shebang" — inability to read it back as a script must
+// never be treated as a chain). Uses pread so the fd's offset is left untouched for the exec of
+// this same fd on the contained path.
+static int fd_starts_with_shebang(int fd) {
+    char two[2];
+    ssize_t r = pread(fd, two, 2, 0);
+    return (r == 2 && two[0] == '#' && two[1] == '!') ? 1 : 0;
+}
+
 // Builds the plan for a `#!interp [optarg]` (direct) or `#!/usr/bin/env NAME [...]` shebang.
 // `head`/`head_len` is the first-256-bytes sniff already read from the ORIGINAL file (script)
 // by the caller; the script fd itself is never exec'd or kept (TOCTOU rule — see spec).
@@ -232,6 +242,13 @@ static int build_shebang_plan(
 
         int fd = open(tok0, O_RDONLY | O_CLOEXEC);
         if (fd < 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
+
+        // Two-level (or deeper) script chain: the resolved interpreter is ITSELF a script (it
+        // carries its own shebang). Only a single script→native-interpreter level is containable
+        // (spec §4.2 / §4.5) — a deeper chain would have the kernel re-resolve THAT script's
+        // interpreter by pathname at runtime, which we do not preflight — so classify uncontained
+        // and let the kernel resolve the whole chain natively from the original path.
+        if (fd_starts_with_shebang(fd)) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
 
         // Rewritten argv: [interp, optarg?, script_abs_path, orig_argv[1:]...]. Guard n == 0
         // (empty orig_argv) so the (n - 1) arithmetic can't under-size the array by a slot.
@@ -299,6 +316,11 @@ static int build_shebang_plan(
     free(resolved);
     if (fd < 0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
 
+    // Same two-level-chain guard as the direct-shebang case: if the interpreter `env` resolved
+    // is itself a script, the chain is deeper than one level → uncontained (kernel/env resolve
+    // the whole chain natively from the original path).
+    if (fd_starts_with_shebang(fd)) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
+
     // Guard n == 0 (empty orig_argv) before the [name, script, orig_argv[1:]...] layout.
     int n = 0; while (orig_argv[n]) n++;
     if (n < 1) { close(fd); return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); }
@@ -331,9 +353,17 @@ int pty_preflight(const char *exe_abs_path, char *const orig_argv[], char *const
 
     int fd = open(exe_abs_path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        // The plan can't be constructed AT ALL (not even the EXEC_PATH fallback needs an open
-        // fd, but a nonexistent path fails EXEC_PATH too — execve would ENOENT identically) →
-        // -1, the one case that is a genuine preflight failure.
+        // EACCES/EPERM specifically: we can't READ the target to sniff a shebang or run the
+        // fd-bound privilege preflight — but that does NOT prove it's un-executable. An
+        // execute-only (e.g. mode 0111, no read bit) native ELF execs fine via execve on Linux
+        // without being readable, so degrade to an uncontained EXEC_PATH plan (the kernel
+        // resolves + execs the path natively; we simply forgo the fd-bound containment proof we
+        // cannot obtain, per the spec §4.2(a) "open EACCES ... degrades to EXEC_PATH-uncontained"
+        // rule). Any OTHER errno (ENOENT missing file, etc.) is a genuine "no plan can be built"
+        // failure → -1, matching the EXEC_PATH fallback's own execve, which would fail identically.
+        if (errno == EACCES || errno == EPERM) {
+            return build_execpath_plan(exe_abs_path, orig_argv, 0, out_plan);
+        }
         return -1;
     }
 
