@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
@@ -464,6 +465,28 @@ public static class SetupCommand {
         // to "Registered". Best-effort — never block setup completion on this.
         await PingCliSetupAsync(serverUrl);
 
+        await Console.Out.WriteLineAsync();
+
+        // Step 6: Import past sessions
+        AnsiConsole.Write(new Rule("[yellow]Step 6/6 — Import past sessions[/]").LeftJustified());
+
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(Environment.CurrentDirectory);
+        (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
+            ? (o, n)
+            : null;
+
+        // Auth requirements are satisfied when no login is required at all (provider
+        // None), or the login this run just did (or already had) produced a usable,
+        // non-expired token — not merely "provider != None" (Decision 9).
+        var authSatisfied = provider == AuthProvider.None || (finalTokens is not null && !finalTokens.IsExpired);
+
+        await RunImportStepAsync(
+            currentRepo, authSatisfied, skipImport, noPrompt,
+            () => AnsiConsole.Prompt(new ConfirmationPrompt("Import past sessions from this repository?") { DefaultValue = true }),
+            serverUrl, activeName, defaultVisibility);
+
+        await Console.Out.WriteLineAsync();
+
         AnsiConsole.Write(new Rule("[green]Setup complete[/]").LeftJustified());
 
         var grid = new Grid().AddColumn().AddColumn();
@@ -507,6 +530,111 @@ public static class SetupCommand {
 
         return 0;
     }
+
+    /// <summary>
+    /// Step 6 (import past sessions) decision + best-effort execution, extracted from
+    /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
+    /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
+    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
+    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
+    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
+    /// exit code is reported with a warning and swallowed — this method never throws and never
+    /// fails setup.
+    /// </summary>
+    internal static async Task RunImportStepAsync(
+            (string Owner, string Name)? currentRepo,
+            bool                          authSatisfied,
+            bool                          skipImport,
+            bool                          noPrompt,
+            Func<bool>                    promptYesNo,
+            string                        serverUrl,
+            string                        activeProfile,
+            string                        defaultVisibility) {
+        var decision = SetupDecisions.DecideImport(
+            currentRepo is not null, authSatisfied, skipImport, noPrompt, promptYesNo);
+
+        if (decision.Outcome == SetupDecisions.ImportOutcome.Skip) {
+            if (decision.SkipReason is not null)
+                AnsiConsole.MarkupLine($"  [dim]Skipping import — {Markup.Escape(decision.SkipReason)}.[/]");
+
+            return;
+        }
+
+        // Run: DecideImport only returns Run when hasCurrentRepo was true, so currentRepo is
+        // guaranteed non-null here.
+        var invocation = new ImportInvocation(
+            BaseUrl:            serverUrl,
+            Repo:               currentRepo!.Value,
+            DefaultVisibility:  defaultVisibility,
+            AutoSkipExclusions: true,
+            ForcePrivate:       false,
+            ActiveProfile:      activeProfile);
+
+        try {
+            var exitCode = await (ImportRunnerOverride ?? DefaultImportRunner)(invocation);
+
+            if (exitCode != 0) {
+                AnsiConsole.MarkupLine(
+                    "  [yellow]⚠[/] Import of past sessions did not complete. Run [cyan]kcap import[/] manually to retry.");
+            }
+        } catch (Exception ex) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(ex.Message)}. Run [cyan]kcap import[/] manually to retry.");
+        }
+    }
+
+    /// <summary>
+    /// The arguments Step 6 pins into its embedded <see cref="ImportCommand.HandleImport"/> call.
+    /// A record (not a bare argument list) so tests can capture and assert on it via
+    /// <see cref="ImportRunnerOverride"/> without running a real import.
+    /// </summary>
+    internal sealed record ImportInvocation(
+        string                       BaseUrl,
+        (string Owner, string Name) Repo,
+        string?                      DefaultVisibility,
+        bool                         AutoSkipExclusions,
+        bool                         ForcePrivate,
+        string                       ActiveProfile);
+
+    /// <summary>
+    /// Test seam: when set, replaces the real <see cref="ImportCommand.HandleImport"/> call made
+    /// by <see cref="RunImportStepAsync"/>. Process-global static state — tests must reset it to
+    /// null (in a finally block) after use.
+    /// </summary>
+    internal static Func<ImportInvocation, Task<int>>? ImportRunnerOverride;
+
+    static Task<int> DefaultImportRunner(ImportInvocation inv) =>
+        ImportCommand.HandleImport(
+            baseUrl:                 inv.BaseUrl,
+            filterCwd:               null,
+            filterSession:           null,
+            minLines:                15,
+            generateSummaries:       false,
+            sources:                 BuildImportSources(),
+            explicitVendorSelection: false,
+            since:                   null,
+            scope:                   new ImportScope.Repo(inv.Repo.Owner, inv.Repo.Name),
+            skipConfirmation:        true,
+            forcePrivate:            inv.ForcePrivate,
+            activeProfile:           inv.ActiveProfile,
+            currentRepo:             inv.Repo,
+            needOrgPick:             false,
+            storedOrg:               null,
+            autoSkipExclusions:      inv.AutoSkipExclusions,
+            defaultVisibility:       inv.DefaultVisibility);
+
+    /// <summary>The nine supported import sources — mirrors Program.cs's `kcap import` construction.</summary>
+    static IReadOnlyList<IImportSource> BuildImportSources() => new IImportSource[] {
+        new ClaudeImportSource(),
+        new CodexImportSource(),
+        new CursorImportSource(),
+        new CopilotImportSource(),
+        new GeminiImportSource(),
+        new KiroImportSource(),
+        new PiImportSource(),
+        new OpenCodeImportSource(),
+        new AntigravityImportSource(),
+    };
 
     static async Task<(string ServerUrl, string? PreAuthToken, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
             string[] args, bool forceDevice) {
