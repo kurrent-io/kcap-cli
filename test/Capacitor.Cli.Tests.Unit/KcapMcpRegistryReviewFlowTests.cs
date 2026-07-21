@@ -50,6 +50,19 @@ public class KcapMcpRegistryReviewFlowTests {
     }
 
     [Test]
+    public async Task Resolve_treats_reserved_flow_result_id_as_a_satisfied_no_op() {
+        // kcap-flow-result is always injected by the launcher and is not a registry entry; the
+        // server's dynamic-flow policy legitimately lists it, so it must be accepted (not rejected)
+        // and NOT re-emitted in the resolved servers. Every reviewer runtime shares this.
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(
+            ["kcap-flow-result", "KCAP-FLOW-RESULT", "kcap-review"], out var servers, out var rejected);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(rejected).IsNull();
+        await Assert.That(servers).IsEquivalentTo(["kcap-review"]);
+    }
+
+    [Test]
     public async Task Resolve_null_or_empty_is_ok_empty() {
         var ok1 = KcapMcpRegistry.TryResolveReviewFlowAllowlist(null, out var s1, out var r1);
         await Assert.That(ok1).IsTrue();

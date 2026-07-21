@@ -41,6 +41,13 @@ public static class KcapMcpRegistry {
     public static readonly IReadOnlySet<string> ReviewFlowAutoApprovableServers =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "kcap-review", "kcap-sessions" };
 
+    /// <summary>The reserved result-submission server every review-flow reviewer is launched with,
+    /// injected by the launcher independent of the allowlist. It is intentionally NOT a registry
+    /// entry, so <see cref="TryResolveReviewFlowAllowlist"/> treats it as an already-satisfied no-op
+    /// (never a rejection, never re-emitted) — the server's dynamic-flow policy legitimately lists
+    /// it, and every reviewer runtime must agree on that.</summary>
+    public const string ReservedResultChannelId = "kcap-flow-result";
+
     /// <summary>Explicit, reviewed classification: each auto-approvable server → the exact tool
     /// names it exposes that are unattended-safe (read / result-submit). The single source of
     /// truth the contract guard test cross-checks against each server's live <c>tools/list</c>;
@@ -78,6 +85,11 @@ public static class KcapMcpRegistry {
         var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var name in names) {
+            // The reserved result channel is always injected by the launcher, so it is a no-op here
+            // (satisfied, never re-emitted, never rejected) — consistent across every reviewer runtime.
+            if (string.Equals(name?.Trim(), ReservedResultChannelId, StringComparison.OrdinalIgnoreCase))
+                continue;
+
             var d = Resolve(name);
 
             if (d is null || d.StartsFlows || !ReviewFlowAutoApprovableServers.Contains(d.Id)) {
