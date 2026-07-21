@@ -7,9 +7,11 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// <summary>
 /// Phase B (D4 §6.4(3)): <see cref="OrphanReaper"/> — reaps hosted-agent children that outlived
 /// a prior daemon run. Acts only on test-owned <see cref="DummyProcess"/> instances. OS-aware: the
-/// env-dependent reaps confirm-and-kill on Linux (readable <c>/proc/{pid}/environ</c>) but SPARE on
-/// macOS 26 (env redacted — ambiguity never kills); the epoch-guard and gone-process paths are
-/// OS-independent.
+/// RECORD pass confirms-and-kills on a proven exact (pid, start-identity) match on every platform
+/// (macOS uses the exact <c>mac:{bootsessionuuid}:{p_uniqueid}</c> incarnation identity — M1-A;
+/// Linux additionally requires the readable <c>KCAP_AGENT_ID</c> env as defense-in-depth). The
+/// separate ENV-MARKER scan still SPARES on macOS 26 (other processes' env is redacted — the scan
+/// finds nothing; ambiguity never kills). The epoch-guard and gone-process paths are OS-independent.
 /// </summary>
 public class OrphanReaperTests {
     static AgentPidRecordStore NewStore() {
@@ -33,19 +35,22 @@ public class OrphanReaperTests {
         var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
         await reaper.ReapOnceAsync();
 
-        // Record-pass kills once ownership is provable: Linux confirms via the KCAP_AGENT_ID env,
-        // Windows has no Unix env guard so an exact (pid, start-identity) match suffices. Only macOS 26
-        // spares (env redacted → the Unix env guard can't confirm; ambiguity never kills).
-        if (!OperatingSystem.IsMacOS()) {
-            dummy.WaitForExit(TimeSpan.FromSeconds(8));
-            await Assert.That(dummy.HasExited).IsTrue();
-            await Assert.That(store.ReadAll()).IsEmpty();
-        } else {
-            // macOS: env unreadable → SPARED; process alive, record retained for a later attempt.
-            await Assert.That(dummy.HasExited).IsFalse();
-            await Assert.That(store.ReadAll().Any(r => r.AgentId == "orphan")).IsTrue();
-            dummy.Kill();
-        }
+        // Record-pass kills once ownership is provable: a proven exact (pid, start-identity) match is
+        // sufficient authorization on EVERY platform. Linux additionally confirms via the KCAP_AGENT_ID
+        // env (defense-in-depth); macOS relies on the exact mac:{bootsessionuuid}:{p_uniqueid} identity
+        // alone (env is redacted there — requiring it would defeat M1-A leader recovery); Windows has no
+        // Unix env guard. Either way the survivor is REAPED (killed) on the first pass.
+        dummy.WaitForExit(TimeSpan.FromSeconds(8));
+        await Assert.That(dummy.HasExited).IsTrue();
+
+        // Record DELETION: on Linux/Windows the kill confirms and the record is dropped on the first
+        // pass. On macOS the daemon is NOT the child's parent, so KillConfirmAsync may observe the
+        // not-yet-parent-reaped zombie as still "alive" within its confirm window (macOS IsAlive has no
+        // zombie detection) and defer deletion to the next sweep — the spec's "eventual, next
+        // boot/heartbeat" macOS recovery. A second sweep (the heartbeat re-run), after WaitForExit has
+        // let the pid settle to fully-dead, deletes the record deterministically on every platform.
+        await reaper.ReapOnceAsync();
+        await Assert.That(store.ReadAll()).IsEmpty();
     }
 
     [Test]
