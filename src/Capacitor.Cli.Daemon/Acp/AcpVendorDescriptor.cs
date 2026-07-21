@@ -2,12 +2,24 @@ using System.Collections.Immutable;
 
 namespace Capacitor.Cli.Daemon.Acp;
 
+/// <summary>How an unattended ACP reviewer receives its validated stdio MCP servers.</summary>
+internal enum AcpReviewFlowMcpTransport {
+    /// <summary>Infer the transport from <see cref="AcpVendorDescriptor.SupportsMcpServers"/>.</summary>
+    Default,
+    /// <summary>The vendor cannot carry the reviewer's required result channel.</summary>
+    Unsupported,
+    /// <summary>Send the servers in ACP <c>session/new.mcpServers</c>.</summary>
+    SessionNew,
+    /// <summary>Preload the servers through Copilot CLI's <c>--additional-mcp-config</c>.</summary>
+    CopilotAdditionalConfig
+}
+
 /// <summary>
 /// Per-vendor wiring for AcpHostedAgentRuntimeFactory: which binary to spawn, what argv an
 /// interactive vs. an unattended (review-flow) launch gets, and how (or whether) this vendor's ACP
-/// surface supports model selection / an mcpServers list. Exactly one descriptor is registered
-/// today (Cursor); onboarding a second ACP-speaking vendor means adding one more descriptor + a
-/// factory registration line, not touching AcpHostedAgentRuntimeFactory itself.
+/// surface supports model selection / an mcpServers list. Cursor and Copilot are registered today;
+/// onboarding another ACP-speaking vendor means adding one descriptor + a factory registration
+/// line, not touching AcpHostedAgentRuntimeFactory itself.
 ///
 /// <b>Round 2 Finding 2 — the selector object is the only source of truth:</b> there is
 /// deliberately no separate "does this vendor support model selection" boolean.
@@ -46,14 +58,16 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// defensive — no observable behavior change.
 /// </summary>
 internal sealed record AcpVendorDescriptor {
-    public string                      Vendor               { get; }
+    public string                      Vendor                 { get; }
     public Func<DaemonConfig, string>  ResolveBinaryPath     { get; }
     public Func<DaemonConfig, string?> ResolveDefaultModel   { get; }
-    public ImmutableArray<string>      Argv                  { get; }
-    public ImmutableArray<string>      UnattendedTrustArgv   { get; }
-    public bool                        SupportsUnattended    { get; }
-    public IAcpModelSelector           ModelSelector         { get; }
-    public bool                        SupportsMcpServers    { get; }
+    public ImmutableArray<string>      Argv                   { get; }
+    public ImmutableArray<string>      UnattendedTrustArgv    { get; }
+    public bool                        SupportsUnattended     { get; }
+    public IAcpModelSelector           ModelSelector          { get; }
+    public bool                        SupportsMcpServers     { get; }
+    public AcpReviewFlowMcpTransport   ReviewFlowMcpTransport { get; }
+    public bool                        SupportsBorrowedReviewFlow { get; }
 
     public AcpVendorDescriptor(
             string                      Vendor,
@@ -63,7 +77,9 @@ internal sealed record AcpVendorDescriptor {
             ImmutableArray<string>      UnattendedTrustArgv,
             bool                        SupportsUnattended,
             IAcpModelSelector           ModelSelector,
-            bool                        SupportsMcpServers
+            bool                        SupportsMcpServers,
+            AcpReviewFlowMcpTransport   ReviewFlowMcpTransport = AcpReviewFlowMcpTransport.Default,
+            bool                        SupportsBorrowedReviewFlow = false
         ) {
         var normalizedUnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
 
@@ -71,6 +87,11 @@ internal sealed record AcpVendorDescriptor {
             throw new ArgumentException(
                 $"{nameof(UnattendedTrustArgv)} must be empty when {nameof(SupportsUnattended)} is false (vendor: {Vendor}).",
                 nameof(UnattendedTrustArgv));
+
+        if (SupportsBorrowedReviewFlow && !SupportsUnattended)
+            throw new ArgumentException(
+                $"{nameof(SupportsBorrowedReviewFlow)} requires {nameof(SupportsUnattended)} (vendor: {Vendor}).",
+                nameof(SupportsBorrowedReviewFlow));
 
         this.Vendor              = Vendor;
         this.ResolveBinaryPath   = ResolveBinaryPath;
@@ -80,6 +101,17 @@ internal sealed record AcpVendorDescriptor {
         this.SupportsUnattended  = SupportsUnattended;
         this.ModelSelector       = ModelSelector;
         this.SupportsMcpServers  = SupportsMcpServers;
+        this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
+        this.ReviewFlowMcpTransport = ReviewFlowMcpTransport switch {
+            AcpReviewFlowMcpTransport.Default when SupportsMcpServers => AcpReviewFlowMcpTransport.SessionNew,
+            AcpReviewFlowMcpTransport.Default                         => AcpReviewFlowMcpTransport.Unsupported,
+            _                                                         => ReviewFlowMcpTransport
+        };
+
+        if (this.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.SessionNew && !SupportsMcpServers)
+            throw new ArgumentException(
+                $"{nameof(AcpReviewFlowMcpTransport.SessionNew)} requires {nameof(SupportsMcpServers)} (vendor: {Vendor}).",
+                nameof(ReviewFlowMcpTransport));
     }
 }
 
@@ -101,16 +133,19 @@ internal static class AcpVendorDescriptors {
     );
 
     /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
-    /// <c>SupportsMcpServers</c> is <c>false</c>: copilot 1.0.69 advertises MCP over http/sse only,
-    /// not stdio, and <see cref="Capacitor.Cli.Core.Acp.AcpMcpServerSpec"/> is stdio-only.</summary>
+    /// ACP itself advertises MCP over http/sse only, so interactive <c>session/new</c> stdio servers
+    /// stay disabled. Review flows preload their validated stdio servers through Copilot's
+    /// <c>--additional-mcp-config</c> process argument and clamp the visible tool surface.</summary>
     public static readonly AcpVendorDescriptor Copilot = new(
         Vendor:              "copilot",
         ResolveBinaryPath:   cfg => cfg.CopilotPath,
         ResolveDefaultModel: _ => null,
         Argv:                ["--acp", "--stdio"],
-        UnattendedTrustArgv: [],
-        SupportsUnattended:  false,
-        ModelSelector:       NoOpModelSelector.Instance,
-        SupportsMcpServers:  false
+        UnattendedTrustArgv: ["--allow-all-tools", "--no-ask-user", "--no-custom-instructions", "--disable-builtin-mcps"],
+        SupportsUnattended:  true,
+        ModelSelector:       ConfigOptionModelSelector.Instance,
+        SupportsMcpServers:  false,
+        ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.CopilotAdditionalConfig,
+        SupportsBorrowedReviewFlow: true
     );
 }

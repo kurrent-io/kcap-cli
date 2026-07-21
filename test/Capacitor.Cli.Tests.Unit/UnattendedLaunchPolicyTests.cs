@@ -52,4 +52,12 @@ public class UnattendedLaunchPolicyTests {
 
         await Assert.That(reason).IsNotNull();
     }
+
+    [Test]
+    public async Task Copilot_descriptor_unattended_launch_is_allowed() {
+        var reason = UnattendedLaunchPolicy.RejectionReason(
+            "copilot", supportsUnattended: AcpVendorDescriptors.Copilot.SupportsUnattended, isReviewFlow: true);
+
+        await Assert.That(reason).IsNull();
+    }
 }

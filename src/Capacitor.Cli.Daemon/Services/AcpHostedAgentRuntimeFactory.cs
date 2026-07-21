@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.LocalIpc;
@@ -12,10 +13,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <see cref="AcpVendorDescriptor"/> — spawns <c>{descriptor.ResolveBinaryPath(config)}
 /// {descriptor.Argv}</c> as a child process, wraps its stdio in an <see cref="AcpConnection"/> +
 /// <see cref="AcpChildProcess"/>, and drives the ACP handshake via
-/// <see cref="AcpHostedAgentRuntime.StartAsync"/>. Exactly one descriptor is registered today
-/// (<see cref="AcpVendorDescriptors.Cursor"/>, whose <see cref="AcpVendorDescriptor.SupportsUnattended"/>
-/// stays <c>false</c> — no permission bridge yet for an unattended launch, so the orchestrator's
-/// <c>UnattendedLaunchPolicy</c> refuses a review-flow launch for it).
+/// <see cref="AcpHostedAgentRuntime.StartAsync"/>. Cursor and Copilot descriptors share this path;
+/// each descriptor declares its own unattended and MCP transport capabilities.
 ///
 /// <b>Spec-review Finding 4:</b> gained a <see cref="ServerConnection"/> constructor
 /// dependency so every runtime this factory produces has the real permission/elicitation bridge
@@ -80,7 +79,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
         // Review flow: the injected result channel + allowlist. Otherwise unchanged (null today).
         var mcpServers = ctx.IsReviewFlow
-            ? reviewMcp
+            ? descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.SessionNew ? reviewMcp : null
             : descriptor.SupportsMcpServers ? ctx.McpServers : null;
 
         try {
@@ -122,13 +121,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 $"Vendor '{descriptor.Vendor}' cannot host an unattended (review-flow) agent.");
 
-        if (ctx.Work != WorkLocation.OwnedWorktree)
+        if (ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
 
-        if (!descriptor.SupportsMcpServers)
+        if (descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.Unsupported)
             throw new InvalidOperationException(
-                $"Vendor '{descriptor.Vendor}' cannot host a review-flow reviewer: no ACP mcpServers support (needed for the kcap-flow-result channel).");
+                $"Vendor '{descriptor.Vendor}' cannot host a review-flow reviewer: no supported MCP transport for the kcap-flow-result channel.");
 
         // A blank agent id would still yield a non-empty server list and slip past a count-only guard,
         // so all three result-channel inputs are checked (a dead channel wedges the round).
@@ -184,13 +183,24 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // would run in the requester's live checkout, so this refuses it here too. StartAsync's
         // pre-spawn validation is the primary gate; this backstops the default spawn path (a
         // non-default connectionSource never reaches this builder).
-        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree)
+        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
 
-        var argv = ctx.IsReviewFlow
-            ? [.. descriptor.Argv, .. descriptor.UnattendedTrustArgv]
-            : descriptor.Argv;
+        var argv = new List<string>(descriptor.Argv);
+
+        if (ctx.IsReviewFlow) {
+            argv.AddRange(descriptor.UnattendedTrustArgv);
+
+            if (descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.CopilotAdditionalConfig) {
+                var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor)!;
+                argv.Add("--additional-mcp-config");
+                argv.Add(BuildCopilotAdditionalMcpConfig(reviewMcp));
+
+                foreach (var toolId in CopilotAvailableToolIds(reviewMcp))
+                    argv.Add($"--available-tools={toolId}");
+            }
+        }
 
         var psi = new ProcessStartInfo(descriptor.ResolveBinaryPath(config), argv) {
             WorkingDirectory       = ctx.Worktree.Path,
@@ -205,6 +215,48 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             psi.Environment["KCAP_URL"] = ctx.ServerUrl;
 
         return psi;
+    }
+
+    /// <summary>Builds Copilot CLI's process-level stdio MCP config. Copilot's ACP capability
+    /// advertises only HTTP/SSE for <c>session/new</c>, but the CLI accepts stdio servers in this
+    /// alternate config shape before the ACP session starts.</summary>
+    static string BuildCopilotAdditionalMcpConfig(IReadOnlyList<AcpMcpServerSpec> servers) {
+        var mcpServers = new JsonObject();
+
+        foreach (var server in servers) {
+            var args = new JsonArray();
+            foreach (var arg in server.Args) args.Add((JsonNode?)arg);
+
+            var env = new JsonObject();
+            foreach (var item in server.Env) env[item.Name] = item.Value;
+
+            mcpServers[server.Name] = new JsonObject {
+                ["type"]    = "stdio",
+                ["command"] = server.Command,
+                ["args"]    = args,
+                ["env"]     = env
+            };
+        }
+
+        return new JsonObject { ["mcpServers"] = mcpServers }.ToJsonString();
+    }
+
+    /// <summary>Copilot's availability filter uses flattened runtime ids (<c>server-tool</c>),
+    /// not its permission-pattern syntax (<c>server(tool)</c>). Keep the result tool plus only the
+    /// reviewed-safe tools belonging to the already-validated server list.</summary>
+    static IEnumerable<string> CopilotAvailableToolIds(IReadOnlyList<AcpMcpServerSpec> servers) {
+        foreach (var server in servers) {
+            if (string.Equals(server.Name, KcapMcpRegistry.ReservedResultChannelId, StringComparison.Ordinal)) {
+                yield return $"{server.Name}-submit_review_result";
+                continue;
+            }
+
+            if (!KcapMcpRegistry.ReviewFlowUnattendedSafeTools.TryGetValue(server.Name, out var tools))
+                continue;
+
+            foreach (var tool in tools.Order(StringComparer.Ordinal))
+                yield return $"{server.Name}-{tool}";
+        }
     }
 
     /// <summary>

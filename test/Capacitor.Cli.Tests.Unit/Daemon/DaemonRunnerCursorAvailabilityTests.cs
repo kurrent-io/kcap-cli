@@ -58,15 +58,14 @@ public class DaemonRunnerCursorAvailabilityTests {
     // === Reviewer vendor override: UnattendedVendors computation ===
 
     [Test]
-    public async Task ComputeUnattendedVendors_ExcludesAvailableCopilot_SupportsUnattendedFalse() {
-        // Copilot ACP hosting is available (binary installed) but SupportsUnattended stays false
-        // until the reviewer child flips it — so it must not be override-eligible even when present.
+    public async Task ComputeUnattendedVendors_IncludesAvailableCopilot_WhenUnattendedEnabled() {
         IHostedAgentRuntimeFactory[] factories = [
             new FakeRuntimeFactory("claude", isAvailable: true, supportsUnattended: true),
-            new FakeRuntimeFactory("copilot", isAvailable: true, supportsUnattended: false),
+            new FakeRuntimeFactory("copilot", isAvailable: true, supportsUnattended: true),
         ];
 
-        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories)).IsEquivalentTo(["claude"]);
+        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories))
+            .IsEquivalentTo(["claude", "copilot"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]

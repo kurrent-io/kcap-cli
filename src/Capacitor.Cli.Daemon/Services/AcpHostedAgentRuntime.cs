@@ -249,7 +249,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     string DiagnosticAuthHint =>
         _vendor == AcpVendorDescriptors.Cursor.Vendor
             ? "run `cursor-agent login` and verify a Team-tier subscription"
-            : $"authenticate `{_vendor}` and verify your subscription/entitlement";
+            : _vendor == AcpVendorDescriptors.Copilot.Vendor
+                ? "run `copilot login` and verify GitHub Copilot access for your enterprise"
+                : $"authenticate `{_vendor}` and verify your subscription/entitlement";
 
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;

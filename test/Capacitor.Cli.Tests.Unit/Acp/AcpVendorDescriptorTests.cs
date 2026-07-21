@@ -24,6 +24,7 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([])).IsTrue();
         await Assert.That(descriptor.SupportsUnattended).IsFalse();
         await Assert.That(descriptor.SupportsMcpServers).IsTrue();
+        await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
     }
 
@@ -33,12 +34,15 @@ public class AcpVendorDescriptorTests {
 
         await Assert.That(descriptor.Vendor).IsEqualTo("copilot");
         await Assert.That(descriptor.Argv.SequenceEqual(["--acp", "--stdio"])).IsTrue();
-        await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([])).IsTrue();
-        await Assert.That(descriptor.SupportsUnattended).IsFalse();
-        // FALSE per the live capability probe: copilot 1.0.69 advertises mcpCapabilities {http,sse}
-        // but not stdio, and AcpMcpServerSpec is stdio-only. See the descriptor's own remarks.
+        await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([
+            "--allow-all-tools", "--no-ask-user", "--no-custom-instructions", "--disable-builtin-mcps"
+        ])).IsTrue();
+        await Assert.That(descriptor.SupportsUnattended).IsTrue();
+        // ACP still advertises only HTTP/SSE, so session/new stdio forwarding stays disabled.
         await Assert.That(descriptor.SupportsMcpServers).IsFalse();
-        await Assert.That(descriptor.ModelSelector).IsEqualTo(NoOpModelSelector.Instance);
+        await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.CopilotAdditionalConfig);
+        await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsTrue();
+        await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
     }
 
     [Test]
@@ -79,6 +83,8 @@ public class AcpVendorDescriptorTests {
         );
 
         await Assert.That(descriptor.ModelSelector).IsEqualTo(NoOpModelSelector.Instance);
+        await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.Unsupported);
+        await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
     }
 
     /// <summary>Qodo finding 3: a vendor that doesn't support unattended launches must not carry
@@ -95,6 +101,36 @@ public class AcpVendorDescriptorTests {
             SupportsUnattended:  false,
             ModelSelector:       NoOpModelSelector.Instance,
             SupportsMcpServers:  false
+        )).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Constructor_Throws_WhenSessionNewTransportLacksMcpServerSupport() {
+        await Assert.That(() => new AcpVendorDescriptor(
+            Vendor:                 "test-vendor",
+            ResolveBinaryPath:      _ => "test-vendor-cli",
+            ResolveDefaultModel:    _ => null,
+            Argv:                   ["acp"],
+            UnattendedTrustArgv:    ["--trust"],
+            SupportsUnattended:     true,
+            ModelSelector:          NoOpModelSelector.Instance,
+            SupportsMcpServers:     false,
+            ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew
+        )).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Constructor_Throws_WhenBorrowedReviewSupportLacksUnattendedSupport() {
+        await Assert.That(() => new AcpVendorDescriptor(
+            Vendor:                      "test-vendor",
+            ResolveBinaryPath:           _ => "test-vendor-cli",
+            ResolveDefaultModel:         _ => null,
+            Argv:                        [],
+            UnattendedTrustArgv:         [],
+            SupportsUnattended:          false,
+            ModelSelector:               NoOpModelSelector.Instance,
+            SupportsMcpServers:          false,
+            SupportsBorrowedReviewFlow: true
         )).Throws<ArgumentException>();
     }
 }

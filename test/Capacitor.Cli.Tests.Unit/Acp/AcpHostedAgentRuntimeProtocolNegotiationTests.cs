@@ -199,10 +199,10 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
     }
 
     [Test]
-    public async Task Diagnostics_Copilot_AuthFailure_NamedNoCursorText() {
+    public async Task Diagnostics_Copilot_AuthFailure_GivesLoginAndEnterpriseHint() {
         var msg = await HandshakeErrorMessage("copilot", f => f.FailNextInitialize(-32000, "Unauthorized: no active session"));
         await Assert.That(msg).Contains("Unauthorized: no active session");
-        await Assert.That(msg).Contains("authenticate `copilot` and verify your subscription/entitlement");
+        await Assert.That(msg).Contains("run `copilot login` and verify GitHub Copilot access for your enterprise");
         await Assert.That(msg).DoesNotContain("cursor-agent");
         await Assert.That(msg).DoesNotContain("Team-tier");
     }
