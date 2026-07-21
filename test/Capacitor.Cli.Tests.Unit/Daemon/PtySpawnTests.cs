@@ -92,30 +92,33 @@ public class PtySpawnTests {
 
     [Test]
     public async Task Cancel_fd_during_handshake_kills_and_reaps_returns_cancelled() {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
-        // A child that SIGSTOPs itself before exec (via a wrapper script) never completes the
-        // handshake — writing to cancel_fd must interrupt the blocking pty_spawn call.
-        var stopper = DummyProcess.WriteShebangScript("/bin/sh", null, "kill -STOP $$\n");
-        var plan = Preflight(stopper, [stopper]);
+        // A readable cancel_fd during the handshake must deterministically win over a child that
+        // would otherwise exec successfully: pty_spawn polls {errpipe, cancel_fd} and MUST take
+        // the cancel arm (kill + reap the child, return -1 / PTY_STEP_CANCELLED) rather than read
+        // the errpipe's exec-EOF as success.
+        //
+        // The cancel byte is written BEFORE the spawn, not after a Delay: a real child reaches
+        // its exec-EOF in ~1ms, far sooner than any post-spawn Delay could fire, so a delayed
+        // write always loses the race to exec-success (verified on macOS — that timing is exactly
+        // why the earlier "SIGSTOP after exec" wrapper reported success instead of cancellation:
+        // the shell exec'd and the CLOEXEC errpipe reached EOF BEFORE the SIGSTOP or the delayed
+        // cancel ran). Pre-arming cancel_fd is the deterministic form of "shutdown cancels an
+        // in-flight handshake": the byte is pending for the whole handshake window, so the poll
+        // reports it and the cancel arm fires regardless of scheduling. pty_spawn kills + reaps
+        // the child on this path, so no process leaks (result.Pid stays 0 on the cancel arm).
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
         var (cancelRead, cancelWrite) = MakePipe();
+        UnixPtyInterop.write(cancelWrite, [1], 1); // arm cancellation before the handshake polls
         try {
-            // `result` is a local variable of THIS method (not an out/ref PARAMETER of it), so
-            // capturing it via `out` inside the Task.Run lambda is ordinary closure capture —
-            // no CS1628 (that error only fires for capturing the ENCLOSING method's own ref/out
-            // parameters, which this method doesn't have).
-            UnixPtyInterop.PtySpawnResult result = default;
-            var spawnTask = Task.Run(() => Spawn(plan, out result, cancelFd: cancelRead));
-            await Task.Delay(500); // let the child reach SIGSTOP
-            UnixPtyInterop.write(cancelWrite, [1], 1);
-            var rc = await spawnTask;
+            var rc = Spawn(plan, out var result, cancelFd: cancelRead);
             await Assert.That(rc).IsEqualTo(-1);
             await Assert.That(result.FailedStep).IsEqualTo(7 /* PTY_STEP_CANCELLED */);
         } finally {
             Free(plan);
             UnixPtyInterop.close(cancelRead);
             UnixPtyInterop.close(cancelWrite);
-            File.Delete(stopper);
         }
     }
 
