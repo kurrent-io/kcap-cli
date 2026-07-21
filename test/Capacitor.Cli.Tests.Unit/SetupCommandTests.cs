@@ -209,6 +209,156 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.ResolveTenantArg("eventuous")).IsEqualTo("https://eventuous.kcap.ai");
     }
 
+    // --- Step 6 (RunImportStepAsync) wiring ---
+    //
+    // SetupCommand.ImportRunnerOverride is process-global static state (mutated by
+    // RunImportStepAsync's caller — HandleAsync — only via this seam), so every test that sets it
+    // must run serialized against the others and reset it to null in a finally block, mirroring
+    // the AppConfigResolvedStateTests.ResolvedStateMutation pattern.
+    const string ImportRunnerOverrideMutation = nameof(ImportRunnerOverrideMutation);
+
+    [Test]
+    [NotInParallel(ImportRunnerOverrideMutation)]
+    public async Task RunImportStepAsync_RunDecision_InvokesRunnerWithPinnedArgs() {
+        SetupCommand.ImportInvocation? captured = null;
+        SetupCommand.ImportRunnerOverride = inv => {
+            captured = inv;
+            return Task.FromResult(0);
+        };
+
+        try {
+            await SetupCommand.RunImportStepAsync(
+                currentRepo:       ("acme", "widgets"),
+                authSatisfied:     true,
+                skipImport:        false,
+                noPrompt:          true,
+                promptYesNo:       () => throw new InvalidOperationException("must not prompt under --no-prompt"),
+                serverUrl:         "https://example.test",
+                activeProfile:     "default",
+                defaultVisibility: "org_public");
+        } finally {
+            SetupCommand.ImportRunnerOverride = null;
+        }
+
+        await Assert.That(captured).IsNotNull();
+        await Assert.That(captured!.BaseUrl).IsEqualTo("https://example.test");
+        await Assert.That(captured.Repo).IsEqualTo(("acme", "widgets"));
+        await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(captured.AutoSkipExclusions).IsTrue();
+        await Assert.That(captured.ForcePrivate).IsFalse();
+        await Assert.That(captured.ActiveProfile).IsEqualTo("default");
+    }
+
+    [Test]
+    [NotInParallel(ImportRunnerOverrideMutation)]
+    public async Task RunImportStepAsync_InteractiveAccept_InvokesRunner() {
+        var invoked = false;
+        SetupCommand.ImportRunnerOverride = _ => {
+            invoked = true;
+            return Task.FromResult(0);
+        };
+
+        try {
+            await SetupCommand.RunImportStepAsync(
+                currentRepo:       ("acme", "widgets"),
+                authSatisfied:     true,
+                skipImport:        false,
+                noPrompt:          false,
+                promptYesNo:       () => true,
+                serverUrl:         "https://example.test",
+                activeProfile:     "default",
+                defaultVisibility: "org_public");
+        } finally {
+            SetupCommand.ImportRunnerOverride = null;
+        }
+
+        await Assert.That(invoked).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel(ImportRunnerOverrideMutation)]
+    public async Task RunImportStepAsync_RunnerReturnsNonZero_DoesNotThrowAndCompletes() {
+        SetupCommand.ImportRunnerOverride = _ => Task.FromResult(1);
+
+        try {
+            // Completing without an unhandled exception is the assertion: a non-zero exit
+            // code must be swallowed (warned about, not propagated) so setup still finishes.
+            await SetupCommand.RunImportStepAsync(
+                currentRepo:       ("acme", "widgets"),
+                authSatisfied:     true,
+                skipImport:        false,
+                noPrompt:          true,
+                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+                serverUrl:         "https://example.test",
+                activeProfile:     "default",
+                defaultVisibility: "org_public");
+        } finally {
+            SetupCommand.ImportRunnerOverride = null;
+        }
+    }
+
+    [Test]
+    [NotInParallel(ImportRunnerOverrideMutation)]
+    public async Task RunImportStepAsync_RunnerThrows_DoesNotPropagateAndCompletes() {
+        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("boom");
+
+        try {
+            // Completing without the InvalidOperationException escaping is the assertion —
+            // import is best-effort and must never fail setup.
+            await SetupCommand.RunImportStepAsync(
+                currentRepo:       ("acme", "widgets"),
+                authSatisfied:     true,
+                skipImport:        false,
+                noPrompt:          true,
+                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+                serverUrl:         "https://example.test",
+                activeProfile:     "default",
+                defaultVisibility: "org_public");
+        } finally {
+            SetupCommand.ImportRunnerOverride = null;
+        }
+    }
+
+    [Test]
+    [NotInParallel(ImportRunnerOverrideMutation)]
+    public async Task RunImportStepAsync_NoCurrentRepo_SkipsWithoutInvokingRunnerOrPrompting() {
+        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
+
+        try {
+            await SetupCommand.RunImportStepAsync(
+                currentRepo:       null,
+                authSatisfied:     true,
+                skipImport:        false,
+                noPrompt:          false,
+                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+                serverUrl:         "https://example.test",
+                activeProfile:     "default",
+                defaultVisibility: "org_public");
+        } finally {
+            SetupCommand.ImportRunnerOverride = null;
+        }
+    }
+
+    [Test]
+    [NotInParallel(ImportRunnerOverrideMutation)]
+    public async Task RunImportStepAsync_SkipImportFlag_SkipsWithoutInvokingRunner() {
+        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
+
+        try {
+            await SetupCommand.RunImportStepAsync(
+                currentRepo:       ("acme", "widgets"),
+                authSatisfied:     true,
+                skipImport:        true,
+                noPrompt:          true,
+                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+                serverUrl:         "https://example.test",
+                activeProfile:     "default",
+                defaultVisibility: "org_public");
+        } finally {
+            SetupCommand.ImportRunnerOverride = null;
+        }
+    }
+
     [Test]
     public async Task ResolveTenantArg_leaves_urls_fqdns_and_hosts_untouched() {
         await Assert.That(SetupCommand.ResolveTenantArg("https://x.example")).IsEqualTo("https://x.example");
