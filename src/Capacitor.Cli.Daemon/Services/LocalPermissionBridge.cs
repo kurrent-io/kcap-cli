@@ -96,12 +96,13 @@ internal sealed partial class LocalPermissionBridge(
 
     /// <summary>
     /// Detects "address already in use" across platforms. HttpListenerException's ErrorCode
-    /// is the underlying socket/Win32 error: 10048 = WSAEADDRINUSE (Windows), 48 = EADDRINUSE
-    /// (macOS), 98 = EADDRINUSE (Linux). Anything else (URLACL denial code 5, etc.) is not
-    /// transient and shouldn't be retried.
+    /// is the underlying socket/Win32 error: 10048 = WSAEADDRINUSE (Windows sockets), 32 =
+    /// ERROR_SHARING_VIOLATION (Windows HttpListener prefix already occupied), 48 = EADDRINUSE
+    /// (macOS), 98 = EADDRINUSE (Linux). Anything else (URLACL denial code 5, etc.) is not transient
+    /// and shouldn't be retried.
     /// </summary>
     static bool IsAddressInUse(HttpListenerException ex) =>
-        ex.ErrorCode is 10048 or 48 or 98;
+        ex.ErrorCode is 10048 or 32 or 48 or 98;
 
     public async Task StopAsync(CancellationToken cancellationToken) {
         if (_cts is not null) await _cts.CancelAsync();
