@@ -165,7 +165,12 @@ public sealed class ConPtyProcess : IPtyProcess {
         }
 
         if (!CreatePipe(out var ptyOutputRead, out var ptyOutputWrite, ref pipeSa, 0)) {
-            throw new InvalidOperationException($"CreatePipe (output) failed: {Marshal.GetLastWin32Error()}");
+            // The input pipe (both ends) is already created at this point — close it before
+            // throwing so an output-pipe failure doesn't leak the two input handles.
+            var err = Marshal.GetLastWin32Error();
+            CloseHandle(ptyInputRead);
+            CloseHandle(ptyInputWrite);
+            throw new InvalidOperationException($"CreatePipe (output) failed: {err}");
         }
 
         var size = new ConPtyInterop.COORD { X = (short)cols, Y = (short)rows };
