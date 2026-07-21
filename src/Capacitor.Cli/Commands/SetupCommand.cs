@@ -51,6 +51,7 @@ public static class SetupCommand {
         var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
         var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
+        var skipImport       = args.Contains("--skip-import");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
