@@ -619,4 +619,156 @@ public class AcpInteractionBridgeTests {
         await Assert.That(infoEntries).Contains(e => e.Message.Contains("resolved") && e.Message.Contains("elicitation") && e.Message.Contains("selected"));
         await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("Proceed?")); // never the prompt text
     }
+
+    // ── Unattended review-flow auto-approve (AcpInteractionBridge autoApproveUnattended) ─────────
+    //
+    // A bridge built with autoApproveUnattended:true selects the least-privilege ALLOW option by
+    // exact Kind WITHOUT ever routing to a human, and fails closed (cancelled) when there is no
+    // unambiguous allow option. Every case below uses a delegate that INCREMENTS a counter (never
+    // throws — the bridge would swallow a throw and return cancelled, masking the assertion) so each
+    // test can prove requestInteraction was invoked exactly zero times.
+
+    static JsonElement PermissionParamsWithOptions(string optionsJson) {
+        var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":{{optionsJson}}}""";
+        return JsonDocument.Parse(json).RootElement.Clone();
+    }
+
+    static (AcpInteractionBridge Bridge, Func<int> Calls) AutoApproveBridge(ILogger? logger = null) {
+        var calls = 0;
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => { Interlocked.Increment(ref calls); return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)); },
+            agentId: AgentId,
+            logger: logger ?? NullLogger.Instance,
+            autoApproveUnattended: true);
+
+        return (bridge, () => Volatile.Read(ref calls));
+    }
+
+    static async Task<(string Outcome, string? OptionId)> RunAutoApprovePermissionAsync(string optionsJson) {
+        var (bridge, calls) = AutoApproveBridge();
+        var request = new AcpRequest(1, "session/request_permission", PermissionParamsWithOptions(optionsJson));
+        var result  = await bridge.HandleAsync(request, CancellationToken.None);
+        var outcome = result!.Value.GetProperty("outcome");
+        await Assert.That(calls()).IsEqualTo(0); // never routed to a human
+        return (outcome.GetProperty("outcome").GetString()!, outcome.TryGetProperty("optionId", out var id) ? id.GetString() : null);
+    }
+
+    [Test]
+    public async Task AutoApprove_PrefersAllowOnce_OverAllowAlways() {
+        var (outcome, optionId) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"r","name":"Reject","kind":"reject_once"},{"optionId":"ao","name":"Allow once","kind":"allow_once"},{"optionId":"aa","name":"Allow always","kind":"allow_always"}]""");
+
+        await Assert.That(outcome).IsEqualTo("selected");
+        await Assert.That(optionId).IsEqualTo("ao");
+    }
+
+    [Test]
+    public async Task AutoApprove_OneAllowOnce_WithMultipleAllowAlways_SelectsTheOnce() {
+        var (outcome, optionId) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"r","name":"Reject","kind":"reject_once"},{"optionId":"ao","name":"Allow once","kind":"allow_once"},{"optionId":"aa1","name":"Allow always","kind":"allow_always"},{"optionId":"aa2","name":"Allow always project","kind":"allow_always"}]""");
+
+        await Assert.That(outcome).IsEqualTo("selected");
+        await Assert.That(optionId).IsEqualTo("ao");
+    }
+
+    [Test]
+    public async Task AutoApprove_OnlyAllowAlways_SelectsIt() {
+        var (outcome, optionId) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"aa","name":"Allow always","kind":"allow_always"}]""");
+
+        await Assert.That(outcome).IsEqualTo("selected");
+        await Assert.That(optionId).IsEqualTo("aa");
+    }
+
+    [Test]
+    public async Task AutoApprove_NoAllowOption_MapsToCancelled() {
+        var (outcome, _) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"r","name":"Reject","kind":"reject_once"},{"optionId":"ra","name":"Reject always","kind":"reject_always"}]""");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_EmptyOptions_MapsToCancelled() {
+        var (outcome, _) = await RunAutoApprovePermissionAsync("[]");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_AmbiguousTwoAllowOnce_MapsToCancelled() {
+        var (outcome, _) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"ao1","name":"Allow once","kind":"allow_once"},{"optionId":"ao2","name":"Allow once too","kind":"allow_once"}]""");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_AmbiguousTwoAllowAlways_NoOnce_MapsToCancelled() {
+        var (outcome, _) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"aa1","name":"Allow always","kind":"allow_always"},{"optionId":"aa2","name":"Allow always project","kind":"allow_always"}]""");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_BlankOptionId_MapsToCancelled() {
+        var (outcome, _) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"   ","name":"Allow once","kind":"allow_once"}]""");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_DuplicateOptionId_MapsToCancelled() {
+        // The chosen allow_once shares its OptionId with another offered option — echoing it could
+        // select the wrong option server-side, so fail closed.
+        var (outcome, _) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"dup","name":"Reject","kind":"reject_once"},{"optionId":"dup","name":"Allow once","kind":"allow_once"}]""");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_DeceptiveAllowName_ButRejectKind_MapsToCancelled() {
+        // Kind wins over Name — a hostile agent labeling a reject option "Allow" must not be approved.
+        var (outcome, _) = await RunAutoApprovePermissionAsync(
+            """[{"optionId":"x","name":"Allow","kind":"reject_once"}]""");
+
+        await Assert.That(outcome).IsEqualTo("cancelled");
+    }
+
+    [Test]
+    public async Task AutoApprove_Elicitation_DeclinedWithoutRoutingToHuman() {
+        var (bridge, calls) = AutoApproveBridge();
+
+        var json    = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?","options":[{"optionId":"yes","name":"Yes","kind":"allow_once"}]}""";
+        var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
+        var result  = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(result!.Value.GetProperty("outcome").GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+        await Assert.That(calls()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task AutoApprove_AuditLog_PinsAgentIdAndKind_NoPathField() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => { throw new InvalidOperationException("must not be called"); },
+            agentId: AgentId,
+            logger: logger,
+            autoApproveUnattended: true);
+
+        var request = new AcpRequest(1, "session/request_permission", PermissionParamsWithOptions(
+            """[{"optionId":"ao","name":"Allow once","kind":"allow_once"}]"""));
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("auto-approved")
+            && e.Message.Contains(AgentId)
+            && e.Message.Contains("allow_once"));
+        // No path field is ever logged — the bridge has no trustworthy path (ToolCall is opaque).
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("path"));
+    }
 }
