@@ -541,16 +541,6 @@ public static class SetupCommand {
     }
 
     /// <summary>
-    /// Step 6 (import past sessions) decision + best-effort execution, extracted from
-    /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
-    /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
-    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
-    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
-    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
-    /// exit code is reported with a warning and swallowed — this method never throws and never
-    /// fails setup.
-    /// </summary>
-    /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
     /// token; any other provider needs a usable (valid-or-refreshable) token. The token probe is
     /// injected so it's testable, and any exception it throws is treated as "not satisfied" — this
@@ -567,6 +557,16 @@ public static class SetupCommand {
         }
     }
 
+    /// <summary>
+    /// Step 6 (import past sessions) decision + best-effort execution, extracted from
+    /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
+    /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
+    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
+    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
+    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
+    /// exit code is reported with a warning and swallowed — this method never throws and never
+    /// fails setup.
+    /// </summary>
     internal static async Task RunImportStepAsync(
             (string Owner, string Name)? currentRepo,
             bool                          authSatisfied,
