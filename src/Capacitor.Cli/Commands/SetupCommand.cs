@@ -93,7 +93,7 @@ public static class SetupCommand {
         }
 
         // Step 1: Server
-        AnsiConsole.Write(new Rule("[yellow]Step 1/5 — Server[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 1/6 — Server[/]").LeftJustified());
         string serverUrl;
         string? preAuthToken = null;
         string  provider;
@@ -136,7 +136,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 2: Login
-        AnsiConsole.Write(new Rule("[yellow]Step 2/5 — Login[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
         if (loginComplete) {
             // WorkOS discovery already authenticated + saved the active (picked) profile.
@@ -170,7 +170,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 3: Default session visibility
-        AnsiConsole.Write(new Rule("[yellow]Step 3/5 — Default session visibility[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 3/6 — Default session visibility[/]").LeftJustified());
 
         string defaultVisibility;
 
@@ -203,7 +203,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 4: Coding agents
-        AnsiConsole.Write(new Rule("[yellow]Step 4/5 — Coding agents[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 4/6 — Coding agents[/]").LeftJustified());
         await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your coding agent CLIs.");
         await Console.Out.WriteLineAsync();
 
@@ -416,7 +416,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 5: Daemon name + save
-        AnsiConsole.Write(new Rule("[yellow]Step 5/5 — Agent Daemon[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
         var    defaultName = Environment.UserName.ToLowerInvariant();
         string daemonName;
