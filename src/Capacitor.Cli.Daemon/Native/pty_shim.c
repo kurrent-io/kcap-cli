@@ -231,9 +231,22 @@ static int build_shebang_plan(
 
     if (!tok0) return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan); // malformed → uncontained
 
-    int is_env = strcmp(tok0, "/usr/bin/env") == 0 || strcmp(tok0, "env") == 0;
+    // Only a LITERAL ABSOLUTE `/usr/bin/env` enters the env-rewrite path. A bare `#!env NAME` (or
+    // any relative env path) is NOT equivalent to `#!/usr/bin/env NAME`: the kernel resolves `env`
+    // itself against the CHILD's post-chdir cwd/PATH, which the parent-side preflight cannot
+    // reproduce — so a non-absolute `env` falls through to the direct-shebang branch and is
+    // rejected there by the absolute-interpreter guard.
+    int is_env = strcmp(tok0, "/usr/bin/env") == 0;
 
     if (!is_env) {
+        // A RELATIVE direct interpreter (`#!bin/interp`, or a bare `#!interp`) is resolved by the
+        // kernel against the CHILD's post-chdir cwd — but we would open+preflight it HERE against
+        // the DAEMON's cwd, a DIFFERENT inode (or a spurious hit/miss), then exec that wrong fd
+        // while reporting it contained. Only a literal ABSOLUTE interpreter path can be preflighted
+        // correctly pre-fork; anything else is uncontained and left for the kernel to resolve
+        // natively from the original path after chdir.
+        if (tok0[0] != '/') return build_execpath_plan(script_abs_path, orig_argv, 0, out_plan);
+
         // Direct shebang: at most ONE optional arg is kept as-is; anything with more tokens
         // after that is "an unresolvable shebang" per spec → uncontained.
         char *tok1 = rest ? strtok_r(NULL, " \t", &save) : NULL;
@@ -518,6 +531,31 @@ static int capture_start_identity(pid_t pid, char *out, size_t outlen) {
     return 0; // uncapturable — out stays "" (identity_unavailable), never a launch failure
 }
 
+// Async-signal-safe: write EXACTLY `len` bytes from `buf`, retrying across EINTR and partial
+// writes, until the whole message is delivered or a non-EINTR error occurs. Returns 0 on full
+// delivery, -1 otherwise. Only write() is used (no stdio/libc buffering), so it is safe on the
+// fork→exec path. This closes the fail-OPEN hole a single unchecked write() left: if write()
+// returned -1/EINTR (or a short count) before delivering the whole {step, err} record, the child
+// would then die, the parent would read EOF, and EOF is interpreted as a SUCCESSFUL exec (a failed
+// launch reported as a running agent). Retrying to full delivery makes the parent's
+// "EOF => exec succeeded" assumption sound on every reachable child-failure path. Callers still
+// _exit() non-zero afterwards regardless of the return value — the child must never exec after a
+// deliberate abort, even if the pipe write itself cannot complete.
+static int write_all_signal_safe(int fd, const void *buf, size_t len) {
+    const char *p = (const char *)buf;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, p + off, len - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;             // non-EINTR error → give up (caller still fails closed)
+        }
+        if (w == 0) return -1;     // no progress → avoid an infinite spin
+        off += (size_t)w;
+    }
+    return 0;
+}
+
 // Async-signal-safe: writes {step, err} to the error pipe and _exit(127)s. Never returns.
 // A top-level function (not nested inside pty_spawn) — GCC/Clang nested functions require
 // executable-stack trampolines and are NOT universally available (Apple clang rejects them
@@ -525,7 +563,7 @@ static int capture_start_identity(pid_t pid, char *out, size_t outlen) {
 // depend on that extension to compile with the project's plain `cc -shared` invocation.
 static void child_fail_and_die(int errpipe_write_fd, int step, int err) {
     struct { int step; int err; } msg = { step, err };
-    write(errpipe_write_fd, &msg, sizeof(msg));
+    write_all_signal_safe(errpipe_write_fd, &msg, sizeof(msg)); // full-delivery retry; fail closed regardless
     _exit(127);
 }
 
@@ -600,7 +638,10 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
         // come. errno is irrelevant here (not a syscall failure), so report err=0.
         if (getppid() != expected_parent) {
             struct { int step; int err; } msg = { PTY_STEP_PARENT_DIED, 0 };
-            write(errpipe[1], &msg, sizeof(msg));
+            // Full-delivery retry (same fail-OPEN hole as child_fail_and_die): a silent single
+            // write() that landed on EINTR would deliver nothing, the parent would read EOF and
+            // mistake this self-kill for a successful exec. We self-kill regardless afterwards.
+            write_all_signal_safe(errpipe[1], &msg, sizeof(msg));
             // kill(getpid(), SIGKILL) rather than raise(SIGKILL): raise() is NOT on the POSIX
             // async-signal-safe list, kill()/getpid() are. Same "die by signal" semantics.
             kill(getpid(), SIGKILL);

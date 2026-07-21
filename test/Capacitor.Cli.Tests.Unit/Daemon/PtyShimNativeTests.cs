@@ -102,6 +102,39 @@ public class PtyShimNativeTests {
     }
 
     [Test]
+    public async Task Relative_direct_shebang_interpreter_is_uncontained() {
+        if (!OperatingSystem.IsLinux()) return;
+
+        // A RELATIVE direct interpreter (#!bin/sh) would be resolved by the kernel against the
+        // CHILD's post-chdir cwd — the parent-side preflight (which opens tok0 against the DAEMON's
+        // cwd) can't reproduce that, so it must NOT be classified contained: it would otherwise
+        // preflight/exec a DIFFERENT inode than the child would resolve. EXEC_PATH-uncontained lets
+        // the kernel resolve the whole thing natively from the original path after chdir.
+        var script = DummyProcess.WriteShebangScript("bin/sh", null, "exit 0\n");
+        try {
+            var plan = Preflight(script, [script], EmptyEnvp(), execveatSupported: 1);
+            try { await Assert.That(UnixPtyInterop.pty_plan_contained(plan)).IsEqualTo(0); }
+            finally { Free(plan); }
+        } finally { File.Delete(script); }
+    }
+
+    [Test]
+    public async Task Bare_env_shebang_is_uncontained() {
+        if (!OperatingSystem.IsLinux()) return;
+
+        // A bare `#!env NAME` is NOT equivalent to `#!/usr/bin/env NAME`: the kernel resolves `env`
+        // itself against the CHILD's post-chdir cwd/PATH, which the parent can't reproduce. Only a
+        // literal absolute `/usr/bin/env` enters the env-rewrite path; a bare `env` falls through to
+        // the direct-shebang branch and is rejected there as a non-absolute interpreter.
+        var script = DummyProcess.WriteShebangScript("env", "sh", "exit 0\n");
+        try {
+            var plan = Preflight(script, [script], EmptyEnvp(), execveatSupported: 1);
+            try { await Assert.That(UnixPtyInterop.pty_plan_contained(plan)).IsEqualTo(0); }
+            finally { Free(plan); }
+        } finally { File.Delete(script); }
+    }
+
+    [Test]
     public async Task Env_shebang_resolves_against_child_path_not_daemon_path() {
         if (!OperatingSystem.IsLinux()) return;
 
