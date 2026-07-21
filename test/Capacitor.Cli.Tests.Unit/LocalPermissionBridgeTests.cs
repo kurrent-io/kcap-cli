@@ -793,6 +793,27 @@ public class LocalPermissionBridgeTests {
             await Assert.That(server.Calls.Count).IsEqualTo(0);
         } finally { await bridge.DisposeAsync(); }
     }
+
+    /// <summary>Regression for the parallel-bind flake: many bridges starting at once (as the full
+    /// parallel test suite does) must each reserve a distinct loopback port without an
+    /// "Address already in use" throw. Pre-fix, the zero-backoff bind retry let concurrent starts
+    /// re-race the same contended ephemeral port in lockstep and exhaust every attempt; the jittered
+    /// backoff desynchronizes them. Deliberately NOT serialized — the concurrency IS the test.</summary>
+    [Test]
+    public async Task ConcurrentStarts_AllBindDistinctPorts_WithoutAddressInUse() {
+        const int N = 12;
+        var bridges = Enumerable.Range(0, N).Select(_ => CreateBridge().bridge).ToArray();
+
+        try {
+            await Task.WhenAll(bridges.Select(b => b.StartAsync(CancellationToken.None)));
+
+            var ports = bridges.Select(b => new Uri(b.BaseUrl!).Port).ToArray();
+            await Assert.That(ports.All(p => p > 0)).IsTrue();       // every bridge bound
+            await Assert.That(ports.Distinct().Count()).IsEqualTo(N); // and to distinct ports
+        } finally {
+            foreach (var b in bridges) await b.DisposeAsync();
+        }
+    }
 }
 
 sealed class CapturingLogger : ILogger<LocalPermissionBridge> {
