@@ -90,6 +90,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
     public event Action<AckResolvedCandidates>? OnAckResolvedCandidates;
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2/§5.5): the sequenced-command receive seams.
+    /// <see cref="OnStopAgentV2"/> is the Seq'd stop primitive a capability daemon receives instead of the
+    /// legacy <c>StopAgent</c>; <see cref="OnAckProcessedPrefix"/> is the server's identity-cache retirement
+    /// proof (SYNCHRONOUS — the processor's <c>AckPrefix</c> is void); <see cref="OnRequestStatusReport"/> is
+    /// a zero-argument server→daemon nudge answered by an immediate out-of-band <c>DaemonStatusReport</c>.</summary>
+    public event Func<StopAgentV2, Task>?    OnStopAgentV2;
+    public event Action<AckProcessedPrefix>? OnAckProcessedPrefix;
+    public event Func<Task>?                 OnRequestStatusReport;
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): snapshot of the un-acked resolved-
     /// candidates ledger, re-advertised on <c>DaemonConnect</c> (mirrors <see cref="GetLiveAgents"/>).
     /// Optional — null when not wired (tests / early startup) ⇒ no candidates advertised.</summary>
@@ -103,6 +112,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<UnresolvedStartupCandidate[]>? GetUnresolvedStartupCandidates { get; set; }
     public Func<StartupDiscovery?>?            GetStartupDiscovery            { get; set; }
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-command watermark counters
+    /// (the processor's HighestAcceptedSeq / LastProcessedSeq) and the kill-quarantine snapshot, mirrored
+    /// onto the enriched <c>DaemonConnect</c> payload alongside the periodic <c>DaemonStatusReport</c>. Set
+    /// by <see cref="AgentOrchestrator"/> at startup; null (tests / early startup) ⇒ the additive fields
+    /// stay at their defaults, wire-compatible with old servers.</summary>
+    public Func<long?>?                  GetHighestAcceptedSeq { get; set; }
+    public Func<long?>?                  GetLastProcessedSeq   { get; set; }
+    public Func<QuarantinedAgentInfo[]>? GetQuarantined        { get; set; }
+
     /// <summary>Phase B (D2): send the periodic daemon self-report ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
     /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
@@ -111,6 +129,22 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         if (!IsReady) return;
         try { await _hub.SendAsync("DaemonStatusReport", report, cancellationToken: _ct); }
         catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed (old server or transient)"); }
+    }
+
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): answer a sequenced command ONE-WAY (never
+    /// <c>InvokeAsync</c>) — an old server without the <c>CommandAck</c>/<c>CommandRejected</c> handler
+    /// produces only a server-side log line, and any send exception is swallowed so the agent loops are
+    /// untouched. Virtual so tests can capture the sends without a live hub.</summary>
+    public virtual async Task CommandAckAsync(CommandAck ack) {
+        if (!IsReady) return;
+        try { await _hub.SendAsync("CommandAck", ack, cancellationToken: _ct); }
+        catch (Exception ex) { _logger.LogDebug(ex, "CommandAck send failed (old server or transient)"); }
+    }
+
+    public virtual async Task CommandRejectedAsync(CommandRejected rej) {
+        if (!IsReady) return;
+        try { await _hub.SendAsync("CommandRejected", rej, cancellationToken: _ct); }
+        catch (Exception ex) { _logger.LogDebug(ex, "CommandRejected send failed (old server or transient)"); }
     }
 
     public ServerConnection(DaemonConfig config, ILoggerFactory loggerFactory, ILogger<ServerConnection> logger) {
@@ -166,6 +200,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // resolved-candidates ledger per-entry. The handler is SYNCHRONOUS (the ledger Ack is void), so
         // invoke it inline and return a completed task — no work is awaited.
         _hub.On<AckResolvedCandidates>("AckResolvedCandidates", ack => { OnAckResolvedCandidates?.Invoke(ack); return Task.CompletedTask; });
+
+        // Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-command receive seams. StopAgentV2
+        // routes through SafeInvoke like every other command handler; AckProcessedPrefix + RequestStatusReport
+        // are synchronous/no-arg (the prefix ack is a void state mutation; the status-report nudge is answered
+        // out-of-band), so they invoke inline and return a completed task.
+        _hub.On<StopAgentV2>("StopAgentV2", cmd => SafeInvoke("StopAgentV2", () => OnStopAgentV2?.Invoke(cmd)));
+        _hub.On<AckProcessedPrefix>("AckProcessedPrefix", ack => { OnAckProcessedPrefix?.Invoke(ack); return Task.CompletedTask; });
+        _hub.On("RequestStatusReport", () => OnRequestStatusReport?.Invoke() ?? Task.CompletedTask);
 
         // Client-result invocations for per-phase eval dispatch.
         _hub.On<PrepareEvalCommand, PrepareResult>("PrepareEval",
@@ -428,7 +470,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // defaults, wire-compatible with old servers.
                     StartupReapComplete: GetStartupReapComplete?.Invoke(),
                     UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
-                    StartupDiscovery: GetStartupDiscovery?.Invoke()
+                    StartupDiscovery: GetStartupDiscovery?.Invoke(),
+                    // Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-settlement capability
+                    // + its epoch/watermark counters + the kill-quarantine snapshot. SupportsSequencedCommands
+                    // is THE gate: advertised true here but inert until the paired server PR consumes it. Epoch
+                    // is the shipped per-boot _daemonEpoch (set by DaemonRunner before services build, so the
+                    // connect epoch and the orchestrator's _daemonEpoch agree).
+                    Quarantined: GetQuarantined?.Invoke(),
+                    Epoch: _config.DaemonEpoch,
+                    HighestAcceptedSeq: GetHighestAcceptedSeq?.Invoke(),
+                    LastProcessedSeq: GetLastProcessedSeq?.Invoke(),
+                    SupportsSequencedCommands: true
                 ),
                 cancellationToken: _ct
             );

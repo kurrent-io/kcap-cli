@@ -214,6 +214,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // DaemonConnect payload; a Linux/macOS value is inert (the server consumes it only on Windows).
     readonly bool        _recordlessSurvivorsImpossible;
 
+    // Phase B2-b (sequenced-settlement design §4.2.2): the epoch-scoped sequenced-command handler.
+    // Owns the two serialized lanes + the contiguous-prefix watermark; injected with this orchestrator's
+    // ReadLiveness / the server's CommandAck+CommandRejected sends so it stays unit-testable without a
+    // live hub. Only Seq'd LaunchAgentCommand + StopAgentV2 route through it; un-Seq'd commands stay on
+    // the legacy unsequenced lane (old-server compat) and never advance the watermark.
+    SequencedCommandProcessor? _processor;
+
     // Phase B (D4 §6.4(2a)/(3)): single-flight latches so a slow sweep (each survivor consumes a
     // ~5s TERM grace sequentially) can't overlap itself when the next heartbeat tick fires — otherwise
     // sweeps accumulate, double-signal, and re-scan /proc concurrently. A tick whose prior sweep is still
@@ -345,6 +352,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             markerStore: _markerCandidates,
             onMarkerResolved: (a, e) => _resolvedLedger?.Upsert(a, e, null, null));
 
+        // Phase B2-b (sequenced-settlement design §4.2.2): the epoch-scoped sequenced-command processor.
+        // Scoped to the shipped per-boot _daemonEpoch; ReadLiveness gives it the confirmed-death-precedence
+        // liveness read a duplicate CommandAck needs, and the two server sends are its ack/reject channels.
+        _processor = new SequencedCommandProcessor(
+            _daemonEpoch, ReadLiveness, _server.CommandAckAsync, _server.CommandRejectedAsync, logger);
+
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;
         _server.OnStopAgent              += HandleStopAgent;
@@ -368,6 +381,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.GetStartupReapComplete         =  ComputeStartupReapComplete;
         _server.GetUnresolvedStartupCandidates =  () => [.. _orphanReaper?.BlockedCandidates() ?? []];
         _server.GetStartupDiscovery            =  () => _orphanReaper?.CurrentDiscovery;
+
+        // Phase B2-b (sequenced-settlement design §4.2.2): route the sequenced-command receive seams and
+        // mirror the watermark counters + kill-quarantine snapshot onto the connect payload. StopAgentV2
+        // goes through the processor's serial lane; AckProcessedPrefix retires identity-cache entries;
+        // RequestStatusReport is answered by an immediate out-of-band DaemonStatusReport.
+        _server.OnStopAgentV2          += HandleStopAgentV2;
+        _server.OnAckProcessedPrefix   += ack => _processor?.AckPrefix(ack);
+        _server.OnRequestStatusReport  += SendDaemonStatusReportOnceAsync;
+        _server.GetHighestAcceptedSeq  =  () => _processor?.HighestAcceptedSeq;
+        _server.GetLastProcessedSeq    =  () => _processor?.LastProcessedSeq;
+        _server.GetQuarantined         =  () => [.. QuarantineSnapshot()];
 
         _server.GetLiveAgentIds = () => [
             .. _agents
@@ -420,9 +444,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
             // candidates ledger on every self-report until the server prunes it per-entry via
-            // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch (Epoch/counters
-            // finalized in a later task); the field is additive/inert until the paired server PR reads it.
+            // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch.
             Epoch: _daemonEpoch,
+            // Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-command watermark counters
+            // from the processor (LastProcessedSeq = contiguous terminal prefix; HighestAcceptedSeq =
+            // highest accepted). Null before the processor exists; 0 on a fresh epoch (nothing accepted).
+            LastProcessedSeq: _processor?.LastProcessedSeq,
+            HighestAcceptedSeq: _processor?.HighestAcceptedSeq,
             // Phase B2-b (sequenced-settlement design): the per-platform startup-completeness signals.
             // StartupReapComplete is a computed roll-up; UnresolvedStartupCandidates always lists the
             // blocked known-id set so a completion-false report carries its reason; StartupDiscovery
@@ -454,6 +482,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return _orphanReaper?.CurrentDiscovery.MarkerScanState == MarkerScanState.Complete;
         if (OperatingSystem.IsWindows() && _recordlessSurvivorsImpossible) return true;
         return true; // pre-W1 Windows / macOS: record-pass-only completion (no blocked record-tracked candidates)
+    }
+
+    /// <summary>Phase B2-b (sequenced-settlement design §5.5/§4.2.2): the single lifecycle-state read
+    /// (confirmed-death precedence Live &gt; Quarantined &gt; Dead) over the same collections
+    /// <see cref="CleanupAgentAsync"/> + <see cref="AgentKillQuarantine"/> mutate. The design mandates that a
+    /// duplicate CommandAck's CurrentState be read so a teardown racing the read can NEVER surface a transient
+    /// false Dead. This read is lock-free (it does not take the per-agent lifecycle lock) and is SOUND ONLY
+    /// BECAUSE OF THE SHIPPED CleanupAgentAsync ORDERING INVARIANT: the confirmed-death teardown adds the
+    /// surviving child to <c>_quarantine</c> BEFORE removing it from <c>_agents</c> (AgentOrchestrator.cs —
+    /// "Add to quarantine BEFORE removing from _agents so EffectiveCount never dips"), so an agent is
+    /// CONTINUOUSLY present in <c>_agents ∪ _quarantine</c> from spawn until its quarantine entry is drained
+    /// (RetryQuarantineOnceAsync) — there is no window where a live/tearing-down agent is absent from both,
+    /// hence no transient false Dead. Dead is returned only after the genuine drain (confirmed death). If that
+    /// ordering invariant is ever broken, this must instead take the per-agent lifecycle lock. NotFound
+    /// collapses to Dead here (see the appendix note) — both satisfy confirmed-absence.</summary>
+    internal AgentLiveness ReadLiveness(string agentId) {
+        // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
+        // The add-to-quarantine-before-remove-from-_agents invariant makes this ordering false-Dead-free.
+        if (_agents.TryGetValue(agentId, out var a))
+            return a.Status is "Starting" or "Running" ? AgentLiveness.Live : AgentLiveness.Quarantined;
+        if (_quarantine?.Snapshot().Any(q => q.Id == agentId) == true) return AgentLiveness.Quarantined;
+        return AgentLiveness.Dead;
     }
 
     /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
@@ -702,7 +752,31 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return agent;
     }
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): route a launch. A fully-Seq'd command
+    /// (Epoch + Seq + CommandId present) goes through the processor's serial lane — accepted exactly-in-order,
+    /// executed once, and turned into a terminal CommandAck/CommandRejected from the <see cref="CommandOutcome"/>
+    /// the core returns. An un-Seq'd command (old server) runs the legacy unsequenced lane directly and never
+    /// advances the watermark. The processor being null (never happens in production — always constructed in
+    /// the ctor) also falls back to the legacy lane.</summary>
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
+        if (_processor is { } proc && cmd.Epoch is { } epoch && cmd.Seq is { } seq && cmd.CommandId is { } cmdId) {
+            await proc.SubmitAsync(
+                new SequencedItem(SequencedKind.Launch, epoch, seq, cmdId, cmd.AgentId),
+                () => HandleLaunchAgentCore(cmd));
+            return;
+        }
+
+        await HandleLaunchAgentCore(cmd); // legacy unsequenced lane (old server) — never advances the watermark
+    }
+
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the shipped launch body, now returning the
+    /// terminal <see cref="CommandOutcome"/> the sequenced lane needs (the legacy caller ignores it). Every
+    /// shipped pre-flight rejection maps to <c>LaunchRejected</c> — capacity to <c>daemon_capacity</c>, all
+    /// other validations to <c>semantic</c> — so the sequenced lane emits a CommandRejected alongside the
+    /// unchanged LaunchFailed; a spawn/registration failure that was cleaned up maps to
+    /// <c>launch_failed_cleaned</c>; a registered agent maps to <c>launch_executed</c>. The shipped
+    /// LaunchFailed / worktree-teardown / cleanup side effects are UNCHANGED — only the return value is added.</summary>
+    async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
         var prompt        = cmd.Prompt;
         var model         = cmd.Model;
@@ -721,7 +795,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_runtimeFactories.TryGetValue(cmd.Vendor, out var runtimeFactory)) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
-            return;
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
         // fail an unattended (review-flow) launch fast when the selected vendor's
@@ -731,7 +805,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (UnattendedLaunchPolicy.RejectionReason(cmd.Vendor, runtimeFactory.SupportsUnattended, isReviewFlow) is { } unattendedRejection) {
             await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
 
-            return;
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
         WorktreeInfo? worktree      = null;
@@ -750,26 +824,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (EffectiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
-                return;
+                return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
             }
 
             if (!_config.IsRepoAllowed(repoPath)) {
                 await _server.LaunchFailedAsync(agentId, $"Repo path not allowed: {repoPath}");
 
-                return;
+                return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
             if (!Directory.Exists(repoPath)) {
                 await _server.LaunchFailedAsync(agentId, $"Repo path does not exist: {repoPath}");
 
-                return;
+                return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
             if (isReview) {
                 if (cmd.Review is not { } review) {
                     await _server.LaunchFailedAsync(agentId, "Review launch missing PR info");
 
-                    return;
+                    return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
 
                 // Final guard: re-validate that the chosen path's origin really
@@ -780,7 +854,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (actual is null) {
                     await _server.LaunchFailedAsync(agentId, $"No origin remote at {repoPath}");
 
-                    return;
+                    return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
 
                 var expected = $"github.com/{review.Owner}/{review.Repo}";
@@ -788,7 +862,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) {
                     await _server.LaunchFailedAsync(agentId, $"Repo at {repoPath} no longer matches {review.Owner}/{review.Repo} (origin: {actual})");
 
-                    return;
+                    return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
             }
 
@@ -801,7 +875,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!string.IsNullOrEmpty(effort) && !ValidEffortLevels.Contains(effort)) {
                 await _server.LaunchFailedAsync(agentId, $"Invalid effort level: {effort}");
 
-                return;
+                return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
             LogLaunching(agentId, repoPath, effort ?? "default", model);
@@ -866,7 +940,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
                     }
 
-                    return;
+                    return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
 
                 daemonBridgeUrl    = _permissionBridge.RegisterReviewerToken(reviewerServers);
@@ -922,7 +996,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     }
                 }
 
-                return;
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
             mcpConfigPath = start.McpConfigPath;
@@ -1008,6 +1082,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
                 ReportResolvedModel(agentId, cmd.Vendor, model);
             }
+
+            // Phase B2-b (sequenced-settlement design §4.2.2): the launch executed — the agent is registered.
+            // The sequenced lane turns this into a terminal CommandAck(Processed) with a LIVE CurrentState read
+            // at ack time; a fire-and-forget read loop that already finalized+cleaned the agent (e.g. an
+            // immediate-exit runtime) reads as launch_failed_cleaned instead. Legacy callers ignore the value.
+            return _agents.TryGetValue(agentId, out var launched)
+                ? new CommandOutcome(CommandOutcomeKind.LaunchExecuted, agentId, launched.SessionId)
+                : new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
@@ -1017,7 +1099,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (_agents.ContainsKey(agentId)) {
                 await CleanupAgentAsync(agentId);
                 await _server.LaunchFailedAsync(agentId, ex.Message);
-                return;
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
@@ -1059,6 +1141,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
 
             await _server.LaunchFailedAsync(agentId, ex.Message);
+
+            // Phase B2-b (sequenced-settlement design §4.2.2): a pre-insert failure — the worktree (if any)
+            // was torn down and no agent was ever registered; terminal for the sequenced lane.
+            return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         }
     }
 
@@ -1358,6 +1444,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// session-end POST + watcher drain on a healthy connection.
     /// </summary>
     static readonly TimeSpan GracefulExitWait = TimeSpan.FromSeconds(15);
+
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the sequenced stop. Routes through the
+    /// processor's serial lane (accepted exactly-in-order, executed once, terminal StopExecuted outcome →
+    /// CommandAck). Falls back to the legacy <see cref="HandleStopAgent"/> path if the processor is absent
+    /// (never happens in production — always constructed in the ctor).</summary>
+    async Task HandleStopAgentV2(StopAgentV2 cmd) {
+        if (_processor is { } proc) {
+            await proc.SubmitAsync(
+                new SequencedItem(SequencedKind.Stop, cmd.Epoch, cmd.Seq, cmd.CommandId, cmd.AgentId),
+                async () => {
+                    await HandleStopAgent(cmd.AgentId);
+                    return new CommandOutcome(CommandOutcomeKind.StopExecuted, cmd.AgentId);
+                });
+            return;
+        }
+
+        await HandleStopAgent(cmd.AgentId); // legacy unsequenced fallback
+    }
 
     internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
@@ -2194,6 +2298,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _daemonHeartbeat.Dispose();
         _tokenRefresh.Dispose();
         _spoolDrain.Dispose();
+
+        // Phase B2-b (sequenced-settlement design §4.2.2): complete the processor's serial lane so an
+        // in-flight execution drains before the daemon exits.
+        if (_processor is not null) await _processor.DisposeAsync();
     }
 
     /// <summary>
