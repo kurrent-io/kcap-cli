@@ -470,7 +470,7 @@ public class CodexConfigTomlTests {
 
         var change = CodexConfigToml.UnregisterKcapMcpServers(path);
 
-        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.UpdatedWithPreservedEntries);
         var servers = (TomlTable)ReadToml(path)["mcp_servers"];
         await Assert.That((string)((TomlTable)servers["kcap-flows"])["command"])
             .IsEqualTo("/opt/homebrew/bin/kcap");
@@ -487,7 +487,7 @@ public class CodexConfigTomlTests {
 
         var change = CodexConfigToml.UnregisterKcapMcpServers(path);
 
-        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Unchanged);
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.PreservedOwnershipUnknown);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 
@@ -504,9 +504,50 @@ public class CodexConfigTomlTests {
         CodexConfigToml.RegisterKcapMcpServers(path); // relinquishes the changed claim
         var change = CodexConfigToml.UnregisterKcapMcpServers(path);
 
-        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.UpdatedWithPreservedEntries);
         var servers = (TomlTable)ReadToml(path)["mcp_servers"];
         await Assert.That(servers.ContainsKey("kcap-flows")).IsTrue();
+    }
+
+    [Test]
+    public async Task Unregister_without_server_table_relinquishes_stale_claims() {
+        var path = TempConfig();
+        CodexConfigToml.RegisterKcapMcpServers(path);
+        var root = ReadToml(path);
+        root.Remove("mcp_servers");
+        File.WriteAllText(path, TomlSerializer.Serialize(root));
+
+        var cleared = CodexConfigToml.UnregisterKcapMcpServers(path);
+        await Assert.That(cleared).IsEqualTo(CodexConfigToml.Change.Updated);
+
+        root = ReadToml(path);
+        var manual = new TomlTable {
+            ["command"] = "kcap",
+            ["args"] = new TomlArray { "mcp", "flows" }
+        };
+        root["mcp_servers"] = new TomlTable { ["kcap-flows"] = manual };
+        File.WriteAllText(path, TomlSerializer.Serialize(root));
+
+        var preserved = CodexConfigToml.UnregisterKcapMcpServers(path);
+        await Assert.That(preserved).IsEqualTo(CodexConfigToml.Change.PreservedUnownedEntries);
+        await Assert.That(((TomlTable)ReadToml(path)["mcp_servers"]).ContainsKey("kcap-flows")).IsTrue();
+    }
+
+    [Test]
+    public async Task Register_rejects_symlinked_parent_directory() {
+        if (OperatingSystem.IsWindows()) return;
+        var root = Path.Combine(Path.GetTempPath(), "kcap-codex-parent-link-" + Guid.NewGuid().ToString("N"));
+        var real = Path.Combine(root, "real");
+        var alias = Path.Combine(root, "alias");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(alias, real);
+        try {
+            var change = CodexConfigToml.RegisterKcapMcpServers(Path.Combine(alias, "config.toml"));
+            await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Failed);
+            await Assert.That(File.Exists(Path.Combine(real, "config.toml"))).IsFalse();
+        } finally {
+            try { Directory.Delete(root, true); } catch { }
+        }
     }
 
     [Test]

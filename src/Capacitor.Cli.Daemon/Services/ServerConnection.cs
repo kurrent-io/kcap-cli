@@ -458,6 +458,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     internal virtual bool IsReady => _gate.IsReady(_hub.State);
 
+    /// <summary>The current SignalR connection incarnation. Review-flow launch commands pin this
+    /// value server-side and the daemon rechecks it immediately before any spawn side effects.</summary>
+    internal virtual string? CurrentConnectionId => _hub.ConnectionId;
+
     async Task OnReconnected(string? connectionId) {
         LogReconnected();
         await RegisterDaemon();

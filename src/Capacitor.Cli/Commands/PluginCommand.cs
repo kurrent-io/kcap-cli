@@ -523,9 +523,21 @@ public static class PluginCommand {
             ? CodexConfigToml.UnregisterKcapMcpServers(env.CodexConfigTomlPath)
             : CodexConfigToml.Change.Unchanged;
         var mcpFailed = mcpChange == CodexConfigToml.Change.Failed;
+        var mcpChanged = mcpChange is CodexConfigToml.Change.Updated or
+            CodexConfigToml.Change.UpdatedWithPreservedEntries;
+        var mcpPreserved = mcpChange is CodexConfigToml.Change.UpdatedWithPreservedEntries or
+            CodexConfigToml.Change.PreservedUnownedEntries or
+            CodexConfigToml.Change.PreservedOwnershipUnknown;
 
-        if (mcpChange == CodexConfigToml.Change.Updated) {
+        if (mcpChanged) {
             await env.Stdout.WriteLineAsync($"Codex MCP servers removed ({env.CodexConfigTomlPath})");
+        }
+        if (mcpPreserved) {
+            var reason = mcpChange == CodexConfigToml.Change.PreservedOwnershipUnknown
+                ? "the ownership ledger is missing or corrupt"
+                : "one or more entries are user-owned or were edited";
+            await env.Stderr.WriteLineAsync(
+                $"Warning: some Codex MCP entries were preserved because {reason}. Review [mcp_servers] in {env.CodexConfigTomlPath} and remove kcap-flows manually if you no longer want the paid flow surface.");
         } else if (mcpFailed) {
             await env.Stderr.WriteLineAsync($"Could not update {env.CodexConfigTomlPath} to remove Codex MCP servers.");
         }
@@ -544,7 +556,7 @@ public static class PluginCommand {
             return 1;
         }
 
-        if (!hooksRemoved && mcpChange != CodexConfigToml.Change.Updated && !agents.RemovedAny && !legacy.RemovedAny) {
+        if (!hooksRemoved && !mcpChanged && !mcpPreserved && !agents.RemovedAny && !legacy.RemovedAny) {
             await env.Stdout.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 

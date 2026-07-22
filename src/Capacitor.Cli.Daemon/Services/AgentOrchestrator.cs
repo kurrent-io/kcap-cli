@@ -601,6 +601,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? DaemonRunner.ProbeCliVersion(_config.ClaudePath)
                 : null;
             var policyMatches = string.Equals(certification.Vendor, cmd.Vendor, StringComparison.Ordinal)
+                && string.Equals(_server.CurrentConnectionId,
+                    certification.ExpectedDaemonConnectionId, StringComparison.Ordinal)
                 && string.Equals(certification.RequiredLauncherPolicyVersion,
                     DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal)
                 && string.Equals(version, certification.ExpectedCliVersion, StringComparison.Ordinal)

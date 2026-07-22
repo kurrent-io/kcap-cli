@@ -26,7 +26,14 @@ public static class CodexConfigToml {
     static readonly Lock              _writeLock    = new();
     static readonly TomlTableTypeInfo _tomlTypeInfo = new();
 
-    public enum Change { Unchanged, Updated, Failed }
+    public enum Change {
+        Unchanged,
+        Updated,
+        UpdatedWithPreservedEntries,
+        PreservedUnownedEntries,
+        PreservedOwnershipUnknown,
+        Failed
+    }
 
     static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
 
@@ -113,12 +120,16 @@ public static class CodexConfigToml {
 
                 var ledgerPath = Path.Combine(Path.GetDirectoryName(configPath) ?? ".", "mcp-ownership-v1.json");
                 var ledger = ReadOwnershipLedger(ledgerPath);
-                if (remove && ledger is null) return Change.Unchanged; // missing/corrupt: preserve everything
-                ledger ??= NewOwnershipLedger();
-                var claims = (JsonObject)ledger["entries"]!;
                 var servers = root.TryGetValue("mcp_servers", out var serversObj) && serversObj is TomlTable found
                     ? found
                     : null;
+                if (remove && ledger is null) {
+                    var hasCanonicalEntries = servers is not null &&
+                        KcapMcpServers.ForCodex.Any(d => servers.ContainsKey(d.Name));
+                    return hasCanonicalEntries ? Change.PreservedOwnershipUnknown : Change.Unchanged;
+                }
+                ledger ??= NewOwnershipLedger();
+                var claims = (JsonObject)ledger["entries"]!;
                 var tomlChanged = false;
                 var ledgerChanged = false;
 
@@ -151,14 +162,24 @@ public static class CodexConfigToml {
                     return tomlChanged || ledgerChanged ? Change.Updated : Change.Unchanged;
                 }
 
-                if (servers is null) return Change.Unchanged;
+                if (servers is null) {
+                    foreach (var descriptor in KcapMcpServers.ForCodex)
+                        ledgerChanged |= claims.Remove(descriptor.Name);
+                    if (ledgerChanged) WriteJsonAtomic(ledgerPath, ledger);
+                    return ledgerChanged ? Change.Updated : Change.Unchanged;
+                }
                 var removable = new List<string>();
+                var preserved = false;
                 foreach (var descriptor in KcapMcpServers.ForCodex) {
-                    if (claims[descriptor.Name] is not JsonObject claim) continue;
+                    if (claims[descriptor.Name] is not JsonObject claim) {
+                        preserved |= servers.ContainsKey(descriptor.Name);
+                        continue;
+                    }
                     if (!servers.TryGetValue(descriptor.Name, out var value) || value is not TomlTable table ||
                         !string.Equals(StringField(claim, "fingerprint"), Fingerprint(table), StringComparison.Ordinal)) {
                         claims.Remove(descriptor.Name); // missing/changed: clear claim and preserve config
                         ledgerChanged = true;
+                        preserved |= servers.ContainsKey(descriptor.Name);
                         continue;
                     }
                     removable.Add(descriptor.Name);
@@ -174,7 +195,9 @@ public static class CodexConfigToml {
                 }
                 if (servers.Count == 0) root.Remove("mcp_servers");
                 if (tomlChanged) WriteTomlAtomic(configPath, root);
-                return tomlChanged || ledgerChanged ? Change.Updated : Change.Unchanged;
+                if (tomlChanged || ledgerChanged)
+                    return preserved ? Change.UpdatedWithPreservedEntries : Change.Updated;
+                return preserved ? Change.PreservedUnownedEntries : Change.Unchanged;
             } catch {
                 return Change.Failed;
             }
@@ -243,10 +266,10 @@ public static class CodexConfigToml {
     static void WriteJsonAtomic(string path, JsonObject root) {
         EnsureParentDirectory(path);
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
-        File.WriteAllText(tmp, root.ToJsonString(new() { WriteIndented = true }));
-        SetOwnerOnly(tmp);
-        try { File.Move(tmp, path, overwrite: true); }
-        catch { try { File.Delete(tmp); } catch { } throw; }
+        try {
+            WriteOwnerOnlyTemp(tmp, root.ToJsonString(new() { WriteIndented = true }));
+            File.Move(tmp, path, overwrite: true);
+        } catch { try { File.Delete(tmp); } catch { } throw; }
     }
 
     /// <summary>
@@ -463,10 +486,8 @@ public static class CodexConfigToml {
 
     static void WriteTomlAtomic(string path, TomlTable root) {
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
-        File.WriteAllText(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
-        SetOwnerOnly(tmp);
-
         try {
+            WriteOwnerOnlyTemp(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
             File.Move(tmp, path, overwrite: true);
         } catch {
             try { File.Delete(tmp); } catch {
@@ -479,10 +500,21 @@ public static class CodexConfigToml {
 
     static string CanonicalConfigPath(string path) {
         var full = Path.GetFullPath(path);
-        RejectSymlink(full);
+        RejectSymlinkComponents(full);
         var ledger = Path.Combine(Path.GetDirectoryName(full) ?? ".", "mcp-ownership-v1.json");
-        RejectSymlink(ledger);
+        RejectSymlinkComponents(ledger);
         return full;
+    }
+
+    static void RejectSymlinkComponents(string path) {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? throw new IOException($"Path has no root: {path}");
+        var current = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries)) {
+            current = Path.Combine(current, part);
+            RejectSymlink(current);
+        }
     }
 
     static void RejectSymlink(string path) {
@@ -493,6 +525,7 @@ public static class CodexConfigToml {
 
     static IDisposable AcquireConfigLock(string canonicalConfigPath) {
         EnsureParentDirectory(canonicalConfigPath);
+        RejectSymlinkComponents(canonicalConfigPath);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalConfigPath))).ToLowerInvariant();
         var mutex = new Mutex(false, "kcap-codex-config-" + hash);
         try {
@@ -512,6 +545,21 @@ public static class CodexConfigToml {
     static void SetOwnerOnly(string path) {
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    static void WriteOwnerOnlyTemp(string path, string content) {
+        var options = new FileStreamOptions {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var stream = new FileStream(path, options))
+        using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            writer.Write(content);
+        // Defense in depth for platforms/filesystems that ignore the create mode.
+        SetOwnerOnly(path);
     }
 
     sealed class MutexLease(Mutex mutex) : IDisposable {
