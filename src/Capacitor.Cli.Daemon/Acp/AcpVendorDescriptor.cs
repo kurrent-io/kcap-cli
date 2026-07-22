@@ -118,9 +118,13 @@ internal sealed record AcpVendorDescriptor {
 internal static class AcpVendorDescriptors {
     /// <summary>Cursor CLI's interactive ACP hosted-agent surface. Cursor is deliberately not
     /// advertised as an unattended reviewer: its current launcher is a script/bundle rather than a
-    /// certifiable standalone artifact, and real MCP use emits an ACP permission frame. Enabling it
-    /// requires a verified-bundle launch procedure and a certified build that completes both review
-    /// kinds without any permission or elicitation frame.</summary>
+    /// certifiable standalone artifact, and real MCP use emits an ACP permission frame. Flipping
+    /// <see cref="AcpVendorDescriptor.SupportsUnattended"/> is only the final step after the full
+    /// certification gate exists: exact OS/architecture artifact identity plus verified-bundle
+    /// copy/hash/version launch, sanitized environment and POSIX ownership/mode trust, owned
+    /// worktree enforcement, fail-and-reap handling for every permission/elicitation/unknown
+    /// interaction frame, and Cursor-specific model/spend validation. A real certified build must
+    /// then complete both review kinds under those exact policies.</summary>
     public static readonly AcpVendorDescriptor Cursor = new(
         Vendor:              "cursor",
         ResolveBinaryPath:   cfg => cfg.CursorPath,
