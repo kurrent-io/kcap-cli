@@ -1,6 +1,8 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -19,6 +21,33 @@ namespace Capacitor.Cli.Tests.Unit;
 /// <c>SpyHostedAgentLauncher</c>).
 /// </summary>
 public partial class AgentOrchestratorVendorTests {
+    [Test]
+    public async Task Borrowed_Claude_review_flow_fails_at_runtime_boundary_without_spawning() {
+        var (cwd, cleanup) = CreateGitRepo();
+        try {
+            var server = new CaptureServerConnection();
+            var ptyFactory = new SpyPtyProcessFactory();
+            var launcher = new ClaudeLauncher(
+                new DaemonConfig { ClaudePath = "spy-claude", ServerUrl = "http://127.0.0.1:1" },
+                NullLogger<ClaudeLauncher>.Instance);
+            await using var orch = BuildOrchestrator(server, ptyFactory,
+                new Dictionary<string, IHostedAgentLauncher> { ["claude"] = launcher });
+            var cmd = new LaunchAgentCommand(
+                "agent-borrowed-review", "review", "default", null, cwd, null, null,
+                Vendor: "claude", Kind: LaunchKind.ReviewFlow, Borrowed: true, BorrowCwd: cwd);
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
+            await Assert.That(server.LaunchFailedCalls[0].Reason)
+                .Contains("borrowed review flows are not certified");
+            await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+            await Assert.That(Directory.Exists(cwd)).IsTrue();
+        } finally {
+            cleanup();
+        }
+    }
+
     // ── A5: borrowed launch runs in the user's cwd and creates no daemon worktree ─────────
 
     [Test]

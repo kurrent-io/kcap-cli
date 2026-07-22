@@ -53,16 +53,10 @@ mcp flows:
       get_review_flow_status Get the status and last result of a flow.
       close_review_flow      Close a completed review flow.
 
-  Claude Code auto-registers `kcap-flows` via the plugin's `.mcp.json`
-  (installed by `kcap setup`), so no manual step is needed there. Add it
-  manually only for Codex:
-
-    Codex (CLI or desktop app) — add to ~/.codex/config.toml:
-      [mcp_servers.kcap-flows]
-      command = "kcap"
-      args    = ["mcp", "flows"]
-      # desktop app launches with no shell PATH, so command
-      # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
+  Claude Code auto-registers `kcap-flows` via the plugin's `.mcp.json`.
+  `kcap setup` / `kcap plugin install --codex` register it conservatively
+  in Codex's config.toml, and the native Codex plugin descriptor includes it.
+  The work-launching server is never marked read-only or auto-approved.
 
 mcp memory:
   Exposes six tools — search_memories, get_memory, save_memory, update_memory,
@@ -101,14 +95,13 @@ mcp workitems:
 
 INSTALL
 
-  `kcap setup` registers `kcap-sessions`, `kcap-review`, and `kcap-memory`
+  `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`, and `kcap-flows`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap
   plugin through Codex's native `codex plugin add` also provides them via
-  the plugin's `.codex-mcp.json` descriptor. `kcap-flows` is auto-registered
-  for Claude Code only — it launches a paid hosted reviewer, so on Codex it
-  stays manual (see `mcp flows` above).
+  the plugin's `.codex-mcp.json` descriptor. Existing manual Codex entries are
+  preserved and never claimed; uninstall removes only unchanged kcap-owned entries.
 
   `kcap-judge` is not auto-registered. Add it explicitly if you
   want it:

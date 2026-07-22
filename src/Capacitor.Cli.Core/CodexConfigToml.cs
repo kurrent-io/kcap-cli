@@ -1,4 +1,9 @@
 using Capacitor.Cli.Core.Mcp;
+using System.Collections;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
 using Tomlyn;
 using Tomlyn.Model;
 using Tomlyn.Serialization;
@@ -21,7 +26,14 @@ public static class CodexConfigToml {
     static readonly Lock              _writeLock    = new();
     static readonly TomlTableTypeInfo _tomlTypeInfo = new();
 
-    public enum Change { Unchanged, Updated, Failed }
+    public enum Change {
+        Unchanged,
+        Updated,
+        UpdatedWithPreservedEntries,
+        PreservedUnownedEntries,
+        PreservedOwnershipUnknown,
+        Failed
+    }
 
     static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
 
@@ -83,7 +95,7 @@ public static class CodexConfigToml {
     /// only missing servers are added. User-defined <c>mcp_servers</c> entries are preserved.
     /// </summary>
     public static Change RegisterKcapMcpServers(string? configPath = null) =>
-        Update(configPath ?? DefaultConfigPath, MutateRegisterMcpServers, out _);
+        UpdateMcpRegistration(configPath ?? DefaultConfigPath, remove: false);
 
     /// <summary>
     /// Removes the kcap-owned MCP server entries (<c>kcap-review</c>, <c>kcap-sessions</c>,
@@ -93,7 +105,172 @@ public static class CodexConfigToml {
     /// entirely when removing them empties it, so uninstall leaves no bare table behind.
     /// </summary>
     public static Change UnregisterKcapMcpServers(string? configPath = null) =>
-        Update(configPath ?? DefaultConfigPath, MutateUnregisterMcpServers, out _);
+        UpdateMcpRegistration(configPath ?? DefaultConfigPath, remove: true);
+
+    static Change UpdateMcpRegistration(string configPath, bool remove) {
+        lock (_writeLock) {
+            try {
+                configPath = CanonicalConfigPath(configPath);
+                using var crossProcess = AcquireConfigLock(configPath);
+                var root = File.Exists(configPath)
+                    ? TomlSerializer.Deserialize(File.ReadAllText(configPath), _tomlTypeInfo.TableInfo) ?? new TomlTable()
+                    : new TomlTable();
+                if (root.TryGetValue("mcp_servers", out var existing) && existing is not TomlTable)
+                    return Change.Failed;
+
+                var ledgerPath = Path.Combine(Path.GetDirectoryName(configPath) ?? ".", "mcp-ownership-v1.json");
+                var ledger = ReadOwnershipLedger(ledgerPath);
+                var servers = root.TryGetValue("mcp_servers", out var serversObj) && serversObj is TomlTable found
+                    ? found
+                    : null;
+                if (remove && ledger is null) {
+                    var hasCanonicalEntries = servers is not null &&
+                        KcapMcpServers.ForCodex.Any(d => servers.ContainsKey(d.Name));
+                    return hasCanonicalEntries ? Change.PreservedOwnershipUnknown : Change.Unchanged;
+                }
+                ledger ??= NewOwnershipLedger();
+                var claims = (JsonObject)ledger["entries"]!;
+                var tomlChanged = false;
+                var ledgerChanged = false;
+
+                if (!remove) {
+                    servers ??= GetOrAddTable(root, "mcp_servers");
+                    foreach (var descriptor in KcapMcpServers.ForCodex) {
+                        if (servers.TryGetValue(descriptor.Name, out var existingValue)) {
+                            if (claims[descriptor.Name] is JsonObject claim && existingValue is TomlTable existingTable &&
+                                !string.Equals(StringField(claim, "fingerprint"), Fingerprint(existingTable), StringComparison.Ordinal)) {
+                                claims.Remove(descriptor.Name); // user changed an owned entry: relinquish it
+                                ledgerChanged = true;
+                            }
+                            continue; // never mutate or claim a pre-existing/manual entry
+                        }
+
+                        var table = BuildMcpTable(descriptor);
+                        servers[descriptor.Name] = table;
+                        tomlChanged = true;
+                        claims[descriptor.Name] = BuildClaim(table);
+                        ledgerChanged = true;
+                    }
+
+                    // Safe crash ordering: config first, ownership claim second. A crash leaks an
+                    // unowned entry, which uninstall deliberately preserves.
+                    if (tomlChanged) {
+                        EnsureParentDirectory(configPath);
+                        WriteTomlAtomic(configPath, root);
+                    }
+                    if (ledgerChanged) WriteJsonAtomic(ledgerPath, ledger);
+                    return tomlChanged || ledgerChanged ? Change.Updated : Change.Unchanged;
+                }
+
+                if (servers is null) {
+                    foreach (var descriptor in KcapMcpServers.ForCodex)
+                        ledgerChanged |= claims.Remove(descriptor.Name);
+                    if (ledgerChanged) WriteJsonAtomic(ledgerPath, ledger);
+                    return ledgerChanged ? Change.Updated : Change.Unchanged;
+                }
+                var removable = new List<string>();
+                var preserved = false;
+                foreach (var descriptor in KcapMcpServers.ForCodex) {
+                    if (claims[descriptor.Name] is not JsonObject claim) {
+                        preserved |= servers.ContainsKey(descriptor.Name);
+                        continue;
+                    }
+                    if (!servers.TryGetValue(descriptor.Name, out var value) || value is not TomlTable table ||
+                        !string.Equals(StringField(claim, "fingerprint"), Fingerprint(table), StringComparison.Ordinal)) {
+                        claims.Remove(descriptor.Name); // missing/changed: clear claim and preserve config
+                        ledgerChanged = true;
+                        preserved |= servers.ContainsKey(descriptor.Name);
+                        continue;
+                    }
+                    removable.Add(descriptor.Name);
+                    claims.Remove(descriptor.Name);
+                    ledgerChanged = true;
+                }
+
+                // Clear claims before touching config. A crash leaves safe, unowned entries.
+                if (ledgerChanged) WriteJsonAtomic(ledgerPath, ledger);
+                foreach (var name in removable) {
+                    servers.Remove(name);
+                    tomlChanged = true;
+                }
+                if (servers.Count == 0) root.Remove("mcp_servers");
+                if (tomlChanged) WriteTomlAtomic(configPath, root);
+                if (tomlChanged || ledgerChanged)
+                    return preserved ? Change.UpdatedWithPreservedEntries : Change.Updated;
+                return preserved ? Change.PreservedUnownedEntries : Change.Unchanged;
+            } catch {
+                return Change.Failed;
+            }
+        }
+    }
+
+    static TomlTable BuildMcpTable(KcapMcpServer descriptor) {
+        var table = new TomlTable {
+            ["command"] = KcapMcpServers.Command,
+            ["args"] = ToTomlArray(descriptor.Args)
+        };
+        if (descriptor.ReadOnly) table["default_tools_approval_mode"] = "approve";
+        return table;
+    }
+
+    static JsonObject NewOwnershipLedger() => new() {
+        ["version"] = 1,
+        ["entries"] = new JsonObject()
+    };
+
+    static JsonObject? ReadOwnershipLedger(string path) {
+        if (!File.Exists(path)) return null;
+        try {
+            var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
+            return root?["version"]?.GetValue<int>() == 1 && root["entries"] is JsonObject ? root : null;
+        } catch { return null; }
+    }
+
+    static JsonObject BuildClaim(TomlTable table) => new() {
+        ["fingerprint"] = Fingerprint(table),
+        ["normalized_table"] = NormalizeToml(table)
+    };
+
+    static string Fingerprint(TomlTable table) {
+        var canonical = NormalizeToml(table).ToJsonString();
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    static JsonNode NormalizeToml(object? value) => value switch {
+        TomlTable table => new JsonObject(table.OrderBy(x => x.Key, StringComparer.Ordinal)
+            .Select(x => KeyValuePair.Create<string, JsonNode?>(x.Key, NormalizeToml(x.Value)))),
+        TomlTableArray tableArray => new JsonArray(tableArray.Select(NormalizeToml).ToArray()),
+        TomlArray array => new JsonArray(array.Select(NormalizeToml).ToArray()),
+        string s => new JsonObject { ["type"] = "string", ["value"] = s },
+        bool b => new JsonObject { ["type"] = "bool", ["value"] = b },
+        null => new JsonObject { ["type"] = "null" },
+        IDictionary dictionary => new JsonObject(dictionary.Keys.Cast<object>()
+            .Select(key => KeyValuePair.Create<string, JsonNode?>(
+                Convert.ToString(key, CultureInfo.InvariantCulture) ?? "", NormalizeToml(dictionary[key])))
+            .OrderBy(x => x.Key, StringComparer.Ordinal)),
+        IEnumerable sequence => new JsonArray(sequence.Cast<object?>().Select(NormalizeToml).ToArray()),
+        _ => new JsonObject {
+            ["type"] = value.GetType().FullName,
+            ["value"] = Convert.ToString(value, CultureInfo.InvariantCulture)
+        }
+    };
+
+    static string? StringField(JsonObject value, string name) =>
+        value[name] is JsonValue field && field.TryGetValue<string>(out var text) ? text : null;
+
+    static void EnsureParentDirectory(string path) {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+    }
+
+    static void WriteJsonAtomic(string path, JsonObject root) {
+        EnsureParentDirectory(path);
+        var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
+        try {
+            WriteOwnerOnlyTemp(tmp, root.ToJsonString(new() { WriteIndented = true }));
+            File.Move(tmp, path, overwrite: true);
+        } catch { try { File.Delete(tmp); } catch { } throw; }
+    }
 
     /// <summary>
     /// Reads the top-level <c>model = "…"</c> key from <c>~/.codex/config.toml</c>
@@ -175,6 +352,15 @@ public static class CodexConfigToml {
         error = null;
 
         lock (_writeLock) {
+            IDisposable crossProcess;
+            try {
+                configPath = CanonicalConfigPath(configPath);
+                crossProcess = AcquireConfigLock(configPath);
+            } catch (Exception ex) {
+                error = ex;
+                return Change.Failed;
+            }
+            using (crossProcess) {
             TomlTable root;
 
             if (File.Exists(configPath)) {
@@ -215,6 +401,7 @@ public static class CodexConfigToml {
 
                 return Change.Failed;
             }
+            }
         }
     }
 
@@ -231,89 +418,11 @@ public static class CodexConfigToml {
         return true;
     }
 
-    static bool MutateRegisterMcpServers(TomlTable root) {
-        // If `mcp_servers` exists but isn't a table, refuse rather than let GetOrAddTable
-        // replace it — that would silently destroy the user's value and break the
-        // non-destructive contract. Update() turns this throw into Change.Failed, so the
-        // caller warns instead. (A non-table `mcp_servers` is an invalid Codex config, but
-        // we still won't clobber it.)
-        if (root.TryGetValue("mcp_servers", out var existing) && existing is not TomlTable)
-            throw new InvalidOperationException(
-                "~/.codex/config.toml has a non-table `mcp_servers` value; refusing to overwrite it.");
-
-        var servers = GetOrAddTable(root, "mcp_servers");
-        var changed = false;
-
-        foreach (var server in KcapMcpServers.ForCodex) {
-            // Never clobber an existing entry's command/args: a prior kcap registration is already
-            // correct, and a user may have customized it (e.g. an absolute-path command for a GUI
-            // host). For an existing entry we only ADDITIVELY set the read-only auto-approve key, and
-            // only when it is DEMONSTRABLY the read-only server: command == "kcap" AND args match the
-            // expected read-only args. The args check matters because the heal never rewrites args — a
-            // hand-written `[mcp_servers.kcap-review]` that actually points at a write-capable server
-            // (e.g. args = ["mcp","memory"]) would otherwise pass a command-only gate and be
-            // auto-approved under the read-only name. Also require the user hasn't set their own
-            // approval mode. This lets genuine pre-existing installs pick up trust; anything ambiguous
-            // keeps prompting.
-            if (servers.TryGetValue(server.Name, out var existingVal)) {
-                if (server.ReadOnly
-                 && existingVal is TomlTable existingTable
-                 && existingTable.TryGetValue("command", out var existingCmd)
-                 && existingCmd is string existingCmdStr && existingCmdStr == KcapMcpServers.Command
-                 && existingTable.TryGetValue("args", out var existingArgsObj)
-                 && existingArgsObj is TomlArray existingArgs && ArgsMatch(existingArgs, server.Args)
-                 && !existingTable.ContainsKey("default_tools_approval_mode")) {
-                    existingTable["default_tools_approval_mode"] = "approve";
-                    changed = true;
-                }
-                continue;
-            }
-
-            var table = new TomlTable {
-                ["command"] = KcapMcpServers.Command,
-                ["args"]    = ToTomlArray(server.Args)
-            };
-            // Auto-approve read-only servers (pure reads: kcap-review, kcap-sessions) so Codex runs
-            // them without a prompt. kcap-memory (writes via save) is omitted → keeps prompting.
-            // (kcap-flows isn't in ForCodex at all.) Valid Codex values: auto | prompt | approve.
-            if (server.ReadOnly) table["default_tools_approval_mode"] = "approve";
-            servers[server.Name] = table;
-            changed = true;
-        }
-
-        return changed;
-    }
-
-    static bool MutateUnregisterMcpServers(TomlTable root) {
-        if (!root.TryGetValue("mcp_servers", out var sObj) || sObj is not TomlTable servers) return false;
-
-        var changed = false;
-
-        foreach (var server in KcapMcpServers.ForCodex)
-            if (servers.Remove(server.Name)) changed = true;
-
-        // Don't leave a bare [mcp_servers] behind if we emptied it.
-        if (servers.Count == 0 && root.Remove("mcp_servers")) changed = true;
-
-        return changed;
-    }
-
     static TomlArray ToTomlArray(string[] values) {
         var arr = new TomlArray();
         foreach (var v in values) arr.Add(v);
 
         return arr;
-    }
-
-    /// <summary>True when a TOML <c>args</c> array equals the expected string args exactly (order +
-    /// values). Used to confirm an existing kcap-named server really is the expected read-only one
-    /// before the heal auto-approves it.</summary>
-    static bool ArgsMatch(TomlArray actual, string[] expected) {
-        if (actual.Count != expected.Length) return false;
-        for (var i = 0; i < expected.Length; i++)
-            if (actual[i] is not string s || s != expected[i]) return false;
-
-        return true;
     }
 
     static bool MutateNetworkAccess(TomlTable root, IReadOnlyCollection<string> allowDomains) {
@@ -377,9 +486,8 @@ public static class CodexConfigToml {
 
     static void WriteTomlAtomic(string path, TomlTable root) {
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
-        File.WriteAllText(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
-
         try {
+            WriteOwnerOnlyTemp(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
             File.Move(tmp, path, overwrite: true);
         } catch {
             try { File.Delete(tmp); } catch {
@@ -387,6 +495,76 @@ public static class CodexConfigToml {
             }
 
             throw;
+        }
+    }
+
+    static string CanonicalConfigPath(string path) {
+        var full = Path.GetFullPath(path);
+        RejectSymlinkComponents(full);
+        var ledger = Path.Combine(Path.GetDirectoryName(full) ?? ".", "mcp-ownership-v1.json");
+        RejectSymlinkComponents(ledger);
+        return full;
+    }
+
+    static void RejectSymlinkComponents(string path) {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? throw new IOException($"Path has no root: {path}");
+        var current = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries)) {
+            current = Path.Combine(current, part);
+            RejectSymlink(current);
+        }
+    }
+
+    static void RejectSymlink(string path) {
+        if (!File.Exists(path) && !Directory.Exists(path)) return;
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException($"Refusing to update symlinked Codex configuration target: {path}");
+    }
+
+    static IDisposable AcquireConfigLock(string canonicalConfigPath) {
+        EnsureParentDirectory(canonicalConfigPath);
+        RejectSymlinkComponents(canonicalConfigPath);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalConfigPath))).ToLowerInvariant();
+        var mutex = new Mutex(false, "kcap-codex-config-" + hash);
+        try {
+            try {
+                if (!mutex.WaitOne(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException("Timed out waiting for another kcap Codex configuration update.");
+            } catch (AbandonedMutexException) {
+                // The prior writer died while holding the lock; ownership transfers to us.
+            }
+            return new MutexLease(mutex);
+        } catch {
+            mutex.Dispose();
+            throw;
+        }
+    }
+
+    static void SetOwnerOnly(string path) {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    static void WriteOwnerOnlyTemp(string path, string content) {
+        var options = new FileStreamOptions {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var stream = new FileStream(path, options))
+        using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            writer.Write(content);
+        // Defense in depth for platforms/filesystems that ignore the create mode.
+        SetOwnerOnly(path);
+    }
+
+    sealed class MutexLease(Mutex mutex) : IDisposable {
+        public void Dispose() {
+            try { mutex.ReleaseMutex(); } finally { mutex.Dispose(); }
         }
     }
 

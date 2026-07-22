@@ -20,6 +20,14 @@ public class McpFlowsServerTests {
     }
 
     [Test]
+    public async Task start_flow_description_requires_explicit_intent_and_discloses_paid_models() {
+        var startFlow = McpFlowsServer.BuildToolsList().Single(t => t.Name == "start_flow");
+
+        await Assert.That(startFlow.Description).Contains("EXPLICIT INTENT");
+        await Assert.That(startFlow.Description.ToLowerInvariant()).Contains("paid hosted models");
+    }
+
+    [Test]
     public async Task Roundless_start_renders_started_envelope() {
         var body = """{"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":null,"reviewer_session_id":null}""";
 
@@ -114,6 +122,23 @@ public class McpFlowsServerTests {
     }
 
     [Test]
+    public async Task Status_response_renders_vendor_audit_and_participants() {
+        var body = """
+            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+             "requested_reviewer_vendor":"claude","applied_reviewer_vendor":"claude",
+             "reviewer_vendor_source":"explicit",
+             "participants":[{"role":"reviewer","vendor":"claude","model":"sonnet","stopped":false}]}
+            """;
+
+        var text = McpFlowsServer.FormatStatusResponse(body);
+
+        await Assert.That(text).Contains("requested_reviewer_vendor: claude");
+        await Assert.That(text).Contains("applied_reviewer_vendor: claude");
+        await Assert.That(text).Contains("reviewer_vendor_source: explicit");
+        await Assert.That(text).Contains("reviewer: vendor=claude model=sonnet status=running");
+    }
+
+    [Test]
     public async Task Round_response_renders_pending_messages() {
         var body = """
             {"flow_run_id":"f1","round_id":"r1","status":"findings","result_kind":"findings","result_text":"some findings",
@@ -172,6 +197,21 @@ public class McpFlowsServerTests {
         var secondIndex = text.IndexOf("from reviewer [msg-b2]:", StringComparison.Ordinal);
         await Assert.That(secondIndex).IsGreaterThan(firstIndex);
         await Assert.That(pendingIds).IsEquivalentTo(["msg-a1", "msg-b2"]);
+    }
+
+    [Test]
+    public async Task Polled_round_result_renders_reviewer_vendor_audit() {
+        var node = JsonNode.Parse("""
+            {"round_number":1,"status":"waiting","round_status":"clean",
+             "requested_reviewer_vendor":"claude","applied_reviewer_vendor":"claude",
+             "reviewer_vendor_source":"explicit"}
+            """)!.AsObject();
+
+        var text = McpFlowsServer.FormatPolledRoundResult(node, "f1");
+
+        await Assert.That(text).Contains("requested_reviewer_vendor: claude");
+        await Assert.That(text).Contains("applied_reviewer_vendor: claude");
+        await Assert.That(text).Contains("reviewer_vendor_source: explicit");
     }
 
     [Test]

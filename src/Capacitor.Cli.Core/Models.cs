@@ -956,6 +956,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveCompleted))]
 [JsonSerializable(typeof(EvalRetrospectiveFailed))]
 [JsonSerializable(typeof(DaemonConnect))]
+[JsonSerializable(typeof(UnattendedVendorCapability))]
+[JsonSerializable(typeof(IReadOnlyList<UnattendedVendorCapability>))]
 [JsonSerializable(typeof(LiveAgentInfo))]
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
@@ -1269,8 +1271,19 @@ public readonly record struct LaunchAgentCommand(
         // old daemons ignore them, old servers never set them.
         string?            Epoch     = null,
         long?              Seq       = null,
-        string?            CommandId = null
+        string?            CommandId = null,
+        // The server's vendor-specific unattended-review certification expectation.
+        // Kept additive and optional so older servers and non-review launches remain compatible.
+        ReviewerCertificationRequirement? ReviewerCertification = null
     );
+
+public sealed record ReviewerCertificationRequirement(
+    string Vendor,
+    string AllowedCliRanges,
+    string RequiredLauncherPolicyVersion,
+    string Revision,
+    string ExpectedDaemonConnectionId,
+    string ExpectedCliVersion);
 
 /// <summary>
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves
@@ -1625,8 +1638,18 @@ public readonly record struct DaemonConnect(
         // Phase B2-b (sequenced-settlement design §5.5): the daemon-lifetime monotonic high-water of the
         // resolved-candidates ledger, advertised alongside ResolvedStartupCandidates so that once sparse
         // acks prune entries the server still knows the generation frontier. Additive/optional.
-        long?                         HighestResolutionGeneration   = null
+        long?                         HighestResolutionGeneration   = null,
+        // Structured per-vendor unattended-review certification facts. The legacy string
+        // list above remains the compatibility surface; this trailing field adds versioned proof.
+        IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities = null
     );
+
+public sealed record UnattendedVendorCapability(
+    string Vendor,
+    string? CliVersion,
+    string LauncherPolicyVersion,
+    bool BorrowedReviewSupported
+);
 
 public readonly record struct AgentRegistered(
         string  AgentId,

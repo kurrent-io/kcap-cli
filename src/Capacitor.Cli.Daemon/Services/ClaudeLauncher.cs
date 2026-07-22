@@ -27,6 +27,9 @@ internal sealed partial class ClaudeLauncher(
     const string EmptyMcpConfig = """{"mcpServers":{}}""";
 
     public void Prepare(LauncherContext ctx) {
+        if (ctx.IsReviewFlow && ctx.Work == WorkLocation.BorrowedCwd)
+            throw new UnattendedReviewPolicyException(
+                "Claude borrowed review flows are not certified; retry with an owned review worktree.");
         // A borrowed cwd is the user's own, already-trusted, already-configured repo — do
         // NOT overlay settings, write .mcp.json, edit settings.local.json, or write
         // ~/.claude.json trust into it (local in-place launch). Touch nothing.

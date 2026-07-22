@@ -944,7 +944,7 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
-    /// Registers the kcap MCP servers (kcap-review, kcap-sessions) in
+    /// Registers the kcap MCP servers, including non-auto-approved kcap-flows, in
     /// <c>~/.codex/config.toml</c> via <see cref="Installers.RegisterCodexMcp"/> so Codex
     /// CLI picks them up with no manual TOML edit. Gated on Codex hooks installing — the
     /// same "full Codex integration" trigger as skills. No prompt: registration is
@@ -963,7 +963,7 @@ internal static class CodingAgentsStep {
 
         switch (installers.RegisterCodexMcp()) {
             case CodexConfigToml.Change.Updated:
-                writeLine($"  [green]✓[/] Codex MCP servers registered: kcap-review, kcap-sessions ([dim]{configPath}[/])");
+                writeLine($"  [green]✓[/] Codex MCP servers registered: kcap-review, kcap-sessions, kcap-flows, kcap-memory ([dim]{configPath}[/])");
 
                 return true;
             case CodexConfigToml.Change.Unchanged:

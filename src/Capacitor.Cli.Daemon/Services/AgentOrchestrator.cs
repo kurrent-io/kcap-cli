@@ -820,12 +820,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // fail an unattended (review-flow) launch fast when the selected vendor's
         // runtime can't run unattended — before creating a worktree, so there's nothing to
-        // clean up. Both shipped PTY launchers support it; this guards future vendors (and the
-        // ACP/Cursor runtime, which does not).
+        // clean up. This guards every newly registered runtime through the same capability seam.
         if (UnattendedLaunchPolicy.RejectionReason(cmd.Vendor, runtimeFactory.SupportsUnattended, isReviewFlow) is { } unattendedRejection) {
             await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
+            var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
+                ? DaemonRunner.ProbeCliVersion(_config.ClaudePath)
+                : null;
+            var policyMatches = string.Equals(certification.Vendor, cmd.Vendor, StringComparison.Ordinal)
+                && string.Equals(_server.CurrentConnectionId,
+                    certification.ExpectedDaemonConnectionId, StringComparison.Ordinal)
+                && string.Equals(certification.RequiredLauncherPolicyVersion,
+                    DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal)
+                && string.Equals(version, certification.ExpectedCliVersion, StringComparison.Ordinal)
+                && DaemonRunner.CliVersionAllowed(version, certification.AllowedCliRanges);
+            if (!policyMatches) {
+                _config.UnattendedVendorCapabilities =
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config);
+                try { await _server.ReRegisterAsync(); } catch { /* launch still fails closed */ }
+                await _server.LaunchFailedAsync(cmd.AgentId,
+                    $"reviewer_certification_changed: '{cmd.Vendor}' no longer matches server certification revision '{certification.Revision}'. Restart the daemon after updating the reviewer CLI.");
+                return new CommandOutcome(
+                    CommandOutcomeKind.LaunchRejected,
+                    agentId,
+                    RejectReason: CommandRejectedReason.Semantic);
+            }
         }
 
         WorktreeInfo? worktree      = null;

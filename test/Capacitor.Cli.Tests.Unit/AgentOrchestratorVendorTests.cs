@@ -233,6 +233,63 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Certified_review_flow_reprobes_before_worktree_or_process_spawn() {
+        var server = new CaptureServerConnection();
+        var ptyFactory = new SpyPtyProcessFactory();
+        var claudeSpy = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") {
+            SupportsUnattended = true
+        };
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
+
+        await using var orch = BuildOrchestrator(server, ptyFactory, launchers,
+            configure: config => config.ClaudePath = "/definitely/missing/claude");
+        var cmd = new LaunchAgentCommand(
+            AgentId: "agent-certification",
+            Prompt: "review this",
+            Model: "default",
+            Effort: null,
+            RepoPath: "/tmp/does-not-matter",
+            Tools: null,
+            AttachmentIds: null,
+            Vendor: "claude",
+            Kind: LaunchKind.ReviewFlow,
+            ReviewerCertification: new ReviewerCertificationRequirement(
+                "claude", ">=1.0.0", DaemonRunner.ClaudeLauncherPolicyVersion, "revision-2",
+                "connection-1", "1.0.0"));
+
+        await orch.HandleLaunchAgentForTest(cmd);
+
+        await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_changed");
+        await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
+        await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Certified_review_flow_rejects_stale_connection_incarnation_before_spawn() {
+        var server = new CaptureServerConnection { ConnectionIdForTest = "connection-new" };
+        var ptyFactory = new SpyPtyProcessFactory();
+        var claudeSpy = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") {
+            SupportsUnattended = true
+        };
+        await using var orch = BuildOrchestrator(server, ptyFactory,
+            new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy });
+        var cmd = new LaunchAgentCommand(
+            "agent-stale-connection", "review", "default", null, "/tmp/unused", null, null,
+            Vendor: "claude", Kind: LaunchKind.ReviewFlow,
+            ReviewerCertification: new ReviewerCertificationRequirement(
+                "claude", ">=1.0.0", DaemonRunner.ClaudeLauncherPolicyVersion, "revision-2",
+                "connection-old", "1.0.0"));
+
+        await orch.HandleLaunchAgentForTest(cmd);
+
+        await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_changed");
+        await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
+        await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Launch_with_vendor_claude_calls_claude_launcher() {
         var (repoPath, cleanup) = CreateGitRepo();
 
@@ -951,6 +1008,8 @@ public partial class AgentOrchestratorVendorTests {
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
     ) {
+        public string? ConnectionIdForTest { get; init; } = "connection-1";
+        internal override string? CurrentConnectionId => ConnectionIdForTest;
         public List<(string AgentId, string Reason)> LaunchFailedCalls { get; } = [];
 
         /// <summary>When set, EndAgentSessionAsync blocks until this token is cancelled,

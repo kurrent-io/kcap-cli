@@ -63,6 +63,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         try {
             launcher.Prepare(launcherCtx);
+        } catch (UnattendedReviewPolicyException) {
+            throw;
         } catch (CodexHooksNotInstalledException) {
             // Propagate — the orchestrator maps this to LaunchFailed + worktree cleanup.
             throw;

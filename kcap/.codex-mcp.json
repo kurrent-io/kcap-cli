@@ -8,6 +8,10 @@
       "command": "kcap",
       "args": ["mcp", "sessions"]
     },
+    "kcap-flows": {
+      "command": "kcap",
+      "args": ["mcp", "flows"]
+    },
     "kcap-memory": {
       "command": "kcap",
       "args": ["mcp", "memory"]

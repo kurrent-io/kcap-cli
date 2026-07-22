@@ -472,14 +472,14 @@ public static class PluginCommand {
     }
 
     /// <summary>
-    /// Registers the kcap MCP servers (kcap-review, kcap-sessions) in
+    /// Registers the kcap MCP servers, including non-auto-approved kcap-flows, in
     /// <c>~/.codex/config.toml</c> so Codex CLI loads them without a manual TOML edit.
     /// Never fails the install: a write error is a warning, not an error code.
     /// </summary>
     static async Task RegisterCodexMcpServersAsync(PluginEnvironment env) {
         switch (CodexConfigToml.RegisterKcapMcpServers(env.CodexConfigTomlPath)) {
             case CodexConfigToml.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Codex MCP servers registered: kcap-review, kcap-sessions ({env.CodexConfigTomlPath}).");
+                await env.Stdout.WriteLineAsync($"Codex MCP servers registered: kcap-review, kcap-sessions, kcap-flows, kcap-memory ({env.CodexConfigTomlPath}).");
                 break;
             case CodexConfigToml.Change.Unchanged:
                 await env.Stdout.WriteLineAsync("Codex MCP servers already registered — no change needed.");
@@ -523,9 +523,21 @@ public static class PluginCommand {
             ? CodexConfigToml.UnregisterKcapMcpServers(env.CodexConfigTomlPath)
             : CodexConfigToml.Change.Unchanged;
         var mcpFailed = mcpChange == CodexConfigToml.Change.Failed;
+        var mcpChanged = mcpChange is CodexConfigToml.Change.Updated or
+            CodexConfigToml.Change.UpdatedWithPreservedEntries;
+        var mcpPreserved = mcpChange is CodexConfigToml.Change.UpdatedWithPreservedEntries or
+            CodexConfigToml.Change.PreservedUnownedEntries or
+            CodexConfigToml.Change.PreservedOwnershipUnknown;
 
-        if (mcpChange == CodexConfigToml.Change.Updated) {
+        if (mcpChanged) {
             await env.Stdout.WriteLineAsync($"Codex MCP servers removed ({env.CodexConfigTomlPath})");
+        }
+        if (mcpPreserved) {
+            var reason = mcpChange == CodexConfigToml.Change.PreservedOwnershipUnknown
+                ? "the ownership ledger is missing or corrupt"
+                : "one or more entries are user-owned or were edited";
+            await env.Stderr.WriteLineAsync(
+                $"Warning: some Codex MCP entries were preserved because {reason}. Review [mcp_servers] in {env.CodexConfigTomlPath} and remove kcap-flows manually if you no longer want the paid flow surface.");
         } else if (mcpFailed) {
             await env.Stderr.WriteLineAsync($"Could not update {env.CodexConfigTomlPath} to remove Codex MCP servers.");
         }
@@ -544,7 +556,7 @@ public static class PluginCommand {
             return 1;
         }
 
-        if (!hooksRemoved && mcpChange != CodexConfigToml.Change.Updated && !agents.RemovedAny && !legacy.RemovedAny) {
+        if (!hooksRemoved && !mcpChanged && !mcpPreserved && !agents.RemovedAny && !legacy.RemovedAny) {
             await env.Stdout.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 

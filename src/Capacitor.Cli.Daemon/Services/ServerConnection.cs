@@ -499,7 +499,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     SupportsSequencedCommands: true,
                     // Phase B2-b (sequenced-settlement design §5.5): the resolved-candidates ledger's
                     // monotonic high-water alongside the re-advertised snapshot above.
-                    HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke()
+                    HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke(),
+                    UnattendedVendorCapabilities: _config.UnattendedVendorCapabilities
                 ),
                 cancellationToken: _ct
             );
@@ -564,6 +565,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// (see the ACP hub-method tests).
     /// </summary>
     internal virtual bool IsReady => _gate.IsReady(_hub.State);
+
+    /// <summary>The current SignalR connection incarnation. Review-flow launch commands pin this
+    /// value server-side and the daemon rechecks it immediately before any spawn side effects.</summary>
+    internal virtual string? CurrentConnectionId => _hub.ConnectionId;
 
     async Task OnReconnected(string? connectionId) {
         LogReconnected();

@@ -396,7 +396,7 @@ public class McpFlowsServerTests : IDisposable {
             }
             """;
 
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedResponse));
 
         using var proc = SpawnMcpServer();
@@ -420,7 +420,7 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(text!.Contains($"flow_run_id: {flowRunId}")).IsTrue();
             await Assert.That(text.Contains("generic flow result")).IsTrue();
 
-            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start").UsingPost());
+            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost());
             await Assert.That(hits.Count).IsEqualTo(1);
 
             var bodyNode = JsonNode.Parse(hits[0].RequestMessage.Body ?? "")?.AsObject();
@@ -780,7 +780,7 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// Core scenario: verifies that start_review_flow posts to /api/flows/review/start,
+    /// Core scenario: verifies that start_review_flow posts to /api/flows/review/start/v2,
     /// that the POST body includes the resolved requester context (requesting_repo_root = git root,
     /// requesting_session_id from KCAP_SESSION_ID), and that the MCP tool response surfaces
     /// both the flow_run_id/status envelope and the FINDINGS result text from the server.
@@ -806,7 +806,7 @@ public class McpFlowsServerTests : IDisposable {
 
         _server.Given(
             Request.Create()
-                .WithPath("/api/flows/review/start")
+                .WithPath("/api/flows/review/start/v2")
                 .UsingPost()
         ).RespondWith(
             Response.Create()
@@ -851,7 +851,7 @@ public class McpFlowsServerTests : IDisposable {
 
             // Assert the POST was made to the correct endpoint
             var hits = _server.FindLogEntries(
-                Request.Create().WithPath("/api/flows/review/start").UsingPost()
+                Request.Create().WithPath("/api/flows/review/start/v2").UsingPost()
             );
             await Assert.That(hits.Count).IsEqualTo(1);
 
@@ -1062,7 +1062,7 @@ public class McpFlowsServerTests : IDisposable {
         const string scenario  = "retry-500";
 
         // POST returns running.
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
 
@@ -1107,7 +1107,7 @@ public class McpFlowsServerTests : IDisposable {
         const string flowRunId = "flow-run-failed";
 
         // POST returns running.
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
 
@@ -1199,7 +1199,7 @@ public class McpFlowsServerTests : IDisposable {
         const string flowRunId = "flow-persistent-500";
 
         // POST returns running.
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
 
@@ -1246,7 +1246,7 @@ public class McpFlowsServerTests : IDisposable {
         const string flowRunId = "flow-403";
 
         // POST returns running.
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
 
@@ -1295,7 +1295,7 @@ public class McpFlowsServerTests : IDisposable {
         const string flowRunId = "flow-404-grace";
 
         // POST returns running.
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
 
@@ -1354,7 +1354,7 @@ public class McpFlowsServerTests : IDisposable {
         const string scenario  = "poll";
 
         // POST returns running + round_number 1.
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
 
@@ -1380,7 +1380,7 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(text.Contains("result_kind: findings")).IsTrue();
 
             // The POST carried async:true.
-            var postBody = JsonNode.Parse(_server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start").UsingPost())[0].RequestMessage.Body ?? "")?.AsObject();
+            var postBody = JsonNode.Parse(_server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())[0].RequestMessage.Body ?? "")?.AsObject();
             await Assert.That(postBody!["async"]?.GetValue<bool>()).IsTrue();
             // At least 2 GETs (running then terminal).
             await Assert.That(_server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet()).Count >= 2).IsTrue();
@@ -1390,7 +1390,7 @@ public class McpFlowsServerTests : IDisposable {
     [Test]
     public async Task Start_review_flow_uses_terminal_result_from_post_without_polling() {
         const string flowRunId = "flow-old-server";
-        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
                 .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"completed","result_kind":"FINDINGS","result_text":"## done","reviewer_agent_id":null,"reviewer_session_id":null}"""));
 
@@ -1635,6 +1635,8 @@ public class McpFlowsServerTests : IDisposable {
     [Test]
     public async Task Uncoded_500_on_dynamic_start_maps_to_unsupported_server_hint() {
         _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("upstream exploded"));
+        _server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(500).WithBody("upstream exploded"));
 
         using var proc = SpawnMcpServer();
