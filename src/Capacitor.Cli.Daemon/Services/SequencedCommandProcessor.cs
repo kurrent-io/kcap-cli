@@ -63,6 +63,9 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
             if (item.Seq != _highestAcceptedSeq + 1)
                 return HandleNonNextLocked(item);                              // Task 15 sends wrong_next
 
+            if (_cache.Count >= _cacheBound)                                   // never evict unacked identity
+                return RejectLocked(item, CommandRejectedReason.Backpressure); // reopens only via a validated AckProcessedPrefix
+
             // ACCEPT + lane-item, atomically under _lock.
             _highestAcceptedSeq = item.Seq;
             _cache[item.Seq] = new CacheEntry { CommandId = item.CommandId, Processed = false };
@@ -157,7 +160,23 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
         }
     }
 
-    public void AckPrefix(AckProcessedPrefix ack) { /* Task 14 */ }
+    /// <summary>Phase B2-b (sequenced-settlement design): retire per-epoch identity-cache entries through a
+    /// VALIDATED <c>AckProcessedPrefix</c> — current epoch, not over-ahead of the processed prefix, strictly
+    /// monotonic. An unacked entry is NEVER evicted (that is the backpressure contract's other half). Called
+    /// off the hub, so it takes <c>_lock</c> itself.</summary>
+    public void AckPrefix(AckProcessedPrefix ack) {
+        lock (_lock) {
+            if (!string.Equals(ack.Epoch, _epoch, StringComparison.Ordinal)) return; // stale epoch — not our lane
+            if (ack.UpToSeq > _lastProcessedSeq) return;                              // over-ahead of the processed prefix
+            if (ack.UpToSeq <= _lastAckedPrefix) return;                              // regressing / duplicate ack
+            _lastAckedPrefix = ack.UpToSeq;
+            List<long>? toRemove = null;
+            foreach (var seq in _cache.Keys)
+                if (seq <= ack.UpToSeq) (toRemove ??= []).Add(seq);
+            if (toRemove is not null)
+                foreach (var seq in toRemove) _cache.Remove(seq);
+        }
+    }
 
     public async ValueTask DisposeAsync() {
         _lane.Writer.TryComplete();

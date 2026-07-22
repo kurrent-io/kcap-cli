@@ -91,4 +91,27 @@ public class SequencedCommandProcessorTests {
             () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
         await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.DuplicateCollision);
     }
+
+    [Test] public async Task Backpressure_rejects_when_the_cache_is_full_and_ack_prefix_reopens_capacity() {
+        var h = new Harness(); await using var p = h.P(bound: 2);
+        await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await p.SubmitAsync(h.Launch(2), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await p.SubmitAsync(h.Launch(3), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.Backpressure);
+        await Assert.That(p.HighestAcceptedSeq).IsEqualTo(2L);       // 3 not accepted (unacked identity kept)
+
+        p.AckPrefix(new AckProcessedPrefix("e1", 2));                // retire <= 2
+        await p.SubmitAsync(h.Launch(3), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await Assert.That(p.LastProcessedSeq).IsEqualTo(3L);
+    }
+
+    [Test] public async Task AckPrefix_rejects_over_ahead_regressing_and_stale_epoch_without_eviction() {
+        var h = new Harness(); await using var p = h.P();
+        await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        p.AckPrefix(new AckProcessedPrefix("e1", 5));   // over-ahead (> LastProcessedSeq) -> ignored
+        p.AckPrefix(new AckProcessedPrefix("WRONG", 1));// stale epoch -> ignored
+        // A duplicate is still answerable (identity not evicted):
+        await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await Assert.That(h.Acks.Count).IsEqualTo(1);
+    }
 }
