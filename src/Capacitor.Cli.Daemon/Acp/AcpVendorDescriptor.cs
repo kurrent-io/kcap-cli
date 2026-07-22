@@ -116,18 +116,18 @@ internal sealed record AcpVendorDescriptor {
 }
 
 internal static class AcpVendorDescriptors {
-    /// <summary>Reproduces AcpHostedAgentRuntimeFactory's original Cursor-only behavior
-    /// byte-for-byte: argv ["acp"], no trust flags (SupportsUnattended stays false so
-    /// UnattendedTrustArgv is unreachable), model selection via the shared
-    /// ConfigOptionModelSelector, mcpServers accepted (always sent as an array on the wire; every
-    /// caller today still populates it with an empty list).</summary>
+    /// <summary>Cursor CLI's ACP hosted-agent surface: <c>cursor-agent acp</c>, no trust-at-spawn
+    /// flags, model selection through ACP config options, and stdio MCP delivery through
+    /// <c>session/new.mcpServers</c>. Unattended review flows remain owned-worktree-only and rely on
+    /// <see cref="AcpInteractionBridge"/>'s local review-flow permission policy, so no permission or
+    /// elicitation is routed to a human.</summary>
     public static readonly AcpVendorDescriptor Cursor = new(
         Vendor:              "cursor",
         ResolveBinaryPath:   cfg => cfg.CursorPath,
         ResolveDefaultModel: cfg => cfg.CursorModel,
         Argv:                ["acp"],
         UnattendedTrustArgv: [],
-        SupportsUnattended:  false,
+        SupportsUnattended:  true,
         ModelSelector:       ConfigOptionModelSelector.Instance,
         SupportsMcpServers:  true
     );

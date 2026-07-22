@@ -69,17 +69,15 @@ public class DaemonRunnerCursorAvailabilityTests {
     }
 
     [Test]
-    public async Task ComputeUnattendedVendors_ExcludesAvailableVendorThatCannotRunUnattended() {
-        // Claude/Codex are unattended-capable PTY launchers; the (Cursor) ACP factory is
-        // available (cursor-agent installed) but has no permission bridge yet, so it must be
-        // excluded from the override-eligible list even though it's installed.
+    public async Task ComputeUnattendedVendors_IncludesAvailableCursor_WhenUnattendedEnabled() {
         IHostedAgentRuntimeFactory[] factories = [
             new FakeRuntimeFactory("claude", isAvailable: true, supportsUnattended: true),
             new FakeRuntimeFactory("codex", isAvailable: true, supportsUnattended: true),
-            new FakeRuntimeFactory("cursor", isAvailable: true, supportsUnattended: false),
+            new FakeRuntimeFactory("cursor", isAvailable: true, supportsUnattended: true),
         ];
 
-        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories)).IsEquivalentTo(["claude", "codex"]);
+        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories))
+            .IsEquivalentTo(["claude", "codex", "cursor"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]

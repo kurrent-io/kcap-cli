@@ -22,8 +22,9 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.Vendor).IsEqualTo("cursor");
         await Assert.That(descriptor.Argv.SequenceEqual(["acp"])).IsTrue();
         await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([])).IsTrue();
-        await Assert.That(descriptor.SupportsUnattended).IsFalse();
+        await Assert.That(descriptor.SupportsUnattended).IsTrue();
         await Assert.That(descriptor.SupportsMcpServers).IsTrue();
+        await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.SessionNew);
         await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
     }

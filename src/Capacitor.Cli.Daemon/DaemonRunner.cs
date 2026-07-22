@@ -332,10 +332,10 @@ public static partial class DaemonRunner {
             .ToArray();
 
         // Reviewer vendor override support: a strict subset of SupportedVendors — only vendors that
-        // can also run fully unattended (no permission bridge needed). The server gates a review-flow
-        // vendor override on this list rather than SupportedVendors alone, so a vendor that's merely
-        // installed (e.g. an ACP-hosted vendor with no unattended launcher yet) is never offered as an
-        // override target.
+        // can also run fully unattended without routing an interaction to a human. The server gates
+        // a review-flow vendor override on this list rather than SupportedVendors alone, so a vendor
+        // that's merely installed but has no unattended launcher is never offered as an override
+        // target.
         config.UnattendedVendors = ComputeUnattendedVendors(runtimeFactories);
 
         // IsAvailable()==false silently omits cursor from SupportedVendors above — correct

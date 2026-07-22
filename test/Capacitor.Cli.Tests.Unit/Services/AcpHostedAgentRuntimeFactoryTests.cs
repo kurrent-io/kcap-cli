@@ -345,9 +345,20 @@ public class AcpHostedAgentRuntimeFactoryTests {
         SupportsMcpServers:  supportsMcpServers
     );
 
+    static AcpVendorDescriptor NonUnattendedDescriptor() => new(
+        Vendor:              "non-unattended-test-vendor",
+        ResolveBinaryPath:   _ => "non-unattended-test-vendor-cli",
+        ResolveDefaultModel: _ => null,
+        Argv:                ["acp"],
+        UnattendedTrustArgv: [],
+        SupportsUnattended:  false,
+        ModelSelector:       NoOpModelSelector.Instance,
+        SupportsMcpServers:  true
+    );
+
     /// <summary>
-    /// Exercises the generic trust-argv seam independently of any production vendor. Cursor stays
-    /// non-unattended while Copilot uses its own concrete trust flags and alternate MCP transport.
+    /// Exercises the generic trust-argv seam independently of production vendors. Cursor has no
+    /// trust-at-spawn argv, while Copilot uses concrete trust flags and an alternate MCP transport.
     /// </summary>
     [Test]
     public async Task BuildProcessStartInfo_DescriptorDriven_AppendsTrustArgvOnlyForReviewFlow() {
@@ -370,7 +381,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// trusting that gate alone.</summary>
     [Test]
     public async Task BuildProcessStartInfo_Throws_ForReviewFlow_WhenDescriptorDoesNotSupportUnattended() {
-        var descriptor = AcpVendorDescriptors.Cursor; // SupportsUnattended: false
+        var descriptor = NonUnattendedDescriptor();
         var config     = new DaemonConfig();
 
         await Assert.That(() => AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
@@ -679,11 +690,12 @@ public class AcpHostedAgentRuntimeFactoryTests {
         return (factory, () => Volatile.Read(ref spawns));
     }
 
-    /// <summary>Test plan 2: session/new carries kcap-flow-result (both env vars) + one server per
-    /// resolvable non-flow allowlist name (KCAP_URL only), with pinned command/args, exact JSON.</summary>
+    /// <summary>The real Cursor descriptor accepts an owned-worktree review flow and carries
+    /// kcap-flow-result (both env vars) + one server per resolvable non-flow allowlist name through
+    /// ACP session/new, with pinned command/args and exact JSON.</summary>
     [Test]
     public async Task ReviewFlow_SessionNew_CarriesFlowResultAndAllowlistServers_ExactJson() {
-        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
+        var descriptor = AcpVendorDescriptors.Cursor;
         var fake        = new FakeAcpAgent();
 
         using var cts = new CancellationTokenSource();
@@ -801,7 +813,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// before spawn. Plus BuildProcessStartInfo's defense-in-depth borrowed-cwd refusal.</summary>
     [Test]
     public async Task ReviewFlow_BorrowedCwd_ThrowsBeforeSpawn() {
-        var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));
+        var (factory, spawns) = CountingSpawnFactory(AcpVendorDescriptors.Cursor);
 
         await Assert.That(async () => await factory.StartAsync(ReviewContext() with { Work = WorkLocation.BorrowedCwd }, CancellationToken.None))
             .Throws<InvalidOperationException>();
@@ -810,8 +822,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task ReviewFlow_NotUnattended_ThrowsBeforeSpawn() {
-        // Cursor's SupportsUnattended is false.
-        var (factory, spawns) = CountingSpawnFactory(AcpVendorDescriptors.Cursor);
+        var (factory, spawns) = CountingSpawnFactory(NonUnattendedDescriptor());
 
         await Assert.That(async () => await factory.StartAsync(ReviewContext(), CancellationToken.None))
             .Throws<InvalidOperationException>();
@@ -820,7 +831,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task BuildProcessStartInfo_Throws_ForReviewFlow_WhenBorrowedCwd_NoTrustArgvBuilt() {
-        var descriptor = SyntheticDescriptor(supportsMcpServers: true); // SupportsUnattended: true
+        var descriptor = AcpVendorDescriptors.Cursor;
         var config     = new DaemonConfig();
 
         await Assert.That(() => AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
@@ -847,7 +858,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     [Test]
     public Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
         AssertReviewFlowAutoApprovesPermissionAsync(
-            SyntheticDescriptor(supportsMcpServers: true),
+            AcpVendorDescriptors.Cursor,
             ReviewContext());
 
     /// <summary>A borrowed Copilot reviewer passed the descriptor's capability-clamp gate and is
