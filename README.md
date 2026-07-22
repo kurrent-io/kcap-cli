@@ -174,6 +174,8 @@ Where a harness exposes a per-server trust knob, registration also marks the **r
 
 The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — or list what a session is already attached to. The plugin **auto-registers it for Claude Code only**; it isn't offered for Cursor or Codex. See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
 
+The `kcap mcp analytics` stdio server lets agents answer analytics questions about the org's recorded coding sessions — spend, token/tool/model usage, outcomes, commits, PRs, evals — with governed read-only SQL over the server's curated analytics views. `kcap setup` **auto-registers it for Claude Code and Codex CLI**; other harnesses aren't offered it yet. See the [Analytics MCP server](#analytics-mcp-server-for-agents) section for details.
+
 ## What it records
 
 Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
@@ -444,6 +446,21 @@ It provides two tools:
 - **`get_session_work_items`** — list the work items the current session is attached to.
 
 Both tools default `session_id` to the current kcap-hooked session (`KCAP_SESSION_ID`) when omitted. This is the manual-declare path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to.
+
+### Analytics MCP server (for agents)
+
+```bash
+kcap mcp analytics
+```
+
+Stdio MCP server that lets coding agents answer analytics questions about the org's recorded AI coding sessions — spend, token/tool/model usage, session outcomes, commits, PRs, evals — by writing **governed read-only SQL** against the server's curated analytics views. Every statement is validated server-side (allowlisted views/columns, SELECT-only, row-capped, repo-scope enforced), so the agent gets the same governed data surface as the web UI's Analytics tab. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it in `~/.codex/config.toml`; enabling the plugin through Codex's native `codex plugin add` also provides it via the `.codex-mcp.json` descriptor. Other harnesses aren't offered it yet.
+
+It provides two tools:
+
+- **`get_analytics_schema`** — the governed schema document: the queryable views and columns, a terminology glossary, SQL rules, and worked examples. Agents are told to call this once before writing SQL.
+- **`query_analytics`** — run one governed Postgres SELECT. Defaults to the current repository (resolved from the working directory); pass `scope: "global"` for org-wide questions, and `max_rows` to adjust the row cap. A rejected query returns the validator's reason so the agent can fix the SQL and retry.
+
+Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints (older servers return a clear "upgrade kcap-server" message).
 
 ### Curate guidelines
 

@@ -61,10 +61,24 @@ public class McpCanonicalContractTests {
     }
 
     [Test]
+    public async Task Codex_subset_includes_analytics() {
+        // kcap-analytics v1 targets Claude Code + Codex (AI-1468 F6).
+        var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();
+        await Assert.That(names).Contains("kcap-analytics");
+    }
+
+    [Test]
     public async Task Cursor_subset_excludes_workitems_but_keeps_flows_and_memory() {
         var names = KcapMcpServers.ForCursor.Select(s => s.Name).ToArray();
         await Assert.That(names).DoesNotContain("kcap-workitems");
         await Assert.That(names).Contains("kcap-flows");
         await Assert.That(names).Contains("kcap-memory");
+    }
+
+    [Test]
+    public async Task Cursor_subset_excludes_analytics_until_wider_rollout() {
+        // Widening kcap-analytics to the non-Claude JSON harnesses is AI-1475.
+        var names = KcapMcpServers.ForCursor.Select(s => s.Name).ToArray();
+        await Assert.That(names).DoesNotContain("kcap-analytics");
     }
 }
