@@ -132,7 +132,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
         }
     }
 
-    /// <summary>AI-1408 certification probe: drives the production review-flow launch shape against
+    /// <summary>Certification probe: drives the production review-flow launch shape against
     /// a real Cursor ACP process and a tiny local stdio MCP server. Success proves the exact
     /// <c>--force --approve-mcps --trust</c> launch can invoke the required result channel without
     /// producing an ACP permission/elicitation request. The runtime's Fail interaction policy makes
