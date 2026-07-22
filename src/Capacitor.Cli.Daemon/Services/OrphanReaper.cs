@@ -187,6 +187,11 @@ internal sealed class OrphanReaper(
             return;
         }
 
+        // Phase B2-b (sequenced-settlement design §5.5): track a marker-candidate source-WRITE failure
+        // (a survivor we could neither durably record nor kill) so the pass does not falsely report
+        // Complete below — such a survivor is invisible to BlockedCandidates AND still alive.
+        var captureFailed = false;
+
         foreach (var pid in pids) {
             if (ct.IsCancellationRequested) return;
             if (handledPids.Contains(pid)) continue;       // already covered by the record pass
@@ -220,24 +225,41 @@ internal sealed class OrphanReaper(
             // marker-candidate source BEFORE the kill (crash-consistency: a crash before the kill
             // re-runs the resolution next boot; never a source-less window, never a retroactive mint),
             // then resolve it through the same matrix as the reconciliation pass.
+            // Persist a durable source BEFORE the kill, and split the write from the resolution so a
+            // WRITE failure is distinguishable from a post-write resolution failure. A write failure
+            // means no source was committed: the survivor is invisible to BlockedCandidates AND still
+            // unkilled, so it must NOT let this pass report Complete. A failure AFTER a successful write
+            // leaves a pending_marker source that BlockedCandidates already treats as blocking, so that
+            // case does not fail the pass (the next boot re-derives + retries the kill from the source).
+            var candidate = new MarkerCandidate(agentId, daemonId, epoch, pid);
             try {
-                var candidate = new MarkerCandidate(agentId, daemonId, epoch, pid);
                 markerStore?.Write(candidate);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                captureFailed = true;
+                logger.LogWarning(ex, "OrphanReaper: marker-candidate source write failed for pid {Pid} — discovery stays incomplete this pass (retried next heartbeat)", pid);
+                continue; // never resolve/kill without a durable source first
+            }
+            try {
                 await ResolveMarkerCandidateAsync(candidate, ct);
             } catch (Exception ex) when (ex is not OperationCanceledException) {
-                logger.LogWarning(ex, "OrphanReaper: env-marker reap failed for pid {Pid}", pid);
+                logger.LogWarning(ex, "OrphanReaper: env-marker reap failed for pid {Pid} — source retained, retried next boot", pid);
             }
         }
 
-        // Phase B2-b (sequenced-settlement design): one clean env-marker-scan pass completed —
-        // enumeration succeeded and every candidate was walked (never cancelled mid-pass; a cancel
-        // returns early above, leaving discovery unchanged). On Linux this is the completeness proof, so
-        // flip to Complete and stamp the scan time. A pass that merely SPARED a pending_marker candidate
-        // is still clean here — that spared source blocks completion via BlockedCandidates, not via the
-        // pass state. Off Linux there is no scan (EnumeratePids returns empty), so CurrentDiscovery stays
+        // Phase B2-b (sequenced-settlement design §5.5): a clean env-marker-scan pass = enumeration
+        // succeeded AND every discovered survivor was durably captured (its pending_marker source now
+        // blocks via BlockedCandidates) or resolved — never cancelled mid-pass (a cancel returns early
+        // above, leaving discovery unchanged). Only then is the pass a completeness proof → flip to
+        // Complete and stamp the scan time. A pass that merely SPARED a pending_marker candidate is still
+        // clean (that spared source blocks via BlockedCandidates, not the pass state). But if ANY
+        // candidate's durable source WRITE failed, that survivor is untracked + unkilled, so the pass is
+        // NOT a proof — leave discovery Failed (retried next heartbeat), keeping the last successful scan
+        // time. Off Linux there is no scan (EnumeratePids returns empty), so CurrentDiscovery stays
         // NotApplicable.
         if (OperatingSystem.IsLinux())
-            CurrentDiscovery = new StartupDiscovery(MarkerScanState.Complete, DateTimeOffset.UtcNow);
+            CurrentDiscovery = captureFailed
+                ? new StartupDiscovery(MarkerScanState.Failed, CurrentDiscovery.LastSuccessfulScanAt)
+                : new StartupDiscovery(MarkerScanState.Complete, DateTimeOffset.UtcNow);
     }
 
     /// <summary>Resolve a marker-candidate source through the asymmetric matrix. Because a recordless

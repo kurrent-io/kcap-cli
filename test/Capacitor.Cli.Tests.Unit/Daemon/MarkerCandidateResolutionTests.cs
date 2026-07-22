@@ -151,6 +151,35 @@ public class MarkerCandidateResolutionTests {
         await Assert.That(markers.ReadAll()).IsEmpty();
     }
 
+    // Phase B2-b (sequenced-settlement design §5.5): if a discovered recordless survivor's durable
+    // marker-candidate source WRITE fails, the survivor is neither recorded (invisible to
+    // BlockedCandidates) nor killed — so the scan must NOT report Complete this pass, or
+    // StartupReapComplete could go true beside a live prior-epoch survivor and the server would launch a
+    // duplicate. Discovery must stay Failed (retried next heartbeat).
+    [Test]
+    public async Task Marker_scan_stays_incomplete_when_a_candidate_source_write_fails() {
+        if (!OperatingSystem.IsLinux()) return;
+        var (store, _, dir) = New();
+        // A MarkerCandidateStore whose Write ALWAYS throws: its state dir is actually a FILE, so
+        // Directory.CreateDirectory(_dir) fails for every Write.
+        var badBase = Path.Combine(dir, "not-a-dir");
+        File.WriteAllText(badBase, "x");
+        var failingMarkers = new MarkerCandidateStore(badBase, NullLogger.Instance);
+
+        // A live prior-epoch recordless survivor the scan discovers and tries (and fails) to capture.
+        using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> {
+            ["KCAP_AGENT_ID"] = "surv", ["KCAP_DAEMON_ID"] = "did", ["KCAP_DAEMON_EPOCH"] = "old" });
+
+        var reaper = new OrphanReaper(store, "did", "new", NullLogger.Instance, markerStore: failingMarkers);
+        await reaper.ReapOnceAsync();
+
+        // The source write failed, so the pass is not a completeness proof.
+        await Assert.That(reaper.CurrentDiscovery.MarkerScanState).IsEqualTo(MarkerScanState.Failed);
+        // The survivor was never killed (we never resolve without a durable source first).
+        await Assert.That(dummy.HasExited).IsFalse();
+        dummy.Kill();
+    }
+
     [Test]
     public async Task Identity_unavailable_record_resolved_via_marker_scan_emits_trusted_flow() {
         if (!OperatingSystem.IsLinux()) return;
