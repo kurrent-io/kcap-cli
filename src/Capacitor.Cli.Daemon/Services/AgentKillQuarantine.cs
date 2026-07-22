@@ -35,17 +35,19 @@ internal sealed class AgentKillQuarantine(ILogger logger) {
 
     /// <summary>Heartbeat retry: attempt to reap every quarantined process by exact identity and drain
     /// those confirmed gone. Best-effort per entry — a still-alive one is retained for the next tick.
-    /// Returns the agent ids DRAINED this pass (death/recycle confirmed) so the caller deletes their
-    /// durable PID records — a quarantined survivor's record is retained by teardown and, carrying the
-    /// current epoch, would otherwise be skipped by the orphan sweep and leak until restart.</summary>
-    public async Task<IReadOnlyList<string>> RetryAllAsync(CancellationToken ct) {
-        var drained = new List<string>();
+    /// Returns the ENTRIES drained this pass (death/recycle confirmed) so the caller can both delete
+    /// their durable PID records — a quarantined survivor's record is retained by teardown and, carrying
+    /// the current epoch, would otherwise be skipped by the orphan sweep and leak until restart — AND
+    /// (Phase B2-b, sequenced-settlement design §4.2.4) emit their flow identity as positive per-id
+    /// death evidence to the resolved-candidates ledger before that delete.</summary>
+    public async Task<IReadOnlyList<Entry>> RetryAllAsync(CancellationToken ct) {
+        var drained = new List<Entry>();
 
         foreach (var entry in _entries.Values) {
             try {
                 if (await ProcessReaper.ReapByIdentityAsync(entry.Pid, entry.Identity, entry.AgentId, logger, ct)
                     && _entries.TryRemove(new KeyValuePair<string, Entry>(entry.AgentId, entry)))
-                    drained.Add(entry.AgentId);
+                    drained.Add(entry);
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 logger.LogWarning(ex, "AgentKillQuarantine: retry failed for {AgentId} (pid {Pid})", entry.AgentId, entry.Pid);
             }
