@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Daemon-driven liveness probe — replaces the pre-AI-79 fire-and-forget
+/// Daemon-driven liveness probe — replaces the previous fire-and-forget
 /// <c>SendHeartbeatAsync</c>. The server-side <c>DaemonPing</c> hub method
 /// returns <c>true</c> if the calling connection is still the registered
 /// daemon for its <c>(owner, name)</c> slot, and <c>false</c> if it isn't —
@@ -31,7 +31,7 @@ internal sealed class DaemonHeartbeatLoop(
     ) {
     /// <summary>
     /// Round-trip time at or above which a <c>DaemonPing</c> is logged as a
-    /// warning rather than at debug (AI-840 diagnostics). Defaults to half the
+    /// warning rather than at debug (diagnostics). Defaults to half the
     /// per-tick deadline: pings that take this long aren't yet failing, but the
     /// transport latency is climbing toward the deadline that triggers a forced
     /// reconnect, so surfacing them shows degradation building up *before* the
@@ -101,7 +101,7 @@ internal sealed class DaemonHeartbeatLoop(
         try {
             await port.ReRegisterAsync();
         } catch (HubException ex) when (ex.Message.StartsWith(ServerConnection.NameInUseErrorCode, StringComparison.Ordinal)) {
-            // AI-630: the server explicitly told us our (owner, name) slot
+            // the server explicitly told us our (owner, name) slot
             // is held by another live daemon. Force-reconnecting would just
             // re-trigger the same rejection. ServerConnection already fired
             // OnNameInUse — DaemonRunner has called lifetime.StopApplication()

@@ -34,6 +34,17 @@ internal sealed class CursorImportSource : IImportSource {
     readonly Lazy<IReadOnlyDictionary<string, string?>>  _sanitizedToFolder;
     readonly Func<string, Task<RepositoryPayload?>>      _repoDetector;
 
+    // per-cwd cache of the detected repo payload, populated during
+    // ImportSessionAsync. Historical import can walk many sessions that share one workspace
+    // folder — without this, each session would re-run repo detection for the same cwd. Keyed
+    // by the resolved workspace folder (Ordinal — the same string ImportSessionAsync already
+    // compares against SourceMeta["WorkspaceFolder"], no case-folding needed for a cache key).
+    // Caches the RepositoryPayload rather than the built JsonObject: a JsonNode can only ever
+    // have one parent, so reusing the same JsonObject instance across two sessions' payloads
+    // throws InvalidOperationException on the second attach — BuildRepositoryNode must be
+    // called fresh per session from the cached payload.
+    readonly Dictionary<string, RepositoryPayload?> _repoCache = new(StringComparer.Ordinal);
+
     public CursorImportSource(
         string?                                  projectsDirOverride         = null,
         string?                                  workspaceStorageDirOverride = null,
@@ -42,11 +53,15 @@ internal sealed class CursorImportSource : IImportSource {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
-        // Cursor is the one import source that emits a `repository` node in its synthetic
-        // session-start (AI-1152) via BuildRepositoryNode, which includes pr_* when populated —
-        // so it keeps live PR detection (unlike the owner/repo-only detectors in the other
-        // sources). Dropping it here would silently strip PR tagging from imported Cursor sessions.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
+        // historical import must never attach a live PR to an old session —
+        // stamping today's open PR onto a transcript from weeks ago is an anachronism, and it's
+        // exactly the wasted `gh pr view` / `glab api` round-trip per cwd that already
+        // skips for the other import sources. detectPullRequest:false still resolves
+        // owner/repo/branch (BuildRepositoryNode's non-PR fields), so imported sessions keep
+        // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
+        // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
+        // separate call site untouched by this default and keeps live PR detection.
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
     }
 
     /// <summary>
@@ -64,7 +79,7 @@ internal sealed class CursorImportSource : IImportSource {
     // Path.GetFullPath: on Windows GetFullPath rebases a driveless rooted path
     // (e.g. "/Users/me/dev/foo") onto the current drive ("C:\Users\me\dev\foo"),
     // which neither Cursor's sanitized project-dir naming nor a caller-supplied
-    // --cwd ever carries — breaking the sanitized-key match (AI-820). Must stay
+    // cwd ever carries — breaking the sanitized-key match. Must stay
     // byte-identical to BuildSanitizedToFolderMap's normalization.
     static string NormalizeForComparison(string path) {
         var p = path.Replace('\\', '/').TrimEnd('/');
@@ -114,71 +129,81 @@ internal sealed class CursorImportSource : IImportSource {
         var result       = new List<DiscoveredSession>();
 
         foreach (var sanitizedDir in Directory.EnumerateDirectories(_projectsDir)) {
-            var sanitized      = Path.GetFileName(sanitizedDir);
-            var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
+            try {
+                var sanitized      = Path.GetFileName(sanitizedDir);
+                var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
 
-            if (!Directory.Exists(transcriptsDir)) continue;
+                if (!Directory.Exists(transcriptsDir)) continue;
 
-            // sanitizedMap value is null when the sanitized key collided with
-            // multiple distinct workspace folders (lossy encoding) — treat as
-            // unknown rather than misattributing to one of them.
-            sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
+                // sanitizedMap value is null when the sanitized key collided with
+                // multiple distinct workspace folders (lossy encoding) — treat as
+                // unknown rather than misattributing to one of them.
+                sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
 
-            if (normalizedCwd is not null
-             && (workspaceFolder is null
-              || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
+                if (normalizedCwd is not null
+                 && (workspaceFolder is null
+                  || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
+                    continue;
+                }
+
+                foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                    try {
+                        var sessionDirName = Path.GetFileName(sessionDir);
+                        var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
+
+                        if (!File.Exists(jsonl)) continue;
+
+                        var dashless = NormalizeCursorSessionId(sessionDirName);
+
+                        if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+                            continue;
+
+                        // Use the JSONL file's creation time as the session-start
+                        // proxy. Cursor's transcript JSONL lines carry no timestamp
+                        // field (Anthropic content-block format without metadata),
+                        // and the file is created when the session starts and
+                        // appended throughout — so birth-time on supported
+                        // filesystems (APFS, NTFS) is the closest proxy.
+                        //
+                        // `--since` MUST gate on session-start, not last-modified,
+                        // or any old session appended to after the cutoff would be
+                        // re-imported.
+                        //
+                        // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
+                        // falls back to mtime when btime isn't queryable. On those
+                        // hosts started_at == ended_at and `--since` effectively
+                        // gates on last-write. Acceptable degradation — most Cursor
+                        // users are on macOS/Windows and the production behavior is
+                        // still strictly better than not having `--since` at all.
+                        DateTimeOffset? firstTimestamp = null;
+                        try {
+                            firstTimestamp = File.GetCreationTimeUtc(jsonl);
+                        } catch {
+                            // Best effort.
+                        }
+
+                        if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
+                            continue;
+                        }
+
+                        result.Add(new DiscoveredSession(
+                            SessionId:      dashless,
+                            Vendor:         Vendor,
+                            Cwd:            workspaceFolder,
+                            FirstTimestamp: firstTimestamp,
+                            SourceMeta:     new Dictionary<string, object?> {
+                                ["TranscriptPath"]  = jsonl,
+                                ["WorkspaceFolder"] = workspaceFolder,
+                                ["SanitizedDir"]    = sanitized,
+                            }));
+                    } catch {
+                        // A hostile/inaccessible session subtree must not abort the whole scan.
+                        continue;
+                    }
+                }
+            } catch {
+                // A hostile/inaccessible workspace subtree must not abort the whole scan.
                 continue;
-            }
-
-            foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
-                var sessionDirName = Path.GetFileName(sessionDir);
-                var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
-
-                if (!File.Exists(jsonl)) continue;
-
-                var dashless = NormalizeCursorSessionId(sessionDirName);
-
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
-                    continue;
-
-                // Use the JSONL file's creation time as the session-start
-                // proxy. Cursor's transcript JSONL lines carry no timestamp
-                // field (Anthropic content-block format without metadata),
-                // and the file is created when the session starts and
-                // appended throughout — so birth-time on supported
-                // filesystems (APFS, NTFS) is the closest proxy.
-                //
-                // `--since` MUST gate on session-start, not last-modified,
-                // or any old session appended to after the cutoff would be
-                // re-imported.
-                //
-                // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
-                // falls back to mtime when btime isn't queryable. On those
-                // hosts started_at == ended_at and `--since` effectively
-                // gates on last-write. Acceptable degradation — most Cursor
-                // users are on macOS/Windows and the production behavior is
-                // still strictly better than not having `--since` at all.
-                DateTimeOffset? firstTimestamp = null;
-                try {
-                    firstTimestamp = File.GetCreationTimeUtc(jsonl);
-                } catch {
-                    // Best effort.
-                }
-
-                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
-                    continue;
-                }
-
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            workspaceFolder,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"]  = jsonl,
-                        ["WorkspaceFolder"] = workspaceFolder,
-                        ["SanitizedDir"]    = sanitized,
-                    }));
             }
 
             ct.ThrowIfCancellationRequested();
@@ -200,18 +225,72 @@ internal sealed class CursorImportSource : IImportSource {
         var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
         var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
 
-        // AI-1153: correlate subagent (child) sessions to their parent by prompt-hash across
+        // correlate subagent (child) sessions to their parent by prompt-hash across
         // all discovered transcripts. A child is ingested under the parent's AgentSubsession
         // stream *by the parent's own import* (subagent-start → transcript-with-agent_id →
         // subagent-stop, before the parent's session-end) rather than as a separate top-level
         // session. Doing it inside the parent import guarantees the parent's SessionEnded stays
         // the last event on its stream — a subagent-start posted after a parallel parent's
         // session-end would reactivate the ended parent (SubagentStarted is a reactivation event).
-        var pathBySession = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var s in sessions)
-            pathBySession[s.SessionId] = s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) && tp is string p ? p : "";
+        //
+        // the correlator's INPUT is widened to every session under the SAME
+        // workspace's agent-transcripts/ dir — ignoring --session/--cwd/--since/scope for this
+        // internal step (cheap local file reads only). Without this, a `--session <child>`
+        // (or --cwd/--since-narrowed) import only ever sees the child in `sessions`, so it can
+        // never discover the parent's Task prompt and the child would wrongly import top-level.
+        // Repo detection below still runs ONLY on the filtered `sessions` slice — this widening
+        // is purely a same-workspace file scan, no git/network work.
+        // Qodo fix: same-workspace discovery below is only meant to ensure a filtered/scoped
+        // import can still SEE a parent for visibility purposes — it must also CONSTRAIN
+        // correlation. Correlating across the union of every workspace touched by this classify
+        // call let a child in workspace A link to a parent in workspace B whenever their
+        // canonical prompt hashes happened to match, corrupting nesting/attribution. Each
+        // workspace gets its own path map and its own Correlate() call; the resulting links are
+        // merged (session ids are unique across workspaces, so no collisions).
+        var pathBySession      = new Dictionary<string, string>(StringComparer.Ordinal); // flat, for child-path lookups only
+        var pathsByWorkspace   = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
 
-        var subagentLinks    = CursorSubagentCorrelator.Correlate(pathBySession.Select(kv => (kv.Key, kv.Value)));
+        Dictionary<string, string> WorkspaceMap(string key) {
+            if (!pathsByWorkspace.TryGetValue(key, out var map))
+                pathsByWorkspace[key] = map = new Dictionary<string, string>(StringComparer.Ordinal);
+            return map;
+        }
+
+        var sanitizedDirs = sessions
+            .Select(s => s.SourceMeta!.TryGetValue("SanitizedDir", out var sd) ? sd as string : null)
+            .Where(sd => sd is not null)
+            .Select(sd => sd!)
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var sanitizedDir in sanitizedDirs) {
+            var workspaceMap = WorkspaceMap(sanitizedDir);
+            foreach (var (sid, path) in DiscoverSameWorkspaceSessionPaths(sanitizedDir, ct)) {
+                workspaceMap[sid] = path;
+                pathBySession[sid] = path;
+            }
+        }
+
+        // Ensure every session actually being classified in this run is present even if its own
+        // workspace directory couldn't be (re-)walked above (e.g. injected SourceMeta without a
+        // SanitizedDir in a test double) — this run's own slice must never be lost. Keyed by the
+        // session's own SanitizedDir so correlation stays workspace-scoped; a session with no
+        // SanitizedDir gets an isolated per-session bucket since its true peer set is unknown.
+        foreach (var s in sessions) {
+            if (!s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) || tp is not string p || p.Length == 0)
+                continue;
+
+            var workspaceKey = s.SourceMeta!.TryGetValue("SanitizedDir", out var sd) && sd is string sdStr
+                ? sdStr
+                : $" single:{s.SessionId}";
+
+            WorkspaceMap(workspaceKey)[s.SessionId] = p;
+            pathBySession[s.SessionId] = p;
+        }
+
+        var subagentLinks = new Dictionary<string, CursorSubagentCorrelator.SubagentLink>(StringComparer.Ordinal);
+        foreach (var workspaceMap in pathsByWorkspace.Values)
+            foreach (var (childId, lnk) in CursorSubagentCorrelator.Correlate(workspaceMap.Select(kv => (kv.Key, kv.Value))))
+                subagentLinks[childId] = lnk;
         var childrenByParent = new Dictionary<string, List<CursorSubagentChild>>(StringComparer.Ordinal);
         foreach (var (childId, lnk) in subagentLinks) {
             if (!childrenByParent.TryGetValue(lnk.ParentSessionId, out var kids)) {
@@ -229,6 +308,24 @@ internal sealed class CursorImportSource : IImportSource {
                 Cwd            = s.Cwd,
                 FirstTimestamp = s.FirstTimestamp,
             };
+
+            // A session already quarantined by the live watcher's runtime rewrite guard must never
+            // be fed back through `kcap import` either: that's exactly the corrupted line-number
+            // source D0's quarantine exists to shut off. Quarantine is always keyed on the FAMILY
+            // identity — the top-level (parent) session id — since CursorRewriteGuard is
+            // constructed from the watcher process's own `sessionId` argument, which for a
+            // spawned CHILD watcher is the parent id (WatcherManager.BuildSpawnArgs:
+            // sessionIdOverride ?? key). ResolveQuarantineIdentity resolves that mapping — see its
+            // doc for round-2 review fix #7's fallback when `--session <child>` (or an
+            // inaccessible/omitted parent transcript) filters the parent out of `subagentLinks`
+            // entirely.
+            var quarantineIdentity = ResolveQuarantineIdentity(s.SessionId, subagentLinks);
+
+            if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "cursor session quarantined (transcript rewrite detected) — not imported"));
+                continue;
+            }
 
             int? lastNonBlankIndex;
             int  nonBlankCount;
@@ -260,6 +357,13 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
+            // Ended-at contract: unlike Copilot (session.shutdown record) or
+            // Gemini/Pi (per-record "timestamp" field), Cursor's Anthropic content-block
+            // transcript carries no authoritative session-end record to tail-scan. The
+            // fallback is: the last parsed user-wrapper timestamp when the normalizer
+            // surfaced one (live-hook path), else this file's last-write time. Do NOT
+            // treat a tail-scan of this transcript as authoritative — there is no
+            // per-line timestamp field here the way there is for Gemini/Pi.
             try {
                 meta.LastTimestamp = File.GetLastWriteTimeUtc(transcriptPath);
             } catch {
@@ -312,21 +416,44 @@ internal sealed class CursorImportSource : IImportSource {
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
-                SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, subagentLinks, childrenByParent),
+                SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, quarantineIdentity, subagentLinks, childrenByParent),
             });
         }
 
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
-        // AI-1153: a correlated subagent child is imported by its parent (below), under the
+        // a correlated subagent child is imported by its parent (below), under the
         // parent's AgentSubsession stream — never as a standalone top-level session.
+        //
+        // this flag is no longer unconditional. ImportCommand reconciles `routed`
+        // right after building it — an ORPHANED child (its correlated parent isn't itself part
+        // of this run's plan) has IsSubagentChild/ParentSessionId cleared before reaching here,
+        // so this check only still fires for a child whose parent IS about to run its own
+        // ImportSessionAsync (and will import this child inline, below in that parent's call).
+        // An orphan instead falls through to the ordinary standalone start→transcript→end path.
         if (classification.SourceMeta!.TryGetValue("IsSubagentChild", out var scObj) && scObj is true) {
+            return ImportOutcome.Skipped;
+        }
+
+        // re-check quarantine FRESH, before ANY lifecycle/transcript
+        // delivery. ClassifyAsync's own check (at classification time, above in this file) can be
+        // stale by the time this runs: repo probing, an interactive confirmation prompt, or simply
+        // queueing behind other sessions in the same import run all give the live watcher's
+        // runtime rewrite guard time to trip and write the quarantine marker AFTER this session
+        // was already classified clean. QuarantineIdentity (the family/parent id) was resolved
+        // once at classify time via ResolveQuarantineIdentity and is stable for the run — only the
+        // quarantine STATE needs a fresh disk read here.
+        var quarantineIdentity = classification.SourceMeta!.TryGetValue("QuarantineIdentity", out var qiObj) && qiObj is string qi
+            ? qi
+            : classification.SessionId;
+
+        if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
             return ImportOutcome.Skipped;
         }
 
@@ -340,18 +467,25 @@ internal sealed class CursorImportSource : IImportSource {
 
         var (createdUtc, modifiedUtc) = TryGetTranscriptTimes(transcriptPath);
 
-        // AI-1152: detect the repo from the workspace folder so the synthetic
+        // detect the repo from the workspace folder so the synthetic
         // sessionStart carries a `repository` node → server emits RepositoryDetected
         // and the (historical/backfilled) session groups under its repo. Fail-open:
         // a non-git workspace or detection error leaves it null and unattributed.
+        //
+        // cached per cwd — a historical import walks every session under a
+        // workspace, and many share one cwd, so this only runs detection once per distinct
+        // folder for the whole import rather than once per session.
         JsonObject? repositoryNode = null;
         if (workspaceFolder is not null) {
-            try {
-                var repo = await _repoDetector(workspaceFolder);
-                if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
-            } catch {
-                repositoryNode = null;
+            if (!_repoCache.TryGetValue(workspaceFolder, out var repo)) {
+                try {
+                    repo = await _repoDetector(workspaceFolder);
+                } catch {
+                    repo = null;
+                }
+                _repoCache[workspaceFolder] = repo;
             }
+            if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
         }
 
         // sessionStart MUST succeed before transcript advances the server
@@ -360,10 +494,19 @@ internal sealed class CursorImportSource : IImportSource {
         // (next run sees AlreadyLoaded and never re-emits). Treat lifecycle
         // POST failure as a hard import failure; the orchestrator surfaces
         // Errored and the user re-runs, which is idempotent on the server
-        // (canonical event ids are deterministic — AI-731).
+        // (canonical event ids are deterministic).
+        var startPayload = BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc, repositoryNode);
+        // Step 3 visibility stamp — New-only, and never overrides existing force-private
+        // handling (Cursor privatizes post-hoc via privateScopeSessionIds, not inline here;
+        // this guard still keeps the two mechanisms from conflicting). New for Cursor: the
+        // live hook has no default_visibility injection today, so this is import-only.
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
-            BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc, repositoryNode),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
@@ -378,30 +521,96 @@ internal sealed class CursorImportSource : IImportSource {
             _                                                => 0,
         };
 
+        // re-check again at the transcript boundary: the sessionStart POST
+        // that just landed gave the runtime guard another window to trip. Unlike the pre-flight
+        // check above (nothing posted yet, so Skipped there is exactly right), the session now
+        // legitimately exists server-side — best-effort close it with session-end so it doesn't
+        // hang open "active" forever, but send NO transcript content (skip the children too — the
+        // same corrupted-source concern applies to them) and surface Failed so a re-run is
+        // attempted, which will hit the pre-flight check above and cleanly Skip from then on.
+        if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+            var abortDurationMs = createdUtc is { } ac && modifiedUtc is { } am && am >= ac
+                ? (long?)(am - ac).TotalMilliseconds
+                : null;
+            await PostSyntheticHookAsync(
+                ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
+                BuildSessionEndPayload(classification.SessionId, transcriptPath, abortDurationMs, modifiedUtc),
+                ct);
+            return ImportOutcome.Failed;
+        }
+
+        // the best-effort close-and-fail contract shared by
+        // EVERY quarantine-abort seam below (the parent's own mid-transcript trip AND a child's):
+        // best-effort session-end so the session doesn't hang open "active" forever (subagent-start
+        // may already have posted for a child — this closes the parent/subsession the SAME way
+        // regardless of which delivery aborted), and Failed so a re-run hits the pre-flight check
+        // above and cleanly Skips from then on. Factored out so the child loop's catch (below) can
+        // share it instead of duplicating the parent-batch catch's logic.
+        async Task<ImportOutcome> CloseAndFailAsync() {
+            var abortDurationMs = createdUtc is { } midAc && modifiedUtc is { } midAm && midAm >= midAc
+                ? (long?)(midAm - midAc).TotalMilliseconds
+                : null;
+            await PostSyntheticHookAsync(
+                ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
+                BuildSessionEndPayload(classification.SessionId, transcriptPath, abortDurationMs, modifiedUtc),
+                ct);
+            return ImportOutcome.Failed;
+        }
+
         int sent;
         try {
+            // abortDelivery re-checks the ALREADY-resolved
+            // quarantineIdentity (a cheap marker-file read, no correlator re-run) before every
+            // 100-line batch. Without this, a quarantine written by the live watcher's runtime
+            // rewrite guard between batch 1 and batch 2 (or later) still let every remaining batch
+            // post — this closes that window by aborting delivery mid-flight.
             sent = await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient,
-                baseUrl:    ctx.BaseUrl,
-                sessionId:  classification.SessionId,
-                filePath:   transcriptPath,
-                agentId:    null,
-                startLine:  startLine,
-                vendor:     Vendor);
+                httpClient:    ctx.HttpClient,
+                baseUrl:       ctx.BaseUrl,
+                sessionId:     classification.SessionId,
+                filePath:      transcriptPath,
+                agentId:       null,
+                startLine:     startLine,
+                vendor:        Vendor,
+                abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
+        } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+            // Quarantine tripped mid-delivery — no children/remaining batches (we return before
+            // reaching them).
+            return await CloseAndFailAsync();
         } catch {
             return ImportOutcome.Failed;
         }
 
-        // AI-1153: import this parent's subagent children BEFORE its session-end, so the
+        // import this parent's subagent children BEFORE its session-end, so the
         // parent's SessionEnded remains the last event on its stream. A subagent-start
         // (reactivation event) appended after the parent's SessionEnded would flip the
         // ended parent back to Active. Hard-fail on child failure (same contract as the
         // parent lifecycle) so a re-run — idempotent via deterministic ids — repairs it.
+        //
+        // track whether any child ACTUALLY sent new transcript bytes,
+        // independent of the parent's own `sent`/`startLine`. An AlreadyLoaded parent (nothing
+        // past its own watermark) can still attach a previously-unloaded child here — that's
+        // real new work, and ImportCommand's IsLifecycleOnlyRoutedReplay must not suppress it.
+        //
+        // a child-transcript quarantine trip is surfaced as
+        // the SAME typed TranscriptDeliveryAbortedException the parent's own delivery throws (see
+        // SendSubagentLifecycleAsync below); catching it here routes it through CloseAndFailAsync
+        // instead of letting SendSubagentLifecycleAsync's old catch-all swallow it into a bare
+        // `false` — which returned Failed WITHOUT ever posting the parent's best-effort session-end,
+        // even though this child's subagent-start had already landed (leaving the parent/subsession
+        // stuck Active forever, since the quarantine marker makes the NEXT run Skip at preflight
+        // rather than repair it).
+        var sentChildContent = false;
         if (classification.SourceMeta!.TryGetValue("SubagentChildren", out var kidsObj)
          && kidsObj is List<CursorSubagentChild> children) {
-            foreach (var child in children) {
-                if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, ct))
-                    return ImportOutcome.Failed;
+            try {
+                foreach (var child in children) {
+                    var (childOk, childSent) = await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, quarantineIdentity, ct);
+                    if (!childOk) return ImportOutcome.Failed;
+                    sentChildContent |= childSent;
+                }
+            } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+                return await CloseAndFailAsync();
             }
         }
 
@@ -416,9 +625,13 @@ internal sealed class CursorImportSource : IImportSource {
             ct);
         if (!endOk) return ImportOutcome.Failed;
 
-        if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+        if (sent == 0) {
+            var noOwnContentOutcome = startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+            return new ImportSessionResult(noOwnContentOutcome, SentChildContent: sentChildContent);
+        }
 
-        return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        var outcome = startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        return new ImportSessionResult(outcome, SentChildContent: sentChildContent);
     }
 
     /// <summary>A Cursor subagent child correlated to a parent: its own session id (used as the
@@ -426,44 +639,147 @@ internal sealed class CursorImportSource : IImportSource {
     internal sealed record CursorSubagentChild(string SessionId, string TranscriptPath, string? SubagentType);
 
     /// <summary>
-    /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so a
-    /// child/parent gets a fresh copy). Children carry <c>IsSubagentChild</c> so their own
-    /// import no-ops; parents carry <c>SubagentChildren</c> so they import them inline.
+    /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so every
+    /// session gets a fresh copy). Children carry <c>IsSubagentChild</c> + <c>ParentSessionId</c>
+    /// (D5 — the parent id lets <see cref="ImportCommand"/> reconcile an orphaned child
+    /// to standalone when the parent isn't itself part of this run's plan) so their own import
+    /// no-ops (unless reconciled); parents carry <c>SubagentChildren</c> so they import them inline.
+    /// Every classification also carries <c>QuarantineIdentity</c> — review fix #6 — so
+    /// <see cref="ImportSessionAsync"/> can re-check <see cref="CursorMarkers.IsQuarantined"/>
+    /// FRESH immediately before any lifecycle/transcript delivery (the family identity itself is
+    /// stable for the run; only the quarantine STATE needs a live re-check, since the live
+    /// watcher's runtime rewrite guard can trip at any moment between classification and import).
     /// </summary>
     static IReadOnlyDictionary<string, object?> StampSubagentMeta(
         IReadOnlyDictionary<string, object?>                       src,
         string                                                     sessionId,
+        string                                                     quarantineIdentity,
         Dictionary<string, CursorSubagentCorrelator.SubagentLink>  links,
         Dictionary<string, List<CursorSubagentChild>>              childrenByParent
     ) {
-        var isChild = links.ContainsKey(sessionId);
-        var hasKids = childrenByParent.TryGetValue(sessionId, out var kids);
-        if (!isChild && !hasKids) return src;
-
-        var d = new Dictionary<string, object?>(src);
-        if (isChild) d["IsSubagentChild"]  = true;
-        if (hasKids) d["SubagentChildren"] = kids;
+        var d = new Dictionary<string, object?>(src) { ["QuarantineIdentity"] = quarantineIdentity };
+        if (links.TryGetValue(sessionId, out var link)) {
+            d["IsSubagentChild"] = true;
+            d["ParentSessionId"] = link.ParentSessionId;
+        }
+        if (childrenByParent.TryGetValue(sessionId, out var kids)) d["SubagentChildren"] = kids;
         return d;
     }
 
     /// <summary>
-    /// AI-1153: ingest one Cursor subagent child under its parent's <c>AgentSubsession</c>
+    /// Every session id → transcript path found directly under ONE workspace's
+    /// <c>agent-transcripts/</c> directory — no <c>--session</c>/<c>--cwd</c>/<c>--since</c>/scope
+    /// filtering, cheap local file reads only. Widens the subagent correlator's input so a
+    /// filtered/scoped import still sees a session's parent/siblings for correlation even when
+    /// they fall outside this run's classify slice. Mirrors the per-workspace walk in
+    /// <see cref="DiscoverAsync"/> minus the filters.
+    /// </summary>
+    IReadOnlyDictionary<string, string> DiscoverSameWorkspaceSessionPaths(string sanitizedDir, CancellationToken ct) {
+        var map            = new Dictionary<string, string>(StringComparer.Ordinal);
+        var transcriptsDir = Path.Combine(_projectsDir, sanitizedDir, "agent-transcripts");
+
+        if (!Directory.Exists(transcriptsDir)) return map;
+
+        try {
+            foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                ct.ThrowIfCancellationRequested();
+                try {
+                    var sessionDirName = Path.GetFileName(sessionDir);
+                    var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
+
+                    if (!File.Exists(jsonl)) continue;
+
+                    map[NormalizeCursorSessionId(sessionDirName)] = jsonl;
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
+                    // A hostile/inaccessible session subtree must not abort the whole scan.
+                    continue;
+                }
+            }
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // A hostile/inaccessible workspace subtree must not abort the whole scan.
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// resolves the FAMILY (quarantine) identity for <paramref name="sessionId"/>:
+    /// its correlated parent's id when <paramref name="subagentLinks"/> (computed from THIS batch's
+    /// discovered sessions) has a link, falling back to the persisted
+    /// <see cref="CursorLiveSubagentLinker"/> marker — written independently by the LIVE hook
+    /// dispatcher at the child's own <c>sessionStart</c>, so it resolves the same parent even when
+    /// a <c>--session &lt;child&gt;</c> filter (or an inaccessible/omitted parent transcript)
+    /// excludes the parent from this batch entirely and the in-batch correlator has nothing to
+    /// correlate against. Falls back to the session's own id when neither source has a link
+    /// (a genuine top-level session, or one never seen live and whose parent transcript isn't in
+    /// this batch either — an inherent limitation the marker fallback can't close).
+    /// </summary>
+    internal static string ResolveQuarantineIdentity(
+        string                                                     sessionId,
+        IReadOnlyDictionary<string, CursorSubagentCorrelator.SubagentLink> subagentLinks
+    ) {
+        if (subagentLinks.TryGetValue(sessionId, out var ownLink)) return ownLink.ParentSessionId;
+
+        return CursorLiveSubagentLinker.TryLoadLink(sessionId) is { } marker
+            ? marker.ParentSessionId
+            : sessionId;
+    }
+
+    /// <summary>
+    /// ingest one Cursor subagent child under its parent's <c>AgentSubsession</c>
     /// stream. Mirrors <c>SessionImporter.SendAgentLifecycle</c>: <c>subagent-start</c>
     /// (session_id=parent, agent_id=child) → transcript batches routed with <c>agent_id</c>=child
     /// (resumed from the subsession watermark so re-imports don't repost the whole child) →
     /// <c>subagent-stop</c>. Called from the parent's <see cref="ImportSessionAsync"/> BEFORE the
-    /// parent's session-end. Returns false on a hard failure (start/transcript/stop POST failed);
-    /// a missing child transcript is skipped non-fatally. No standalone session lifecycle is
-    /// emitted for the child, so it never becomes a top-level session card.
+    /// parent's session-end. Returns <c>(false, _)</c> on a hard failure (start/transcript/stop
+    /// POST failed); a missing child transcript is skipped non-fatally (<c>(true, false)</c>). No
+    /// standalone session lifecycle is emitted for the child, so it never becomes a top-level
+    /// session card.
+    ///
+    /// <para>
+    /// also reports whether this call actually POSTed new transcript
+    /// bytes for the child (<c>SentContent</c>) — the caller needs that to know real new work
+    /// happened even when the PARENT's own <c>sent</c> count is zero (e.g. an AlreadyLoaded
+    /// parent attaching a previously-unloaded child).
+    /// </para>
+    ///
+    /// <para>
+    /// a fail-open resend — the child subsession watermark
+    /// probe itself threw, so <c>startLine</c> resets to 0 and the whole child is reposted — is
+    /// INDETERMINATE, not proof of "no new content". The round-3 fix treated a probe failure as
+    /// "definitely a duplicate resend" and forced <c>SentContent = false</c>; but when the child
+    /// is genuinely NEW and the watermark endpoint merely 500s transiently, that full resend
+    /// really does POST new content — yet the caller was told nothing new happened. For an
+    /// AlreadyLoaded parent, that meant a newly-attached child's content could stay on a public
+    /// parent under <c>--private</c>: a privacy leak. So a probe failure must NOT be treated as
+    /// "no new content"; it's indeterminate, and the safe default is to treat a posted resend as
+    /// content that MAY be new (<c>SentContent = true</c>), same as the probe-succeeded path.
+    /// This can cause a cosmetic double-count for an already-complete child that gets
+    /// fail-open-resent (its AlreadyLoaded parent counted in both Loaded and AlreadyLoaded) —
+    /// that's a known, separately-tracked follow-up (deferred P2); privacy correctness wins over
+    /// count precision.
+    /// </para>
     /// </summary>
-    async Task<bool> SendSubagentLifecycleAsync(
+    async Task<(bool Success, bool SentContent)> SendSubagentLifecycleAsync(
             string            parentSessionId,
             CursorSubagentChild child,
             ImportContext     ctx,
+            string            quarantineIdentity,
             CancellationToken ct
         ) {
         if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
-            return true; // missing child transcript — skip, non-fatal
+            return (true, false); // missing child transcript — skip, non-fatal
+
+        // never start a NEW child under a family that is
+        // ALREADY quarantined by the time its turn comes up in the parent's loop. Without this, a
+        // quarantine tripped by some earlier child's own delivery (or any other concurrent trip —
+        // the live watcher runs alongside this import) still let every LATER child's subagent-start
+        // post, since nothing here re-checked the marker before that first POST. Throwing the same
+        // typed exception the transcript-delivery abort below throws lets the caller's loop (in
+        // ImportSessionAsync) route this through the identical best-effort close-and-fail contract.
+        if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+            throw new SessionImporter.TranscriptDeliveryAbortedException();
+        }
 
         var agentId      = child.SessionId; // the child session id doubles as the subagent id
         var subagentType = string.IsNullOrEmpty(child.SubagentType) ? "task" : child.SubagentType!;
@@ -478,38 +794,77 @@ internal sealed class CursorImportSource : IImportSource {
             ["cwd"]             = "",                    // required by HookBase
             ["strict"]          = true,                  // fail-closed: 500 if SubagentStarted isn't persisted
         }, ct);
-        if (!startOk) return false;
+        if (!startOk) return (false, false);
 
         // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
         // doesn't repost the full child transcript every time. Fail-open to a full send.
+        //
+        // a fail-open resend (the probe itself threw — e.g. a
+        // transient 5xx) resets startLine to 0 and reposts the WHOLE child. That resend is
+        // INDETERMINATE — it MAY be a duplicate of an already-complete child, or it MAY be
+        // genuinely new content that a transient probe failure prevented us from resuming
+        // correctly. Treating probe failure as proof of "no new content" (the round-3 fix) is a
+        // privacy regression: a real new child attached to an AlreadyLoaded parent would then be
+        // reported as no content sent, the parent would be excluded from `--private`, and its
+        // new child content would leak on a public session. So probe failure alone is no longer
+        // tracked as a reason to suppress SentContent below — the safe default when content was
+        // actually posted is to count it, whether or not the watermark was known.
+        //
+        // Before falling open, give a status-bearing 5xx/408 one extra local re-attempt (2
+        // attempts total, fixed, no added backoff) via FetchServerLastLineWithCappedRetryAsync —
+        // a single transient 500 no longer skips straight to fail-open on the first failure.
+        // Statusless transport failures (already retried inside GetWithRetryAsync) and 429 (a
+        // rate-limit signal) are excluded from this outer retry and still fail open on the
+        // first attempt. Cancellation is never treated as a transient failure — it propagates
+        // immediately.
         var startLine = 0;
         try {
-            if (await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, ct, agentId) is { } last)
+            if (await FetchServerLastLineWithCappedRetryAsync(
+                    probeCt => FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, probeCt, agentId), ct
+                ) is { } last)
                 startLine = last + 1;
+        } catch (OperationCanceledException) {
+            throw;
         } catch {
             startLine = 0;
         }
 
+        int childSent;
         try {
             // failOnError: fail-closed like the parent lifecycle — a rejected/failed child
             // transcript POST must abort so the parent import fails and a re-run repairs it,
             // rather than leaving an empty completed subagent while reporting success.
-            await SessionImporter.SendTranscriptBatches(
-                httpClient:  ctx.HttpClient,
-                baseUrl:     ctx.BaseUrl,
-                sessionId:   parentSessionId,
-                filePath:    child.TranscriptPath,
-                agentId:     agentId,
-                startLine:   startLine,
-                vendor:      Vendor,
-                failOnError: true);
+            //
+            // abortDelivery closes over the SAME
+            // already-resolved quarantineIdentity as the parent's own send (no extra correlator
+            // work), so a quarantine tripping mid-child-transcript also aborts the remaining
+            // child batches, not just the parent's.
+            childSent = await SessionImporter.SendTranscriptBatches(
+                httpClient:    ctx.HttpClient,
+                baseUrl:       ctx.BaseUrl,
+                sessionId:     parentSessionId,
+                filePath:      child.TranscriptPath,
+                agentId:       agentId,
+                startLine:     startLine,
+                vendor:        Vendor,
+                failOnError:   true,
+                abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
+        } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+            // a quarantine trip during THIS child's own
+            // transcript delivery must propagate to the caller's close-and-fail path, not collapse
+            // into the same bare `false` an ordinary POST failure returns below. A `false` here
+            // returned Failed from ImportSessionAsync WITHOUT ever posting the parent's best-effort
+            // session-end, even though this child's subagent-start had already landed — leaving the
+            // parent/subsession stuck Active forever (the quarantine marker makes the next run Skip
+            // at preflight instead of repairing it).
+            throw;
         } catch {
-            return false;
+            return (false, false);
         }
 
         // Full SubagentStopHook shape (mirrors the Gemini/OpenCode builders) — the server
         // binds all fields, so an incomplete body can be rejected before HandleSubagentStop.
-        return await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
+        var stopOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
             ["hook_event_name"]        = "subagent_stop",
             ["session_id"]             = parentSessionId,
             ["agent_id"]               = agentId,
@@ -521,6 +876,15 @@ internal sealed class CursorImportSource : IImportSource {
             ["last_assistant_message"] = "",
             ["strict"]                 = true,                 // fail-closed: 500 if SubagentCompleted isn't persisted
         }, ct);
+
+        // Privacy-safe by construction: whether the probe succeeded (known watermark) or failed
+        // (fail-open full resend), any lines actually POSTED count as SentContent. A probe
+        // failure is indeterminate, never a "definitely no new content" verdict — see the
+        // fail-open comment above. Known trade-off: an already-complete child that gets
+        // fail-open-resent will also report SentContent=true, which can cosmetically double-count
+        // its AlreadyLoaded parent (Loaded + AlreadyLoaded buckets) — deferred, separately
+        // tracked follow-up; privacy correctness wins over count precision.
+        return (stopOk, stopOk && childSent > 0);
     }
 
     internal static JsonObject BuildSessionStartPayload(
@@ -536,18 +900,19 @@ internal sealed class CursorImportSource : IImportSource {
         if (workspaceFolder is not null) {
             payload["workspace_roots"] = new JsonArray(workspaceFolder);
         }
-        // AI-1152: git-detected repo (owner/repo/branch/...) so the server emits
+        // git-detected repo (owner/repo/branch/...) so the server emits
         // RepositoryDetected for historical/backfilled Cursor sessions.
         if (repository is not null) {
             payload["repository"] = repository;
         }
-        // AI-739: server prefers started_at over UtcNow when present, so
+        // server prefers started_at over UtcNow when present, so
         // historical sessions surface with their real start time. Use an
         // ISO-8601 round-trip ("O") string — DateTimeOffset? on the server
         // record deserialises that shape directly.
         if (startedAt is { } ts) {
             payload["started_at"] = ts.ToString("O");
         }
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -566,6 +931,7 @@ internal sealed class CursorImportSource : IImportSource {
         if (endedAt is { } ts) {
             payload["ended_at"] = ts.ToString("O");
         }
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -636,14 +1002,17 @@ internal sealed class CursorImportSource : IImportSource {
     }
 
     static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
-        // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark (AI-1153).
+        // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark.
         var url = string.IsNullOrEmpty(agentId)
             ? $"{baseUrl}/api/sessions/{sessionId}/last-line"
             : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";
         using var resp = await http.GetWithRetryAsync(url, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
-        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
+        // Construct via the (string?, Exception?, HttpStatusCode?) overload so .StatusCode is
+        // inspectable by FetchServerLastLineWithCappedRetryAsync's status check, rather than
+        // message-string parsing.
+        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}", null, resp.StatusCode);
 
         var       body = await resp.Content.ReadAsStringAsync(ct);
         using var doc  = JsonDocument.Parse(body);
@@ -652,6 +1021,43 @@ internal sealed class CursorImportSource : IImportSource {
             ? ln.GetInt32()
             : null;
     }
+
+    /// <summary>
+    /// A small, fixed 2-attempt cap around a watermark-probe call. Retries ONLY a
+    /// status-bearing 5xx or 408 (Request Timeout) response — a single transient 500 no longer
+    /// skips straight to the caller's fail-open path on the first failure. Two categories are
+    /// explicitly excluded from this outer re-attempt: statusless transport failures (a
+    /// network-level <see cref="HttpRequestException"/> with no <c>.StatusCode</c> — these
+    /// already had their own exponential-backoff retry inside <c>GetWithRetryAsync</c>'s inner
+    /// loop, so a second full retry cycle would double an already-exhausted budget for no
+    /// reason to expect a different outcome), and 429 (Too Many Requests — a rate-limit signal,
+    /// not a transient blip; immediately retrying it is the wrong response). No additional
+    /// backoff is added beyond <c>GetWithRetryAsync</c>'s own per-attempt retry loop. Cancellation
+    /// propagates immediately and is never treated as a transient failure to retry. After both
+    /// attempts are exhausted (or on a non-retryable failure), the exception propagates to the
+    /// caller's existing fail-open handling, unchanged by this cap.
+    ///
+    /// <paramref name="probe"/> is a delegate (rather than concrete HttpClient/url parameters) so
+    /// this pure retry-decision shell is directly, deterministically unit-testable.
+    /// </summary>
+    internal static async Task<int?> FetchServerLastLineWithCappedRetryAsync(
+            Func<CancellationToken, Task<int?>> probe, CancellationToken ct
+        ) {
+        try {
+            return await probe(ct);
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (HttpRequestException ex) when (IsRetryableWatermarkProbeStatus(ex.StatusCode)) {
+            return await probe(ct);
+        }
+    }
+
+    /// <summary>
+    /// True for a status-bearing 5xx or 408 — the only categories the 2-attempt cap retries.
+    /// A null status (statusless transport failure) and 429 both return false.
+    /// </summary>
+    internal static bool IsRetryableWatermarkProbeStatus(HttpStatusCode? statusCode) =>
+        statusCode is { } code && ((int)code >= 500 && (int)code <= 599 || code == HttpStatusCode.RequestTimeout);
 
     static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
         string? cwd, string? repoKey, ClassifyContext ctx

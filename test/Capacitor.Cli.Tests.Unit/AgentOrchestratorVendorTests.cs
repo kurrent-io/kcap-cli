@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Pty;
@@ -57,19 +58,25 @@ public partial class AgentOrchestratorVendorTests {
             IPtyProcessFactory                                  ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher>   launchers,
             string?                                             allowedRepoPath        = null,
-            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null
+            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null,
+            Action<DaemonConfig>?                               configure              = null
         ) {
         var config = new DaemonConfig {
             Name                = "test",
             ServerUrl           = "http://127.0.0.1:1",
             ClaudePath          = "claude",
             MaxConcurrentAgents = 5,
-            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8])
+            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8]),
+            // Phase B (D4): isolate the PID-record store to a temp dir so tests never touch the
+            // real ~/.config/kcap/daemons.
+            StateDir            = Path.Combine(Path.GetTempPath(), "kcap-orch-state-" + Guid.NewGuid().ToString("N")[..8])
         };
 
         if (allowedRepoPath is not null) {
             config.AllowedRepoPaths = [allowedRepoPath];
         }
+
+        configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
@@ -108,7 +115,7 @@ public partial class AgentOrchestratorVendorTests {
         public void StopApplication() { }
     }
 
-    // AI-864: re-registration is awaited inside RegisterDaemon before readiness is restored.
+    // re-registration is awaited inside RegisterDaemon before readiness is restored.
     // A transient per-agent failure must be retried (not swallowed on first try), so the agent's
     // ownership is restored before the daemon flips ready — narrowing the "ready despite reregister
     // failure" window qodo flagged.
@@ -188,7 +195,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
     }
 
-    // AI-1124: the orchestrator's unattended-launch guard (UnattendedLaunchPolicy.RejectionReason)
+    // the orchestrator's unattended-launch guard (UnattendedLaunchPolicy.RejectionReason)
     // must actually be wired into HandleLaunchAgent — reject a review-flow launch whose vendor
     // can't run unattended, and do it before any worktree/PTY side effects.
     [Test]
@@ -310,7 +317,7 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
-    // AI-684 Task 10: a "cursor" launch must route to its registered IHostedAgentRuntimeFactory
+    // Task 10: a "cursor" launch must route to its registered IHostedAgentRuntimeFactory
     // (the ACP seam) rather than falling through to a PTY launcher/factory. This is a pure unit
     // test — SpyHostedAgentRuntimeFactory never spawns a real cursor-agent process.
     [Test]
@@ -358,7 +365,7 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
-    // AI-684 Fix B/E (PR #244 review, BLOCKER): a runtime whose ReadOutputAsync never yields a byte
+    // Fix B/E (PR #244 review, BLOCKER): a runtime whose ReadOutputAsync never yields a byte
     // (ACP/cursor) must NOT wait for the orchestrator's on-first-chunk Starting→Running flip — that
     // flip lives in ReadAgentOutputAsync and only fires on an output CHUNK, which never arrives for
     // such a runtime. Before the fix this left the agent stuck in "Starting" (eventually auto-
@@ -585,7 +592,7 @@ public partial class AgentOrchestratorVendorTests {
 
             // Stopping the agent cancels ReadCts. The blocked enqueue MUST be released by
             // that cancellation; otherwise the read loop (and its finally-block cleanup)
-            // stalls until daemon shutdown (AI-846). Before the fix the enqueue awaited the
+            // stalls until daemon shutdown. Before the fix the enqueue awaited the
             // daemon-lifetime token instead, so this never completes.
             await orch.HandleStopAgentForTest("agent-bp");
 
@@ -775,7 +782,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     /// <summary>
-    /// Test double for the AI-684 Task 10 runtime-selection seam: records that <see cref="StartAsync"/>
+    /// Test double for the Task 10 runtime-selection seam: records that <see cref="StartAsync"/>
     /// was called (and with what agent id) and returns a no-op <see cref="FakeHostedAgentRuntime"/>,
     /// without ever spawning a real process — proves the orchestrator routes a launch to the correct
     /// <see cref="IHostedAgentRuntimeFactory"/> by vendor.
@@ -812,7 +819,7 @@ public partial class AgentOrchestratorVendorTests {
     /// harmless stand-in instead of a real PTY or ACP connection. <see cref="ReadOutputAsync"/>
     /// blocks until <see cref="ExitGate"/> is released (or <c>ct</c> cancels) rather than completing
     /// immediately, mirroring the real ACP runtime's "stay open until the process exits" contract —
-    /// this lets AI-684 Fix B/E tests observe orchestrator state (e.g. Status flips to "Running")
+    /// this lets Fix B/E tests observe orchestrator state (e.g. Status flips to "Running")
     /// WHILE the agent is still live, before ever driving it to completion.</summary>
     sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : IHostedAgentRuntime {
         public string Vendor              => vendor;
@@ -889,8 +896,9 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     sealed class SpyPtyProcessFactory : IPtyProcessFactory {
-        public int     SpawnCalls  { get; private set; }
-        public string? LastCommand { get; private set; }
+        public int                         SpawnCalls  { get; private set; }
+        public string?                     LastCommand { get; private set; }
+        public Dictionary<string, string>? LastEnv     { get; private set; }
 
         public IPtyProcess Spawn(
                 string                      command,
@@ -902,6 +910,7 @@ public partial class AgentOrchestratorVendorTests {
             ) {
             SpawnCalls++;
             LastCommand = command;
+            LastEnv     = extraEnv;
 
             return new StubPtyProcess();
         }
@@ -957,22 +966,121 @@ public partial class AgentOrchestratorVendorTests {
             return Task.CompletedTask;
         }
 
-        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (AI-864:
-        /// drives the bounded per-agent re-registration retry test).</summary>
+        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (drives
+        /// the bounded per-agent re-registration retry test).</summary>
         public int AgentRegisteredFailTimes { get; init; }
         public int AgentRegisteredCallCount { get; private set; }
 
         public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) {
             AgentRegisteredCallCount++;
+            lock (AcpCallOrder) AcpCallOrder.Add($"register:{agentId}");
 
             return AgentRegisteredCallCount <= AgentRegisteredFailTimes
                 ? Task.FromException(new InvalidOperationException("transient re-register failure"))
                 : Task.CompletedTask;
         }
 
+        // ── Option B task 4: ACP bind/forward capture ────────────────────────────────────
+        // Overrides the RAW hub-invoke seams (mirroring AcpServerConnectionTests' TestServerConnection)
+        // rather than the higher-level gated AcpSessionStartedAsync/SendAcpEventsAsync, so every call
+        // still goes through the REAL ConnectionRetry/IsReady gating the production wiring relies on.
+        // IsReady is overridden to true (no real hub connection exists in these tests) so that gating
+        // resolves immediately instead of hanging forever waiting for a connection that never connects.
+
+        internal override bool IsReady => true;
+
+        /// <summary>Every register/bind/events call, in the exact order the orchestrator issued them —
+        /// the single source of truth for the bind-ordering and teardown-ordering assertions.</summary>
+        public List<string> AcpCallOrder { get; } = [];
+
+        public List<(string AgentId, string Vendor, string AcpSessionId, string? Cwd, string? Model)> AcpSessionStartedCalls { get; } = [];
+        public List<(string AgentId, string AcpSessionId, AcpEventEnvelope[] Envelopes)>              AcpEventsCalls         { get; } = [];
+
+        /// <summary>Fires (unbounded, never blocks the caller) once per AcpSessionEvents call, carrying
+        /// the 1-based call count — lets a test await "the Nth events call happened" deterministically
+        /// instead of guessing with Task.Delay.</summary>
+        public Channel<int> AcpEventsCallSignal { get; } = Channel.CreateUnbounded<int>();
+
+        /// <summary>Overrides the ack a given batch receives; defaults to "fully accepted".</summary>
+        public Func<AcpEventEnvelope[], AcpBatchAck>? AcpEventsAckOverride { get; init; }
+
+        /// <summary>Set to make the raw AcpSessionEvents invoke hang until this token is cancelled —
+        /// simulates a server call that never returns, for the bounded-final-drain test (mirrors
+        /// EndSessionBlockUntil's pattern).</summary>
+        public CancellationTokenSource? AcpEventsBlockUntil { get; init; }
+
+        /// <summary>One-shot gate: when set, the NEXT raw AcpSessionEvents invoke awaits this task
+        /// before returning (then the field is cleared) — lets a test deterministically control
+        /// exactly when one specific events call completes, without racing unrelated background
+        /// work (e.g. CleanupAgentAsync's own worktree removal) that would otherwise let a call
+        /// "eventually" go through regardless of the ordering under test.</summary>
+        public TaskCompletionSource? PendingAcpEventsGate { get; set; }
+
+        /// <summary>One-shot gate: when set, the NEXT raw AcpSessionStarted invoke awaits this task
+        /// before returning (then the field is cleared) — models a bind call still in flight across
+        /// a reconnect outage (reliability fix's stale-binding-race test), independent of
+        /// <paramref name="ct"/> so the test controls exactly when the "late bind" resolves.</summary>
+        public TaskCompletionSource? PendingAcpBindGate { get; set; }
+
+        internal override async Task InvokeAcpSessionStartedRawAsync(
+                string agentId, string vendor, string acpSessionId, string? cwd, string? model,
+                IReadOnlyDictionary<string, string>? metadata, CancellationToken ct
+            ) {
+            lock (AcpCallOrder) {
+                AcpCallOrder.Add($"bind:{agentId}");
+                AcpSessionStartedCalls.Add((agentId, vendor, acpSessionId, cwd, model));
+            }
+
+            if (PendingAcpBindGate is { } gate) {
+                PendingAcpBindGate = null;
+                await gate.Task;
+            }
+        }
+
+        internal override async Task<AcpBatchAck> InvokeAcpSessionEventsRawAsync(
+                string agentId, string acpSessionId, AcpEventEnvelope[] envelopes, CancellationToken ct
+            ) {
+            int callCount;
+
+            lock (AcpCallOrder) {
+                AcpCallOrder.Add($"events:{agentId}:{string.Join(',', envelopes.Select(e => e.Seq))}");
+                AcpEventsCalls.Add((agentId, acpSessionId, envelopes));
+                callCount = AcpEventsCalls.Count;
+            }
+
+            if (AcpEventsBlockUntil is { } blockCts) {
+                // Linked with ct (unlike a bare blockCts.Token wait) so a per-agent CTS cancellation
+                // propagates through exactly like a real _hub.InvokeAsync(..., cancellationToken: ct)
+                // call would (reliability fix: forwarder-cancel-on-drain-timeout relies on
+                // this). A ct-driven cancellation PROPAGATES (mirrors the real hub); blockCts alone
+                // is purely test cleanup (releases an otherwise-abandoned background call) and falls
+                // through to a normal successful return.
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(blockCts.Token, ct);
+
+                try {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, linked.Token);
+                } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                    throw;
+                } catch (OperationCanceledException) {
+                    /* released by the test (blockCts) */
+                }
+            }
+
+            // Not interlocked: the forwarder always has exactly one send in flight at a time (its
+            // single-in-flight-batch design), so this test double never sees concurrent callers.
+            if (PendingAcpEventsGate is { } gate) {
+                PendingAcpEventsGate = null;
+                await gate.Task;
+            }
+
+            AcpEventsCallSignal.Writer.TryWrite(callCount);
+
+            return AcpEventsAckOverride?.Invoke(envelopes) ?? new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq);
+        }
+
         /// <summary>(AgentId, Status) pairs passed to every AgentStatusChangedAsync call, in
         /// call order — lets a test assert on the exact lifecycle transitions the orchestrator
-        /// drove (e.g. AI-684 Fix B/E's immediate Running flip for a no-terminal runtime).</summary>
+        /// drove (e.g. Fix B/E's immediate Running flip for a no-terminal runtime).</summary>
         public List<(string AgentId, string Status)> StatusChangedCalls { get; } = [];
 
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) {
@@ -985,7 +1093,13 @@ public partial class AgentOrchestratorVendorTests {
         /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>
         public Action? OnAgentUnregistered { get; init; }
 
+        /// <summary>Every agent id passed to AgentUnregisteredAsync, in call order. Phase B
+        /// (D1): a single-flight teardown must unregister an agent exactly once even under a racing
+        /// launch-catch + read-loop cleanup.</summary>
+        public List<string> AgentUnregisteredCalls { get; } = [];
+
         public override Task AgentUnregisteredAsync(string agentId) {
+            lock (AgentUnregisteredCalls) AgentUnregisteredCalls.Add(agentId);
             OnAgentUnregistered?.Invoke();
 
             return Task.CompletedTask;
@@ -995,7 +1109,7 @@ public partial class AgentOrchestratorVendorTests {
             => Task.CompletedTask;
 
         /// <summary>Set both to make the send block (simulating a full/down terminal
-        /// queue) until its <c>ct</c> is cancelled — used by the AI-846 back-pressure
+        /// queue) until its <c>ct</c> is cancelled — used by the back-pressure
         /// test. Left null for every other test, where the send is a no-op.</summary>
         public TaskCompletionSource? SendEntered   { get; init; }
         public TaskCompletionSource? SendUnblocked { get; init; }
@@ -1019,6 +1133,7 @@ public partial class AgentOrchestratorVendorTests {
 
         public override async Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason) {
             EndSessionReasons.Add(reason);
+            lock (AcpCallOrder) AcpCallOrder.Add($"endSession:{agentId}");
 
             if (EndSessionBlockUntil is { } cts) {
                 try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); } catch (OperationCanceledException) {

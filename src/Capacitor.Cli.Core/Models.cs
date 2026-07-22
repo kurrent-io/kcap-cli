@@ -139,10 +139,23 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
+    // Task 7: set by the shutdown final drain (isFinalDrain) when it held back an
+    // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
+    // the final drain to flag the session needs-import (never drop a truncated tail).
+    public bool FinalDrainHeldIncompleteLine { get; set; }
+
     // Last wall-clock time new transcript content was observed on the rollout file.
     // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
     // Initialized when the watcher starts; updated in DrainNewLines on new lines.
     public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
+
+    // idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
+    // connection drops and cleared when it returns; AccumulatedDisconnected sums the disconnected
+    // durations SINCE the last transcript activity (reset to zero when LastActivityAt advances).
+    // ShouldEndOnIdle subtracts it so a transient outage isn't counted as idleness, while a
+    // genuinely idle session still ends after the configured CONNECTED-idle budget.
+    public DateTimeOffset? DisconnectedSince       { get; set; }
+    public TimeSpan        AccumulatedDisconnected { get; set; }
 
     // Tracks Codex tool-call call_ids that are currently in flight (started but
     // not yet finished). A function_call/custom_tool_call response_item adds the
@@ -169,6 +182,38 @@ class WatchState {
     // suppresses the idle-timeout session-end while a tool is genuinely in flight (mirrors
     // the Codex PendingCodexToolCalls guard).
     public int PendingAntigravityToolCalls { get; set; }
+
+    // Antigravity live subagent nesting: child conversation ids already POSTed to
+    // /hooks/antigravity/subagent-link for this parent watcher. A child stays OUT of this set
+    // until its link POST succeeds, so a failed POST retries on the next scan (fail-open).
+    public HashSet<string> PostedSubagentLinks { get; } = new(StringComparer.Ordinal);
+
+    // Task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
+    // synthetic KiroUsageBackfilled line, so a later drain never re-emits the same anchor. Mirrors
+    // LastAntigravityGenIdx above, but keyed on the anchor string rather than a row index because
+    // Kiro's sidecar has no stable ordinal — committed ONLY after a successful send (see
+    // KiroUsagePendingAnchors).
+    public HashSet<string> KiroUsageEmittedAnchors { get; } = new(StringComparer.Ordinal);
+
+    // Anchors staged by the most recent AppendKiroUsageBackfillLines call but not yet committed
+    // to KiroUsageEmittedAnchors. The watcher commits them into the set above only once the batch
+    // carrying their synthetic lines lands; a failed send leaves this list to be recomputed (and
+    // re-staged) fresh on the next drain, so nothing is lost.
+    public List<string> KiroUsagePendingAnchors { get; } = [];
+
+    // Task 11 (D0/D3) — byte offset (end of the last batch the runtime rewrite guard
+    // verified and the server acked) the Cursor watcher's guard checks resume from each poll.
+    // Distinct from LinesProcessed (a LINE-number cursor set from the server's acked frontier,
+    // which can differ from the raw count of lines sent when a line was disposed differently
+    // than "emitted"); this is a plain BYTE count so the guard can re-read/re-hash the exact
+    // range it last verified. Only ever set for vendor == "cursor".
+    public long CursorByteOffset { get; set; }
+
+    // poll counter driving the periodic full-prefix re-hash cadence
+    // (WatchCommand.CursorFullPrefixVerifyEveryNPolls). Incremented once per poll for vendor ==
+    // "cursor" only; a plain counter (not wall-clock time) so the cadence is exact regardless of
+    // how long any individual poll takes.
+    public int CursorGuardPollCount { get; set; }
 
     public const int TranscriptThreshold = 10;
 }
@@ -304,13 +349,13 @@ public record EvalQuestionDto {
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
 
-    // AI-9 Phase 3 — the catalog prompt version this question's rendered prompt
+    // Phase 3 — the catalog prompt version this question's rendered prompt
     // ran against. Null on the back-compat /api/eval/questions alias (which does
     // not emit it) and on older servers; populated only by /api/eval/catalog.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
 
-    // AI-9 Phase 3 — RAW question text from the catalog, used by the tools path
+    // Phase 3 — RAW question text from the catalog, used by the tools path
     // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
     // the alias / older servers. Distinct from Prompt, which on a reconciled
     // text-path question holds the server-RENDERED prompt.
@@ -319,7 +364,7 @@ public record EvalQuestionDto {
 }
 
 /// <summary>
-/// Wire-format DTO for <c>GET /api/eval/catalog</c> (AI-9 Phase 3). Carries the
+/// Wire-format DTO for <c>GET /api/eval/catalog</c>. Carries the
 /// server-rendered retrospective prompt + its version, and the active questions
 /// with raw text + server-rendered prompt + per-question prompt version +
 /// needs_tools. There is NO top-level question template — the daemon uses each
@@ -399,7 +444,7 @@ public record EvalQuestionVerdict {
     [JsonPropertyName("tools_used")]
     public int? ToolsUsed { get; init; }
 
-    // AI-9 Phase 3 — catalog prompt version stamped at aggregation time before
+    // Phase 3 — catalog prompt version stamped at aggregation time before
     // POSTing the V3 payload. Null until Aggregate fills it from the catalog.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
@@ -580,7 +625,7 @@ public record SessionEvalCompletedPayloadV2 {
     public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
 }
 
-// Posted to POST /api/sessions/{id}/evals/v3 (AI-9 Phase 3). Differs from V2 by
+// Posted to POST /api/sessions/{id}/evals/v3. Differs from V2 by
 // adding retrospective_prompt_version; the per-question version rides on each
 // EvalQuestionVerdict.PromptVersion. Wire shape must stay 1:1 with the server's
 // SessionEvalCompletedPayloadV3 in Capacitor.Server.
@@ -647,7 +692,7 @@ static partial class GitUrlParser {
     }
 
     // owner is greedy (`.+`) so a nested GitLab namespace (group/subgroup/...) is
-    // captured whole, with repo as the final path segment. AI-1121 / §6b.
+    // captured whole, with repo as the final path segment. / §6b.
     [GeneratedRegex(@"https?://[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex HttpsRegex();
 
@@ -668,6 +713,169 @@ public record RepoEntry {
     public required DateTimeOffset LastUsed { get; init; }
 }
 
+// ── Projects (`kcap projects` / `kcap project <slug>`) — mirrors the server's
+// ProjectSummaryDto / ProjectDetailDto (src/Capacitor.Server.Core/Projects/ProjectContracts.cs) ──
+
+/// <summary>A single row from <c>GET /api/projects</c>.</summary>
+public sealed record CliProjectSummary {
+    [JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+
+    [JsonPropertyName("slug")]
+    public required string Slug { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("owner_user_id")]
+    public required string OwnerUserId { get; init; }
+
+    [JsonPropertyName("repo_count")]
+    public int RepoCount { get; init; }
+
+    [JsonPropertyName("member_count")]
+    public int MemberCount { get; init; }
+
+    /// <summary>"owner" | "member" | "none".</summary>
+    [JsonPropertyName("viewer_membership")]
+    public required string ViewerMembership { get; init; }
+
+    /// <summary>"request" | "invite" | null.</summary>
+    [JsonPropertyName("viewer_pending")]
+    public string? ViewerPending { get; init; }
+
+    [JsonPropertyName("pending_request_count")]
+    public int PendingRequestCount { get; init; }
+
+    [JsonPropertyName("repo_hashes")]
+    public List<string> RepoHashes { get; init; } = [];
+}
+
+/// <summary>A repo entry inside <see cref="CliProjectDetail"/>.</summary>
+public sealed record CliProjectRepo {
+    [JsonPropertyName("repo_hash")]
+    public required string RepoHash { get; init; }
+
+    [JsonPropertyName("repo_slug")]
+    public required string RepoSlug { get; init; }
+}
+
+/// <summary>A member entry inside <see cref="CliProjectDetail"/>.</summary>
+public sealed record CliProjectMember {
+    [JsonPropertyName("member_kind")]
+    public required string MemberKind { get; init; }
+
+    [JsonPropertyName("member_id")]
+    public required string MemberId { get; init; }
+
+    [JsonPropertyName("display_name")]
+    public required string DisplayName { get; init; }
+}
+
+/// <summary>A pending join request/invite inside <see cref="CliProjectDetail"/>. Empty unless the viewer is owner/admin.</summary>
+public sealed record CliProjectJoinRequest {
+    [JsonPropertyName("user_id")]
+    public required string UserId { get; init; }
+
+    /// <summary>"request" | "invite".</summary>
+    [JsonPropertyName("direction")]
+    public required string Direction { get; init; }
+
+    [JsonPropertyName("requested_at")]
+    public DateTimeOffset RequestedAt { get; init; }
+}
+
+/// <summary>The body of <c>GET /api/projects/{slug}</c>.</summary>
+public sealed record CliProjectDetail {
+    [JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+
+    [JsonPropertyName("slug")]
+    public required string Slug { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("owner_user_id")]
+    public required string OwnerUserId { get; init; }
+
+    [JsonPropertyName("viewer_membership")]
+    public required string ViewerMembership { get; init; }
+
+    [JsonPropertyName("viewer_pending")]
+    public string? ViewerPending { get; init; }
+
+    [JsonPropertyName("repos")]
+    public List<CliProjectRepo> Repos { get; init; } = [];
+
+    [JsonPropertyName("members")]
+    public List<CliProjectMember> Members { get; init; } = [];
+
+    [JsonPropertyName("join_requests")]
+    public List<CliProjectJoinRequest> JoinRequests { get; init; } = [];
+}
+
+/// <summary>Error body shared by every <c>/api/projects*</c> route on failure (e.g. <c>projects_not_in_plan</c>).</summary>
+public sealed record CliProjectError {
+    [JsonPropertyName("error")]
+    public required string Error { get; init; }
+
+    [JsonPropertyName("message")]
+    public required string Message { get; init; }
+}
+
+/// <summary>
+/// One discovered plan/spec/design/checklist artifact returned by
+/// <c>GET /api/sessions/{id}/plan-artifacts</c>. Mirrors the server's
+/// <c>Capacitor.Plans.PlanArtifact</c> record field-for-field; string fields
+/// (<see cref="Kind"/>, <see cref="Source"/>, <see cref="ContentState"/>,
+/// <see cref="Confidence"/>) carry the server's snake_case enum values verbatim
+/// (e.g. "plan", "repo_file", "truncated") — no local enum type, since the CLI
+/// only needs to compare/display them, never branch on the full server vocabulary.
+/// </summary>
+public sealed record PlanArtifactDto {
+    [JsonPropertyName("artifact_id")]     public required string ArtifactId { get; init; }
+    [JsonPropertyName("kind")]            public required string Kind { get; init; }
+    [JsonPropertyName("title")]           public required string Title { get; init; }
+    [JsonPropertyName("source")]          public required string Source { get; init; }
+    [JsonPropertyName("session_id")]      public required string SessionId { get; init; }
+    [JsonPropertyName("agent_id")]        public string? AgentId { get; init; }
+    [JsonPropertyName("agent_type")]      public string? AgentType { get; init; }
+    [JsonPropertyName("head_session_id")] public string? HeadSessionId { get; init; }
+    [JsonPropertyName("head_agent_id")]   public string? HeadAgentId { get; init; }
+    [JsonPropertyName("head_agent_type")] public string? HeadAgentType { get; init; }
+    [JsonPropertyName("head_discovered_at")]      public DateTimeOffset? HeadDiscoveredAt { get; init; }
+    [JsonPropertyName("last_observed_session_id")] public string? LastObservedSessionId { get; init; }
+    [JsonPropertyName("last_observed_at")] public DateTimeOffset? LastObservedAt { get; init; }
+    [JsonPropertyName("path")]            public string? Path { get; init; }
+    [JsonPropertyName("content")]         public string? Content { get; init; }
+    [JsonPropertyName("content_state")]   public required string ContentState { get; init; } // "ok" | "truncated" | "unavailable"
+    [JsonPropertyName("is_complete")]     public required bool IsComplete { get; init; }
+    [JsonPropertyName("is_confirmed")]    public required bool IsConfirmed { get; init; }
+    [JsonPropertyName("is_truncated")]    public bool IsTruncated { get; init; }
+    [JsonPropertyName("original_bytes")]  public long? OriginalBytes { get; init; }
+    [JsonPropertyName("content_hash")]    public required string ContentHash { get; init; }
+    [JsonPropertyName("head_change_hash")] public string? HeadChangeHash { get; init; }
+    [JsonPropertyName("version")]         public required int Version { get; init; }
+    [JsonPropertyName("discovered_at")]   public required DateTimeOffset DiscoveredAt { get; init; }
+    [JsonPropertyName("confidence")]      public required string Confidence { get; init; } // "high" | "medium" | "low"
+    [JsonPropertyName("reason")]          public required string Reason { get; init; }
+    [JsonPropertyName("is_primary")]      public bool IsPrimary { get; init; }
+}
+
+/// <summary>Body of <c>GET /api/sessions/{id}/plan-artifacts</c>.</summary>
+public sealed record PlanArtifactsResponseDto {
+    [JsonPropertyName("primary")]     public PlanArtifactDto? Primary { get; init; }
+    [JsonPropertyName("artifacts")]   public List<PlanArtifactDto> Artifacts { get; init; } = [];
+    [JsonPropertyName("diagnostics")] public List<string> Diagnostics { get; init; } = [];
+}
+
 public sealed record CurationApplyItem {
     [JsonPropertyName("category")]      public string?               Category     { get; init; }
     [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
@@ -683,6 +891,8 @@ public sealed record CurationApplyResponse {
 
 [JsonSerializable(typeof(List<RecapEntry>))]
 [JsonSerializable(typeof(List<RepoRecapEntry>))]
+[JsonSerializable(typeof(PlanArtifactDto))]
+[JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]
@@ -701,6 +911,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCatalogQuestionDto))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
+[JsonSerializable(typeof(List<CliProjectSummary>))]
+[JsonSerializable(typeof(CliProjectDetail))]
+[JsonSerializable(typeof(CliProjectError))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]
@@ -723,8 +936,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(ReviewLaunchInfo))]
 [JsonSerializable(typeof(LaunchKind))]
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
-[JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
-[JsonSerializable(typeof(RefreshAgentWorktreeResult))]
+[JsonSerializable(typeof(BorrowProbeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
 [JsonSerializable(typeof(PrepareEvalCommand))]
@@ -744,6 +956,11 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveCompleted))]
 [JsonSerializable(typeof(EvalRetrospectiveFailed))]
 [JsonSerializable(typeof(DaemonConnect))]
+[JsonSerializable(typeof(LiveAgentInfo))]
+[JsonSerializable(typeof(QuarantinedAgentInfo))]
+[JsonSerializable(typeof(DaemonStatusReport))]
+[JsonSerializable(typeof(AgentPidRecord))]
+[JsonSerializable(typeof(PidIdentityKind))]
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
@@ -756,6 +973,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(HostedPermissionRequest))]
 [JsonSerializable(typeof(PermissionResolution))]
 [JsonSerializable(typeof(EndAgentSessionResult))]
+[JsonSerializable(typeof(MachineIdFile))]
+[JsonSerializable(typeof(CursorQuarantineMarker))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
@@ -773,10 +992,36 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Acp.InitializeParams))]
 [JsonSerializable(typeof(Acp.ClientCapabilities))]
 [JsonSerializable(typeof(Acp.FsCapabilities))]
+[JsonSerializable(typeof(Acp.InitializeResult))]
+[JsonSerializable(typeof(Acp.AgentCapabilities))]
 [JsonSerializable(typeof(Acp.SessionNewParams))]
+[JsonSerializable(typeof(Acp.AcpMcpServerSpec))]
+[JsonSerializable(typeof(Acp.AcpMcpServerEnvVar))]
+[JsonSerializable(typeof(Acp.AcpMcpServerSpec[]))]
 [JsonSerializable(typeof(Acp.SessionPromptParams))]
 [JsonSerializable(typeof(Acp.PromptContentBlock))]
 [JsonSerializable(typeof(Acp.SessionCancelParams))]
+[JsonSerializable(typeof(Acp.SetConfigOptionParams))]
+[JsonSerializable(typeof(Acp.SessionModelsInfo))]
+[JsonSerializable(typeof(Acp.AvailableModelDto))]
+[JsonSerializable(typeof(Acp.SessionRequestPermissionParams))]
+[JsonSerializable(typeof(Acp.PermissionOptionDto))]
+[JsonSerializable(typeof(Acp.PermissionOutcomeResult))]
+[JsonSerializable(typeof(Acp.PermissionOutcomeDto))]
+[JsonSerializable(typeof(Acp.ElicitationCreateParams))]
+[JsonSerializable(typeof(Acp.ElicitationCreateResult))]
+[JsonSerializable(typeof(AcpInteractionRequest))]
+[JsonSerializable(typeof(AcpInteractionOption))]
+[JsonSerializable(typeof(AcpInteractionDecision))]
+[JsonSerializable(typeof(AcpInteractionResolution))]
+[JsonSerializable(typeof(AcpEventEnvelope))]
+[JsonSerializable(typeof(AcpEventEnvelope[]))]
+[JsonSerializable(typeof(AcpBatchAck))]
+[JsonSerializable(typeof(TranscriptBatchAck))]
+// The AcpSessionStarted hub method's optional metadata argument. Registered as its own root type
+// (not just nested inside another JsonSerializable graph) because SignalR's JsonHubProtocol
+// serializes each hub-invocation argument independently by its declared type.
+[JsonSerializable(typeof(IReadOnlyDictionary<string, string>))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
@@ -802,7 +1047,7 @@ public readonly record struct PermissionDecision(
     );
 
 /// <summary>
-/// Single-argument payload for the <c>RequestPermission2</c> hub invocation (AI-864). SignalR
+/// Single-argument payload for the <c>RequestPermission2</c> hub invocation. SignalR
 /// binds hub-method arguments by count, so a record keeps the arity fixed at 1 and lets the wire
 /// contract gain fields without breaking mixed-version servers. Mirrors the server-side record of
 /// the same name in Capacitor.Server; property names must stay in sync (snake_case on the wire).
@@ -815,7 +1060,7 @@ public readonly record struct HostedPermissionRequest(
     );
 
 /// <summary>
-/// Payload of the <c>PermissionResolved</c> server→client push (AI-864): the user's decision for a
+/// Payload of the <c>PermissionResolved</c> server→client push: the user's decision for a
 /// hosted-agent permission request, correlated by <see cref="RequestId"/>. A single record (not
 /// positional args) so the push contract can gain fields without breaking mixed-version daemons —
 /// SignalR binds by argument count. Mirrors the server-side record of the same name.
@@ -824,6 +1069,146 @@ public readonly record struct PermissionResolution(
         string             RequestId,
         PermissionDecision Decision
     );
+
+/// <summary>
+/// Single-argument payload for the <c>AcpRequestInteraction</c> hub invocation. Mirrors
+/// the server-side record of the same name in <c>Capacitor.Server.Core</c> (<c>src/Capacitor.Server.Core/AcpInteraction.cs</c>);
+/// property names must stay in sync (snake_case on the wire via this context's naming policy).
+/// <b>Spec-review Finding 1:</b> <see cref="RequestedSchema"/> is a new OPTIONAL trailing field,
+/// mirroring the server-side <c>AcpInteractionRequest.RequestedSchema</c> exactly (same name,
+/// position, and nullability) — kept in lockstep across the wire boundary the same way every other
+/// field on this type already is (see Task A2's Interfaces note for the "server `record` / daemon
+/// `readonly record struct`, same JSON shape" convention this type follows).
+/// </summary>
+public readonly record struct AcpInteractionRequest(
+        string                 AgentId,
+        string                 AcpSessionId,
+        string                 Kind,
+        string?                ToolName,
+        JsonElement?           ToolInput,
+        string?                ToolCallId,
+        string?                Prompt,
+        AcpInteractionOption[]? Options,
+        bool                   IsMultiSelect,
+        JsonElement?           RequestedSchema = null
+    );
+
+/// <summary>
+/// One selectable option for an ACP permission or elicitation interaction. Spec-review
+/// Finding 6: <see cref="OptionId"/> is the stable resolution key (mirrors
+/// <c>Acp.PermissionOptionDto.OptionId</c>) — <see cref="Label"/> is display-only.
+/// </summary>
+public readonly record struct AcpInteractionOption(string OptionId, string Label, string? Description, string? Kind = null);
+
+/// <summary>
+/// Decision for an ACP interaction, pushed from the server. Mirrors the server-side
+/// record of the same name. Spec-review Finding 6: <see cref="SelectedOptionId"/> is what
+/// <c>AcpInteractionBridge.MapPermissionDecision</c> (Task B3) matches against — never
+/// <see cref="SelectedOptionLabel"/>, which is retained for display/attribution only.
+/// </summary>
+public readonly record struct AcpInteractionDecision(
+        string       Outcome,
+        string?      SelectedOptionId,
+        string?      SelectedOptionLabel,
+        int?         SelectedIndex,
+        string?      FreeText,
+        JsonElement? UpdatedToolInput
+    );
+
+/// <summary>
+/// Payload of the <c>AcpInteractionResolved</c> server→client push, correlated by
+/// <see cref="RequestId"/>. Mirrors the server-side record of the same name.
+/// </summary>
+public readonly record struct AcpInteractionResolution(
+        string             RequestId,
+        AcpInteractionDecision Decision
+    );
+
+/// <summary>
+/// Envelope-kind discriminator constants. Field-for-field mirror of the
+/// server-side <c>Capacitor.Server.Core.Acp.AcpEventKind</c> static class (same constant names, same
+/// wire string values) — kept as plain string constants (not a C# enum) because
+/// <see cref="AcpEventEnvelope.Kind"/> itself is a plain <see langword="string"/> on both sides, not
+/// an enum-backed field.
+/// </summary>
+public static class AcpEventKind {
+    public const string SessionStarted     = "session_started";
+    public const string UserMessage        = "user_message";
+    public const string AssistantText      = "assistant_text";
+    public const string AssistantThinking  = "assistant_thinking";
+    public const string ToolCall           = "tool_call";
+    public const string ToolResult         = "tool_result";
+    public const string SessionTitle       = "session_title";
+    public const string SessionEnded       = "session_ended";
+}
+
+/// <summary>
+/// One canonical-equivalent event the daemon sends over the server's <c>AcpSessionEvents</c> hub
+/// method. Daemon-local, field-for-field mirror of the server-side
+/// <c>Capacitor.Server.Core.Acp.AcpEventEnvelope</c> record (same property names/types/defaults,
+/// same "flat and Kind-discriminated, no polymorphism" shape) — read (never edited) from
+/// <c>src/Capacitor.Server.Core/Acp/AcpEventEnvelope.cs</c> in the server repo. Neither
+/// side declares an explicit <c>[JsonPropertyName]</c>: both ride the wire under a
+/// <c>JsonNamingPolicy.SnakeCaseLower</c>-equivalent naming policy (the server's SignalR
+/// <c>AddJsonProtocol</c> configuration; this context's <see cref="CapacitorJsonContext"/>'s
+/// <see cref="JsonSourceGenerationOptionsAttribute.PropertyNamingPolicy"/>), so keeping the C#
+/// property NAMES identical here is what keeps the wire shape identical — see
+/// <c>AcpEventEnvelopeWireCompatTests</c> for the locked-in per-field wire-compat guard. Exactly one
+/// per-kind field group is populated for a given <see cref="Kind"/> (see
+/// <c>AcpEventTranslator.Translate</c>, which never sets a field outside its kind's group).
+/// </summary>
+public readonly record struct AcpEventEnvelope(
+        int     ContractVersion   = 1,
+        long    Seq               = 0,
+        string  Kind              = "",
+
+        // text / thinking chunks
+        string? Text              = null,
+        bool    ThinkingEncrypted = false,
+
+        // tool_call
+        string? ToolCallId        = null,
+        string? ToolName          = null,
+        string? ToolInputJson     = null, // JSON object string
+
+        // tool_result
+        string? ToolResult        = null,
+        bool    ToolIsError       = false,
+
+        // session_started
+        string? Model             = null,
+        string? Cwd               = null,
+        string? RawSessionId      = null,
+        string? SessionMode       = null, // ACP session/new mode (agent|plan|ask)
+
+        // session_ended
+        string? EndReason         = null,
+
+        // transcript-authoritative time (ISO-8601); server falls back to now if absent
+        string? TimestampIso      = null
+    );
+
+/// <summary>
+/// Ack returned from the server's <c>AcpSessionEvents</c> hub method.
+/// Field-for-field mirror of the server-side <c>Capacitor.Server.Core.Acp.AcpBatchAck</c> record —
+/// <see cref="ExpectedNextSeq"/> is set only on a gap-reject, telling the daemon where to rewind
+/// (resend from <see cref="ExpectedNextSeq"/> on a gap; a terminal-drop ack
+/// has <see cref="AcceptedSeq"/> below the daemon's max-sent seq AND a null
+/// <see cref="ExpectedNextSeq"/>).
+/// </summary>
+public readonly record struct AcpBatchAck(long AcceptedSeq, long PersistedSeq, long? ExpectedNextSeq = null);
+
+/// <summary>
+/// Ack returned from the server's <c>SendTranscriptBatchAcked</c> hub method (D3).
+/// Field-for-field mirror of the server-side <c>Capacitor.TranscriptBatchAck</c> record.
+/// <see cref="NextLineNumber"/> is the source-acknowledgement frontier — the first line number
+/// the server has NOT fully disposed of (emitted or deliberately ignored). The Cursor watcher
+/// sets its local cursor from this value rather than the count of lines it sent, so a
+/// server-held (retry-blocked or persist-blocked) line is re-delivered on the next poll and an
+/// ignored (no-event) line still advances past — the server, not the client's send count, is
+/// authoritative for what's actually been disposed of.
+/// </summary>
+public readonly record struct TranscriptBatchAck(int NextLineNumber);
 
 /// <summary>Commands sent from the server to daemon clients via SignalR.</summary>
 public readonly record struct LaunchAgentCommand(
@@ -838,26 +1223,33 @@ public readonly record struct LaunchAgentCommand(
         LaunchKind        Kind            = LaunchKind.Default,
         ReviewLaunchInfo? Review          = null,
         string?           BaseRef         = null,
-        // AI-1163: for a mirror-requester review flow, the requester's repo root. When set, the
-        // daemon syncs its working tree (uncommitted + untracked) into the freshly-created reviewer
-        // worktree BEFORE spawning, so round 1 sees in-progress code — not just committed HEAD. The
-        // daemon validates the source is a checkout of the same repo (origin match) before copying;
-        // a mismatch (e.g. a different machine, where the path doesn't resolve) skips the sync.
-        // Appended last as an optional field so the SignalR positional binding stays wire-compatible
-        // with older daemons/servers.
-        string?           SyncFromRepoRoot = null,
-        // AI-1126 D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
+        // D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
         // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
         // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
-        // last, same wire-compat rule as SyncFromRepoRoot above.
-        string[]?         McpAllowlist = null
+        // last as an optional field so the SignalR positional binding stays wire-compatible with
+        // older daemons/servers.
+        string[]?         McpAllowlist = null,
+        // Phase A: launch against the user's own checkout instead of a fresh daemon-owned
+        // worktree. A bool on the wire (not the WorkLocation enum) — WorkLocation's numeric values
+        // are BorrowedCwd=0/OwnedWorktree=1, the reverse of what you'd guess, so a raw enum int
+        // would be a footgun; the daemon maps Borrowed -> WorkLocation internally. BorrowCwd is the
+        // absolute path to borrow when Borrowed is true. Appended last, same wire-compat rule as the
+        // fields above.
+        bool               Borrowed = false,
+        string?            BorrowCwd = null,
+        // Phase B (D2): flow identity for a ReviewFlow launch, so the daemon can store it on
+        // the AgentInstance and report it in LiveAgents / DaemonStatusReport (lets a restarted server
+        // associate a surviving unassigned reviewer with its role). Appended last, same wire-compat
+        // rule as the fields above — old daemons ignore them, old servers never set them.
+        string?            FlowRunId = null,
+        string?            FlowRole  = null
     );
 
 /// <summary>
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves
 /// the existing prompt-driven launch; <see cref="Review"/> uses
 /// <see cref="ReviewLaunchInfo"/> + <c>BaseRef</c> to drive a hosted PR review;
-/// <see cref="ReviewFlow"/> (AI-1089) marks a durable agent-review-flow reviewer, which the
+/// <see cref="ReviewFlow"/> marks a durable agent-review-flow reviewer, which the
 /// daemon runs unattended (never approval + no MCP). The value crosses the CLI↔server wire, so
 /// it MUST stay Default=0, Review=1, ReviewFlow=2.
 /// </summary>
@@ -866,6 +1258,78 @@ public enum LaunchKind {
     Review     = 1,
     ReviewFlow = 2
 }
+
+// ── Phase B (D2): daemon self-report DTOs ────────────────────────────────────────────────
+
+/// <summary>Phase B (D2): one live hosted agent in the daemon's self-report. <see cref="Kind"/>
+/// is the <see cref="LaunchKind"/> name; <see cref="FlowRunId"/>/<see cref="FlowRole"/> are set only
+/// for a ReviewFlow launch. Carried additively on <see cref="DaemonConnect.LiveAgents"/> and in
+/// <see cref="DaemonStatusReport"/> so the server can associate a surviving unassigned reviewer with
+/// its role instead of a blind grace period. All-optional trailing fields keep it wire-compatible.</summary>
+public readonly record struct LiveAgentInfo(
+        string         Id,
+        string         Kind,
+        DateTimeOffset CreatedAt,
+        string?        FlowRunId = null,
+        string?        FlowRole  = null
+    );
+
+/// <summary>Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
+/// or kill failure) and is being retried by the daemon heartbeat. Same shape as
+/// <see cref="LiveAgentInfo"/>; reported separately so the server can see it counts against admission
+/// (<c>EffectiveCount = ActiveCount + Quarantined.Count</c>) without changing <c>ActiveCount</c>'s
+/// meaning.</summary>
+public readonly record struct QuarantinedAgentInfo(
+        string         Id,
+        string         Kind,
+        DateTimeOffset CreatedAt,
+        string?        FlowRunId = null,
+        string?        FlowRole  = null
+    );
+
+/// <summary>Phase B (D2): the periodic (60s) one-way daemon→server self-report. Sent via a
+/// one-way <c>SendAsync</c> (never <c>InvokeAsync</c>) so an old server without the handler produces
+/// only a server-side log line, not a client fault. <see cref="ActiveCount"/> is exactly the daemon's
+/// Starting/Running agent count (its wire meaning never changes).</summary>
+public readonly record struct DaemonStatusReport(
+        int                  ActiveCount,
+        LiveAgentInfo[]      LiveAgents,
+        QuarantinedAgentInfo[] Quarantined
+    );
+
+/// <summary>M1-A (spec §4.3): distinguishes a record with a comparable start-identity
+/// (<see cref="Present"/>) from one where native capture failed (<see cref="IdentityUnavailable"/>
+/// — <see cref="AgentPidRecord.StartIdentity"/> is <c>""</c>, a deliberate well-formed marker,
+/// not a launch failure). <see cref="Present"/> MUST be the zero value: a pre-M1-A record's
+/// JSON has no <c>identity_kind</c> key at all, and System.Text.Json's constructor-based
+/// deserialization gives a missing value-type constructor parameter <c>default(T)</c> — this
+/// is precisely how the backward-compat rule ("missing identity_kind + nonempty start_identity
+/// ⇒ present") is satisfied with NO custom converter.</summary>
+public enum PidIdentityKind {
+    Present             = 0,
+    IdentityUnavailable = 1,
+}
+
+/// <summary>Phase B (D4 §6.4(2)): the durable per-agent PID record written atomically at spawn
+/// to <c>&lt;state-dir&gt;/agents/{agentId}.json</c>, so a restarted daemon can reap a surviving child
+/// by EXACT identity. <see cref="StartIdentity"/> is the <c>ProcessStartToken</c> string
+/// (kernel starttime / absolute start ticks / macOS incarnation id — exact, no tolerance), or
+/// <c>""</c> when <see cref="IdentityKind"/> is <see cref="PidIdentityKind.IdentityUnavailable"/>.
+/// <see cref="DaemonId"/> = hash of the daemon state-dir path (stable logical identity);
+/// <see cref="DaemonEpoch"/> = fresh per boot.</summary>
+public readonly record struct AgentPidRecord(
+        string          AgentId,
+        int             Pid,
+        string          StartIdentity,
+        PidIdentityKind IdentityKind,
+        string          Kind,
+        string          Vendor,
+        string?         FlowRunId,
+        string?         FlowRole,
+        string          DaemonId,
+        string          DaemonEpoch,
+        DateTimeOffset  SpawnedAt
+    );
 
 public readonly record struct ReviewLaunchInfo(
         string Owner,
@@ -886,25 +1350,18 @@ public readonly record struct FindRepoForRemoteRequest(
     );
 
 /// <summary>
-/// Server → daemon command to sync the source repo's current working-tree state (tracked +
-/// untracked non-ignored files) into the reviewer agent's daemon-created worktree, so the
-/// reviewer sees Claude's latest uncommitted changes before a code-review follow-up round.
-/// Wire keys (snake_case): <c>agent_id</c>, <c>source_repo_root</c>, <c>exclude_paths</c>.
+/// Daemon reply to the server's <c>ProbeBorrowSource</c> client-result invocation (Phase A,
+/// task A3): "can you borrow this path?". <see cref="CanBorrow"/> mirrors
+/// <c>BorrowAuthResult.Allowed</c>; <see cref="CanonicalCwd"/>/<see cref="CanonicalGitRoot"/> are the
+/// daemon-computed canonical paths (non-null only when the path exists), and <see cref="Reason"/>
+/// carries the rejection reason (<c>path_absent</c> / <c>not_allowed</c>) when not borrowable. Wire
+/// keys (snake_case): <c>can_borrow</c>, <c>canonical_cwd</c>, <c>canonical_git_root</c>, <c>reason</c>.
 /// </summary>
-public readonly record struct RefreshAgentWorktreeCommand(
-        string   AgentId,
-        string   SourceRepoRoot,
-        string[] ExcludePaths
-    );
-
-/// <summary>
-/// Daemon reply to <see cref="RefreshAgentWorktreeCommand"/>. <see cref="Success"/> is
-/// <c>false</c> when a guard prevented the sync or the sync itself threw; <see cref="Error"/>
-/// carries the reason. Wire keys: <c>success</c>, <c>error</c>.
-/// </summary>
-public readonly record struct RefreshAgentWorktreeResult(
-        bool    Success,
-        string? Error
+public record BorrowProbeResult(
+        bool    CanBorrow,
+        string? CanonicalCwd,
+        string? CanonicalGitRoot,
+        string? Reason
     );
 
 public readonly record struct SendInputCommand(
@@ -927,13 +1384,19 @@ public readonly record struct ResizeTerminalCommand(
 /// file content for diagnostics). The server uses it to distinguish a
 /// legitimate reconnect of the same daemon (new SignalR connectionId, same
 /// instance) from a different daemon process claiming the same
-/// <c>(owner, name)</c> slot. Pre-AI-630 daemons sent no <c>InstanceId</c>;
+/// <c>(owner, name)</c> slot. Legacy daemons sent no <c>InstanceId</c>;
 /// the server still accepts them under a legacy-displacement fallback.</para>
 ///
 /// <para><c>Version</c> is the daemon binary's
 /// <c>AssemblyInformationalVersion</c>. Logged on connect and surfaced on
 /// the server's <c>DaemonInfo</c> so the dashboard can show what version
 /// each connected daemon is running.</para>
+///
+/// <para><c>MachineId</c> is this machine's stable id (see
+/// <see cref="MachineId"/>), reported so the server can later prove a daemon
+/// claiming a given repo path is actually running on the requester's
+/// machine. Trailing/optional so an older daemon that doesn't send it (or a
+/// newer daemon talking to an older server that ignores it) never breaks.</para>
 /// </summary>
 public readonly record struct DaemonConnect(
         string    Name,
@@ -943,7 +1406,16 @@ public readonly record struct DaemonConnect(
         string[]  LiveAgentIds,
         string?   InstanceId       = null,
         string?   Version          = null,
-        string[]? SupportedVendors = null
+        string[]? SupportedVendors = null,
+        string?   MachineId        = null,
+        // Phase B (D2): richer live-agent metadata alongside the existing LiveAgentIds
+        // (kept for back-compat). Trailing/optional — old servers ignore it, old daemons never set it.
+        LiveAgentInfo[]? LiveAgents = null,
+        // Reviewer vendor override support: vendor tokens this daemon can run fully UNATTENDED (a
+        // subset of SupportedVendors — every entry here MUST also appear there). Null from a daemon
+        // build that predates this field — that daemon is simply not an override-eligible target for
+        // ANY vendor. There is deliberately no fallback that widens a null to anything non-null.
+        string[]? UnattendedVendors = null
     );
 
 public readonly record struct AgentRegistered(

@@ -214,6 +214,83 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-flows");
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
+            // flows deliberately gets NO server-level instructions (we don't want more
+            // routing to a paid hosted reviewer) — the field must be omitted.
+            await Assert.That(result["instructions"]).IsNull();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Handshake probe: clients that send <c>resources/list</c> / <c>prompts/list</c> /
+    /// <c>ping</c> before treating the server as ready must get empty-but-successful responses,
+    /// not <c>-32601 Method not found</c> — and the negotiated protocolVersion must echo back a
+    /// client-requested version we support, not always the hardcoded baseline.
+    /// </summary>
+    [Test]
+    public async Task ResourcesList_and_PromptsList_return_empty_not_method_not_found() {
+        using var proc = SpawnMcpServer();
+        try {
+            var init = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 1,
+                ["method"]  = "initialize",
+                ["params"]  = new JsonObject { ["protocolVersion"] = "2025-06-18" }
+            });
+            await Assert.That(init["result"]?["protocolVersion"]?.GetValue<string>()).IsEqualTo("2025-06-18");
+
+            var resources = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 2,
+                ["method"]  = "resources/list"
+            });
+            await Assert.That(resources["error"]).IsNull();
+            await Assert.That(resources["result"]?["resources"]?.AsArray()?.Count).IsEqualTo(0);
+
+            var prompts = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 3,
+                ["method"]  = "prompts/list"
+            });
+            await Assert.That(prompts["error"]).IsNull();
+            await Assert.That(prompts["result"]?["prompts"]?.AsArray()?.Count).IsEqualTo(0);
+
+            var ping = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 4,
+                ["method"]  = "ping"
+            });
+            await Assert.That(ping["error"]).IsNull();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Malformed-initialize survival probe: a client sending a non-string
+    /// <c>protocolVersion</c> (e.g. a bare JSON number) must not crash <c>McpProtocol.NegotiateVersion</c> —
+    /// the initialize dispatch arm has no try/catch, so an uncaught exception there would kill the
+    /// whole stdio server. The server must fall back to the baseline version and stay responsive.
+    /// </summary>
+    [Test]
+    public async Task Initialize_with_non_string_protocol_version_falls_back_and_server_survives() {
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 1,
+                ["method"]  = "initialize",
+                ["params"]  = new JsonObject { ["protocolVersion"] = 2025 }
+            });
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
+
+            // Server survived the malformed request — a follow-up still gets a response.
+            var again = await SendRequest(proc, ToolsListRequest(2));
+            await Assert.That(again["result"]?["tools"]).IsNotNull();
         } finally {
             await ShutdownAsync(proc);
         }
@@ -246,7 +323,7 @@ public class McpFlowsServerTests : IDisposable {
     /// <summary>
     /// Pins the four review-tool schemas byte-stably: definition_id/participant/message must
     /// NEVER leak into these schemas — old clients (and old skills) depend on the exact
-    /// property/required sets that shipped before the generic tools were added (AI-1126 D-b).
+    /// property/required sets that shipped before the generic tools were added (D-b).
     /// </summary>
     [Test]
     public async Task Review_tool_schemas_are_unchanged() {
@@ -260,7 +337,7 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 byName["start_review_flow"],
-                properties: ["kind", "target_kind", "target_ref", "target_title", "context", "instructions", "mode"],
+                properties: ["kind", "target_kind", "target_ref", "target_title", "context", "instructions", "mode", "vendor"],
                 required:   ["kind", "target_kind", "target_ref", "target_title", "context"]
             );
 
@@ -299,7 +376,7 @@ public class McpFlowsServerTests : IDisposable {
 
     /// <summary>
     /// Generic alias for start_review_flow: definition_id maps onto the wire "kind" field so the
-    /// server (which treats kind == definition id, AI-1126 phase C) doesn't need to know about
+    /// server (which treats kind == definition id, phase C) doesn't need to know about
     /// the generic tool name at all.
     /// </summary>
     [Test]
@@ -467,7 +544,7 @@ public class McpFlowsServerTests : IDisposable {
     /// A non-boolean JSON "async" (e.g. an LLM caller passing the string "yes") must NOT crash
     /// the request with an uncaught GetValue&lt;bool&gt;() exception — it must surface as a clean
     /// isError:true tool result, and the stdio loop must stay alive for the next request (Qodo
-    /// finding, AI-1126 D-b). No WireMock stub is needed: the bad arg is rejected before any HTTP
+    /// finding, D-b). No WireMock stub is needed: the bad arg is rejected before any HTTP
     /// call is made, mirroring Submit_review_round_without_flow_run_id_returns_error above.
     /// </summary>
     [Test]
@@ -658,7 +735,7 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// Regression (AI-1056): kcap-flows auto-registers via the Claude plugin, so Claude Code
+    /// Regression: kcap-flows auto-registers via the Claude plugin, so Claude Code
     /// spawns `kcap mcp flows` for every session. initialize / tools/list must stay local-only —
     /// the authenticated client (and its GET /auth/config round-trip + re-auth stderr hint) is
     /// created lazily on the first tools/call, so sessions that never use a flows tool pay
@@ -1403,6 +1480,255 @@ public class McpFlowsServerTests : IDisposable {
                 Request.Create().WithPath($"/api/flows/{flowRunId}/close").UsingPost()
             );
             await Assert.That(hits.Count).IsEqualTo(2);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    const string DynamicDefinitionYaml = """
+        id: my-dynamic-flow
+        participants:
+          reviewer:
+            vendor: claude
+            model: claude-sonnet-4-5
+            workspace: none
+        """;
+
+    static JsonObject DynamicStartTargetArgs() => new() {
+        ["target_kind"]  = "pr",
+        ["target_ref"]   = "https://github.com/x/y/pull/1",
+        ["target_title"] = "My PR",
+        ["context"]      = "please look at this"
+    };
+
+    /// <summary>
+    /// Dynamic flows: start_flow with definition_yaml posts the YAML doc on the snake_case
+    /// definition_yaml wire field and must NOT carry "kind" at all — the server treats the two
+    /// as mutually exclusive and rejects a body with both.
+    /// </summary>
+    [Test]
+    public async Task Start_flow_with_definition_yaml_posts_it_and_omits_kind() {
+        const string flowRunId = "flow-dynamic-1";
+
+        var stubbedResponse = $$"""
+            {
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "round-1",
+              "round_number": 1,
+              "status": "completed",
+              "result_kind": "FINDINGS",
+              "result_text": "dynamic flow result",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
+            }
+            """;
+
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedResponse));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = DynamicStartTargetArgs();
+            args["definition_yaml"] = DynamicDefinitionYaml;
+
+            var response = await SendRequest(proc, ToolsCallRequest(60, "start_flow", args));
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains("dynamic flow result")).IsTrue();
+
+            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(1);
+
+            var bodyNode = JsonNode.Parse(hits[0].RequestMessage.Body ?? "")?.AsObject();
+            await Assert.That(bodyNode).IsNotNull();
+            await Assert.That(bodyNode!["definition_yaml"]?.GetValue<string>()).IsEqualTo(DynamicDefinitionYaml);
+            await Assert.That(bodyNode.ContainsKey("kind")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// The definition_id / definition_yaml xor can't be expressed in the MCP schema (both are
+    /// optional there), so the handler must enforce exactly-one BEFORE any HTTP call and return
+    /// a clean isError tool result naming the mutual exclusion.
+    /// </summary>
+    [Test]
+    public async Task Start_flow_with_both_or_neither_id_and_yaml_errors_before_http() {
+        using var proc = SpawnMcpServer();
+        try {
+            var both = DynamicStartTargetArgs();
+            both["definition_id"]   = "catalog-flow";
+            both["definition_yaml"] = DynamicDefinitionYaml;
+
+            var bothResponse = await SendRequest(proc, ToolsCallRequest(61, "start_flow", both));
+            var bothResult   = bothResponse["result"]?.AsObject();
+            await Assert.That(bothResult).IsNotNull();
+            await Assert.That(bothResult!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var bothText = bothResult["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(bothText).IsNotNull();
+            await Assert.That(bothText!.Contains("exactly one of definition_id")).IsTrue();
+
+            var neitherResponse = await SendRequest(proc, ToolsCallRequest(62, "start_flow", DynamicStartTargetArgs()));
+            var neitherResult   = neitherResponse["result"]?.AsObject();
+            await Assert.That(neitherResult).IsNotNull();
+            await Assert.That(neitherResult!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var neitherText = neitherResult["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(neitherText).IsNotNull();
+            await Assert.That(neitherText!.Contains("exactly one of definition_id")).IsTrue();
+
+            // Neither call may have reached the server.
+            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(0);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Dynamic-rejection contract: any non-2xx body carrying a string "error" code plus "message"
+    /// is a NEW-server coded rejection — the CLI surfaces the server message verbatim (prefixed
+    /// with the code) and must NOT add the "may not support dynamic flows" old-server hint.
+    /// </summary>
+    [Test]
+    public async Task Coded_400_surfaces_server_message_verbatim() {
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(400)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithBody("""{"error":"model_unpriced","message":"participant 'reviewer': model 'x' has no known pricing — pick a priced model."}""")
+            );
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = DynamicStartTargetArgs();
+            args["definition_yaml"] = DynamicDefinitionYaml;
+
+            var response = await SendRequest(proc, ToolsCallRequest(63, "start_flow", args));
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains("model_unpriced")).IsTrue();
+            await Assert.That(text.Contains("participant 'reviewer': model 'x' has no known pricing — pick a priced model.")).IsTrue();
+            await Assert.That(text.Contains("may not support dynamic flows")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// An UNCODED non-2xx on a start that included definition_yaml means the server may predate
+    /// dynamic flows — the tool error must carry the upgrade hint plus the raw body. The same
+    /// uncoded failure on a definition_id (catalog) start must NOT get the hint.
+    /// </summary>
+    [Test]
+    public async Task Uncoded_500_on_dynamic_start_maps_to_unsupported_server_hint() {
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("upstream exploded"));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var dynamicArgs = DynamicStartTargetArgs();
+            dynamicArgs["definition_yaml"] = DynamicDefinitionYaml;
+
+            var dynamicResponse = await SendRequest(proc, ToolsCallRequest(64, "start_flow", dynamicArgs));
+            var dynamicResult   = dynamicResponse["result"]?.AsObject();
+            await Assert.That(dynamicResult).IsNotNull();
+            await Assert.That(dynamicResult!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var dynamicText = dynamicResult["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(dynamicText).IsNotNull();
+            await Assert.That(dynamicText!.Contains("may not support dynamic flows")).IsTrue();
+            await Assert.That(dynamicText.Contains("upstream exploded")).IsTrue();
+
+            var catalogArgs = DynamicStartTargetArgs();
+            catalogArgs["definition_id"] = "catalog-flow";
+
+            var catalogResponse = await SendRequest(proc, ToolsCallRequest(65, "start_flow", catalogArgs));
+            var catalogResult   = catalogResponse["result"]?.AsObject();
+            await Assert.That(catalogResult).IsNotNull();
+            await Assert.That(catalogResult!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var catalogText = catalogResult["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(catalogText).IsNotNull();
+            await Assert.That(catalogText!.Contains("upstream exploded")).IsTrue();
+            await Assert.That(catalogText.Contains("may not support dynamic flows")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// A non-2xx body that IS valid JSON but not an object (e.g. a proxy's quoted scalar string)
+    /// must not throw past the coded-rejection check — <c>JsonNode.Parse(...).AsObject()</c> would
+    /// throw <see cref="InvalidOperationException"/> on a scalar/array node, which used to escape to
+    /// the dispatcher catch-all and replace the useful status/body/hint with a generic internal
+    /// error. It must fall through to the uncoded path exactly like non-JSON bodies do.
+    /// </summary>
+    [Test]
+    public async Task NonObject_json_body_falls_through_to_uncoded_path() {
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(502).WithHeader("Content-Type", "application/json").WithBody("\"Bad Gateway\""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var dynamicArgs = DynamicStartTargetArgs();
+            dynamicArgs["definition_yaml"] = DynamicDefinitionYaml;
+
+            var response = await SendRequest(proc, ToolsCallRequest(66, "start_flow", dynamicArgs));
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains("may not support dynamic flows")).IsTrue();
+            await Assert.That(text.Contains("\"Bad Gateway\"")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Pins the start_flow schema after the dynamic-flows change: definition_yaml is offered,
+    /// required drops definition_id (the xor can't be expressed in the schema — it lives in both
+    /// property descriptions and is enforced by the handler), and the definition_yaml description
+    /// carries the parser's hard requirements (workspace: none, concrete model).
+    /// </summary>
+    [Test]
+    public async Task Start_flow_schema_offers_definition_yaml_and_requires_neither_definition_arg() {
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, ToolsListRequest(2));
+            var tools    = response["result"]?["tools"]?.AsArray();
+            await Assert.That(tools).IsNotNull();
+
+            var startFlow = tools!.First(t => t?["name"]?.GetValue<string>() == "start_flow")!;
+
+            await AssertSchema(
+                startFlow,
+                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "context", "instructions", "mode", "vendor"],
+                required:   ["target_kind", "target_ref", "target_title", "context"]
+            );
+
+            var props    = startFlow["inputSchema"]!["properties"]!.AsObject();
+            var idDesc   = props["definition_id"]?["description"]?.GetValue<string>() ?? "";
+            var yamlDesc = props["definition_yaml"]?["description"]?.GetValue<string>() ?? "";
+
+            await Assert.That(idDesc.Contains("exactly one")).IsTrue();
+            await Assert.That(yamlDesc.Contains("exactly one")).IsTrue();
+            await Assert.That(yamlDesc.Contains("workspace: none")).IsTrue();
         } finally {
             await ShutdownAsync(proc);
         }

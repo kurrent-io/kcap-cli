@@ -9,20 +9,26 @@ using Capacitor.Cli.Core.Antigravity;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Discover + classify + import historical Google Antigravity conversations (AI-1160).
+/// Discover + classify + import historical Google Antigravity conversations.
 /// Each conversation is a brain dir under
 /// <c>~/.gemini/antigravity/brain/&lt;id&gt;/.system_generated/logs/transcript_full.jsonl</c> —
 /// the same lines the live watcher tails — so historical and live import converge on the
 /// server's <c>AntigravityTranscriptNormalizer</c> (routed phase, like Gemini).
 ///
-/// <para>The conversation id is the brain dir name and is used VERBATIM as the session id
-/// (matching live capture, which uses the dashed conversationId), so a session captured
-/// live and later re-imported dedupes to one stream. Subagents are separate conversations
-/// linked via <c>messages/*.json</c> (see <see cref="AntigravitySubagents"/>); roots are
-/// conversations that are never a child, and their children are imported as subagents under
-/// them. Antigravity records no machine-readable workspace path in the transcript, so import
-/// leaves <c>cwd</c> null (no repo enrichment / exclusion on historical import — a v1
-/// limitation shared with Gemini; live capture gets cwd from the hook payload).</para>
+/// <para>The conversation id is the brain dir name (a dashed UUID). The session id we surface
+/// is its DASHLESS canonical form — matching live capture (the Antigravity hook and
+/// <c>kcap watch</c> strip dashes) so a session captured live and later re-imported dedupes to
+/// one stream, and so <c>kcap import --antigravity --session &lt;id&gt;</c> filtering is
+/// format-insensitive. The dashed conversation id is kept only for filesystem paths
+/// (the brain-dir transcript). Subagents are separate conversations linked via
+/// <c>INVOKE_SUBAGENT</c> steps in the parent's transcript (the spawn-time signal;
+/// see <see cref="AntigravitySubagents"/>); roots are conversations
+/// that are never a child, and their children are imported as subagents under them — each with
+/// the DASHLESS child conversation id as its <c>agent_id</c> (the server canonicalizes agent_id
+/// to dashless on both ingest and watermark read, so this matches live routing; mirrors
+/// <c>GeminiImportSource</c>). Antigravity records no machine-readable workspace path in the
+/// transcript, so import leaves <c>cwd</c> null (no repo enrichment / exclusion on historical
+/// import — a v1 limitation shared with Gemini; live capture gets cwd from the hook payload).</para>
 ///
 /// <para>Token/model cost lives off-transcript in each conversation's <c>gen_metadata</c>
 /// db; the live path streams it as synthetic USAGE lines. Injecting it on historical import
@@ -48,6 +54,8 @@ internal sealed class AntigravityImportSource : IImportSource {
     public bool   IsAvailable => Directory.Exists(BrainRoot);
     public bool   SupportsTitleGeneration => false; // server computes a fallback title at session-end
 
+    static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [antigravity-import] {message}");
+
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var result = new List<DiscoveredSession>();
         if (!Directory.Exists(BrainRoot)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -57,8 +65,30 @@ internal sealed class AntigravityImportSource : IImportSource {
         // root's subagents. Cycle-/non-tree-safe (BuildRootDescendants) so a deep chain isn't
         // lost and a cycle imports standalone rather than vanishing. Linkage is complete on disk.
         var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
-        var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        List<string> convIds;
+        try {
+            convIds = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        } catch {
+            // A hostile/inaccessible brain root must not abort the whole import pass.
+            convIds = [];
+        }
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
+
+        // drift observability: surface format drift without a messages fallback.
+        // HashSet membership so the counters stay O(n), not O(n²), on large brain trees (qodo #285).
+        var allConversationIds = convIds.ToHashSet(StringComparer.Ordinal);
+        var linkedChildIds     = parentMap.Values.ToHashSet(StringComparer.Ordinal);
+        var invokeEdges   = parentMap.Count;
+        var danglingChild = parentMap.Keys.Count(c => !allConversationIds.Contains(c));
+        var msgButNoInvoke = convIds.Count(id =>
+            Directory.Exists(AntigravityPaths.MessagesDir(id, _home, _geminiCliHome))
+            && !parentMap.ContainsKey(id) && !linkedChildIds.Contains(id));
+        Log($"Antigravity import: {invokeEdges} invoke edge(s); {danglingChild} invoked child id(s) with no conversation dir; {msgButNoInvoke} conversation(s) with messages/ but no invoke edge");
+
+        // Normalize the --session filter to the dashless canonical form so it matches the
+        // dashless session id we surface, whether the user passed a dashed or dashless id
+        // (mirrors GeminiImportSource).
+        var sessionFilter = filters.FilterSession is { } fs ? ImportCommand.NormalizeGuid(fs) : null;
 
         var sinceUtc = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
@@ -67,7 +97,11 @@ internal sealed class AntigravityImportSource : IImportSource {
         foreach (var (convId, descendants) in byRoot) {
             ct.ThrowIfCancellationRequested();
 
-            if (filters.FilterSession is { } fs && !string.Equals(convId, fs, StringComparison.Ordinal)) continue;
+            // Dashless canonical id — matches live capture and fixes format-sensitive --session
+            // filtering. The dashed convId still resolves the on-disk brain-dir transcript path.
+            var sessionId = ImportCommand.NormalizeGuid(convId);
+
+            if (sessionFilter is not null && !string.Equals(sessionId, sessionFilter, StringComparison.Ordinal)) continue;
 
             var transcript = AntigravityPaths.TranscriptFullPath(convId, _home, _geminiCliHome);
             if (!File.Exists(transcript)) continue;
@@ -79,12 +113,15 @@ internal sealed class AntigravityImportSource : IImportSource {
             if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
 
             result.Add(new DiscoveredSession(
-                SessionId:      convId,
+                SessionId:      sessionId,
                 Vendor:         Vendor,
                 Cwd:            null,
                 FirstTimestamp: firstTimestamp,
                 SourceMeta:     new Dictionary<string, object?> {
                     ["TranscriptPath"] = transcript,
+                    // Dashed conversation ids — kept dashed because they resolve on-disk brain-dir
+                    // transcript paths in ImportChildrenAsync; the server-facing agent_id is
+                    // canonicalized to dashless there.
                     ["Children"]       = descendants, // all transitive descendants, nested under this root
                 }));
         }
@@ -156,7 +193,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
         var transcriptPath = (string)c.SourceMeta!["TranscriptPath"]!;
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
@@ -169,26 +206,45 @@ internal sealed class AntigravityImportSource : IImportSource {
         // once-skipped subagent would otherwise be lost forever), then re-post session-end — all
         // idempotent server-side (deterministic lifecycle ids → no-ops when they already
         // succeeded). If either lifecycle POST fails, return Failed so a re-run retries the repair
-        // instead of reporting a falsely-complete Skipped (mirrors Cursor) (AI-1160 review).
+        // instead of reporting a falsely-complete Skipped (mirrors Cursor).
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) {
             if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
                     BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
                 return ImportOutcome.Failed;
 
-            await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
+            // Capture whether the repair actually attached new nested-child content — true
+            // iff any child's SendTranscriptBatches sent >0 server-accepted lines. The
+            // lifecycle-only repair path (subagent-start+stop, no content resend) contributes
+            // false. This outcome stays hardcoded Skipped — only SentChildContent is threaded
+            // through below.
+            var sentChildContent = await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
+
+            // Explicit gen_metadata usage pass — even though AlreadyLoaded sends zero real
+            // transcript lines (the content watermark is already at the tip), a session
+            // re-imported after this feature shipped may still be missing its USAGE lines
+            // (they were never emitted on the original import). Always attempted, always
+            // before session-end.
+            await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
 
             if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
                     BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
                 return ImportOutcome.Failed;
 
-            return ImportOutcome.Skipped;
+            return new ImportSessionResult(ImportOutcome.Skipped, sentChildContent);
         }
 
         // Lifecycle-before-transcript (mirrors Gemini): a transcript that advances the
         // watermark past a failed lifecycle POST would leave the session lifecycle-less.
         // Re-runs are idempotent server-side (deterministic lifecycle ids).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
-                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+        var startPayload = BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate);
+        // Step 3 visibility stamp — New-only (this branch handles New + Partial; AlreadyLoaded
+        // returned above), and never overrides the existing forcePrivate "private" stamp above
+        // (mutually exclusive: this only fires when !ctx.ForcePrivate).
+        if (!ctx.ForcePrivate && c.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
+        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity", startPayload, ct))
             return ImportOutcome.Failed;
 
         var startLine = c.Status == ImportCommand.ClassificationStatus.Partial ? c.ResumeFromLine : 0;
@@ -204,6 +260,12 @@ internal sealed class AntigravityImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
+        // Explicit gen_metadata usage pass — decodes the sibling conversation .db and posts the
+        // synthetic USAGE lines the live watcher would have streamed, so a content-only import
+        // still gains cost. Best-effort (cost is never load-bearing); always before
+        // session-end.
+        await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
+
         // Children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
         // Subagent failures don't fail the (already-imported) parent; a re-import retries.
         await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
@@ -216,23 +278,38 @@ internal sealed class AntigravityImportSource : IImportSource {
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    async Task ImportChildrenAsync(
+    /// <summary>
+    /// Returns <c>true</c> iff any child's <see cref="SessionImporter.SendTranscriptBatches"/>
+    /// call sent &gt;0 server-accepted lines during this pass — the <c>SentChildContent</c>
+    /// signal threaded onto the <c>AlreadyLoaded</c> caller's <see cref="ImportSessionResult"/>.
+    /// The lifecycle-only repair branch below (subagent-start+stop, no content resend)
+    /// contributes <c>false</c> — it's a repair, not new content.
+    /// </summary>
+    async Task<bool> ImportChildrenAsync(
             HttpClient client, string baseUrl, string rootId,
             IReadOnlyDictionary<string, object?> sourceMeta, CancellationToken ct) {
         if (!sourceMeta.TryGetValue("Children", out var kidsObj) || kidsObj is not List<string> { Count: > 0 } children)
-            return;
+            return false;
+
+        var anyChildContentSent = false;
 
         foreach (var childId in children) {
             ct.ThrowIfCancellationRequested();
 
+            // childId is the DASHED conversation id — it names the on-disk brain dir, so it
+            // resolves the transcript path. The server-facing agent_id is its DASHLESS canonical
+            // form: the server canonicalizes agent_id on both ingest and watermark read, so this
+            // matches live routing/correlation and the dashless session ids used everywhere else
+            // (mirrors GeminiImportSource).
             var childTranscript = AntigravityPaths.TranscriptFullPath(childId, _home, _geminiCliHome);
             if (!File.Exists(childTranscript)) continue;
 
-            // Where the child's own (rootId, childId) stream is already ingested up to. agentId =
-            // raw child conversation id (matches how live child events route).
+            var childAgentId = ImportCommand.NormalizeGuid(childId);
+
+            // Where the child's own (rootId, childAgentId) stream is already ingested up to.
             int? chwm;
             try {
-                chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childId, ct);
+                chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childAgentId, ct);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
@@ -260,19 +337,18 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // a server restart between the failed stop and this re-import. Re-posting start
                 // restores the active mark (idempotent: deterministic SubagentStarted id, and
                 // already-active is a no-op) so the following stop clears it and appends the
-                // (idempotent, deterministic) SubagentCompleted. Child content is not re-sent
-                // (AI-1160 review).
+                // (idempotent, deterministic) SubagentCompleted. Child content is not re-sent.
                 //
                 // strict=true on BOTH: the server's start endpoint returns a fail-open 200 even
                 // when RecordAgentStartAsync throws and rolls back the active mark, so a non-strict
                 // start would be treated as success and the following stop would silently no-op
                 // (no active agent → no SubagentCompleted). strict surfaces the failure as non-2xx,
                 // so we only post stop when start truly re-marked the agent, and a re-import retries
-                // otherwise (AI-1160 review).
+                // otherwise.
                 if (await PostHookAsync(client, baseUrl, "subagent-start",
-                        BuildSubagentStartPayload(rootId, childId, childTranscript, strict: true), ct))
+                        BuildSubagentStartPayload(rootId, childAgentId, childTranscript, strict: true), ct))
                     await PostHookAsync(client, baseUrl, "subagent-stop",
-                        BuildSubagentStopPayload(rootId, childId, childTranscript, strict: true), ct);
+                        BuildSubagentStopPayload(rootId, childAgentId, childTranscript, strict: true), ct);
 
                 continue;
             }
@@ -285,22 +361,31 @@ internal sealed class AntigravityImportSource : IImportSource {
 
             // Fail-closed: no content unless the subagent registered first.
             if (!await PostHookAsync(client, baseUrl, "subagent-start",
-                    BuildSubagentStartPayload(rootId, childId, childTranscript), ct))
+                    BuildSubagentStartPayload(rootId, childAgentId, childTranscript), ct))
                 continue;
 
+            int childSent;
             try {
-                await SessionImporter.SendTranscriptBatches(
+                // failOnError: true — SentChildContent must reflect only server-ACCEPTED
+                // batches; a non-2xx now throws and is caught below, so a rejected batch
+                // never flips the signal (Qodo finding 3).
+                childSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: childTranscript, agentId: childId, startLine: childStartLine, vendor: Vendor);
+                    filePath: childTranscript, agentId: childAgentId, startLine: childStartLine, vendor: Vendor,
+                    failOnError: true);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
             }
 
+            if (childSent > 0) anyChildContentSent = true;
+
             await PostHookAsync(client, baseUrl, "subagent-stop",
-                BuildSubagentStopPayload(rootId, childId, childTranscript), ct);
+                BuildSubagentStopPayload(rootId, childAgentId, childTranscript), ct);
         }
+
+        return anyChildContentSent;
     }
 
     // ── payload builders ────────────────────────────────────────────────────────
@@ -308,8 +393,12 @@ internal sealed class AntigravityImportSource : IImportSource {
     static JsonObject BuildSessionStartPayload(string sid, string? cwd, DateTimeOffset? startedAt, bool forcePrivate) {
         var p = new JsonObject { ["hook_event_name"] = "sessionStart", ["session_id"] = sid };
         if (cwd is not null) p["cwd"] = cwd;
+        // fail-open git-root discovery, mirroring ImportChainsAsync
+        // so routed imports carry the same workspace_root the file-based path does.
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 
@@ -317,12 +406,13 @@ internal sealed class AntigravityImportSource : IImportSource {
         var p = new JsonObject { ["hook_event_name"] = "sessionEnd", ["session_id"] = sid, ["reason"] = "antigravity-import" };
         if (cwd is not null) p["cwd"] = cwd;
         if (endedAt is { } ts) p["ended_at"] = ts.ToString("O");
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 
     // strict=true makes the server return non-2xx when the lifecycle write itself fails, rather
     // than a fail-open 200 — so a caller that gates on the POST result learns the server actually
-    // recorded the event (AI-1160 review).
+    // recorded the event.
 
     static JsonObject BuildSubagentStartPayload(string parentSid, string agentId, string transcriptPath, bool strict = false) {
         var p = new JsonObject {
@@ -341,7 +431,7 @@ internal sealed class AntigravityImportSource : IImportSource {
     // agent_transcript_path, and last_assistant_message. Omitting them makes the server reject the
     // body at binding (before HandleSubagentStop runs), so strict is never honored and PostHookAsync
     // returns false — the repair would then loop start→failed-stop forever. Send the full shape,
-    // mirroring GeminiSubagentDiscovery.BuildStopPayload (AI-1160 review).
+    // mirroring GeminiSubagentDiscovery.BuildStopPayload.
     static JsonObject BuildSubagentStopPayload(string parentSid, string agentId, string transcriptPath, bool strict = false) {
         var p = new JsonObject {
             ["hook_event_name"]        = "subagent_stop",
@@ -356,6 +446,66 @@ internal sealed class AntigravityImportSource : IImportSource {
         };
         if (strict) p["strict"] = true;
         return p;
+    }
+
+    // Synthetic USAGE line numbers live in a high band so they never collide with real transcript
+    // line numbers (which start at 0). MUST match the live path's WatchCommand.
+    // AntigravityUsageLineBase AND the server's SessionWriter.AntigravityUsageLineBase — all
+    // three are pinned to the same literal (grepped: WatchCommand.cs:1692,
+    // SessionWriter.TranscriptPipeline.cs:21) since the server derives the USAGE event id from
+    // line CONTENT (gen_row), not the line number, so the number is only a non-colliding
+    // ordering hint.
+    const long AntigravityUsageLineBase = 1_000_000_000L;
+
+    /// <summary>
+    /// Decodes the sibling conversation <c>.db</c>'s <c>gen_metadata</c> rows into synthetic
+    /// USAGE transcript lines and posts them directly via <c>/hooks/transcript</c> — NOT through
+    /// <see cref="SessionImporter.SendTranscriptBatches"/>, whose AlreadyLoaded-derived startLine
+    /// would skip a USAGE line entirely (it lives past the real-content watermark, in the high
+    /// band). Deterministic USAGE event ids (keyed on gen_row) dedupe server-side, so re-posting
+    /// on every re-import is safe. Called for every classification (New/Partial AND
+    /// AlreadyLoaded) so a session imported before this feature shipped — content but no cost —
+    /// gains usage on a bare re-import even though zero physical transcript lines are (re)sent.
+    /// Best-effort: cost is never load-bearing — a decode/post failure
+    /// here must never fail the import.
+    /// </summary>
+    static async Task<bool> PostUsageLinesAsync(
+            ImportContext ctx, string sessionId, string transcriptPath, DateTimeOffset? createdAt, CancellationToken ct) {
+        if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return true;
+
+        var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, afterIdx: -1, createdAt: createdAt?.ToString("O"));
+        if (rows.Count == 0) return true;
+
+        var lines       = new string[rows.Count];
+        var lineNumbers = new int[rows.Count];
+        for (var i = 0; i < rows.Count; i++) {
+            lines[i]       = rows[i].Line;
+            lineNumbers[i] = (int)(AntigravityUsageLineBase + rows[i].Idx);
+        }
+
+        return await PostTranscriptLinesAsync(ctx.HttpClient, ctx.BaseUrl, sessionId, lines, lineNumbers, ct);
+    }
+
+    static async Task<bool> PostTranscriptLinesAsync(
+            HttpClient client, string baseUrl, string sessionId, string[] lines, int[] lineNumbers, CancellationToken ct) {
+        var batch = new TranscriptBatch {
+            SessionId   = sessionId,
+            Lines       = lines,
+            LineNumbers = lineNumbers,
+            Vendor      = "antigravity",
+            Strict      = false,
+        };
+        var json = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);
+
+        try {
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, ct: ct);
+            return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return false; // cost is always best-effort — never let a post failure surface
+        }
     }
 
     static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {

@@ -13,22 +13,6 @@ internal static partial class UnixPtyInterop {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial int forkpty(out int master, IntPtr name, IntPtr termp, ref WinSize winp);
 
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int execvp(string file, string?[] argv);
-
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int chdir(string path);
-
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int setenv(string name, string value, int overwrite);
-
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial int unsetenv(string name);
-
     [LibraryImport("libc", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial int kill(int pid, int sig);
@@ -66,6 +50,75 @@ internal static partial class UnixPtyInterop {
     [LibraryImport("libpty_shim", EntryPoint = "pty_set_winsize", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int pty_set_winsize_shim(int fd, ushort rows, ushort cols);
+
+    [LibraryImport("libpty_shim", EntryPoint = "pty_probe_execveat")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_probe_execveat();
+
+    // argv/envp are NULL-terminated string arrays; a `string?[]` with a trailing `null` element
+    // marshals correctly via LibraryImport's array marshaller (a trailing null sentinel, no
+    // length prefix — the same shape execve/execvp expect).
+    [LibraryImport("libpty_shim", EntryPoint = "pty_preflight", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_preflight(
+        string exeAbsPath, string?[] origArgv, string?[] envp, int execveatSupported, out IntPtr outPlan);
+
+    [LibraryImport("libpty_shim", EntryPoint = "pty_plan_contained")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_plan_contained(IntPtr plan);
+
+    [LibraryImport("libpty_shim", EntryPoint = "pty_plan_free")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void pty_plan_free(ref IntPtr plan);
+
+    [LibraryImport("libc", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pipe(int[] fds);
+
+    // access(2): the permission-CLASS-aware executability test execvp itself uses to pick the first
+    // runnable PATH candidate — owner vs group vs other bits, ACLs, and noexec mounts all factored
+    // in, unlike a raw "any execute bit set" mode-mask. Returns 0 when the mode is granted, -1 (with
+    // errno) otherwise. Used by the pre-fork PATH resolver so it skips exactly the candidates the
+    // child's own exec would skip.
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int access(string path, int mode);
+
+    public const int X_OK = 1; // access(2) execute-permission test
+
+    // forkpty + child sequence + error-pipe handshake (L1-shim(b)). `plan` is the opaque
+    // pty_exec_plan* from pty_preflight; envp/cwd cross the boundary the same way argv does
+    // for pty_preflight — a NULL-terminated `string?[]`/UTF-8 string, no length prefix.
+    [LibraryImport("libpty_shim", EntryPoint = "pty_spawn", StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int pty_spawn(
+        IntPtr plan, string?[] envp, string cwd, ushort rows, ushort cols,
+        int expectedParent, int cancelFd, out PtySpawnResult result);
+
+    // macOS-only export (see pty_shim.h) — no compile-time guard needed on the C# side, since
+    // LibraryImport resolution is lazy/per-call; callers must gate with OperatingSystem.IsMacOS().
+    [LibraryImport("libpty_shim", EntryPoint = "pty_capture_mac_identity", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial int pty_capture_mac_identity(int pid, byte* out_, nuint outlen);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct PtySpawnResult {
+        public int  Pid;
+        public int  MasterFd;
+        public int  ErrNo;
+        public int  FailedStep;
+        public fixed byte StartIdentity[128];
+
+        public readonly string StartIdentityString {
+            get {
+                fixed (byte* p = StartIdentity) {
+                    var len = 0;
+                    while (len < 128 && p[len] != 0) len++;
+                    return System.Text.Encoding.UTF8.GetString(p, len);
+                }
+            }
+        }
+    }
 
     public static void SetWinSize(int fd, ushort rows, ushort cols) {
         if (IsMacOS && RuntimeInformation.OSArchitecture == Architecture.Arm64) {

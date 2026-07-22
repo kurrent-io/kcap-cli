@@ -16,7 +16,7 @@ public class RepositoryDetectionCacheTests {
 
     [Test]
     public async Task GitCacheEntry_v2_is_stale_after_nested_group_bump() {
-        // v2 pre-dates multi-segment owner parsing (AI-1121); a nested repo cached under
+        // v2 pre-dates multi-segment owner parsing; a nested repo cached under
         // v2 has owner=null and must be re-derived, not served stale, after the bump.
         const string v2 = """{"schema_version":2,"host":"gitlab.com","owner":null,"repo_name":null,"cached_at":"2020-01-01T00:00:00+00:00"}""";
         var entry = JsonSerializer.Deserialize(v2, CapacitorJsonContext.Default.GitCacheEntry);
@@ -25,7 +25,7 @@ public class RepositoryDetectionCacheTests {
     }
 
     // Exercises the real detection path end-to-end for a nested namespace, proving the
-    // greedy owner parse (AI-1121) flows through DetectRepositoryAsync (glab-independent).
+    // greedy owner parse flows through DetectRepositoryAsync (glab-independent).
     [Test]
     public async Task Detects_nested_gitlab_repo_base_info() {
         var repo = MakeTempRepo("git@gitlab.com:group/sub/project.git");

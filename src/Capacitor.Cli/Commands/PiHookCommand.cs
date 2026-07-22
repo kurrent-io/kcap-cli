@@ -7,7 +7,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Dispatcher for the Pi (badlogic/pi-mono) live-ingest extension (AI-886). Pi
+/// Dispatcher for the Pi (badlogic/pi-mono) live-ingest extension. Pi
 /// has no shell hooks; the shipped <c>kcap.ts</c> extension invokes this on
 /// Pi's in-process lifecycle events:
 ///   <c>kcap hook --pi --event session-start --file &lt;path&gt; --cwd &lt;cwd&gt; --reason &lt;reason&gt;</c>
@@ -29,7 +29,7 @@ namespace Capacitor.Cli.Commands;
 static class PiHookCommand {
     // Pi's extension shells out with a 10s pi.exec timeout (see kcap.ts), so the
     // session-end drain must finish well inside that or the session-end POST is
-    // starved and the session sticks "Active" (mirror of AI-813).
+    // starved and the session sticks "Active" (same drain-cap pattern as ClaudeHookCommand's).
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(6);
 
     public static async Task<int> Handle(string baseUrl, string[] args) {
@@ -63,6 +63,10 @@ static class PiHookCommand {
             return 0;
         }
 
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
         if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
@@ -71,20 +75,21 @@ static class PiHookCommand {
         }
 
         return eventName switch {
-            "session-start" => await HandleSessionStart(baseUrl, sessionId, file, cwd, reason, header?.Timestamp, activeProfile),
+            "session-start" => await HandleSessionStart(baseUrl, sessionId, file, cwd, reason, header?.Timestamp, activeProfile, spool),
             "session-end"   => await HandleSessionEnd(baseUrl, sessionId, file, cwd, reason),
             _               => 0   // unknown — fail-open like the other dispatchers
         };
     }
 
     static async Task<int> HandleSessionStart(
-            string         baseUrl,
-            string         sessionId,
-            string         file,
-            string?        cwd,
-            string?        reason,
+            string          baseUrl,
+            string          sessionId,
+            string          file,
+            string?         cwd,
+            string?         reason,
             DateTimeOffset? startedAt,
-            Profile?       activeProfile
+            Profile?        activeProfile,
+            HookSpool       spool
         ) {
         var source = string.IsNullOrEmpty(reason) ? "startup" : reason;
 
@@ -95,7 +100,12 @@ static class PiHookCommand {
             ["home_dir"]        = PathHelpers.HomeDirectory
         };
 
-        if (cwd is not null) forwarded["cwd"] = cwd;
+        if (cwd is not null) {
+            forwarded["cwd"] = cwd;
+
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
+        }
         if (startedAt is { } ts) forwarded["started_at"] = ts.ToString("O");
         if (Environment.GetEnvironmentVariable("KCAP_AGENT_ID") is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
@@ -111,11 +121,14 @@ static class PiHookCommand {
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/pi", enriched);
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
+        // permanent failure keeps the prior non-zero exit and skips the watcher.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/pi", enriched, "pi-hook",
+            spool, sessionId, route: "session-start/pi");
 
-        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
-        // way skip the watcher — on a lapse its POSTs would 401 too.
-        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, file,
@@ -128,7 +141,7 @@ static class PiHookCommand {
     static async Task<int> HandleSessionEnd(string baseUrl, string sessionId, string file, string? cwd, string? reason) {
         // Kill watcher + inline-drain BEFORE the POST so the server computes
         // stats over the full transcript — capped so a slow drain can't starve
-        // the session-end POST (mirror of ClaudeHookCommand / AI-813).
+        // the session-end POST (mirror of ClaudeHookCommand).
         try {
             var drained = await TimeBudget.RunCappedAsync(
                 async () => {

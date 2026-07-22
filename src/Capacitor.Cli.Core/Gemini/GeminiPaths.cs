@@ -26,7 +26,7 @@ public static class GeminiPaths {
     /// root is NOT sufficient because <c>~/.gemini</c> is SHARED with Google
     /// Antigravity, which stores its state under <c>antigravity/</c> +
     /// <c>antigravity-cli/</c> — so an Antigravity-only home would otherwise falsely
-    /// read as a Gemini install (AI-1158). Require one of the config/recording
+    /// read as a Gemini install. Require one of the config/recording
     /// markers Gemini CLI creates that Antigravity does not: <c>settings.json</c>,
     /// <c>projects.json</c>, or the <c>tmp/</c> chat-recording dir. The binary name
     /// <c>gemini</c> is too generic to be the only signal, so callers that want a
@@ -50,6 +50,15 @@ public static class GeminiPaths {
         => Path.Combine(Root(home, geminiCliHome), "settings.json");
 
     /// <summary>
+    /// Global context/memory file (<c>~/.gemini/GEMINI.md</c>) — Gemini CLI loads it for
+    /// every project (top of the hierarchical GEMINI.md chain), so it is where kcap installs
+    /// its steering-instructions block. A separate file from <see cref="SettingsJson"/>; honors
+    /// <c>GEMINI_CLI_HOME</c> like the rest of the layout.
+    /// </summary>
+    public static string GeminiMd(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(Root(home, geminiCliHome), "GEMINI.md");
+
+    /// <summary>
     /// Per-project temporary state root: <c>~/.gemini/tmp/&lt;project&gt;/</c>.
     /// Chat recordings live under <c>chats/</c> within each project dir.
     /// </summary>
@@ -64,9 +73,12 @@ public static class GeminiPaths {
     /// Nested subagent-recording directory for a parent session:
     /// <c>&lt;chats&gt;/&lt;parentSessionId&gt;/</c>. Gemini records each subagent's transcript
     /// here as <c>&lt;subId&gt;.jsonl</c> (subId = a fresh dashed UUID — the executor's agent
-    /// id; nested subagents at any depth stay flat under the top-level session).
+    /// id). A subagent that itself spawns subagents gets its OWN nested dir the same way —
+    /// <c>&lt;chats&gt;/&lt;subId&gt;/&lt;grandSubId&gt;.jsonl</c> — so deeper invocations are
+    /// discovered by recursing into each descendant's own directory, not by assuming a flat
+    /// layout (see <see cref="GeminiSubagentDiscovery.EnumerateDescendantFiles"/>).
     /// <paramref name="parentSessionId"/> is the DASHED form from the parent transcript's
-    /// header, matching the on-disk directory name. AI-900.
+    /// header, matching the on-disk directory name.
     /// </summary>
     public static string SubagentDir(string chatsDir, string parentSessionId)
         => Path.Combine(chatsDir, parentSessionId);

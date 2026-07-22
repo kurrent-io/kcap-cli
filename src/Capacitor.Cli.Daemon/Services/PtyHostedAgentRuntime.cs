@@ -17,18 +17,19 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
     /// </summary>
     internal static readonly TimeSpan InputSubmitDelay = TimeSpan.FromMilliseconds(50);
 
-    public string Vendor              => vendor;
-    public int    Pid                 => pty.Pid;
-    public bool   HasExited           => pty.HasExited;
-    public int?   ExitCode            => pty.ExitCode;
-    public bool   EmitsTerminalOutput => true;
+    public string  Vendor              => vendor;
+    public int     Pid                 => pty.Pid;
+    public bool    HasExited           => pty.HasExited;
+    public int?    ExitCode            => pty.ExitCode;
+    public string? StartIdentity       => pty.StartIdentity;
+    public bool    EmitsTerminalOutput => true;
 
     public IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default) => pty.ReadOutputAsync(ct);
 
     /// <summary>
     /// Delivers <paramref name="text"/> as a bracketed paste (ESC[200~ … ESC[201~) so the agent's
     /// TUI treats it as one pasted block and the following Enter is an unambiguous submit
-    /// keypress. Without the paste markers a large multi-line message is mis-handled (AI-30):
+    /// keypress. Without the paste markers a large multi-line message is mis-handled:
     /// Codex never submits it at all, and Claude only submits it ~50% of the time — the CR races
     /// the still-ingesting paste and is folded in as a literal newline, so the text sits in the
     /// composer until a later, isolated keystroke finishes it. Both hosted CLIs enable

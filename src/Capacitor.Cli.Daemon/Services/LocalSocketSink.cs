@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// calls <see cref="TryEnqueue"/>, which never blocks: if the bounded queue is full, the
 /// client is too slow, so we mark it <see cref="Detached"/> and drop it rather than (a)
 /// silently losing a chunk mid-stream — which desyncs Claude's cursor-addressing redraw
-/// (AI-844) — or (b) back-pressuring the shared loop and stalling every other client. A
+/// or (b) back-pressuring the shared loop and stalling every other client. A
 /// dropped client reattaches for a fresh <c>OutputBuffer</c> replay, recovering from a
 /// clean frame.
 internal sealed class LocalSocketSink : ITerminalSink {
@@ -19,7 +19,7 @@ internal sealed class LocalSocketSink : ITerminalSink {
         _send = send;
         // Wait mode: TryWrite never blocks but returns false when the queue is full — that
         // false is our overflow signal (force-detach). DropOldest/DropWrite would silently
-        // lose a chunk and always return true, reintroducing the AI-844 corruption.
+        // lose a chunk and always return true, reintroducing the corruption.
         _ch = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(capacity) {
             FullMode     = BoundedChannelFullMode.Wait,
             SingleReader = true

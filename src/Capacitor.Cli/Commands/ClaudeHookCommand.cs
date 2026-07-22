@@ -256,17 +256,20 @@ public static class ClaudeHookCommand {
         // after EnsureWatcherRunning. Other commands enrich inline.
         Task<string>? deferredRepoTask = null;
 
+        // detectPullRequest:false everywhere: a live `gh pr view` / `glab` round-trip (~600ms to
+        // GitHub) is the single biggest client cost on the hook path and would push the facts
+        // envelope past Claude's 5s SessionStart timeout. PR info is not needed here — the watcher
+        // runs its own DetectRepositoryAsync (with PR detection) and backfills it independently.
         if (command == "session-start") {
-            // Budgeted so a slow git/gh probe self-skips under deadline pressure (repo info
-            // still arrives via the watcher's own detection). Awaited INSIDE the session-start
-            // block after EnsureWatcherRunning so it never delays transcript-capture start.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
+            // Awaited INSIDE the session-start block after EnsureWatcherRunning so it never delays
+            // transcript-capture start.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command), detectPullRequest: false);
         } else if (command is "session-end" or "subagent-stop") {
-            // Budgeted like session-start so a slow git/gh probe can't push the bounded POST/spool
-            // path past the hook deadline. The await below is also budget-bounded as a hard backstop.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
+            // Budgeted so a slow git probe can't push the bounded POST/spool path past the hook
+            // deadline. The await below is also budget-bounded as a hard backstop.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command), detectPullRequest: false);
         } else {
-            body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(body, detectPullRequest: false);
         }
 
         // Resolve the V2 profile once for repo/path exclusion and
@@ -362,7 +365,7 @@ public static class ClaudeHookCommand {
                         // Clamp the pre-drain cap so it cannot consume the entire remaining budget
                         // that the bounded POST needs (mirrors the session-end fix). Reserve at
                         // least Safety (1.5s) for the bounded POST so a slow drain doesn't starve
-                        // it entirely. Use whichever is smallest (AI-1005).
+                        // it entirely. Use whichever is smallest.
                         var remaining    = HookBudget.Remaining(processStart, "subagent-stop");
                         var effectiveCap = TimeSpan.FromMilliseconds(
                             Math.Max(0, Math.Min(PreHookDrainCap.TotalMilliseconds,
@@ -423,6 +426,24 @@ public static class ClaudeHookCommand {
             // plan_content onto the enriched body before the POST.
             body = await deferredRepoTask!;
 
+            // best-effort git-root discovery for the session's cwd, fed to the server's
+            // plan-artifact discovery so a repo-file plan/spec found at the workspace root can be
+            // attributed even when cwd is a subdirectory. Fail-open: GitRepository.FindRoot swallows
+            // I/O errors and returns null when no repo is found, in which case the field is simply
+            // omitted (older servers ignore unknown fields regardless).
+            if (sessionCwd is not null && GitRepository.FindRoot(sessionCwd) is { } workspaceRoot) {
+                try {
+                    var node = JsonNode.Parse(body);
+
+                    if (node is not null) {
+                        node["workspace_root"] = workspaceRoot;
+                        body                    = node.ToJsonString();
+                    }
+                } catch {
+                    // Best effort
+                }
+            }
+
             // Inject default_visibility from the active V2 profile. The legacy top-level
             // LegacyV1Config.DefaultVisibility shape is not populated by v2 configs (the field
             // lives under the profile), so reading it there silently fell back to "org_public"
@@ -470,7 +491,7 @@ public static class ClaudeHookCommand {
                 return 0;
             }
 
-            // AI-1165 — kick off the team-memory index fetch in PARALLEL with the hook POST so
+            // kick off the team-memory index fetch in PARALLEL with the hook POST so
             // it adds no latency to the critical path. Fully best-effort / fail-open: any failure,
             // a 401, or a budget overrun yields a null fragment and nothing is injected. Started
             // after the ordering-guard / backlog returns above so a spooled session-start doesn't
@@ -530,7 +551,7 @@ public static class ClaudeHookCommand {
                     var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
                     var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
-                    // AI-1165 — join the parallel memory-index fetch, bounded by the remaining
+                    // join the parallel memory-index fetch, bounded by the remaining
                     // hook budget so a slow fetch can't delay the hook (fail-open → null).
                     var memoryFragment  = MemoryIndexEmitter.BuildFragment(
                         await AwaitMemoryIndexAsync(memoryIndexTask, processStart), memoryDisabled);
@@ -613,7 +634,7 @@ public static class ClaudeHookCommand {
 
         // Dedicated bounded POST for the per-agent subagent-stop: a single attempt clamped to the
         // remaining hook budget that spools on transient failure, so a dropped SubagentCompleted is
-        // replayed on the next hook (AI-1005). Only the stop carrying agent_id maps to a completion;
+        // replayed on the next hook. Only the stop carrying agent_id maps to a completion;
         // without it, fall through to the shared best-effort path (behavior unchanged).
         if (command == "subagent-stop") {
             string? sessionId = null, agentId = null;
@@ -625,7 +646,7 @@ public static class ClaudeHookCommand {
 
             if (sessionId is not null && agentId is not null) {
                 // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
-                // subagent-stop so a stranded session-start reaches the server before it (AI-1005).
+                // subagent-stop so a stranded session-start reaches the server before it.
                 if (CurrentSessionHasBacklog(spool, sessionId)) {
                     spool.Append(sessionId, "subagent-stop", body);
                     await Console.Error.WriteLineAsync($"[kcap] subagent-stop spooled (ordering guard); will retry on the next kcap hook ({sessionId}/{agentId})");
@@ -756,7 +777,7 @@ public static class ClaudeHookCommand {
         }
     }
 
-    // ── AI-1165: SessionStart team-memory index injection ────────────────────────
+    // ── SessionStart team-memory index injection ────────────────────────
     //
     // Best-effort fetch of GET /api/memories/index for the current repo + machine.
     // Fail-open on a failure / non-2xx / timeout → null, and
@@ -810,7 +831,8 @@ public static class ClaudeHookCommand {
     static async Task<string?> TryResolveRepoHashAsync(string? sessionCwd) {
         try {
             var cwd      = string.IsNullOrWhiteSpace(sessionCwd) ? Directory.GetCurrentDirectory() : sessionCwd;
-            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+            // Memory-index scoping needs only owner/repo → skip the PR round-trip.
+            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
             if (repoInfo?.Owner is null || repoInfo.RepoName is null) return null;
 
             return RepoHashHelper.ComputeRepoHash(repoInfo.Owner, repoInfo.RepoName);
@@ -868,12 +890,18 @@ public static class ClaudeHookCommand {
         };
 
     /// <summary>
-    /// Returns true if the given session still has undelivered spool entries (live .jsonl or in-flight
-    /// .draining files). Used as an ordering guard so a stranded session-start always reaches the
-    /// server before its session-end.
+    /// Returns true if the given session still has undelivered spool entries. Used as an ordering
+    /// guard so a stranded session-start always reaches the server before its session-end.
+    ///
+    /// <para>Delegates to the public <see cref="HookSpool.HasBacklog"/> rather than
+    /// re-implementing the file checks: the ordered drain (now running on every non-Codex hook,
+    /// including <c>--claude</c>) can WITHHOLD a spooled session-end in the <c>.ordered-*</c> temp
+    /// namespace pending the transcript tail. A stale private check that only looked at
+    /// <c>{sid}.jsonl</c> / <c>{sid}.*.draining</c> would miss that withheld terminal and let a later
+    /// Claude hook (e.g. subagent-stop) post directly, AHEAD of the still-withheld session-end —
+    /// the exact cross-spool ordering violation Blockers 1/3 exist to prevent. <c>HasBacklog</c>
+    /// covers all three namespaces; <see cref="CursorHookCommand"/> already routes through it.</para>
     /// </summary>
     static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
-        sid is not null && Directory.Exists(spool.Dir)
-        && (File.Exists(Path.Combine(spool.Dir, $"{sid}.jsonl"))
-            || Directory.EnumerateFiles(spool.Dir, $"{sid}.*.draining").Any());
+        sid is not null && spool.HasBacklog(sid);
 }

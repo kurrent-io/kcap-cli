@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -33,6 +34,22 @@ public class UnattendedLaunchPolicyTests {
     [Test]
     public async Task Non_unattended_launch_is_always_allowed_even_if_vendor_lacks_support() {
         var reason = UnattendedLaunchPolicy.RejectionReason(new FakeLauncher("gemini", supportsUnattended: false), isReviewFlow: false);
+
+        await Assert.That(reason).IsNull();
+    }
+
+    [Test]
+    public async Task Cursor_descriptor_unattended_launch_is_allowed_with_zero_prompt_policy() {
+        var reason = UnattendedLaunchPolicy.RejectionReason(
+            "cursor", supportsUnattended: AcpVendorDescriptors.Cursor.SupportsUnattended, isReviewFlow: true);
+
+        await Assert.That(reason).IsNull();
+    }
+
+    [Test]
+    public async Task Copilot_descriptor_unattended_launch_is_allowed() {
+        var reason = UnattendedLaunchPolicy.RejectionReason(
+            "copilot", supportsUnattended: AcpVendorDescriptors.Copilot.SupportsUnattended, isReviewFlow: true);
 
         await Assert.That(reason).IsNull();
     }

@@ -144,7 +144,7 @@ static partial class ProcessHelpers {
     /// the transcript watcher.
     /// </summary>
     /// <remarks>
-    /// Background (AI-820): hooks are invoked by the coding agent (Claude/Codex) with their
+    /// Background: hooks are invoked by the coding agent (Claude/Codex) with their
     /// stdio wired to pipes the agent reads. .NET's <see cref="System.Diagnostics.Process"/>
     /// always passes <c>bInheritHandles: true</c> to <c>CreateProcess</c> when any stream is
     /// redirected, so a watcher spawned from inside a hook inherits the hook process's own
@@ -189,7 +189,7 @@ static partial class ProcessHelpers {
                 return;
             }
 
-            // SetHandleInformation genuinely failed on a valid handle: the AI-820
+            // SetHandleInformation genuinely failed on a valid handle: the
             // mitigation did not apply, so a spawned watcher may still inherit this
             // pipe and reintroduce the hang/leak. Surface one diagnostic per process
             // (don't spam the agent's hook output) and never throw.
@@ -197,7 +197,7 @@ static partial class ProcessHelpers {
                 stdHandleInheritWarned = true;
                 Console.Error.WriteLine(
                     $"[kcap] warning: could not clear HANDLE_FLAG_INHERIT on {streamName} "
-                  + $"(win32 error {Marshal.GetLastPInvokeError()}); a spawned watcher may inherit std handles (AI-820).");
+                  + $"(win32 error {Marshal.GetLastPInvokeError()}); a spawned watcher may inherit std handles.");
             }
         } catch {
             // Best effort — handle hygiene must never crash the spawn path.
@@ -269,7 +269,7 @@ static partial class ProcessHelpers {
             // Walk the ppid ancestry by process name to skip the transient per-hook
             // executor. GetParentPidWindows() alone returns that executor, which has
             // usually already exited by the time the watcher boots — so the parent-PID
-            // watchdog saw a dead PID at startup and silently never armed (AI-822).
+            // watchdog saw a dead PID at startup and silently never armed.
             // Falls back to the immediate parent when no agent is found on the chain
             // (preserving prior behaviour for the no-vendor / unmatched cases). PID reuse
             // is a known Windows hazard for ppid walks, but the by-name match means a
@@ -345,7 +345,7 @@ static partial class ProcessHelpers {
     /// Returns <c>(ppid, comm)</c> for an arbitrary live PID, or null if the process
     /// can't be inspected (gone, access denied, or unsupported platform). Feeds the
     /// ancestry walk in <see cref="ResolveCodingAgentPid"/> on every platform — the
-    /// Windows implementation (AI-822) reads the parent PID via
+    /// Windows implementation reads the parent PID via
     /// <c>NtQueryInformationProcess</c> and the image name via
     /// <c>QueryFullProcessImageName</c>.
     /// </summary>
@@ -567,19 +567,27 @@ static partial class ProcessHelpers {
         }
 
         var slash    = comm.LastIndexOfAny(['/', '\\']);
-        var basename  = slash >= 0 ? comm[(slash + 1)..] : comm;
+        var basename = slash >= 0 ? comm[(slash + 1)..] : comm;
 
-        if (basename.Equals(vendor, StringComparison.OrdinalIgnoreCase)) {
-            return true;
+        // Reduce the basename to a clean stem: the whole name if it has no dot, or the part before a
+        // single trailing extension (".exe"). Anything else (multiple dots, a space) is not a clean
+        // executable name and never matches.
+        var dot = basename.IndexOf('.');
+        string stem;
+
+        if (dot < 0) {
+            stem = basename;
+        } else if (dot > 0 && !basename.AsSpan(dot + 1).Contains('.') && !basename.AsSpan(dot + 1).Contains(' ')) {
+            stem = basename[..dot];
+        } else {
+            return false;
         }
 
-        // "claude.exe" style: vendor token followed by a single extension and nothing else.
-        var dot = basename.IndexOf('.');
-
-        return dot > 0
-            && basename[..dot].Equals(vendor, StringComparison.OrdinalIgnoreCase)
-            && !basename.AsSpan(dot + 1).Contains('.')
-            && !basename.AsSpan(dot + 1).Contains(' ');
+        // Match the vendor token OR `{vendor}-cli`. The bounded `-cli` tolerance fixes the Kiro
+        // watchdog, whose durable process image is `kiro-cli` while its vendor token is `kiro`
+        // The clean-stem gate above keeps it from over-matching unrelated processes.
+        return stem.Equals(vendor, StringComparison.OrdinalIgnoreCase)
+            || stem.Equals($"{vendor}-cli", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

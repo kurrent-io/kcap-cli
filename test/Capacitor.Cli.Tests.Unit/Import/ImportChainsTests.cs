@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
@@ -99,7 +100,7 @@ public class ImportChainsTests : IDisposable {
 
     [Test]
     public async Task ImportChainsAsync_reports_per_session_progress() {
-        // Regression (AI-907): per-session slot rows always showed 0% because
+        // Regression: per-session slot rows always showed 0% because
         // BatchFlushed events were never wired to the slot bar. OnSessionProgress
         // must now fire once per flushed parent batch, carrying the batch size and
         // the session's full sendable-line total.
@@ -294,5 +295,65 @@ public class ImportChainsTests : IDisposable {
         // If serial, spread ≥ 3 × 200ms = 600ms (each chain waits for the previous).
         // If parallel, spread < 100ms (all chains start simultaneously).
         await Assert.That(spreadMs).IsLessThan(160);
+    }
+
+    [Test]
+    public async Task ImportChainsAsync_derives_workspace_root_from_the_remapped_cwd_not_the_raw_meta_cwd() {
+        // Regression: workspace_root discovery used to run
+        // GitRepository.FindRoot against the RAW transcript cwd (session.Meta.Cwd)
+        // instead of the already remap-/worktree-resolved path the import flow
+        // computes up front into sessionCwds. A historical transcript whose recorded
+        // cwd no longer exists (moved/renamed repo) would silently omit
+        // workspace_root even though the user had configured a cwd_remap that
+        // resolves to a real git working tree.
+        StubAllHookEndpoints();
+
+        var resolvedRepoDir = Path.Combine(_tempDir, "resolved-repo");
+        Directory.CreateDirectory(Path.Combine(resolvedRepoDir, ".git"));
+
+        const string sid = "workspace-root-remap";
+        var path = Path.Combine(_tempDir, $"{sid}.jsonl");
+        File.WriteAllLines(path, new[] {
+            """{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/proj","message":{"content":"line-0"}}""",
+        });
+
+        var session = new ImportCommand.SessionClassification {
+            SessionId  = sid,
+            FilePath   = path,
+            EncodedCwd = "-tmp-proj",
+            // The raw recorded cwd no longer exists on disk / has no git repo — if this
+            // were used directly, FindRoot would return null and workspace_root would
+            // be omitted entirely.
+            Meta       = new() { Cwd = "/definitely/does-not-exist/raw-cwd" },
+            Status     = ImportCommand.ClassificationStatus.New,
+            TotalLines = 1,
+        };
+        var chains = new List<List<ImportCommand.SessionClassification>> { new() { session } };
+
+        // Mirrors what ResolveTranscriptReposAsync populates: the remapped/worktree-resolved
+        // cwd for this session, fed back to ImportSingleSessionAsync's workspace_root lookup.
+        var sessionCwds = new Dictionary<string, string> { [sid] = resolvedRepoDir };
+
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => { },
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var client = new HttpClient();
+        var result = await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None, sessionCwds);
+
+        await Assert.That(result.Loaded).IsEqualTo(1);
+
+        var startEntry = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/session-start/claude");
+        var body       = JsonNode.Parse(startEntry.RequestMessage.Body!)!.AsObject();
+
+        await Assert.That(body["workspace_root"]?.GetValue<string>()).IsEqualTo(resolvedRepoDir);
+        await Assert.That(body["cwd"]?.GetValue<string>()).IsEqualTo(resolvedRepoDir);
     }
 }

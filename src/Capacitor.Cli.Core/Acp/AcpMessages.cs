@@ -1,11 +1,12 @@
 // src/Capacitor.Cli.Core/Acp/AcpMessages.cs
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Acp;
 
 /// <summary>
 /// Typed <c>params</c> payloads for the ACP methods <see cref="Daemon.Acp.AcpConnection"/> callers
-/// (<c>AcpHostedAgentRuntime</c>, AI-684 Task 9) send. These exist only so request construction can
+/// (<c>AcpHostedAgentRuntime</c>, Task 9) send. These exist only so request construction can
 /// go through source-gen (<see cref="JsonSerializer.SerializeToElement{T}(T, System.Text.Json.Serialization.Metadata.JsonTypeInfo{T})"/>
 /// against <see cref="CapacitorJsonContext"/>) instead of the reflection-based overloads, which are
 /// unsafe under NativeAOT. Field names/shapes are pinned to the probe-confirmed wire shapes in
@@ -16,8 +17,8 @@ namespace Capacitor.Cli.Core.Acp;
 
 /// <summary>
 /// <c>initialize</c> params. Deliberately advertises MINIMAL client capabilities (no <c>fs</c>, no
-/// <c>terminal</c>) — AI-687 decides those from the AI-688 findings; AI-684 does not implement
-/// either capability.
+/// <c>terminal</c>) — those get decided later based on ACP probe findings; this type implements
+/// neither capability.
 /// </summary>
 public sealed record InitializeParams(
     [property: JsonPropertyName("protocolVersion")]  int                     ProtocolVersion,
@@ -29,15 +30,66 @@ public sealed record ClientCapabilities(
     [property: JsonPropertyName("terminal")] bool           Terminal
 );
 
+/// <summary>
+/// <c>initialize</c> result — <c>AcpHostedAgentRuntime.StartAsync</c> deserializes the agent's
+/// <c>initialize</c> response into this to validate <see cref="ProtocolVersion"/> (must be <c>1</c>;
+/// the daemon speaks no other version yet) and to capture <see cref="AgentCapabilities"/> for later
+/// features (e.g. a reconnect path gated on <see cref="Acp.AgentCapabilities.LoadSession"/>).
+/// Deliberately minimal — the real wire response also carries <c>promptCapabilities</c>/
+/// <c>authMethods</c>, neither of which the daemon needs yet.
+/// </summary>
+public sealed record InitializeResult(
+    [property: JsonPropertyName("protocolVersion")]  int                 ProtocolVersion,
+    [property: JsonPropertyName("agentCapabilities")] AgentCapabilities?  AgentCapabilities
+);
+
+/// <summary>
+/// Agent-advertised capabilities from <c>initialize</c>'s result — only <see cref="LoadSession"/> is
+/// modeled for now (captured for a future reconnect path; nothing acts on it yet).
+/// <see cref="LoadSession"/> defaults to <see langword="false"/> when the wire omits it,
+/// matching the ACP spec's "absent means unsupported" convention.
+/// </summary>
+public sealed record AgentCapabilities(
+    [property: JsonPropertyName("loadSession")] bool LoadSession = false
+);
+
 public sealed record FsCapabilities(
     [property: JsonPropertyName("readTextFile")]  bool ReadTextFile,
     [property: JsonPropertyName("writeTextFile")] bool WriteTextFile
 );
 
-/// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).</summary>
+/// <summary>One MCP server <c>session/new</c> can hand the agent — stdio transport only (no
+/// caller needs http/sse yet; add a discriminated Transport field if/when one does).
+/// <see cref="Args"/> and <see cref="Env"/> are always sent as arrays on the wire, never
+/// <see langword="null"/> — the constructor normalizes a <see langword="null"/> input to <c>[]</c>
+/// and defensively clones a non-null input so a caller can't mutate this record's serialized
+/// payload after construction.</summary>
+public sealed record AcpMcpServerSpec {
+    [JsonPropertyName("name")]    public string               Name    { get; }
+    [JsonPropertyName("command")] public string               Command { get; }
+    [JsonPropertyName("args")]    public string[]             Args    { get; }
+    [JsonPropertyName("env")]     public AcpMcpServerEnvVar[] Env     { get; }
+
+    public AcpMcpServerSpec(string Name, string Command, string[]? Args, AcpMcpServerEnvVar[]? Env) {
+        this.Name    = Name;
+        this.Command = Command;
+        this.Args    = Args is null ? [] : [.. Args];
+        this.Env     = Env  is null ? [] : [.. Env];
+    }
+}
+
+public sealed record AcpMcpServerEnvVar(
+    [property: JsonPropertyName("name")]  string Name,
+    [property: JsonPropertyName("value")] string Value
+);
+
+/// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).
+/// <c>McpServers</c> is always sent as an array (never omitted) — empty for every launch until a
+/// caller populates RuntimeStartContext.McpServers (no caller does yet — the reviewer path is
+/// the first planned consumer).</summary>
 public sealed record SessionNewParams(
-    [property: JsonPropertyName("cwd")]        string        Cwd,
-    [property: JsonPropertyName("mcpServers")] object[]      McpServers
+    [property: JsonPropertyName("cwd")]        string             Cwd,
+    [property: JsonPropertyName("mcpServers")] AcpMcpServerSpec[] McpServers
 );
 
 /// <summary><c>session/prompt</c> params — a content-block array, per the probe (not a bare string).</summary>
@@ -54,4 +106,126 @@ public sealed record PromptContentBlock(
 /// <summary><c>session/cancel</c> params — sent as a notification (no response expected).</summary>
 public sealed record SessionCancelParams(
     [property: JsonPropertyName("sessionId")] string SessionId
+);
+
+/// <summary>
+/// <c>session/set_config_option</c> params (model selection). Sent AFTER
+/// <c>session/new</c> resolves and BEFORE the first <c>session/prompt</c>, with the response
+/// awaited so the model is set before the turn starts. Wire shape probe-confirmed against real
+/// <c>cursor-agent</c> (<c>docs/ai-688-cursor-prototype-findings.md</c>): <see cref="ConfigId"/> is
+/// the literal <c>"model"</c> (the field is named <c>configId</c> on the wire, NOT <c>id</c> — an
+/// earlier attempt using <c>id</c> got a Zod <c>invalid_type</c> error at path <c>configId</c>), and
+/// <see cref="Value"/> must be the EXACT, parameterized <c>modelId</c> from
+/// <see cref="SessionModelsInfo.AvailableModels"/> (e.g.
+/// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>) — a bare family name is not a valid wire
+/// value. See <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> for how a requested family name/exact
+/// id is resolved to this exact value.
+/// </summary>
+public sealed record SetConfigOptionParams(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("configId")]  string ConfigId,
+    [property: JsonPropertyName("value")]     string Value
+);
+
+/// <summary>
+/// Typed shape for <c>session/new</c>'s <c>result.models</c> object — the daemon
+/// otherwise treats the <c>session/new</c> result as an opaque <see cref="JsonElement"/> (only
+/// <c>sessionId</c> is read out of it today); this record exists purely so
+/// <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> can resolve a requested model against
+/// <see cref="AvailableModels"/> without ad hoc <see cref="JsonElement"/> digging. Probe-confirmed
+/// shape: <c>{"currentModelId":"...","availableModels":[{"modelId":"...","name":"..."}]}</c>.
+/// </summary>
+public sealed record SessionModelsInfo(
+    [property: JsonPropertyName("currentModelId")]  string?              CurrentModelId,
+    [property: JsonPropertyName("availableModels")] AvailableModelDto[]? AvailableModels
+);
+
+/// <summary>
+/// One entry in <see cref="SessionModelsInfo.AvailableModels"/>. <see cref="ModelId"/> is the
+/// exact, parameterized wire value <c>session/set_config_option</c>'s <c>value</c> requires (e.g.
+/// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>); <see cref="Name"/> is the shorter
+/// human-readable family name (e.g. <c>claude-sonnet-4-5</c>) a caller is more likely to request.
+/// </summary>
+public sealed record AvailableModelDto(
+    [property: JsonPropertyName("modelId")] string  ModelId,
+    [property: JsonPropertyName("name")]    string? Name
+);
+
+/// <summary>
+/// <c>session/request_permission</c> params sent BY THE AGENT (server-initiated request, handled
+/// via <see cref="Daemon.Acp.AcpConnection.OnServerRequest"/>). Spec-derived, NOT
+/// probe-confirmed: the probe never observed a real <c>session/request_permission</c> frame
+/// (the probe account's turn ended before any tool call — see
+/// <c>docs/acp-probe-findings.md</c> §"Permission / elicitation requests"). Mirrors the shape
+/// <see cref="Capacitor.Cli.Tests.Unit.Acp.FakeAcpAgent.BuildRequestPermissionFrame"/> already
+/// builds for tests. <see cref="ToolCall"/> stays an opaque <see cref="JsonElement"/> — its exact
+/// schema is unconfirmed and it is never re-serialized, only forwarded to the server as
+/// <see cref="AcpInteractionRequest.ToolInput"/> best-effort (see <c>AcpInteractionBridge</c>).
+/// </summary>
+public sealed record SessionRequestPermissionParams(
+    [property: JsonPropertyName("sessionId")] string              SessionId,
+    [property: JsonPropertyName("toolCall")]  JsonElement          ToolCall,
+    [property: JsonPropertyName("options")]   PermissionOptionDto[] Options
+);
+
+/// <summary>One offered option in a <see cref="SessionRequestPermissionParams"/> — spec-derived, NOT probe-confirmed.</summary>
+public sealed record PermissionOptionDto(
+    [property: JsonPropertyName("optionId")] string OptionId,
+    [property: JsonPropertyName("name")]     string Name,
+    [property: JsonPropertyName("kind")]     string Kind
+);
+
+/// <summary>
+/// Client's JSON-RPC <c>result</c> for a <c>session/request_permission</c> request — spec-derived,
+/// NOT probe-confirmed. Mirrors <see cref="Capacitor.Cli.Tests.Unit.Acp.FakeAcpAgent.PermissionOutcomeSelected"/>/
+/// <see cref="Capacitor.Cli.Tests.Unit.Acp.FakeAcpAgent.PermissionOutcomeCancelled"/>.
+/// </summary>
+public sealed record PermissionOutcomeResult(
+    [property: JsonPropertyName("outcome")] PermissionOutcomeDto Outcome
+);
+
+/// <summary>
+/// <c>Outcome</c> is <c>"selected"</c> (with <see cref="OptionId"/> set to the chosen
+/// <see cref="PermissionOptionDto.OptionId"/>) or <c>"cancelled"</c> (denial/timeout/agent-exit) —
+/// spec-derived, NOT probe-confirmed.
+/// </summary>
+public sealed record PermissionOutcomeDto(
+    [property: JsonPropertyName("outcome")] string Outcome,
+    [property: JsonPropertyName("optionId"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                                             string? OptionId = null
+);
+
+/// <summary>
+/// Capability-gated, NOT part of the core ACP spec — modeled defensively on the same
+/// request/response shape as <see cref="SessionRequestPermissionParams"/> since no confirmed
+/// elicitation schema exists for Cursor (R3's open question: "Does Cursor use the ACP
+/// elicitation RFD shape or a vendor extension?" is unanswered). The daemon never advertises
+/// support for this method in <c>initialize</c> (see <c>AcpHostedAgentRuntime.StartAsync</c>'s
+/// existing minimal-capabilities <c>ClientCapabilities</c>, unchanged by this plan) — if a real
+/// agent sends it anyway, <c>AcpInteractionBridge</c> still answers deterministically (see Task
+/// B2) rather than crashing or hanging, but this is explicitly a defensive best-effort path, not a
+/// negotiated capability.
+///
+/// <b>Spec-review Finding 1:</b> <see cref="RequestedSchema"/> is the JSON-Schema half of the
+/// roadmap spec's "options OR JSON Schema" elicitation shape — spec-derived field name
+/// (<c>requestedSchema</c> on the wire), following the MCP elicitation convention this
+/// ACP-capability-gated method is modeled after (there is no ACP-native precedent for it at all).
+/// <see cref="Options"/> and <see cref="RequestedSchema"/> are independent optional fields, not a
+/// discriminated union — a real agent could in principle send either, both, or neither;
+/// <see cref="Capacitor.Cli.Daemon.Acp.AcpInteractionBridge"/> (Task B3) forwards
+/// <see cref="RequestedSchema"/> to the server verbatim (capped server-side, Task A1/A3) and never
+/// attempts to render or validate it itself.
+/// </summary>
+public sealed record ElicitationCreateParams(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("message")]   string Message,
+    [property: JsonPropertyName("options"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                                               PermissionOptionDto[]? Options = null,
+    [property: JsonPropertyName("requestedSchema"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                                               JsonElement? RequestedSchema = null
+);
+
+/// <summary>Client's JSON-RPC <c>result</c> for a (capability-gated) <c>elicitation/create</c> request.</summary>
+public sealed record ElicitationCreateResult(
+    [property: JsonPropertyName("outcome")] PermissionOutcomeDto Outcome
 );

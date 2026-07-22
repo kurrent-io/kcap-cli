@@ -7,5 +7,6 @@
   <Folder Name="/test/">
     <Project Path="test\Capacitor.Cli.Tests.Integration\Capacitor.Cli.Tests.Integration.csproj" />
     <Project Path="test\Capacitor.Cli.Tests.Unit\Capacitor.Cli.Tests.Unit.csproj" />
+    <Project Path="test\Capacitor.Cli.Tests.Unit.NativeTestHost\Capacitor.Cli.Tests.Unit.NativeTestHost.csproj" />
   </Folder>
 </Solution>

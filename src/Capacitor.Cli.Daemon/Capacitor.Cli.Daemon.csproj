@@ -19,6 +19,7 @@
     <ItemGroup>
         <InternalsVisibleTo Include="Capacitor.Cli.Tests.Unit" />
         <InternalsVisibleTo Include="Capacitor.Cli.Tests.Integration" />
+        <InternalsVisibleTo Include="Capacitor.Cli.Tests.Unit.NativeTestHost" />
         <!-- Used when referenced as a submodule from the server repo -->
         <InternalsVisibleTo Include="Capacitor.Server.TestHelpers" />
         <InternalsVisibleTo Include="Capacitor.Server.Tests" />
@@ -46,11 +47,36 @@
         <LinkerArg Condition="Exists('/usr/local/opt/brotli/lib')" Include="-L/usr/local/opt/brotli/lib" />
     </ItemGroup>
 
-    <!-- Compile the PTY shim on macOS (needed for ARM64 variadic ioctl workaround) -->
-    <Target Name="CompilePtyShim" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-        <Exec Command="cc -shared -o $(OutputPath)libpty_shim.dylib Native/pty_shim.c" />
+    <!-- Native PTY spawn shim: per-RID properties. A plain (non-Target) PropertyGroup is safe
+         here because both inputs ($(RuntimeIdentifier), IsOSPlatform()) are stable from the
+         start of evaluation; unlike $(OutputPath) itself (see the note below), nothing later
+         in this file (or in the SDK's own imported targets) changes them out from under a
+         property defined here. -->
+    <PropertyGroup Condition="!$(RuntimeIdentifier.StartsWith('win')) And !$([MSBuild]::IsOSPlatform('Windows'))">
+        <PtyShimExt Condition="$([MSBuild]::IsOSPlatform('OSX'))">dylib</PtyShimExt>
+        <PtyShimExt Condition="!$([MSBuild]::IsOSPlatform('OSX'))">so</PtyShimExt>
+        <!-- musl targets need the musl C library/toolchain, not glibc's cc -->
+        <PtyShimCc Condition="$(RuntimeIdentifier.Contains('musl'))">musl-gcc</PtyShimCc>
+        <PtyShimCc Condition="'$(PtyShimCc)' == ''">cc</PtyShimCc>
+    </PropertyGroup>
+
+    <!-- Compile the native PTY spawn shim for every non-Windows RID being published. Must run
+         ON that RID's native runner (cross-publishing e.g. linux-arm64 from an x64 host would
+         silently package an x64 .so); release.yml's per-RID matrix already satisfies this;
+         local `dotnet build`/`dotnet publish` with no explicit -r builds for the CURRENT host
+         RID only, which is also always native.
+         RID isolation: no custom RID-suffixed output directory is needed; the .NET SDK already
+         sets AppendRuntimeIdentifierToOutputPath=true by default, so $(OutputPath) itself already
+         varies per RID once -r is specified (verified locally: a plain build lands at
+         bin/Debug/net10.0/, a `-r osx-arm64` publish at bin/Release/net10.0/osx-arm64/); adding
+         another $(RuntimeIdentifier) segment on top would double-nest and break the copy step. -->
+    <Target Name="CompilePtyShim" BeforeTargets="Build;Publish" Condition="!$(RuntimeIdentifier.StartsWith('win')) And !$([MSBuild]::IsOSPlatform('Windows'))">
+        <!-- -fPIC is harmless on macOS and required for a correctly-relocatable .so on Linux
+             (the old macOS-only target never needed it; position-independence is the default
+             there). -->
+        <Exec Command="$(PtyShimCc) -shared -fPIC -O2 -o $(OutputPath)libpty_shim.$(PtyShimExt) Native/pty_shim.c" />
     </Target>
-    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-        <None Include="$(OutputPath)libpty_shim.dylib" CopyToOutputDirectory="PreserveNewest" Link="libpty_shim.dylib" />
+    <ItemGroup Condition="!$(RuntimeIdentifier.StartsWith('win')) And !$([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(OutputPath)libpty_shim.$(PtyShimExt)" CopyToOutputDirectory="PreserveNewest" Link="libpty_shim.$(PtyShimExt)" />
     </ItemGroup>
 </Project>

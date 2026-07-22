@@ -86,7 +86,7 @@ internal sealed class CodexImportSource(string? rootOverride = null) : IImportSo
         );
     }
 
-    public Task<ImportOutcome> ImportSessionAsync(
+    public Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct

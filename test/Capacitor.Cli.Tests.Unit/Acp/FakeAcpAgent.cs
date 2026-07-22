@@ -1,6 +1,7 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/FakeAcpAgent.cs
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 
@@ -45,6 +46,69 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     readonly ConcurrentQueue<(IReadOnlyList<JsonElement> Updates, JsonElement Result)> _promptScripts = new();
     readonly List<(string Method, JsonElement? Params)> _receivedCalls = new();
     readonly object _receivedCallsLock = new();
+
+    string? _pendingServerRequestToolCallJson;
+    string? _pendingServerRequestOptionsJson;
+    long    _nextServerRequestId = 1000; // disjoint range from the connection's own outbound ids
+
+    JsonElement _sessionNewResult = ProbeConfirmedSessionNewResult;
+    bool        _failNextSetConfigOption;
+
+    JsonElement                  _initializeResult = ProbeConfirmedInitializeResult;
+    (int Code, string Message)? _failNextInitialize;
+
+    readonly List<(string Method, JsonElement? Params)>          _sentServerRequests = new();
+    readonly object                                              _sentServerRequestsLock = new();
+    JsonElement?                                                 _lastServerRequestResponse;
+    JsonElement?                                                 _lastServerRequestError;
+
+    /// <summary>
+    /// Every server→client request (e.g. <c>session/request_permission</c>) this fake has SENT to
+    /// the connection under test, in send order. Populated by
+    /// <see cref="EnqueuePermissionRequestDuringNextPrompt"/>'s injection into
+    /// <see cref="RunPromptScriptAsync"/>.
+    /// </summary>
+    public IReadOnlyList<(string Method, JsonElement? Params)> SentServerRequests {
+        get { lock (_sentServerRequestsLock) return _sentServerRequests.ToArray(); }
+    }
+
+    /// <summary>The connection's JSON-RPC <c>result</c> for the most recent server→client request this fake sent, or null if not yet answered.</summary>
+    public JsonElement? LastServerRequestResponse => _lastServerRequestResponse;
+
+    /// <summary>The connection's JSON-RPC <c>error</c> for the most recent server→client request this fake sent, or null if not answered with an error.</summary>
+    public JsonElement? LastServerRequestError => _lastServerRequestError;
+
+    /// <summary>
+    /// Qodo daemon-review Q3: the FIRST exception thrown by a fire-and-forget
+    /// <c>DispatchLineAsync</c> dispatch (see <see cref="RunAsync"/>'s remarks on why dispatch must
+    /// stay untracked-by-the-loop rather than awaited in-line), or <see langword="null"/> if none has
+    /// faulted yet. PRE-FIX, a dispatch fault was only <c>Debug.WriteLine</c>'d — invisible to a test
+    /// assertion — so a faulted dispatch manifested as a hang/timeout on whatever the test was
+    /// awaiting from the connection, rather than a clear failure. Captured via
+    /// <see cref="ExceptionDispatchInfo"/> (not the bare <see cref="Exception"/>) so
+    /// <see cref="DisposeAsync"/> can rethrow it with its ORIGINAL stack trace preserved. Only the
+    /// first fault is kept — later ones are logged the same way the pre-fix code always did, since a
+    /// second fault on an already-faulted fake is rarely independently interesting and keeping "the
+    /// first thing that went wrong" is the more useful diagnostic.
+    /// </summary>
+    public Exception? DispatchFault => Volatile.Read(ref _dispatchFault)?.SourceException;
+
+    ExceptionDispatchInfo? _dispatchFault;
+
+    /// <summary>
+    /// Arranges the fake to send a real <c>session/request_permission</c> server→client request
+    /// (built via <see cref="BuildRequestPermissionFrame"/>) as part of the NEXT
+    /// <c>session/prompt</c> turn's response, awaiting and recording the connection's reply before
+    /// answering the prompt itself with the default <c>end_turn</c> result. This finally wires the
+    /// builder helpers <see cref="BuildRequestPermissionFrame"/>/<see cref="PermissionOutcomeSelected"/>/
+    /// <see cref="PermissionOutcomeCancelled"/> into the fake's active dispatch loop — Task 8
+    /// built them but deliberately left them unwired (see this file's original remarks), since the
+    /// permission bridge itself was Task 9's job.
+    /// </summary>
+    public void EnqueuePermissionRequestDuringNextPrompt(string toolCallJson, string optionsJson) {
+        _pendingServerRequestToolCallJson = toolCallJson;
+        _pendingServerRequestOptionsJson  = optionsJson;
+    }
 
     /// <summary>
     /// The stream a NEW <see cref="Capacitor.Cli.Daemon.Acp.AcpConnection"/> under test should be
@@ -96,16 +160,118 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         _promptScripts.Enqueue((updateNotifications, result));
 
     /// <summary>
+    /// Overrides the <c>session/new</c> response this fake returns for every subsequent
+    /// <c>session/new</c> request (default: <see cref="ProbeConfirmedSessionNewResult"/>, a single
+    /// <c>composer-2.5[fast=true]</c> model) — gap 1 model-selection tests use this to script
+    /// a richer <c>models.availableModels</c> list + <c>currentModelId</c>.
+    /// <see cref="BuildSessionNewResult"/> is the easiest way to build a well-formed override.
+    /// </summary>
+    public void SetSessionNewResult(JsonElement result) => _sessionNewResult = result;
+
+    /// <summary>
+    /// Arranges the NEXT <c>session/set_config_option</c> request to be answered with a JSON-RPC
+    /// error instead of a success result — models a real agent rejecting the
+    /// resolved model id, exercising <c>AcpHostedAgentRuntime</c>'s non-fatal "log a warning and
+    /// continue with Cursor's default model" handling.
+    /// </summary>
+    public void FailNextSetConfigOption() => _failNextSetConfigOption = true;
+
+    /// <summary>
+    /// Overrides the <c>initialize</c> response this fake returns for every subsequent
+    /// <c>initialize</c> request (default: <see cref="ProbeConfirmedInitializeResult"/>, protocol
+    /// version 1 with <c>loadSession: true</c>) — protocol-negotiation tests use this to
+    /// script a mismatched <c>protocolVersion</c> or a missing/false <c>agentCapabilities</c>.
+    /// <see cref="BuildInitializeResult"/> is the easiest way to build a well-formed override.
+    /// </summary>
+    public void SetInitializeResult(JsonElement result) => _initializeResult = result;
+
+    /// <summary>
+    /// Arranges the NEXT <c>initialize</c> request to be answered with a JSON-RPC error instead of
+    /// a success result — models a logged-out/unsubscribed <c>cursor-agent</c> rejecting
+    /// the handshake, exercising <c>AcpHostedAgentRuntime.StartAsync</c>'s auth/subscription hint.
+    /// </summary>
+    public void FailNextInitialize(int code, string message) => _failNextInitialize = (code, message);
+
+    /// <summary>
+    /// Convenience builder for a caller-controlled <c>initialize</c> result — narrower than
+    /// the full <see cref="ProbeConfirmedInitializeResult"/> fixture, carrying only the two fields
+    /// <c>AcpHostedAgentRuntime.StartAsync</c> actually reads: <paramref name="protocolVersion"/>
+    /// and, when non-null, an <c>agentCapabilities.loadSession</c> flag. Passing
+    /// <paramref name="loadSession"/> as <see langword="null"/> omits <c>agentCapabilities</c>
+    /// entirely, exercising the "missing agentCapabilities" defensive-default path.
+    /// </summary>
+    public static JsonElement BuildInitializeResult(int protocolVersion, bool? loadSession = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteNumber("protocolVersion", protocolVersion);
+            if (loadSession is { } ls) {
+                writer.WriteStartObject("agentCapabilities");
+                writer.WriteBoolean("loadSession", ls);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Convenience builder for a probe-shaped <c>session/new</c> result with a
+    /// caller-controlled <c>models.availableModels</c> list + <c>currentModelId</c>.
+    /// <paramref name="availableModels"/> entries are <c>(modelId, name)</c> pairs.
+    /// </summary>
+    public static JsonElement BuildSessionNewResult(
+            string sessionId,
+            string currentModelId,
+            IEnumerable<(string ModelId, string Name)> availableModels) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionId", sessionId);
+            writer.WriteStartObject("models");
+            writer.WriteString("currentModelId", currentModelId);
+            writer.WriteStartArray("availableModels");
+            foreach (var (modelId, name) in availableModels) {
+                writer.WriteStartObject();
+                writer.WriteString("modelId", modelId);
+                writer.WriteString("name", name);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteStartArray("configOptions");
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
+
+    /// <summary>
     /// When set, every <c>session/prompt</c> request's RESPONSE (not the queued updates, if any) is
     /// held back until <paramref name="gate"/> completes — the fake still records the call
     /// immediately (so <see cref="ReceivedCalls"/> observes it right away), it just doesn't answer.
-    /// Models a real agent mid-turn: used by AI-684 Fix E tests to prove
+    /// Models a real agent mid-turn: used by Fix E tests to prove
     /// <c>AcpHostedAgentRuntime.StartAsync</c>/<c>SendUserInputAsync</c> return promptly WITHOUT
     /// waiting for the turn's <c>stopReason</c> response, instead of the pre-fix behavior where
     /// both awaited the full round trip. Set to <see langword="null"/> (the default) to answer
     /// immediately as usual.
     /// </summary>
     public TaskCompletionSource? HoldPromptResponses { get; set; }
+
+    /// <summary>
+    /// Test plan item 9: when set, a <c>session/set_config_option</c> request's RESPONSE is
+    /// held back until <paramref name="gate"/>'s task completes — mirrors
+    /// <see cref="HoldPromptResponses"/> exactly. The fake still records the call immediately (so
+    /// <see cref="ReceivedCalls"/> observes it right away via <c>DispatchLineAsync</c>'s
+    /// <c>Record</c> call, which runs before this method is ever reached), it just doesn't answer
+    /// until released. Used to prove a <c>ct</c> canceled WHILE this RPC is in flight aborts
+    /// <c>StartAsync</c> via a propagated <see cref="OperationCanceledException"/>, rather than the
+    /// selector silently swallowing it and returning <see langword="null"/> the way it does for a
+    /// resolution failure.
+    /// </summary>
+    public TaskCompletionSource? HoldSetConfigOptionResponse { get; set; }
 
     /// <summary>
     /// The fake's read loop: parses newline-delimited JSON-RPC frames arriving from the connection
@@ -127,7 +293,35 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
-                await DispatchLineAsync(line, ct).ConfigureAwait(false);
+                // dispatched as untracked background work rather than awaited in-loop.
+                // EnqueuePermissionRequestDuringNextPrompt's session/request_permission send-and-await
+                // (SendServerRequestAndAwaitResponseAsync) is itself triggered from a session/prompt's
+                // dispatch — its TaskCompletionSource can only be completed by THIS SAME loop reading
+                // the connection's reply line. Awaiting the dispatch here would therefore deadlock:
+                // the loop would be blocked inside the prompt's dispatch waiting for a line that only
+                // the loop itself can read. Firing dispatch as background work keeps the loop free to
+                // read subsequent lines (including that reply) while a single dispatch is in flight.
+                // Record() (called synchronously at the top of DispatchLineAsync, before any await)
+                // still runs before this method returns to the loop for lines processed one at a
+                // time by ReadLineAsync, so ReceivedCalls order is unaffected for the existing tests
+                // that assert strict ordering (FakeAcpAgentTests) — those never have two lines
+                // in flight at once.
+                var dispatchTask = DispatchLineAsync(line, ct);
+                _ = dispatchTask.ContinueWith(t => {
+                    if (!t.IsFaulted)
+                        return;
+
+                    System.Diagnostics.Debug.WriteLine($"FakeAcpAgent: DispatchLineAsync faulted: {t.Exception}");
+
+                    // Qodo daemon-review Q3: capture the FIRST fault (thread-safe — multiple
+                    // dispatches can be in flight at once, see this method's own remarks above) so
+                    // it surfaces via DispatchFault / DisposeAsync instead of being visible only in
+                    // Debug output. t.Exception is an AggregateException; unwrap to the single inner
+                    // exception a faulted Task always carries here (DispatchLineAsync never throws
+                    // an AggregateException itself).
+                    var captured = ExceptionDispatchInfo.Capture(t.Exception!.InnerException ?? t.Exception);
+                    Interlocked.CompareExchange(ref _dispatchFault, captured, null);
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // normal shutdown
@@ -140,8 +334,24 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         var hasId     = root.TryGetProperty("id", out var idElement);
         var hasMethod = root.TryGetProperty("method", out var methodElement);
-        if (!hasMethod)
+        if (!hasMethod) {
+            // A frame with no "method" is either the connection's reply to one of THIS fake's own
+            // session/request_permission sends (id in _pendingFakeRequests), or an unrelated
+            // response the fake doesn't care about — never expected in this fixture's scripts
+            // other than this new path, but guarded defensively.
+            if (hasId && idElement.TryGetInt64(out var replyId)) {
+                TaskCompletionSource<(JsonElement?, JsonElement?)>? pending;
+                lock (_sentServerRequestsLock) _pendingFakeRequests.Remove(replyId, out pending);
+
+                if (pending is not null) {
+                    var hasResult = root.TryGetProperty("result", out var resultEl);
+                    var hasError  = root.TryGetProperty("error", out var errorEl);
+                    pending.TrySetResult((hasResult ? resultEl.Clone() : null, hasError ? errorEl.Clone() : null));
+                }
+            }
+
             return;
+        }
 
         var method        = methodElement.GetString() ?? "";
         var paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : (JsonElement?) null;
@@ -157,11 +367,20 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         switch (method) {
             case "initialize":
-                await WriteResponseAsync(id, ProbeConfirmedInitializeResult, ct).ConfigureAwait(false);
+                if (_failNextInitialize is { } failInit) {
+                    _failNextInitialize = null;
+                    await WriteErrorResponseAsync(id, failInit.Code, failInit.Message, ct).ConfigureAwait(false);
+                } else {
+                    await WriteResponseAsync(id, _initializeResult, ct).ConfigureAwait(false);
+                }
                 break;
 
             case "session/new":
-                await WriteResponseAsync(id, ProbeConfirmedSessionNewResult, ct).ConfigureAwait(false);
+                await WriteResponseAsync(id, _sessionNewResult, ct).ConfigureAwait(false);
+                break;
+
+            case "session/set_config_option":
+                await HandleSetConfigOptionAsync(id, paramsElement, ct).ConfigureAwait(false);
                 break;
 
             case "session/prompt":
@@ -177,6 +396,15 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     }
 
     async Task RunPromptScriptAsync(JsonElement id, CancellationToken ct) {
+        if (_pendingServerRequestToolCallJson is not null && _pendingServerRequestOptionsJson is not null) {
+            var toolCallJson = _pendingServerRequestToolCallJson;
+            var optionsJson  = _pendingServerRequestOptionsJson;
+            _pendingServerRequestToolCallJson = null;
+            _pendingServerRequestOptionsJson  = null;
+
+            await SendServerRequestAndAwaitResponseAsync("session/request_permission", toolCallJson, optionsJson, ct).ConfigureAwait(false);
+        }
+
         var (updates, result) = _promptScripts.TryDequeue(out var script)
             ? script
             : (new[] { DefaultAgentMessageChunkUpdate(FixedSessionId, "hello from FakeAcpAgent") }, DefaultPromptResult);
@@ -188,6 +416,72 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
             await gate.Task.ConfigureAwait(false);
 
         await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Model-selection gap 1: answers a <c>session/set_config_option</c> request — either the scripted
+    /// JSON-RPC error (see <see cref="FailNextSetConfigOption"/>) or a probe-shaped success result
+    /// echoing back the requested <c>value</c> as the <c>model</c> config option's
+    /// <c>currentValue</c>, mirroring the real agent's confirmed response shape
+    /// (<c>docs/ai-688-cursor-prototype-findings.md</c>). The request itself is already captured in
+    /// <see cref="ReceivedCalls"/> by <see cref="DispatchLineAsync"/> before this runs.
+    /// </summary>
+    async Task HandleSetConfigOptionAsync(JsonElement id, JsonElement? @params, CancellationToken ct) {
+        if (_failNextSetConfigOption) {
+            _failNextSetConfigOption = false;
+            await WriteErrorResponseAsync(id, -32602, "Invalid params: unknown model", ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (HoldSetConfigOptionResponse is { } gate)
+            await gate.Task.ConfigureAwait(false);
+
+        var value = @params is { } p && p.TryGetProperty("value", out var valueEl) ? valueEl.GetString() ?? "" : "";
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteStartArray("configOptions");
+            writer.WriteStartObject();
+            writer.WriteString("id", "model");
+            writer.WriteString("currentValue", value);
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        var result = JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+        await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends a server→client request frame (currently only <c>session/request_permission</c>) with
+    /// a fake-allocated id disjoint from the connection's own outbound id space, waits for the
+    /// connection's response frame, and records it on <see cref="LastServerRequestResponse"/>/
+    /// <see cref="LastServerRequestError"/>. This is a SEPARATE read loop concern from
+    /// <see cref="RunAsync"/>'s main dispatch (which handles requests ARRIVING from the connection
+    /// under test) — the fake's OWN read loop, already running via <see cref="RunAsync"/>, also
+    /// observes the connection's reply to THIS request as an ordinary incoming "response" frame
+    /// (has <c>id</c> + <c>result</c>/<c>error</c>, no <c>method</c>) and records it here via a
+    /// short-lived local completion source correlated by id.
+    /// </summary>
+    readonly Dictionary<long, TaskCompletionSource<(JsonElement? Result, JsonElement? Error)>> _pendingFakeRequests = new();
+
+    async Task SendServerRequestAndAwaitResponseAsync(string method, string toolCallJson, string optionsJson, CancellationToken ct) {
+        var id    = Interlocked.Increment(ref _nextServerRequestId);
+        var frame = BuildRequestPermissionFrame(id, FixedSessionId, toolCallJson, optionsJson);
+
+        var tcs = new TaskCompletionSource<(JsonElement?, JsonElement?)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_sentServerRequestsLock) {
+            _pendingFakeRequests[id] = tcs;
+            _sentServerRequests.Add((method, frame.GetProperty("params")));
+        }
+
+        await WriteRawFrameAsync(frame, ct).ConfigureAwait(false);
+
+        var (result, error) = await tcs.Task.ConfigureAwait(false);
+        _lastServerRequestResponse = result;
+        _lastServerRequestError    = error;
     }
 
     void Record(string method, JsonElement? @params) {
@@ -299,9 +593,20 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
+    /// <summary>
+    /// Probe-confirmed <c>session_info_update</c> variant (agent session auto-titling):
+    /// <c>{"sessionUpdate":"session_info_update","title":"..."}</c> — the shape captured verbatim
+    /// from a real <c>cursor-agent acp</c> session in the Cursor prototype findings doc.
+    /// </summary>
+    public static JsonElement BuildSessionInfoUpdate(string title) {
+        var escaped = JsonEncodedText.Encode(title);
+        return JsonDocument.Parse($$$"""{"sessionUpdate":"session_info_update","title":"{{{escaped}}}"}""")
+            .RootElement.Clone();
+    }
+
     // ---- spec-derived (NOT probe-confirmed) helper builders ----
     //
-    // The AI-684 probe account was plan-gated before any tool-call turn completed, so none of the
+    // The probe account was plan-gated before any tool-call turn completed, so none of the
     // variants below were ever observed on the wire (see docs/acp-probe-findings.md, "sessionUpdate
     // variants observed" and "Recommended follow-up"). They are built from the published ACP spec
     // only. Re-verify each against docs/acp-probe-findings.md's "Recommended follow-up" once a
@@ -322,24 +627,67 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
-    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"..."}</c>.
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"...","rawInput":{...}}</c>
+    /// (<c>rawInput</c> only when <paramref name="rawInputJson"/> is non-null — task 1's
+    /// <c>AcpSessionUpdate.Reduce()</c> extraction target for <c>ToolInputJson</c>).
     /// <paramref name="status"/> is one of <c>pending</c> / <c>in_progress</c> / <c>completed</c> / <c>failed</c>.
     /// </summary>
-    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status) {
-        var json = $$"""
-            {"sessionUpdate":"tool_call","toolCallId":"{{toolCallId}}","title":"{{title}}","kind":"{{kind}}","status":"{{status}}"}
-            """;
-        return JsonDocument.Parse(json).RootElement.Clone();
+    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status, string? rawInputJson = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "tool_call");
+            writer.WriteString("toolCallId", toolCallId);
+            writer.WriteString("title", title);
+            writer.WriteString("kind", kind);
+            writer.WriteString("status", status);
+            if (rawInputJson is not null) {
+                writer.WritePropertyName("rawInput");
+                using var doc = JsonDocument.Parse(rawInputJson);
+                doc.RootElement.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
-    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"..."}</c>.
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"...","content":[{"type":"content","content":{"type":"text","text":"..."}}],"rawOutput":{...}}</c>
+    /// — <c>content</c>/<c>rawOutput</c> are included only when <paramref name="resultText"/>/
+    /// <paramref name="rawOutputJson"/> are non-null (task 1's
+    /// <c>AcpSessionUpdate.Reduce()</c> extraction targets for <c>ToolResultText</c>: the ACP-spec
+    /// <c>ToolCallContent</c> text-block shape, falling back to <c>rawOutput</c> verbatim).
     /// </summary>
-    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status) {
-        var json = $$"""{"sessionUpdate":"tool_call_update","toolCallId":"{{toolCallId}}","status":"{{status}}"}""";
-        return JsonDocument.Parse(json).RootElement.Clone();
+    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status, string? resultText = null, string? rawOutputJson = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "tool_call_update");
+            writer.WriteString("toolCallId", toolCallId);
+            writer.WriteString("status", status);
+            if (resultText is not null) {
+                writer.WriteStartArray("content");
+                writer.WriteStartObject();
+                writer.WriteString("type", "content");
+                writer.WriteStartObject("content");
+                writer.WriteString("type", "text");
+                writer.WriteString("text", resultText);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+                writer.WriteEndArray();
+            }
+            if (rawOutputJson is not null) {
+                writer.WritePropertyName("rawOutput");
+                using var doc = JsonDocument.Parse(rawOutputJson);
+                doc.RootElement.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
     /// <summary>
@@ -364,7 +712,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <paramref name="toolCallJson"/> and <paramref name="optionsJson"/> are raw JSON text for the
     /// nested objects, left as caller-supplied strings since their exact shape is unconfirmed.
     /// Task 8 does not wire this into <see cref="RunAsync"/>'s dispatch loop — a documented builder
-    /// is sufficient for this fixture's scope; Task 9 (AI-686) wires the actual permission bridge.
+    /// is sufficient for this fixture's scope; Task 9 wires the actual permission bridge.
     /// The two possible client response shapes are documented on
     /// <see cref="PermissionOutcomeSelected"/> / <see cref="PermissionOutcomeCancelled"/>.
     /// </summary>
@@ -434,10 +782,20 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         await _agentWritesToConnection.FlushAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Qodo daemon-review Q3: disposes the fixture's streams as before, then — if a fire-and-forget
+    /// <c>DispatchLineAsync</c> dispatch ever faulted (see <see cref="DispatchFault"/>) — rethrows
+    /// that FIRST captured fault with its original stack trace, so a test that tore this fixture
+    /// down via <c>await using</c> without explicitly checking <see cref="DispatchFault"/> still
+    /// fails loudly instead of the fault being silently dropped. Stream disposal always runs first
+    /// (best-effort cleanup must not be skipped just because a fault will be rethrown after).
+    /// </summary>
     public async ValueTask DisposeAsync() {
         await _agentReadsFromConnection.DisposeAsync().ConfigureAwait(false);
         await _agentWritesToConnection.DisposeAsync().ConfigureAwait(false);
         await ClientWriteStream.DisposeAsync().ConfigureAwait(false);
         await ClientReadStream.DisposeAsync().ConfigureAwait(false);
+
+        Volatile.Read(ref _dispatchFault)?.Throw();
     }
 }

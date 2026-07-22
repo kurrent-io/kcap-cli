@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// Minimal process-lifecycle abstraction for the <c>cursor-agent acp</c> child process, mirroring
 /// the shape of <see cref="Pty.IPtyProcess"/> but without any terminal I/O (ACP stdio carries
 /// JSON-RPC protocol traffic, not terminal bytes — that goes through <see cref="AcpConnection"/>
-/// instead). Exists so <c>AcpHostedAgentRuntime</c> (AI-684 Task 9) is testable without spawning a
+/// instead). Exists so <c>AcpHostedAgentRuntime</c> is testable without spawning a
 /// real process; Task 10's factory implements this over <see cref="System.Diagnostics.Process"/>.
 /// </summary>
 internal interface IAcpProcess : IAsyncDisposable {

@@ -127,7 +127,7 @@ public class ConnectionRetryTests {
         await Assert.That(invokeCalls).IsEqualTo(2);
     }
 
-    // AI-864: a HubException matching the retriable-server-error predicate is retried up to a
+    // a HubException matching the retriable-server-error predicate is retried up to a
     // BOUND (unlike transient disconnects, which retry until the daemon shuts down). Used for the
     // "Caller is not the daemon owning session" error that can appear briefly after a reconnect
     // before per-agent re-registration restores ownership — retrying past that window avoids a

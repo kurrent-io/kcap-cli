@@ -77,10 +77,11 @@ static class McpMemoryServer {
                 if (id is null) continue;
 
                 var response = method switch {
-                    "initialize" => BuildInitializeResponse(id),
+                    "initialize" => BuildInitializeResponse(id, request),
                     "tools/list" => BuildToolsListResponse(id, tools),
                     "tools/call" => await DispatchToolCallAsync(id, request),
-                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                    _            => McpProtocol.TryHandleStandardMethod(method, id)
+                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
                 };
 
                 await writer.WriteLineAsync(response);
@@ -113,10 +114,17 @@ static class McpMemoryServer {
         try { return await MachineIdProvider.GetOrCreateAsync(); } catch { return null; }
     }
 
-    static string BuildInitializeResponse(JsonNode id) =>
+    // Server-level usage preamble (MCP `instructions`) — steers clients to check for prior art here
+    // before assuming none, and to save durable learnings.
+    const string ServerInstructions =
+        "Use these tools for durable team knowledge — preferences, feedback, project facts, references. " +
+        "Search memories before assuming there's no prior art on a task, and before saving a new one — they " +
+        "hold learnings that aren't in the code.";
+
+    static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kcap-memory", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-memory", "1.0.0"), ServerInstructions),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -223,7 +231,7 @@ static class McpMemoryServer {
     }
 
     // NOTE: request bodies use snake_case keys (repo_hash, machine_tag, source_session_id) —
-    // the server's global JSON policy is JsonNamingPolicy.SnakeCaseLower (see AI-1134 task 9).
+    // the server's global JSON policy is JsonNamingPolicy.SnakeCaseLower.
     // Responses are passed through as raw text, so only these request-body builders are affected.
     internal static JsonObject BuildSaveBody(JsonObject? args, string? cwdRepoHash, string? machineId) {
         string Req(string name) =>
@@ -340,7 +348,7 @@ static class McpMemoryServer {
 
     internal static McpTool[] BuildToolsList() => [
         new("search_memories",
-            "Search the team's shared memories (hybrid semantic + keyword). Call this BEFORE saving a new memory and when starting work that might have prior learnings.",
+            "Search the team's shared memories (hybrid semantic + keyword). Call this before saving a new memory, and before assuming there's no prior art on a task — it surfaces durable team learnings (preferences, feedback, project facts) that aren't in the code.",
             new("object", new() {
                 ["query"] = new("string", "What to search for."),
                 ["limit"] = new("number", "Max results (default 10, max 50).")

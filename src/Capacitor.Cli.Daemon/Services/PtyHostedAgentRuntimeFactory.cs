@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// <see cref="IHostedAgentRuntimeFactory"/> for the interactive PTY-backed CLIs (Claude, Codex).
-/// Moved verbatim from the body of <see cref="AgentOrchestrator.HandleLaunchAgent"/> (AI-684 Task
+/// Moved verbatim from the body of <see cref="AgentOrchestrator.HandleLaunchAgent"/> (Task
 /// 10): builds the <see cref="LauncherContext"/> (including the review-launch
 /// <see cref="ReviewLaunchBuilder.BuildAsync"/> call), runs <see cref="IHostedAgentLauncher.Prepare"/>
 /// then <see cref="IHostedAgentLauncher.BuildArgs"/>, assembles the daemon-injected env vars, spawns
@@ -57,7 +57,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
                 ? await ReviewLaunchBuilder.BuildAsync(ctx.Vendor, ctx.CapacitorPath, ctx.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
                 : null
         ) {
-            McpAllowlist = ctx.McpAllowlist
+            McpAllowlist = ctx.McpAllowlist,
+            Work         = ctx.Work
         };
 
         try {
@@ -77,6 +78,13 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             ["KCAP_RENDERED_AGENT"] = "1",
             ["KCAP_AGENT_ID"]       = ctx.AgentId
         };
+
+        // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
+        // OrphanReaper env-marker scan can reap a recordless survivor of a PRIOR incarnation of THIS
+        // daemon (same KCAP_DAEMON_ID, older KCAP_DAEMON_EPOCH) — and never touch another daemon's
+        // child or a live agent of the current incarnation.
+        if (!string.IsNullOrEmpty(ctx.DaemonId))    env["KCAP_DAEMON_ID"]    = ctx.DaemonId;
+        if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) {
             env["KCAP_URL"] = ctx.ServerUrl;

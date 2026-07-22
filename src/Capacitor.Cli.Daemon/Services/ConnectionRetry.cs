@@ -25,13 +25,37 @@ namespace Capacitor.Cli.Daemon.Services;
 ///
 /// A caller may additionally supply <paramref name="isRetriableServerError"/> +
 /// <paramref name="maxServerErrorRetries"/> to retry a BOUNDED number of times on specific
-/// server-rejection exceptions (AI-864: the "Caller is not the daemon owning session"
+/// server-rejection exceptions (the "Caller is not the daemon owning session"
 /// <c>HubException</c> that can appear briefly after a reconnect, before per-agent
 /// re-registration has restored ownership — retrying past that window avoids a spurious deny).
 /// Unlike transient disconnects, these retries are capped so a genuinely-permanent server error
 /// still surfaces (→ deny) instead of looping forever.
 /// </summary>
 internal static class ConnectionRetry {
+    /// <summary>
+    /// Non-generic overload for a hub invocation with no return value (e.g. <c>AcpSessionStarted</c>)
+    /// — delegates to the generic overload with a discarded
+    /// <see langword="object?"/> result so void-returning callers get the exact same gating/retry
+    /// semantics as <see cref="InvokeWithConnectionRetryAsync{T}"/> without duplicating the loop.
+    /// </summary>
+    public static Task InvokeWithConnectionRetryAsync(
+            Func<Task>             invoke,
+            Func<bool>             isReady,
+            TimeSpan               pollInterval,
+            Action<int>            onRetry,
+            CancellationToken      ct,
+            Func<Exception, bool>? isRetriableServerError = null,
+            int                    maxServerErrorRetries = 0
+        ) => InvokeWithConnectionRetryAsync<object?>(
+            async () => { await invoke(); return null; },
+            isReady,
+            pollInterval,
+            onRetry,
+            ct,
+            isRetriableServerError,
+            maxServerErrorRetries
+        );
+
     public static async Task<T> InvokeWithConnectionRetryAsync<T>(
             Func<Task<T>>      invoke,
             Func<bool>         isReady,

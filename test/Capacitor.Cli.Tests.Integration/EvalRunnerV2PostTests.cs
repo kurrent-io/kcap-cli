@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// AI-795 Task 18: locks in the daemon's V2 wire-format migration. After
+/// Task 18: locks in the daemon's V2 wire-format migration. After
 /// migrating <see cref="EvalService.Aggregate"/> to return
 /// <see cref="SessionEvalCompletedPayloadV2"/>, the persistence step must
 /// POST to <c>/api/sessions/{id}/evals/v2</c> (not the legacy V1 route)

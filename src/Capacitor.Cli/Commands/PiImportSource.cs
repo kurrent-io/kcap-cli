@@ -76,7 +76,7 @@ internal sealed class PiImportSource : IImportSource {
         var result = new List<DiscoveredSession>();
         var seen   = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl", SearchOption.AllDirectories)) {
+        foreach (var jsonl in GuardedDiscovery.EnumerateFiles(_sessionsDir, "*.jsonl")) {
             ct.ThrowIfCancellationRequested();
 
             var header = await TryReadHeaderAsync(jsonl, ct);
@@ -165,7 +165,10 @@ internal sealed class PiImportSource : IImportSource {
                 continue;
             }
 
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // Pi transcript records carry a per-record "timestamp" field;
+            // prefer the tail-scanned last one over file mtime, which can be skewed
+            // by unrelated later writes to the same session-scoped file.
+            meta.LastTimestamp = EndedAtResolvers.LastTimestampFromJsonl(transcriptPath) ?? TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
             if (hasExcludes && s.Cwd is { } cwd) {
@@ -221,7 +224,7 @@ internal sealed class PiImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct
@@ -234,9 +237,16 @@ internal sealed class PiImportSource : IImportSource {
         // Lifecycle-before-transcript ordering: a transcript that advanced the
         // watermark past a failed lifecycle POST would leave the session
         // permanently lifecycle-less. Idempotent server-side (deterministic ids).
+        var startPayload = BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp, ctx.ForcePrivate);
+        // Step 3 visibility stamp — New-only, and never overrides the existing forcePrivate
+        // "private" stamp above (mutually exclusive: this only fires when !ctx.ForcePrivate).
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/pi",
-            BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp, ctx.ForcePrivate),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
@@ -279,8 +289,12 @@ internal sealed class PiImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (cwd is not null) payload["cwd"] = cwd;
+        // fail-open git-root discovery, mirroring ImportChainsAsync
+        // so routed imports carry the same workspace_root the file-based path does.
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
         if (forcePrivate) payload["default_visibility"] = "private";
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -292,6 +306,7 @@ internal sealed class PiImportSource : IImportSource {
         };
         if (cwd is not null) payload["cwd"] = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -367,9 +382,8 @@ internal sealed class PiImportSource : IImportSource {
     /// <summary>
     /// True when the line maps to at least one canonical event under the
     /// server's <c>PiTranscriptNormalizer</c>: the <c>session</c> header always
-    /// emits; <c>compaction</c> emits a <c>ContextCompacted</c> (AI-892);
-    /// <c>branch_summary</c> emits an <c>AssistantTextGenerated</c> with Pi metadata
-    /// (AI-892);
+    /// emits; <c>compaction</c> emits a <c>ContextCompacted</c>;
+    /// <c>branch_summary</c> emits an <c>AssistantTextGenerated</c> with Pi metadata;
     /// <c>message</c> emits for roles user/assistant (non-empty content),
     /// toolResult (has toolCallId), bashExecution (has command). Everything else
     /// (model_change / thinking_level_change / label / session_info / custom*) is

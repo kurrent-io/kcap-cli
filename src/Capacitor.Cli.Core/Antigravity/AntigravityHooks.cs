@@ -3,13 +3,13 @@ using System.Text.Json.Nodes;
 namespace Capacitor.Cli.Core.Antigravity;
 
 /// <summary>
-/// Builder + detection for kcap's hook block inside Antigravity's <c>hooks.json</c>
-/// (AI-1158). Antigravity's config nests differently from Gemini's shared
+/// Builder + detection for kcap's hook block inside Antigravity's <c>hooks.json</c>.
+/// Antigravity's config nests differently from Gemini's shared
 /// <c>settings.json</c>: <c>hooks.json</c> is a map of user-named blocks →
 /// <c>{ event → entries }</c>, so kcap owns exactly one block (<see cref="BlockName"/>)
 /// and never disturbs user blocks.
 ///
-/// Two entry shapes (verified against Antigravity 2.2.1, AI-1150 spike): tool events
+/// Two entry shapes (verified against Antigravity 2.2.1, spike): tool events
 /// (<c>PreToolUse</c>/<c>PostToolUse</c>) use <c>[{ matcher, hooks:[…] }]</c>; lifecycle
 /// events (<c>PreInvocation</c>/<c>PostInvocation</c>/<c>Stop</c>) use a DIRECT handler
 /// list <c>[{ type, command, timeout }]</c> (a matcher there is silently ignored / can
@@ -39,7 +39,7 @@ public static class AntigravityHooks {
 
     /// <summary>Semver of the kcap plugin's manifest/hook layout (NOT the kcap build version —
     /// that's tracked by the sibling <c>.kcap-hooks-version</c> marker). Kept a plain dotted
-    /// triple: the GUI was only verified to accept a simple <c>x.y.z</c> (AI-1158 GUI re-test),
+    /// triple: the GUI was only verified to accept a simple <c>x.y.z</c> (GUI re-test),
     /// so we avoid prerelease/build-metadata suffixes that a stricter loader might reject.</summary>
     public const string PluginVersion = "1.0.0";
 
@@ -47,7 +47,7 @@ public static class AntigravityHooks {
     /// The plugin manifest (<c>plugin.json</c>) the Antigravity GUI REQUIRES to recognize a
     /// directory under <c>config/plugins/</c> as a loadable plugin. Without this marker the GUI
     /// silently ignores the dir and never loads the sibling <c>hooks.json</c> — the reason the
-    /// CLI-dir install shipped in #256 was invisible to the running IDE (AI-1158 GUI re-test).
+    /// CLI-dir install shipped in #256 was invisible to the running IDE (GUI re-test).
     /// <c>name</c> is optional (the GUI defaults it to the dir name) but we set it explicitly.
     /// </summary>
     public static JsonObject BuildPluginManifest() =>

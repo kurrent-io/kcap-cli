@@ -76,10 +76,11 @@ static class McpSessionsServer {
                 if (id is null) continue;
 
                 var response = method switch {
-                    "initialize" => BuildInitializeResponse(id),
+                    "initialize" => BuildInitializeResponse(id, request),
                     "tools/list" => BuildToolsListResponse(id, tools),
                     "tools/call" => await DispatchToolCallAsync(id, request),
-                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                    _            => McpProtocol.TryHandleStandardMethod(method, id)
+                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
                 };
 
                 await writer.WriteLineAsync(response);
@@ -108,10 +109,17 @@ static class McpSessionsServer {
         }
     }
 
-    static string BuildInitializeResponse(JsonNode id) =>
+    // Server-level usage preamble (MCP `instructions`) — steers clients toward these tools for
+    // prior-work / why / who-decided questions over native grep / git log.
+    const string ServerInstructions =
+        "Use these tools to recall prior work — 'have we done X before', 'why did we', 'who decided Y', " +
+        "'when did we work on Z'. Search here before grepping the code or git log — they search the reasoning " +
+        "across past sessions, not just the code.";
+
+    static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kcap-sessions", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-sessions", "1.0.0"), ServerInstructions),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -205,14 +213,29 @@ static class McpSessionsServer {
             qs.Add($"author_github_id={aid}");
         }
 
-        // repo: explicit value > cwd-derived hash > omit. Sentinel "all" means cross-repo (omit param).
-        // Normalise empty/whitespace explicit repo to null so the cwd fallback runs — otherwise
-        // `repo: ""` produced `repo=` in the URL and silently broadened search to all visible repos.
-        var explicitRepo                                          = args?["repo"]?.GetValue<string>();
+        // repo scope: explicit "all" → cross-repo; explicit value → that repo; else cwd repo.
+        // Fail closed rather than silently broadening: if we can't resolve the current repo
+        // and the caller didn't explicitly opt into cross-repo, error instead of searching everything.
+        // Read `repo` defensively: a non-string JSON value must yield a clean validation error
+        // (caught as a tool error), not an unhandled InvalidOperationException that the outer
+        // guard turns into a generic "internal error".
+        string? explicitRepo = args?["repo"] switch {
+            null                                          => null,
+            JsonValue v when v.TryGetValue(out string? s) => s,
+            _                                             => throw new ArgumentException(
+                "`repo` must be a string — \"<owner>/<name>\", a 16-hex repo hash, or \"all\".")
+        };
         if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
-        var repo                                                  = explicitRepo ?? cwdRepoHash;
 
-        if (repo is not null && !string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {
+        if (string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {
+            // cross-repo: omit the repo filter entirely.
+        } else {
+            var repo = explicitRepo ?? cwdRepoHash;
+            if (repo is null)
+                throw new ArgumentException(
+                    "Cannot resolve the current repository owner/name from git metadata (e.g. a missing or " +
+                    "unparseable 'origin' remote). Pass repo: \"<owner>/<name>\" for a specific repo, or " +
+                    "repo: \"all\" to search across all visible repos.");
             qs.Add($"repo={Uri.EscapeDataString(repo)}");
         }
 
@@ -474,7 +497,7 @@ static class McpSessionsServer {
     static McpTool[] BuildToolsList() => [
         new(
             "search_sessions",
-            "Search past Kurrent Capacitor sessions in the current repo (or across all visible repos with repo: \"all\") by free-text question and/or author name. Returns ranked hits with session_id, title, owner, snippet, and (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript. Use this for 'why did X happen?', 'who decided Y?', 'when did we work on Z?' questions.",
+            "Search past Kurrent Capacitor sessions in the current repo (or across all visible repos with repo: \"all\") by free-text question and/or author name. Returns ranked hits with session_id, title, owner, snippet, and (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
             new(
                 "object",
                 new() {

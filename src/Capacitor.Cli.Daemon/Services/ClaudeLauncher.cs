@@ -79,7 +79,10 @@ internal sealed partial class ClaudeLauncher(
             args.Add("--system-prompt");
             args.Add(launch.SystemPrompt);
 
-            if (!string.IsNullOrEmpty(ctx.Model)) {
+            // Mirrors CodexLauncher.AddModelArg's sentinel check: "default" means "let the
+            // vendor resolve its own configured default model" and must never be forwarded
+            // literally — the real Claude CLI has no model named "default".
+            if (!string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)) {
                 args.Add("--model");
                 args.Add(ctx.Model);
             }
@@ -89,11 +92,20 @@ internal sealed partial class ClaudeLauncher(
             // MCP servers, so the reviewer can't recursively start a nested review flow.
             // Interactive (Default) agents keep prompts + their configured MCP servers.
             if (ctx.IsReviewFlow) {
-                args.Add("--permission-mode");
-                args.Add("bypassPermissions");
+                // A borrowed reviewer runs in the user's REAL checkout (not a daemon-owned,
+                // throwaway worktree) — bypassPermissions would auto-approve writes there.
+                // Skip it for BorrowedCwd; the --disallowedTools deny-list below removes the
+                // write/execute surface instead. Deliberately NOT --permission-mode plan —
+                // that reshapes tool use more broadly and can block/reshape the injected
+                // flow-result MCP tool too.
+                if (ctx.Work != WorkLocation.BorrowedCwd) {
+                    args.Add("--permission-mode");
+                    args.Add("bypassPermissions");
+                }
+
                 args.Add("--strict-mcp-config");
                 args.Add("--mcp-config");
-                // AI-1139: the strict config now whitelists exactly the kcap-flow-result
+                // the strict config now whitelists exactly the kcap-flow-result
                 // submission server; the empty map remains the fallback when the daemon has
                 // no server URL / kcap path configured.
                 args.Add(BuildReviewFlowMcpConfig(ctx));
@@ -103,8 +115,16 @@ internal sealed partial class ClaudeLauncher(
                 // the user-scoped kcap-flows server — and could recursively start a nested
                 // flow, escaping the empty-MCP boundary above. The reviewer keeps Read/Grep/
                 // Bash etc.; it just can't fan out subagents.
+                //
+                // For a borrowed reviewer, additionally deny the write/execute surface — Edit/
+                // Write/MultiEdit/NotebookEdit/Bash — composed into the SAME --disallowedTools
+                // value: the Claude CLI takes one comma-or-space-separated list per flag, not
+                // repeated flags, so both denials must be merged into a single argument
+                // Read/Grep/Glob and the flow-result MCP tool stay available.
                 args.Add("--disallowedTools");
-                args.Add("Agent");
+                args.Add(ctx.Work == WorkLocation.BorrowedCwd
+                    ? "Agent,Edit,Write,MultiEdit,NotebookEdit,Bash"
+                    : "Agent");
             }
 
             if (!string.IsNullOrEmpty(ctx.Effort)) {
@@ -112,7 +132,9 @@ internal sealed partial class ClaudeLauncher(
                 args.Add(ctx.Effort);
             }
 
-            if (!string.IsNullOrEmpty(ctx.Model)) {
+            // Mirrors CodexLauncher.AddModelArg's sentinel check — see the review-detail branch
+            // above for why "default" must never be forwarded literally.
+            if (!string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)) {
                 args.Add("--model");
                 args.Add(ctx.Model);
             }
@@ -126,12 +148,12 @@ internal sealed partial class ClaudeLauncher(
         return new LaunchArgs(args.ToArray(), mcpConfigPath);
     }
 
-    /// <summary>AI-1139: strict whitelist for review-flow reviewers — exactly the
+    /// <summary>Strict whitelist for review-flow reviewers — exactly the
     /// kcap-flow-result submission server, or the empty map when the daemon has no server
     /// URL / kcap path (zero servers is the recursion-safe default). Built via JsonNode
     /// string casts — JsonValue.Create / collection expressions lower to generic Add&lt;T&gt;
     /// and trip NativeAOT (IL3050).
-    /// AI-1126 D-c: on the non-empty path, also materializes the flow definition's
+    /// D-c: on the non-empty path, also materializes the flow definition's
     /// <see cref="LauncherContext.McpAllowlist"/> into the same mcpServers object — each name
     /// resolved against the kcap-owned <see cref="KcapMcpRegistry"/> (never ambient user
     /// config), unknown names skipped, flow-starting servers stripped regardless of listing.

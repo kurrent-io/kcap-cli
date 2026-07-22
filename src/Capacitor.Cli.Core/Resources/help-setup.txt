@@ -5,7 +5,7 @@ Usage: kcap setup [options]
 Options:
   --server-url <url>          Server URL (skip prompt)
   --daemon-name <name>        Daemon name (skip prompt)
-  --default-visibility <vis>  Default visibility: private, org_public, public
+  --default-visibility <vis>  Default visibility: private, project, org_public, public
   --no-prompt                 Non-interactive mode (requires --server-url)
   --github                    Sign in with GitHub instead of org SSO during
                               the login step (default is org SSO when a
@@ -27,19 +27,49 @@ Options:
                               leave ~/.codex/config.toml untouched.
   --skip-cursor-hooks         Don't install Cursor hooks even if the Cursor
                               user-dir is detected (~/.cursor/).
+  --skip-cursor-mcp           Skip registering the kcap MCP servers for Cursor
+                              (~/.cursor/mcp.json).
   --skip-copilot-hooks        Don't install Copilot CLI hooks even if Copilot
                               is detected (~/.copilot/ or copilot on PATH).
+  --skip-copilot-mcp          Skip registering the kcap MCP servers for Copilot
+                              (~/.copilot/mcp-config.json).
+  --skip-copilot-instructions Skip installing kcap's steering instructions for
+                              Copilot (~/.copilot/copilot-instructions.md).
   --skip-gemini-hooks         Don't install Gemini CLI hooks even if Gemini
                               is detected (~/.gemini/ or gemini on PATH).
+  --skip-gemini-mcp           Skip registering the kcap MCP servers for Gemini
+                              (in the shared ~/.gemini/settings.json).
+  --skip-gemini-instructions  Skip installing kcap's steering instructions for
+                              Gemini (~/.gemini/GEMINI.md).
   --skip-kiro-hooks           Don't install Kiro CLI hooks even if Kiro is
                               detected (~/.kiro/ or kiro/kiro-cli on PATH).
+  --skip-kiro-mcp             Skip registering the kcap MCP servers for Kiro
+                              (~/.kiro/settings/mcp.json).
+  --skip-kiro-skills          Skip installing the kcap skills for Kiro
+                              (~/.kiro/skills).
   --skip-pi-hooks             Don't install the Pi live-ingest extension even if
                               Pi is detected (~/.pi/ or pi on PATH).
+  --skip-pi-mcp               Skip installing the kcap MCP-bridge extension for
+                              Pi (~/.pi/agent/extensions/kcap-mcp.ts).
+  --skip-pi-instructions      Skip installing kcap's steering instructions for
+                              Pi (~/.pi/agent/AGENTS.md).
   --skip-opencode-hooks       Don't install the OpenCode plugin even if OpenCode
                               is detected (~/.config/opencode/ or opencode on PATH).
+  --skip-opencode-mcp         Skip registering the kcap MCP servers for OpenCode
+                              (~/.config/opencode/opencode.json).
+  --skip-opencode-instructions
+                              Skip installing kcap's steering instructions for
+                              OpenCode (~/.config/opencode/AGENTS.md).
   --skip-antigravity-hooks    Don't install the Antigravity hooks block even if
                               Antigravity is detected (~/.gemini/antigravity/ or
                               antigravity on PATH).
+  --skip-antigravity-mcp      Skip registering the kcap MCP servers for Antigravity
+                              (~/.gemini/config/mcp_config.json).
+  --skip-antigravity-instructions
+                              Skip installing kcap's steering instructions for
+                              Antigravity (the shared ~/.gemini/GEMINI.md).
+  --skip-antigravity-skills   Skip copying the kcap skills into ~/.gemini/skills
+                              (where Antigravity reads them, not ~/.agents/skills).
   --use-provider-api-key <v>  In --no-prompt mode, set whether kcap keeps
                               ANTHROPIC_API_KEY / OPENAI_API_KEY in headless
                               agent spawns. Accepts true/1/yes/on or
@@ -47,6 +77,9 @@ Options:
                               error. Omit the flag to preserve the existing
                               profile setting. Default scrub keeps
                               subscription auth working.
+  --skip-import               Don't offer the Step 6 import of this repo's
+                              past sessions. Also disables the auto-import
+                              that --no-prompt now performs by default.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
@@ -55,12 +88,26 @@ copilot binary on PATH; Gemini CLI via ~/.gemini/ or the gemini binary on PATH;
 AWS Kiro CLI via ~/.kiro/ or the kiro/kiro-cli binary on PATH; Pi (badlogic/pi-mono)
 via ~/.pi/ or the pi binary on PATH; SST OpenCode via ~/.config/opencode/ (or
 ~/.local/share/opencode/) or the opencode binary on PATH; Google Antigravity via
-~/.gemini/antigravity/ or the antigravity binary on PATH. One yes/no prompt is
-shown per detected agent. Hooks are installed user-wide (Pi, OpenCode, and
-Antigravity install a plugin/hooks-block rather than a shell-hooks file).
+~/.gemini/antigravity/ or the antigravity binary on PATH. Setup lists the
+detected agents, then asks a single yes/no prompt to install kcap (hooks,
+skills, instructions, MCP) for all of them, instead of one prompt per agent.
+Hooks are installed user-wide (Pi, OpenCode, and Antigravity install a
+plugin/hooks-block rather than a shell-hooks file).
 
 When you sign in with Kurrent's hosted auth and have no tenant yet, setup can
 create one for you (organization name + workspace slug) and wait for it to go live.
+
+As a final step, setup offers to import this repository's past sessions across
+every detected agent (equivalent to `kcap import --repo .`). It's only offered
+when the current directory is a git repo with a resolvable origin remote and
+authentication requirements are satisfied (including no-auth servers, auth
+provider None); otherwise it's skipped with a one-line reason and the usual
+`kcap import` hint. Opt out with --skip-import.
+
+Behavior change: --no-prompt now auto-imports the current repository's past
+sessions too, matching the wizard's default-yes answer for this step. Existing
+unattended/scripted `kcap setup --no-prompt` invocations will start uploading
+current-repo session history unless they add --skip-import.
 
 For project-scope or post-setup re-installs, use:
 

@@ -85,7 +85,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 }
 
 // Commands that don't need a server URL
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
     Console.Error.WriteLine("No server configured. Run `kcap setup` or set KCAP_URL.");
@@ -93,7 +93,7 @@ if (baseUrl is null && !offlineCommands.Contains(command)) {
     return 1;
 }
 
-// AI-1168: last-resort guard around the whole command dispatch. Without it, any
+// last-resort guard around the whole command dispatch. Without it, any
 // exception a handler doesn't swallow escapes to the NativeAOT runtime, which
 // aborts the process (SIGABRT + a macOS crash report). For a ~1s hook/generator
 // the agent spawns, that was happening dozens of times a day. Record the
@@ -298,6 +298,17 @@ switch (command) {
         return await RemapCommand.HandleAsync(args);
     case "repos":
         return await ReposCommand.HandleAsync(args);
+    case "projects":
+        return await ProjectsCommand.HandleList(baseUrl!);
+    case "project": {
+        if (args.Length < 2) {
+            Console.Error.WriteLine("Usage: kcap project <slug>");
+
+            return 1;
+        }
+
+        return await ProjectsCommand.HandleDetail(baseUrl!, args[1]);
+    }
     case "update":
         return await UpdateCommand.HandleAsync(args);
     case "review": {
@@ -313,13 +324,14 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
             Console.Error.WriteLine("  kcap mcp flows");
             Console.Error.WriteLine("  kcap mcp flow-result   (launched by the daemon for hosted reviewers)");
             Console.Error.WriteLine("  kcap mcp memory");
+            Console.Error.WriteLine("  kcap mcp workitems");
 
             return 1;
         }
@@ -357,6 +369,8 @@ switch (command) {
                 return await McpFlowResultServer.RunAsync(baseUrl!);
             case "memory":
                 return await McpMemoryServer.RunAsync(baseUrl!);
+            case "workitems":
+                return await McpWorkItemsServer.RunAsync(baseUrl!);
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
@@ -545,7 +559,7 @@ switch (command) {
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
             : allSources;
 
-        // --- Scope resolution (AI-613) ---
+        // --- Scope resolution ---
         var profileConfig = await AppConfig.LoadProfileConfig();
         var activeProfile = string.IsNullOrEmpty(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
         var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
@@ -586,7 +600,7 @@ switch (command) {
             storedOrg:               storedOrg);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode|antigravity]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode|antigravity|cursor]");
 
         return 1;
     case "watch": {
@@ -624,7 +638,7 @@ switch (command) {
     }
     // Internal: spawned detached by the Copilot sessionEnd hook to deliver the
     // post-hook `session.shutdown` tail Copilot writes after the hook returns
-    // (AI-897). Not a user-facing command.
+    // Not a user-facing command.
     case "copilot-finalize" when args.Length < 3:
         Console.Error.WriteLine("Usage: kcap copilot-finalize <sessionId> <transcriptPath>");
 
@@ -684,6 +698,21 @@ switch (command) {
         return 0;
     }
     case "hook": {
+        // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
+        // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
+        // added (removed from their Handle methods so this runs exactly once per invocation) and
+        // additionally covers Claude/Cursor, which never called it (they only drain their OWN
+        // route-agnostic FIFO backlog via HookSpool.DrainAllAsync). Codex is exempt — it runs its
+        // own drain in the BACKGROUND, after satisfying its synchronous stdout contract.
+        // Cross-process-throttled (~30s) and auth-gated inside DrainSpoolsAsync, so this adds no
+        // per-invocation network cost beyond a disk stat on the vast majority of firings.
+        if (!args.Contains("--codex") && baseUrl is not null && HttpClientExtensions.IsAcceptableUrl(baseUrl)) {
+            await AgentHookPoster.DrainSpoolsAsync(
+                baseUrl,
+                new HookSpool(PathHelpers.ConfigPath("spool")),
+                new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool")),
+                sessionId: null); // current session unknown here — reading stdin now would consume it
+        }
         if (args.Contains("--claude")) {
             return await ClaudeHookCommand.Handle(baseUrl!, Console.In, updateCheckTask, hookProcessStart);
         }
@@ -719,6 +748,11 @@ switch (command) {
         await Console.Error.WriteLineAsync(
             "kcap cursor import has been removed. Use 'kcap import --cursor' instead.");
         return 2;
+    // Internal: D0 phase-0 empirical append-only verification harness. Hidden —
+    // not in help-usage.txt — run manually against a live Cursor transcript while gathering
+    // the D0 evidence; not part of the normal watch/hook/import surface.
+    case "cursor-verify-appendonly":
+        return await CursorVerifyAppendOnlyCommand.RunAsync(args);
 }
 
 Console.Error.WriteLine($"Unknown command: {command}");

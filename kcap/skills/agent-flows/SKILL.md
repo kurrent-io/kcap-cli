@@ -34,6 +34,48 @@ Once the user has explicitly opted into a flow (see above), pick the `definition
 - Code changes or a pull request → `definition_id: "code-review"` (built-in; same as `review-flows`' `code-review` kind)
 - Anything else → the definition id the user named, or one you look up in the server's flow-definition catalog at `/admin/flows`. If you're unsure which definition applies, ask the user rather than guessing.
 
+## Composing a dynamic flow
+
+If nothing in the catalog fits — no `definition_id` covers the roles or workflow you need — compose one inline instead: pass `definition_yaml` to `start_flow` in place of `definition_id`. Provide exactly one of the two, never both. (`start_review_flow` / `submit_review_round` stay catalog-only — this only applies to the generic `start_flow`.)
+
+YAML shape:
+
+```yaml
+id: reviewer-fixer
+participants:
+  reviewer:
+    vendor: claude
+    model: claude-opus-4-6
+    workspace: none
+    rounds:
+      initial_prompt: "Review the diff on branch feature/x for correctness and adherence to project conventions."
+      follow_up_prompt: "Here's the updated diff — re-review."
+  fixer:
+    vendor: claude
+    model: claude-sonnet-4-5
+    workspace: none
+    rounds:
+      initial_prompt: "Address the reviewer's findings on branch feature/x and report what changed."
+      follow_up_prompt: "Here's the reviewer's next round of findings — address them."
+limits:
+  max_rounds: 6
+  budget_usd: 2
+  round_timeout: 10m
+  idle_ttl: 1h
+mcp:
+  - kcap-flow-result
+```
+
+- `id` — `[a-z0-9-]+`.
+- `participants` — a map keyed by role name. Each role **requires** `vendor`, a **concrete** `model` (`default` is rejected — it can't be budget-checked before launch; the model must also have known pricing or the start is rejected), `workspace: none` (**required** — a missing `workspace` is rejected; `mirror-requester` is the only other value), and `rounds:` with `initial_prompt` + `follow_up_prompt`.
+- Optional top-level `limits:` (`max_rounds`, `budget_usd`, `round_timeout` e.g. `"10m"`, `idle_ttl` e.g. `"2h"`) and `mcp:` — only `kcap-flow-result` survives the server's allowlist, anything else is silently dropped.
+
+**Server clamps vs. rejects:** limits above the admin's configured caps are silently capped, not rejected — omit a limit and a default applies (10 rounds / $5 / 10-minute round timeout / 2-hour idle). What IS rejected outright, with a coded `Error (<code>): <message>`: too many participants for the tenant's cap (default 3), a non-concrete or unpriced model, or oversize YAML (>64KB) / prompts (>16KB each). These messages are actionable — recompose (fewer roles, shorter prompts, a priced model) and call `start_flow` again.
+
+**Mandatory approval step:** before calling `start_flow` with `definition_yaml`, show the user the composed flow — each role's vendor/model, round prompts, and the limits (rounds/budget/timeouts) — and get an explicit yes. Do not submit a dynamic flow without that confirmation.
+
+**Error handling:** a coded `Error (<code>): <message>` is an actionable server rejection — fix the YAML per the message and retry. An uncoded error whose text mentions "may not support dynamic flows" means the server predates this feature — fall back to a catalog `definition_id` instead of retrying the same YAML. Other coded rejections you may see: `dynamic_run_limit` (you already have the maximum number of active dynamic runs — close one with `close_flow` first), `dynamic_flows_disabled` (the admin turned dynamic flows off — use a catalog definition or ask an admin), and `budget_unverifiable` on a later send (retryable — the server can't read the run's cost data yet; wait briefly and resend, or close the run).
+
 ## If the flows MCP tools are not loaded
 
 If `start_flow` / `send_to_participant` are not among the tools available in this session, do NOT try to obtain them:
@@ -120,7 +162,7 @@ report completion to user
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_flow` | `definition_id` (e.g. `spec-review`, `code-review`, or a custom catalog id), `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — optional; by default, on the same machine, the participant's worktree is mirrored from your working tree including uncommitted changes, so it reads the actual source. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
+| `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — optional; by default, on the same machine, the participant's worktree is mirrored from your working tree including uncommitted changes, so it reads the actual source. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
 | `send_to_participant` | `flow_run_id`, `participant` (role name declared in the flow definition's `participants` map; single-participant definitions use `reviewer` — an unknown role is rejected, naming the valid ones), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result for that role, or to launch a role for the first time. Pass the same `flow_run_id`, the role's name, and the updated message. |
 | `get_flow_status` | `flow_run_id` | — | Poll or check the current status of a flow run (running, waiting, completed, failed). |
 | `close_flow` | `flow_run_id` | — | Only after the definition's clean signal — or when abandoning the task early; the run otherwise stays open until closed. |

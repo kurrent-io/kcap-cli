@@ -13,6 +13,9 @@ Subcommands:
                           review flows from within an agent session.
   memory                  Start the MCP memory server (stdio) — team memory
                           tools (search, get, save, update, rescope, archive).
+  workitems               Start the MCP workitems server (stdio) — declare and
+                          list a session's work-item attachments. Claude Code
+                          only.
 
 Options for review:
   --owner <owner>         Repository owner (session default)
@@ -80,6 +83,21 @@ mcp memory:
       args    = ["mcp", "memory"]
       # desktop app launches with no shell PATH, so command
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
+
+mcp workitems:
+  Exposes two tools — declare_work_item, get_session_work_items — for agents
+  to attach the current session (and its continuation chain) to a work item,
+  or list what it's already attached to. Requires `kcap login`.
+
+    Tools:
+      declare_work_item        Attach the current session to a work item by
+                                issue key, PR number, work item id, or a new
+                                title (exactly one of the four).
+      get_session_work_items   List the work items the current session is
+                                attached to.
+
+  Claude Code auto-registers `kcap-workitems` via the plugin's `.mcp.json`
+  (installed by `kcap setup`); it is not offered for Cursor or Codex.
 
 INSTALL
 

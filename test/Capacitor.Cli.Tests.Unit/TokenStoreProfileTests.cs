@@ -190,7 +190,7 @@ public class TokenStoreProfileTests {
     [NotInParallel(nameof(TokenStoreProfileTests))]
     public async Task LoadAsync_corrupt_active_profile_does_not_fall_back_to_legacy() {
         // A present-but-corrupt active profile means "not authenticated" — it must NOT
-        // resurrect stale credentials from a surviving legacy tokens.json (AI-1082 review).
+        // resurrect stale credentials from a surviving legacy tokens.json.
         Directory.CreateDirectory(TokensDir);
         Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
         await File.WriteAllTextAsync(
@@ -222,7 +222,7 @@ public class TokenStoreProfileTests {
     [NotInParallel(nameof(TokenStoreProfileTests))]
     public async Task DeleteAsync_removes_leaked_temp_files() {
         // Logout must remove ALL token material, including temps leaked by a crash
-        // between write and move (AI-1082 review).
+        // between write and move.
         Directory.CreateDirectory(TokensDir);
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json"), "{}");
         await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json.999.deadbeef.tmp"), "secret");

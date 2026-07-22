@@ -2,8 +2,10 @@
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
@@ -30,7 +32,7 @@ public class AcpConnectionTests {
 
         public AcpConnection Connection { get; }
 
-        public Harness() {
+        public Harness(ILogger? logger = null, bool debugFrames = false) {
             // Connection writes requests/notifications/responses into _toAgent; the "agent side"
             // (this harness) reads them from the same pipe.
             _agentReadsFromClient = _toAgent.Reader.AsStream();
@@ -42,7 +44,8 @@ public class AcpConnectionTests {
             Connection = new AcpConnection(
                 writeStream: _toAgent.Writer.AsStream(),
                 readStream: _toClient.Reader.AsStream(),
-                logger: NullLogger<AcpConnection>.Instance
+                logger: logger ?? NullLogger<AcpConnection>.Instance,
+                debugFrames: debugFrames
             );
         }
 
@@ -209,9 +212,11 @@ public class AcpConnectionTests {
     // PR #244 review (Fix #3): OnServerRequest's contract is now Task<JsonElement?> — the handler
     // can no longer return an un-serializable CLR object that WriteServerResponseAsync could only
     // reject with a throw OUTSIDE any try/catch, silently orphaning the agent's request (no
-    // response ever written, wedging its wait on this id forever). These three tests assert the
-    // "always answered" guarantee holds across the three shapes a handler can produce: a value, a
-    // thrown exception, and a null result.
+    // response ever written, wedging its wait on this id forever). These tests assert the
+    // "always answered" guarantee holds across the three shapes a handler can produce: a value
+    // becomes the JSON-RPC `result`, a thrown exception becomes a `-32603 Internal error`, and a
+    // null return (the method ran but declined to handle it) becomes a `-32601 Method not found` —
+    // the same shape a fully unset handler produces, never a null-result success.
     [Test]
     public async Task Inbound_server_request_handler_throwing_still_writes_an_internal_error_response() {
         await using var harness = new Harness();
@@ -245,22 +250,73 @@ public class AcpConnectionTests {
     }
 
     [Test]
-    public async Task Inbound_server_request_handler_returning_null_writes_a_null_result_response() {
+    public async Task Inbound_server_request_handler_returning_null_writes_method_not_found_error() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
         var              runTask = harness.Connection.RunAsync(cts.Token);
 
         harness.Connection.OnServerRequest = (_, _) => Task.FromResult<JsonElement?>(null);
 
+        // fs/read_text_file is unadvertised (the daemon sends fs.readTextFile=false in its
+        // initialize params) — a wired handler declining it must never look like a successful
+        // no-op file read.
         await harness.WriteFrameToConnectionAsync(
-            """{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{}}"""
+            """{"jsonrpc":"2.0","id":8,"method":"fs/read_text_file","params":{"path":"/tmp/x"}}"""
         );
 
         var frame = await harness.ReadFrameFromConnectionAsync();
         using var doc = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(8L);
-        await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
-        await Assert.That(doc.RootElement.GetProperty("result").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
+        var error = doc.RootElement.GetProperty("error");
+        await Assert.That(error.GetProperty("code").GetInt32()).IsEqualTo(-32601);
+
+        // Loop must still be alive afterward — mirrors the throw-test's liveness check, re-locking
+        // the "always answered" guarantee at this new response shape.
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    // Proves the PRODUCTION wiring (a real AcpInteractionBridge, not a fake null-returning
+    // delegate) declines an unadvertised method cleanly. The bridge's `requestInteraction` delegate
+    // is never invoked here — terminal/create doesn't match either method the bridge recognizes, so
+    // it never reaches that delegate; asserting `called` stays false pins that.
+    [Test]
+    public async Task Inbound_unadvertised_terminal_request_through_real_bridge_writes_method_not_found_error() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        var called = false;
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (_, _) => {
+                called = true;
+                return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null));
+            },
+            agentId: "agent-1",
+            logger: NullLogger.Instance);
+
+        harness.Connection.OnServerRequest = bridge.HandleAsync;
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","id":42,"method":"terminal/create","params":{"command":"ls"}}"""
+        );
+
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc = JsonDocument.Parse(frame);
+        await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(42L);
+        await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
+        var error = doc.RootElement.GetProperty("error");
+        await Assert.That(error.GetProperty("code").GetInt32()).IsEqualTo(-32601);
+        await Assert.That(called).IsFalse();
 
         cts.Cancel();
         await SwallowCancellation(runTask);
@@ -272,7 +328,7 @@ public class AcpConnectionTests {
         using var       cts     = new CancellationTokenSource();
         var              runTask = harness.Connection.RunAsync(cts.Token);
 
-        // OnServerRequest intentionally left unset (AI-684 default-decline posture).
+        // OnServerRequest intentionally left unset (default-decline posture).
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{}}"""
         );
@@ -475,5 +531,114 @@ public class AcpConnectionTests {
         } catch (OperationCanceledException) {
             // expected shutdown path for this test's owned CTS
         }
+    }
+
+    // ── KCAP_ACP_DEBUG_FRAMES gate: full inbound/outbound frame logging ────────────────────────
+
+    /// <summary>Records every log call — mirrors <c>AcpTranscriptAggregationTests.CaptureLogger</c>'s
+    /// established pattern.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    [Test]
+    public async Task DebugFrames_off_by_default_never_logs_the_full_outbound_or_inbound_frame() {
+        var logger = new CaptureLogger();
+        // debugFrames omitted — proves the default is Off, matching every pre-existing call site.
+        await using var harness = new Harness(logger);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        var requestTask = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
+        var frame        = await harness.ReadFrameFromConnectionAsync();
+        var id           = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
+
+        await harness.WriteFrameToConnectionAsync(
+            $$$"""{"jsonrpc":"2.0","id":{{{id}}},"result":{"stopReason":"end_turn"}}"""
+        );
+        await requestTask.WaitAsync(HangGuard);
+
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("ACP >>>"));
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("ACP <<<"));
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("session/prompt"));
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("stopReason"));
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task DebugFrames_on_logs_the_full_outbound_request_frame() {
+        var logger = new CaptureLogger();
+        await using var harness = new Harness(logger, debugFrames: true);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        _ = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        var id    = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
+
+        await Assert.That(logger.Entries).Contains(e =>
+            e.Level == LogLevel.Debug && e.Message.Contains("ACP >>>") && e.Message.Contains("session/prompt"));
+
+        // Clean shutdown: still owe the pending request a response before disposing.
+        await harness.WriteFrameToConnectionAsync($$$"""{"jsonrpc":"2.0","id":{{{id}}},"result":{}}""");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task DebugFrames_on_logs_the_full_inbound_notification_frame() {
+        var logger = new CaptureLogger();
+        await using var harness = new Harness(logger, debugFrames: true);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"abc-secret-marker"}}"""
+        );
+        await tcs.Task.WaitAsync(HangGuard);
+
+        await Assert.That(logger.Entries).Contains(e =>
+            e.Level == LogLevel.Debug && e.Message.Contains("ACP <<<") && e.Message.Contains("abc-secret-marker"));
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task DebugFrames_on_does_not_regress_the_existing_shape_only_malformed_line_logging() {
+        // AcpConnection already logs frame SHAPE only for malformed/unrecognized lines — that must
+        // not regress when the opt-in full-frame logging is added. This proves the pre-existing
+        // malformed-line handling is unchanged with the flag on: still skipped, still keeps the loop
+        // alive, no throw.
+        var logger = new CaptureLogger();
+        await using var harness = new Harness(logger, debugFrames: true);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
+        await harness.WriteFrameToConnectionAsync("{not valid json at all");
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
     }
 }

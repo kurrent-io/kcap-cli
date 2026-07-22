@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 
 /// <summary>
 /// <see cref="IAcpProcess"/> over a real <see cref="Process"/> — the <c>cursor-agent acp</c> child
-/// spawned by <see cref="Services.AcpHostedAgentRuntimeFactory"/> (AI-684 Task 10). Mirrors the
+/// spawned by <see cref="Services.AcpHostedAgentRuntimeFactory"/>. Mirrors the
 /// terminate/wait semantics of <c>Pty.Unix.UnixPtyProcess</c>/<c>WinPtyProcess</c> (SIGTERM-then-kill
 /// via <see cref="Process.Kill(bool)"/>, bounded waits that return silently on timeout) but owns no
 /// terminal I/O — stdin/stdout carry ACP JSON-RPC frames, consumed by <see cref="AcpConnection"/>.
@@ -14,20 +14,31 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// with <c>RedirectStandardError = true</c> (see <see cref="Services.AcpHostedAgentRuntimeFactory"/>),
 /// and nothing else ever reads that stream — if we didn't drain it here, the OS pipe buffer (~64KB)
 /// would eventually fill and cursor-agent would block on its next stderr write, deadlocking a long
-/// session. The drain loop reads lines until EOF (process exit) or cancellation and logs them at
-/// Debug so cursor-agent diagnostics are still captured, just not on the critical path.
+/// session. The drain loop reads lines until EOF (process exit) or cancellation and logs each line's
+/// LENGTH at Debug by default (stderr can carry paths/prompt fragments/error detail); the full line
+/// text is only logged when the operator opts in via <c>KCAP_ACP_DEBUG_FRAMES</c> (see
+/// <see cref="DaemonConfig.DebugFrames"/>).
 /// </summary>
-internal sealed class AcpChildProcess : IAcpProcess {
+internal sealed partial class AcpChildProcess : IAcpProcess {
     readonly Process                 _process;
     readonly ILogger                 _logger;
+    readonly bool                    _debugFrames;
+    readonly string                  _vendor;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
 
     int _disposed;
 
-    public AcpChildProcess(Process process, ILogger logger) {
-        _process = process;
-        _logger  = logger;
+    /// <param name="debugFrames">
+    /// <c>KCAP_ACP_DEBUG_FRAMES</c> (<see cref="DaemonConfig.DebugFrames"/>) — off by default. When
+    /// on, <see cref="DrainStderrAsync"/> logs full (length-capped) stderr line text at Debug instead
+    /// of just its length; cursor-agent stderr can carry paths/prompt fragments/error detail.
+    /// </param>
+    public AcpChildProcess(Process process, ILogger logger, bool debugFrames = false, string vendor = "cursor") {
+        _process     = process;
+        _logger      = logger;
+        _debugFrames = debugFrames;
+        _vendor      = vendor;
 
         // Fire-and-forget from the ctor's perspective — DisposeAsync cancels and (best-effort)
         // awaits it. Never let this task fault unobserved; DrainStderrAsync swallows everything
@@ -50,8 +61,15 @@ internal sealed class AcpChildProcess : IAcpProcess {
 
                 if (line is null) break; // EOF — process exited and closed the stream.
 
-                if (line.Length > 0)
-                    _logger.LogDebug("cursor-agent stderr: {Line}", line);
+                if (line.Length == 0) continue;
+
+                // KCAP_ACP_DEBUG_FRAMES gate (Off by default) — stderr can carry paths, prompt
+                // fragments, or error detail, so it is only logged verbatim when explicitly opted in;
+                // otherwise only its length is logged.
+                if (_debugFrames)
+                    LogStderrLineFull(_vendor, AcpDebugFrameLog.Cap(line));
+                else
+                    LogStderrLineShape(_vendor, line.Length);
             }
         } catch (OperationCanceledException) {
             // Disposal requested the drain stop — expected, not an error.
@@ -159,4 +177,10 @@ internal sealed class AcpChildProcess : IAcpProcess {
             // Best-effort.
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "{Vendor} stderr: {Line}")]
+    partial void LogStderrLineFull(string vendor, string line);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "{Vendor} stderr: {Length} chars")]
+    partial void LogStderrLineShape(string vendor, int length);
 }

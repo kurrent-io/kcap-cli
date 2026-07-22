@@ -116,6 +116,23 @@ public class McpFlowResultServerTests {
     }
 
     [Test]
+    public async Task Server_catching_up_fails_immediately_with_retry_later_guidance() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(409).WithBody("""{"error":"server_catching_up","message":"catching up"}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await McpFlowResultServer.SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("catching up");
+        await Assert.That(text).Contains("try again in a few minutes");
+        await Assert.That(delays).HasCount().EqualTo(0);
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Validation_failures_do_not_hit_the_network() {
         using var server = WireMockServer.Start();
         using var client = new HttpClient();
@@ -252,6 +269,25 @@ public class McpFlowResultServerTests {
         await Assert.That(text).DoesNotContain("FINDINGS");
         await Assert.That(delays).HasCount().EqualTo(4); // 5 attempts = 4 delays
         await Assert.That(server.LogEntries.Count()).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task Send_message_server_catching_up_fails_immediately_with_retry_later_guidance() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(409).WithBody("""{"error":"server_catching_up","message":"catching up"}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", MessageArgs(), NoDelay(delays)
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("catching up");
+        await Assert.That(text).Contains("try again in a few minutes");
+        await Assert.That(delays).HasCount().EqualTo(0);
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
     }
 
     [Test]

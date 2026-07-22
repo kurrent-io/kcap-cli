@@ -65,7 +65,7 @@ internal sealed class KiroImportSource : IImportSource {
         if (!Directory.Exists(_sessionsDir))
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
 
-        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl")) {
+        foreach (var jsonl in GuardedDiscovery.EnumerateFiles(_sessionsDir, "*.jsonl", recursive: false)) {
             ct.ThrowIfCancellationRequested();
 
             // Filename stem is the dashed session UUID Kiro uses for both files.
@@ -219,7 +219,7 @@ internal sealed class KiroImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct
@@ -238,9 +238,16 @@ internal sealed class KiroImportSource : IImportSource {
         // would leave the session permanently lifecycle-less.
         var lifecycleId = dashed ?? classification.SessionId;
 
+        var startPayload = BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp);
+        // Step 3 visibility stamp — New-only, and never overrides an existing force-private
+        // choice (Kiro has none of its own today; this guard keeps it that way).
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/kiro",
-            BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
@@ -309,8 +316,12 @@ internal sealed class KiroImportSource : IImportSource {
             ["session_id"]      = sessionId,
         };
         if (cwd is not null) payload["cwd"] = cwd;
+        // fail-open git-root discovery, mirroring ImportChainsAsync
+        // so routed imports carry the same workspace_root the file-based path does.
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (model is not null) payload["model"] = model;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -322,6 +333,7 @@ internal sealed class KiroImportSource : IImportSource {
         };
         if (cwd is not null) payload["cwd"] = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 

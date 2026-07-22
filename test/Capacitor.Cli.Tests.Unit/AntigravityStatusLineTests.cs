@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// The `kcap status` hooks line reports Antigravity alongside the other vendors (AI-1158).
+/// The `kcap status` hooks line reports Antigravity alongside the other vendors.
 /// </summary>
 public class AntigravityStatusLineTests {
     [Test]

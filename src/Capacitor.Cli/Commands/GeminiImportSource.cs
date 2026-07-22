@@ -62,40 +62,45 @@ internal sealed class GeminiImportSource : IImportSource {
         foreach (var projectDir in Directory.EnumerateDirectories(_tmpDir)) {
             ct.ThrowIfCancellationRequested();
 
-            if (cwdBasename is not null
-             && !string.Equals(Path.GetFileName(projectDir), cwdBasename, PathComparison)) {
-                continue;
-            }
-
-            var chatsDir = GeminiPaths.ChatsDir(projectDir);
-            if (!Directory.Exists(chatsDir)) continue;
-
-            foreach (var file in Directory.EnumerateFiles(chatsDir, "session-*.jsonl")) {
-                var (sessionId, startTime) = ReadHeader(file);
-
-                if (sessionId is null || !Guid.TryParse(sessionId, out _)) continue;
-
-                var dashless = sessionId.Replace("-", "");
-
-                if (!seen.Add(dashless)) continue;
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+            try {
+                if (cwdBasename is not null
+                 && !string.Equals(Path.GetFileName(projectDir), cwdBasename, PathComparison)) {
                     continue;
-
-                var firstTimestamp = startTime;
-                if (firstTimestamp is null) {
-                    try { firstTimestamp = File.GetCreationTimeUtc(file); } catch { /* best effort */ }
                 }
 
-                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
+                var chatsDir = GeminiPaths.ChatsDir(projectDir);
+                if (!Directory.Exists(chatsDir)) continue;
 
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            null,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"] = file,
-                    }));
+                foreach (var file in GuardedDiscovery.EnumerateFiles(chatsDir, "session-*.jsonl", recursive: false)) {
+                    var (sessionId, startTime) = ReadHeader(file);
+
+                    if (sessionId is null || !Guid.TryParse(sessionId, out _)) continue;
+
+                    var dashless = sessionId.Replace("-", "");
+
+                    if (!seen.Add(dashless)) continue;
+                    if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+                        continue;
+
+                    var firstTimestamp = startTime;
+                    if (firstTimestamp is null) {
+                        try { firstTimestamp = File.GetCreationTimeUtc(file); } catch { /* best effort */ }
+                    }
+
+                    if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
+
+                    result.Add(new DiscoveredSession(
+                        SessionId:      dashless,
+                        Vendor:         Vendor,
+                        Cwd:            null,
+                        FirstTimestamp: firstTimestamp,
+                        SourceMeta:     new Dictionary<string, object?> {
+                            ["TranscriptPath"] = file,
+                        }));
+                }
+            } catch {
+                // A hostile/inaccessible project subtree must not abort the whole scan.
+                continue;
             }
         }
 
@@ -149,7 +154,10 @@ internal sealed class GeminiImportSource : IImportSource {
                 continue;
             }
 
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // Gemini chat records carry a per-message "timestamp" field; prefer the
+            // tail-scanned last one over file mtime, which can be skewed by unrelated
+            // later writes to the same session-scoped file.
+            meta.LastTimestamp = EndedAtResolvers.LastTimestampFromJsonl(transcriptPath) ?? TryGetLastWriteUtc(transcriptPath);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -187,7 +195,7 @@ internal sealed class GeminiImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct
@@ -200,9 +208,16 @@ internal sealed class GeminiImportSource : IImportSource {
         // transcript that advances the watermark past a failed lifecycle POST
         // would leave the session permanently lifecycle-less. Re-runs are
         // idempotent server-side (deterministic lifecycle event ids).
+        var startPayload = BuildSessionStartPayload(classification.SessionId, classification.Meta.FirstTimestamp);
+        // Step 3 visibility stamp — New-only, and never overrides an existing force-private
+        // choice (Gemini has none of its own today; this guard keeps it that way).
+        if (!ctx.ForcePrivate && classification.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/gemini",
-            BuildSessionStartPayload(classification.SessionId, classification.Meta.FirstTimestamp),
+            startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
@@ -229,7 +244,15 @@ internal sealed class GeminiImportSource : IImportSource {
         // Import nested subagents (chats/<parentSessionId>/<subId>.jsonl) under the parent,
         // BEFORE session-end so their SubagentStarted/Completed land in the parent stream
         // ahead of SessionEnded. Subagent failures don't fail the (already-imported) parent.
-        await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ct);
+        //
+        // Capture whether any subagent actually got new content POSTed and ACCEPTED — the
+        // SentChildContent signal. KNOWN RESIDUAL: ImportSubagentsAsync has no per-child
+        // watermark — it always resends the whole subagent transcript from line 0 on every
+        // re-run, so for a session that HAS a subagent this reads true on essentially every
+        // re-run whether or not anything is actually new. Accepted — still strictly better
+        // than defaulting false (which would risk hiding genuinely-new subagent content
+        // behind the lifecycle-only-replay label).
+        var sentChildContent = await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ct);
 
         var endOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/gemini",
@@ -237,9 +260,9 @@ internal sealed class GeminiImportSource : IImportSource {
             ct);
         if (!endOk) return ImportOutcome.Failed;
 
-        if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+        if (sent == 0) return new ImportSessionResult(startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped, sentChildContent);
 
-        return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        return new ImportSessionResult(startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded, sentChildContent);
     }
 
     static JsonObject BuildSessionStartPayload(string sessionId, DateTimeOffset? startedAt) {
@@ -249,6 +272,7 @@ internal sealed class GeminiImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -259,6 +283,7 @@ internal sealed class GeminiImportSource : IImportSource {
             ["reason"]          = "gemini-import",
         };
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -275,49 +300,93 @@ internal sealed class GeminiImportSource : IImportSource {
     }
 
     /// <summary>
-    /// Imports any nested subagent transcripts (chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl)
-    /// recorded alongside the parent. Each is sent under the parent session id with the
-    /// subagent's canonical (dashless) id so the server routes it to AgentSubsession-*.
-    /// subagent-start is fail-closed (skip a subagent's content if start fails) so a subagent
-    /// stream never exists without the SubagentStarted that lets chat/trace nest it. Re-runs
-    /// are idempotent (deterministic server-side ids). AI-900.
+    /// Imports every TRANSITIVE descendant subagent transcript (root's own
+    /// chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl, then each discovered subagent's own
+    /// nested dir, recursively — depth-capped) as a DIRECT subagent of the top-level root
+    /// (Model A's flat stream key can't express deeper nesting, so flattening is what preserves
+    /// content that would otherwise be dropped). Each descendant's agent_name/type is resolved
+    /// from its OWN immediate parent's transcript — not the root's — since that's where its
+    /// invoke_agent call was recorded; a per-parent cache avoids re-scanning the same transcript
+    /// for siblings. subagent-start is fail-closed (skip a descendant's content if start fails)
+    /// so a subagent stream never exists without the SubagentStarted that lets chat/trace nest
+    /// it. Re-runs are idempotent (deterministic server-side ids). Any descendants beyond the
+    /// depth cap, or a descendant directory that couldn't be read, are surfaced (never silent)
+    /// via a stderr diagnostic.
+    ///
+    /// Returns <c>true</c> iff any descendant's <see cref="SessionImporter.SendTranscriptBatches"/>
+    /// call sent &gt;0 server-accepted lines — the <c>SentChildContent</c> signal, aggregated
+    /// across the ENTIRE recursive descendant subtree (direct children and every deeper
+    /// grandchild found by the walk above), not just direct children. Unlike Cursor/Antigravity,
+    /// there is no per-descendant watermark here: every re-run resends each descendant's whole
+    /// transcript from line 0, so this reads <c>true</c> on essentially every re-run of a session
+    /// that has any descendant subagent, whether or not anything is actually new (accepted
+    /// residual).
     /// </summary>
-    async Task ImportSubagentsAsync(
+    async Task<bool> ImportSubagentsAsync(
         HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath, CancellationToken ct
     ) {
-        var subFiles = GeminiSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
-        if (subFiles.Count == 0) return;
+        // Gemini has no completeness-fingerprint ledger (unlike OpenCode), so the omitted ids
+        // are unused here — the diagnostic below only needs the count (and, when the below-cap
+        // counting walk was truncated, whether that count is a lower bound).
+        var (descendants, omitted, _, countTruncated, unreadableDirs) =
+            GeminiSubagentDiscovery.EnumerateDescendantFiles(transcriptPath);
 
-        var types = GeminiSubagentDiscovery.ResolveAgentTypes(transcriptPath);
+        if (omitted > 0) {
+            var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
+            Console.Error.WriteLine(
+                $"[kcap] gemini: root {parentSessionIdDashless} descendants_omitted={omitted}{lowerBoundNote} " +
+                $"(depth cap {GeminiSubagentDiscovery.MaxDescendantDepth} exceeded)");
+        }
 
-        foreach (var subFile in subFiles) {
+        if (unreadableDirs > 0) {
+            Console.Error.WriteLine(
+                $"[kcap] gemini: root {parentSessionIdDashless} unreadable_descendant_dirs={unreadableDirs} " +
+                "(a descendant directory existed but could not be read — its subtree may be incomplete)");
+        }
+
+        if (descendants.Count == 0) return false;
+
+        var typesByParentTranscript = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+        var anySubagentContentSent  = false;
+
+        foreach (var d in descendants) {
             ct.ThrowIfCancellationRequested();
 
-            var subId = Path.GetFileNameWithoutExtension(subFile);
-            if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
+            if (!typesByParentTranscript.TryGetValue(d.ImmediateParentTranscriptPath, out var types)) {
+                types = GeminiSubagentDiscovery.ResolveAgentTypes(d.ImmediateParentTranscriptPath);
+                typesByParentTranscript[d.ImmediateParentTranscriptPath] = types;
+            }
 
-            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(subId); // dashless — matches server routing + correlation
-            var agentType = types.GetValueOrDefault(subId) ?? "subagent";    // agent_name from the parent invoke_agent call
+            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(d.DashedId); // dashless — matches server routing + correlation
+            var agentType = types.GetValueOrDefault(d.DashedId) ?? "subagent";    // agent_name from the IMMEDIATE parent's invoke_agent call
 
             // Fail-closed: don't stream content unless the subagent registered first.
             var startOk = await PostSyntheticHookAsync(
                 client, baseUrl, "subagent-start",
-                GeminiSubagentDiscovery.BuildStartPayload(parentSessionIdDashless, agentId, agentType, subFile), ct);
+                GeminiSubagentDiscovery.BuildStartPayload(parentSessionIdDashless, agentId, agentType, d.File), ct);
             if (!startOk) continue;
 
+            int subSent;
             try {
-                await SessionImporter.SendTranscriptBatches(
+                // failOnError: true — SentChildContent must reflect only server-ACCEPTED
+                // batches; a non-2xx now throws and is caught below, so a rejected batch
+                // never flips the signal (Qodo finding 3).
+                subSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl,
-                    sessionId:  parentSessionIdDashless, filePath: subFile,
-                    agentId:    agentId, startLine: 0, vendor: Vendor);
+                    sessionId:  parentSessionIdDashless, filePath: d.File,
+                    agentId:    agentId, startLine: 0, vendor: Vendor, failOnError: true);
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
             }
 
+            if (subSent > 0) anySubagentContentSent = true;
+
             await PostSyntheticHookAsync(
                 client, baseUrl, "subagent-stop",
-                GeminiSubagentDiscovery.BuildStopPayload(parentSessionIdDashless, agentId, agentType, subFile), ct);
+                GeminiSubagentDiscovery.BuildStopPayload(parentSessionIdDashless, agentId, agentType, d.File), ct);
         }
+
+        return anySubagentContentSent;
     }
 
     static DateTimeOffset? TryGetLastWriteUtc(string path) {

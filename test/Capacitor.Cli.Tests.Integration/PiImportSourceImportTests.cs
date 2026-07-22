@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Routed-import wire-contract tests for <see cref="PiImportSource"/> (AI-886).
+/// Routed-import wire-contract tests for <see cref="PiImportSource"/>.
 /// Pi classifications carry <c>FilePath = ""</c>, so they run through the
 /// routed phase (<c>ImportSessionAsync</c>) rather than the chain worker. These
 /// drive the full discover → classify → import path against a stub server and
@@ -179,5 +179,54 @@ public class PiImportSourceImportTests : IDisposable {
         await Assert.That(classified.Count).IsEqualTo(1);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(classified[0].ResumeFromLine).IsEqualTo(2);
+    }
+
+    // --- Pi's AlreadyLoaded replay is a genuine no-op (no subagent handling in this vendor at
+    // all) — the vendor-neutral gate must suppress this shape. ---
+
+    [Test]
+    public async Task ImportSession_AlreadyLoaded_replay_is_a_no_op_suppressed_by_the_vendor_neutral_gate() {
+        var sessionsDir = WriteSessionFile();
+
+        // Server already covers every importable line → AlreadyLoaded.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":2}"""));
+        _server.Given(Request.Create().WithPath("/hooks/session-start/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/session-end/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+
+        var source = new PiImportSource(
+            sessionsDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var result = await source.ImportSessionAsync(
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None);
+
+        // Pi never touches a child/subagent stream on this path — SentChildContent stays at its
+        // safe default false.
+        await Assert.That(result.SentChildContent).IsFalse();
+
+        // With the vendor parameter dropped, this real (status, outcome, sentChildContent) shape
+        // is recognized as a lifecycle-only replay and must be suppressed — not counted as
+        // Loaded/Resumed on top of the classify-time AlreadyLoaded bucket.
+        var isSuppressed = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(isSuppressed).IsTrue();
+
+        var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
+            classified[0].Status, result.Outcome, result.SentChildContent);
+        await Assert.That(resolved).IsNull();
     }
 }

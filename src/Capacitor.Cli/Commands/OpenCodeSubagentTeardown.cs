@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.OpenCode;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Shared session-end teardown for live OpenCode subagents (AI-919 phase 2). OpenCode
+/// Shared session-end teardown for live OpenCode subagents. OpenCode
 /// fires no subagent-stop hook and the child watchers the parent spawns carry no
 /// parent-pid watchdog, so the parent session-end is the ONLY thing that finalizes them:
 /// for each nested child transcript the plugin wrote, kill its child watcher (no-op if

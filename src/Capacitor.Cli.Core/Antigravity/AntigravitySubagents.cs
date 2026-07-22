@@ -3,21 +3,23 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core.Antigravity;
 
 /// <summary>
-/// Resolves Antigravity's subagent → parent conversation linkage for historical import
-/// (AI-1160). A subagent is a SEPARATE conversation; the parent's brain dir records the
-/// linkage as inter-agent messages under
-/// <c>brain/&lt;parent&gt;/.system_generated/messages/*.json</c>, each
-/// <c>{ "sender": "&lt;child&gt;", "recipient": "&lt;parent&gt;" }</c>. This linkage is only
-/// written when a child reports back, so it is unreliable at live child-start (nesting is
-/// deferred there) — but at IMPORT time every message file is on disk, so the full map is
-/// resolvable. Roots are conversations that are never a <c>sender</c>.
+/// Resolves Antigravity's subagent → parent conversation linkage for historical import. A
+/// subagent is a SEPARATE conversation; the linkage is derived from the
+/// parent transcript's <c>INVOKE_SUBAGENT</c> steps (the spawn-time signal — same source the
+/// live watcher now uses, see <see cref="ChildConversationIdsFromLine"/>), which is available
+/// even for a child that never reports back. This replaces the
+/// child-reports-back scan of <c>brain/&lt;parent&gt;/.system_generated/messages/*.json</c>,
+/// which silently dropped errored/never-reporting children (see d9956b89) and had the
+/// sender/recipient direction inverted in some captures (see 7f8d9d93 → a1204f98). Roots are
+/// conversations that never appear as an invoked child.
 /// </summary>
 public static class AntigravitySubagents {
     /// <summary>
     /// Builds child-conversation-id → parent-conversation-id by scanning every brain dir's
-    /// messages. Best-effort: unreadable / malformed message files are skipped. If a child maps
-    /// to MULTIPLE parents (pathological / non-tree data), the lexicographically-smallest parent
-    /// wins so the map is deterministic regardless of directory enumeration order.
+    /// <c>transcript_full.jsonl</c> for INVOKE_SUBAGENT steps. Best-effort: unreadable /
+    /// truncated transcripts are skipped. If a child is invoked by MULTIPLE parents
+    /// (pathological / non-tree data), the lexicographically-smallest parent wins so the map is
+    /// deterministic regardless of directory enumeration order.
     /// </summary>
     public static IReadOnlyDictionary<string, string> BuildParentMap(
             string? home = null, string? geminiCliHome = null, CancellationToken ct = default) {
@@ -26,41 +28,38 @@ public static class AntigravitySubagents {
         var brainRoot = Path.Combine(AntigravityPaths.Root(home, geminiCliHome), "brain");
         if (!Directory.Exists(brainRoot)) return map;
 
-        // Building the full map requires scanning every brain dir's messages (a child records its
-        // parent, so finding any root's descendants means reading all links). That's O(history) IO,
-        // so honour cancellation between dirs and files — a targeted `--session` import or a Ctrl+C
-        // must be able to interrupt it (AI-1160 review).
         foreach (var brainDir in Directory.EnumerateDirectories(brainRoot)) {
             ct.ThrowIfCancellationRequested();
-            var messages = Path.Combine(brainDir, ".system_generated", "messages");
-            if (!Directory.Exists(messages)) continue;
+            var parent = Path.GetFileName(brainDir);
+            var transcript = Path.Combine(brainDir, ".system_generated", "logs", "transcript_full.jsonl");
+            if (!File.Exists(transcript)) continue;
 
-            foreach (var file in Directory.EnumerateFiles(messages, "*.json")) {
+            foreach (var line in EnumerateLinesSafe(transcript)) {
                 ct.ThrowIfCancellationRequested();
-                try {
-                    using var doc = JsonDocument.Parse(File.ReadAllText(file));
-                    var root = doc.RootElement;
-                    if (root.ValueKind != JsonValueKind.Object) continue;
-
-                    var sender    = root.TryGetProperty("sender",    out var s) ? s.GetString() : null;
-                    var recipient = root.TryGetProperty("recipient", out var r) ? r.GetString() : null;
-
-                    if (string.IsNullOrEmpty(sender)
-                     || string.IsNullOrEmpty(recipient)
-                     || string.Equals(sender, recipient, StringComparison.Ordinal))
-                        continue;
-
-                    // Deterministic on conflict: keep the smallest parent (Ordinal).
-                    if (!map.TryGetValue(sender!, out var existing)
-                     || string.CompareOrdinal(recipient!, existing) < 0)
-                        map[sender!] = recipient!;
-                } catch {
-                    // Skip a malformed / unreadable message file — never abort the whole map.
+                foreach (var child in ChildConversationIdsFromLine(line)) {
+                    if (string.Equals(child, parent, StringComparison.Ordinal)) continue;   // self-guard
+                    // First-wins on conflict, deterministic: keep the smallest parent (Ordinal).
+                    if (!map.TryGetValue(child, out var existing)
+                     || string.CompareOrdinal(parent, existing) < 0)
+                        map[child] = parent;
                 }
             }
         }
 
         return map;
+    }
+
+    static IEnumerable<string> EnumerateLinesSafe(string path) {
+        IEnumerator<string> e;
+        try { e = File.ReadLines(path).GetEnumerator(); }
+        catch { yield break; }        // unreadable transcript — skip the whole file
+        using (e) {
+            while (true) {
+                try { if (!e.MoveNext()) yield break; }
+                catch { yield break; } // truncated/locked mid-read — stop, keep what we have
+                yield return e.Current;
+            }
+        }
     }
 
     /// <summary>Parent conversation id for a child, or null when it is a root / unlinked.</summary>
@@ -104,5 +103,110 @@ public static class AntigravitySubagents {
         }
 
         return byRoot;
+    }
+
+    /// <summary>
+    /// The authoritative spawn-time parent→child signal. A parent's transcript
+    /// records an INVOKE_SUBAGENT step whose <c>content</c> embeds JSON listing the child
+    /// conversation(s) it spawned (<c>{ "conversationId": "&lt;child&gt;", … }</c>, one object or an
+    /// array). Returns the child ids for a single transcript line — empty for any non-INVOKE_SUBAGENT,
+    /// blank, or malformed line. Strict: the id is read ONLY from the step's content payload (parsed
+    /// as JSON), not matched by a regex over the whole line, and each id must be GUID-shaped.
+    /// </summary>
+    public static IReadOnlyList<string> ChildConversationIdsFromLine(string line) {
+        if (!TryReadInvokeContent(line, out var content)) return [];
+
+        var raw = new List<string>();
+        // The content can embed more than one top-level JSON value (e.g. several
+        // "{ \"conversationId\": … }" objects separated by narrative text/newlines), so scan for
+        // every balanced block rather than stopping at the first.
+        foreach (var json in ExtractJsonBlocks(content)) {
+            try {
+                using var doc = JsonDocument.Parse(json);
+                CollectConversationIds(doc.RootElement, raw);
+            } catch {
+                // Skip an unparsable block; a sibling block may still be valid.
+            }
+        }
+
+        var seen   = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var id in raw) {
+            if (!Guid.TryParse(id, out _)) continue;   // GUID-shaped only; brain-dir ids are dashed
+            if (seen.Add(id)) result.Add(id);
+        }
+        return result;
+    }
+
+    /// <summary>True iff the line is a structurally-valid INVOKE_SUBAGENT step (used by callers to
+    /// log a drift diagnostic when such a step yields no parseable child id).</summary>
+    public static bool IsInvokeSubagentLine(string line) => TryReadInvokeContent(line, out _);
+
+    static bool TryReadInvokeContent(string line, out string content) {
+        content = "";
+        if (string.IsNullOrWhiteSpace(line)) return false;
+        try {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("type", out var t) || t.ValueKind != JsonValueKind.String
+             || t.GetString() != "INVOKE_SUBAGENT") return false;
+            if (!root.TryGetProperty("content", out var c) || c.ValueKind != JsonValueKind.String) {
+                content = "";                 // an INVOKE step with no string content is still an invoke line
+                return true;
+            }
+            content = c.GetString() ?? "";
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>Every balanced {…} or […] block found in <paramref name="s"/>, scanning left to
+    /// right (content can embed several sibling JSON values, not just one). String-aware so braces
+    /// inside quoted text don't break balancing. An unbalanced/truncated trailing block is dropped
+    /// rather than yielded partially.</summary>
+    static List<string> ExtractJsonBlocks(string s) {
+        var blocks = new List<string>();
+        var i = 0;
+        while (i < s.Length) {
+            var start = s.IndexOfAny(['{', '['], i);
+            if (start < 0) break;
+            char open = s[start], close = open == '{' ? '}' : ']';
+            int depth = 0; bool inStr = false, esc = false;
+            var end = -1;
+            for (var j = start; j < s.Length; j++) {
+                var ch = s[j];
+                if (inStr) {
+                    if (esc) esc = false;
+                    else if (ch == '\\') esc = true;
+                    else if (ch == '"') inStr = false;
+                    continue;
+                }
+                if (ch == '"') inStr = true;
+                else if (ch == open) depth++;
+                else if (ch == close && --depth == 0) { end = j; break; }
+            }
+            if (end < 0) break;   // unbalanced / truncated — stop scanning
+            blocks.Add(s.Substring(start, end - start + 1));
+            i = end + 1;
+        }
+        return blocks;
+    }
+
+    static void CollectConversationIds(JsonElement el, List<string> into) {
+        switch (el.ValueKind) {
+            case JsonValueKind.Object:
+                foreach (var p in el.EnumerateObject()) {
+                    if (p.NameEquals("conversationId") && p.Value.ValueKind == JsonValueKind.String)
+                        into.Add(p.Value.GetString()!);
+                    else
+                        CollectConversationIds(p.Value, into);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in el.EnumerateArray()) CollectConversationIds(item, into);
+                break;
+        }
     }
 }

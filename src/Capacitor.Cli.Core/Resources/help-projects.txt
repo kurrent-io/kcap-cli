@@ -1,0 +1,8 @@
+kcap projects — List projects you can see
+
+Usage: kcap projects
+
+Prints a table with slug, name, repo count, member count, and your role
+(owner / member / pending invite / pending request / —).
+
+Requires the Team or Enterprise plan; the server returns a 403 on Free.

@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <summary>
 /// Correlates a hosted-agent permission request with the server's later decision push.
 ///
-/// Background (AI-864): the daemon used to obtain a permission decision as the return value of
+/// Background: the daemon used to obtain a permission decision as the return value of
 /// a <c>RequestPermission</c> hub invocation that stayed pending for the entire elicitation
 /// wait. Under SignalR's default <c>MaximumParallelInvocationsPerClient = 1</c> that single
 /// in-flight invocation starved the daemon's <c>DaemonPing</c>, tripped the 5s ping deadline,

@@ -14,7 +14,7 @@ internal sealed class OpenCodeDbFixtureIt : IDisposable {
         Exec(c, """
             CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
                 title TEXT NOT NULL, version TEXT NOT NULL DEFAULT '', model TEXT,
-                time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL);
+                time_created INTEGER, time_updated INTEGER);
             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
                 time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
             CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -33,6 +33,21 @@ internal sealed class OpenCodeDbFixtureIt : IDisposable {
         cmd.Parameters.AddWithValue("$d", (object?)dir ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$t", title);
         cmd.Parameters.AddWithValue("$tc", t);
+        cmd.ExecuteNonQuery();
+    }
+
+    // Nullable-timestamp variant of AddSession — real OpenCode rows can carry a NULL
+    // time_created/time_updated (session never touched after creation, or a schema
+    // that predates the column), which must map to "unknown", not epoch.
+    public void AddSessionRaw(string id, string? parent, string? dir, string title, long? timeCreated, long? timeUpdated) {
+        using var c = Open(); using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT INTO session(id,parent_id,directory,title,version,time_created,time_updated) VALUES($i,$p,$d,$t,'1.17',$tc,$tu)";
+        cmd.Parameters.AddWithValue("$i", id);
+        cmd.Parameters.AddWithValue("$p", (object?)parent ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$d", (object?)dir ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$t", title);
+        cmd.Parameters.AddWithValue("$tc", (object?)timeCreated ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$tu", (object?)timeUpdated ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 

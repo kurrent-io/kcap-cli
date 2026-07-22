@@ -74,7 +74,11 @@ internal sealed partial class CodexLauncher(
             "--cd",
             ctx.Worktree.Path,
             "--sandbox",
-            "workspace-write",
+            // A borrowed reviewer runs in the user's REAL checkout (not a daemon-owned,
+            // throwaway worktree) — workspace-write would let it mutate that real repo.
+            // read-only is already proven in the headless runner (CodexCliRunner), including
+            // with MCP injection, so the flow-result MCP tool still works.
+            ctx.Work == WorkLocation.BorrowedCwd ? "read-only" : "workspace-write",
             // Review-flow reviewers (LaunchKind.ReviewFlow) run unattended → never pause for
             // approval (writes stay confined by the workspace-write sandbox). Interactive rendered
             // agents keep the default on-request approval so the user stays in the loop.
@@ -82,7 +86,7 @@ internal sealed partial class CodexLauncher(
             ctx.IsReviewFlow ? "never" : "on-request"
         };
 
-        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result (AI-1139), which can
+        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result, which can
         // only submit a result — never start a flow. Clear-then-whitelist, in this order:
         // the bare `mcp_servers={}` FIRST replaces the entire [mcp_servers] table from
         // ~/.codex/config.toml; the dotted overrides then insert into the now-empty table.
@@ -116,7 +120,7 @@ internal sealed partial class CodexLauncher(
         return new([.. args], McpConfigPath: null);
     }
 
-    /// <summary>AI-1139: registers the reviewer-side result-submission server. Skipped (zero
+    /// <summary>Registers the reviewer-side result-submission server. Skipped (zero
     /// servers — the recursion-safe default) when the daemon has no server URL or kcap path;
     /// the reviewer then falls back to the transcript marker per the prompt contract.</summary>
     void AddFlowResultServer(List<string> args, LauncherContext ctx) {
@@ -132,7 +136,7 @@ internal sealed partial class CodexLauncher(
         args.Add($"mcp_servers.{name}.env={{KCAP_URL={TomlString(config.ServerUrl)},KCAP_FLOW_AGENT_ID={TomlString(ctx.AgentId)}}}");
     }
 
-    /// <summary>AI-1126 D-c: materializes the flow definition's <see cref="LauncherContext.McpAllowlist"/>
+    /// <summary> D-c: materializes the flow definition's <see cref="LauncherContext.McpAllowlist"/>
     /// as additional dotted overrides, in the same clear-then-whitelist style as
     /// <see cref="AddFlowResultServer"/>. Each name resolves against the kcap-owned
     /// <see cref="KcapMcpRegistry"/> — never ambient user config — unknown names are skipped,

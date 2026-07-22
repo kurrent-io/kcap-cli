@@ -82,6 +82,16 @@ public static class HttpClientExtensions {
 
     static string? cachedProvider;
 
+    /// <summary>
+    /// Test seam: clears the in-process discovery cache above. The cache is keyed by
+    /// nothing but process lifetime (unlike <see cref="AuthProviderCache"/>'s on-disk,
+    /// per-<c>baseUrl</c> store) — the FIRST call to <see cref="DiscoverProviderAsync"/>
+    /// in a process wins for every subsequent call regardless of <c>baseUrl</c>. A test
+    /// whose SUT calls this against its own WireMock stub must reset it first, or it can
+    /// silently observe a value cached by an earlier call against a different server.
+    /// </summary>
+    internal static void ResetProviderCacheForTesting() => cachedProvider = null;
+
     public static async Task<string> DiscoverProviderAsync(string baseUrl, CancellationToken ct = default) {
         if (cachedProvider is not null) {
             return cachedProvider;
@@ -92,6 +102,16 @@ public static class HttpClientExtensions {
         // the same actionable message the retry guards print.
         EnsureAbsolute(baseUrl);
 
+        // Cross-process cache: each hook invocation is a fresh process, so the in-process static
+        // above never helps a hook. Skip the /auth/config round-trip when a recent result is on disk.
+        var cached = AuthProviderCache.TryGet(baseUrl);
+
+        if (cached is not null) {
+            cachedProvider = cached;
+
+            return cached;
+        }
+
         using var http = new HttpClient();
 
         try {
@@ -100,7 +120,8 @@ public static class HttpClientExtensions {
             if (response.IsSuccessStatusCode) {
                 var config   = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
                 var provider = config?.Provider ?? "None";
-                cachedProvider = provider; // Only cache successful discovery
+                cachedProvider = provider;          // in-process
+                AuthProviderCache.Set(baseUrl, provider); // cross-process; only cache successful discovery
 
                 return provider;
             }

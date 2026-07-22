@@ -16,6 +16,53 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.RouteOrder).Contains("session-start");
     }
 
+    // the session-start payload gains a best-effort workspace_root (the git repo root
+    // for cwd), used server-side by plan-artifact discovery. Fail-open: a cwd with no
+    // discoverable .git entry (e.g. "/tmp") must omit the field entirely rather than send null.
+    [Test]
+    public async Task session_start_includes_workspace_root_when_cwd_is_inside_a_git_repo() {
+        var tmp = Directory.CreateTempSubdirectory("kcap-claude-hook-git-");
+        try {
+            Directory.CreateDirectory(Path.Combine(tmp.FullName, ".git"));
+            var nested = Path.Combine(tmp.FullName, "nested", "dir");
+            Directory.CreateDirectory(nested);
+
+            using var fx = new Fixture();
+            await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{nested.Replace("\\", "\\\\")}}"}""");
+
+            var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|"));
+            var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
+            await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.FullName);
+        } finally {
+            // Best-effort: on windows-latest runners the AV/indexer can transiently hold a
+            // handle on a just-created directory and fail the recursive delete with
+            // IOException ("being used by another process"). The temp dir is on an
+            // ephemeral runner — retry briefly, then let it go rather than fail the test.
+            for (var attempt = 1; ; attempt++) {
+                try {
+                    tmp.Delete(recursive: true);
+                    break;
+                } catch (IOException) when (attempt < 4) {
+                    await Task.Delay(100 * attempt);
+                } catch (IOException) {
+                    break;
+                } catch (UnauthorizedAccessException) {
+                    break;
+                }
+            }
+        }
+    }
+
+    [Test]
+    public async Task session_start_omits_workspace_root_when_cwd_has_no_git_repo() {
+        using var fx = new Fixture();
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}""");
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|"));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
+        await Assert.That(body!["workspace_root"]).IsNull();
+    }
+
     // Covers the auth-hang case from the spec: the hard cap must beat an
     // uncancellable hang (e.g. TokenStore.RefreshAsync's untimed HttpClient.PostAsync).
     [Test]
@@ -259,6 +306,26 @@ public class ClaudeHookCommandTests {
         await Assert.That(all).Contains("\"route\":\"subagent-stop\"");
     }
 
+    // Task 12 / BLOCKER-1+3 regression: the centralized ordered drain (now running on every
+    // non-Codex hook, incl. --claude) can WITHHOLD a spooled session-end in the ".ordered-*" temp
+    // namespace pending the transcript tail. ClaudeHookCommand.CurrentSessionHasBacklog must see that
+    // withheld terminal (it now delegates to HookSpool.HasBacklog, which covers ".ordered-*") so a
+    // later Claude subagent-stop for the SAME session spools BEHIND it rather than POSTing ahead of
+    // the still-withheld session-end — the exact cross-spool ordering violation the blockers prevent.
+    [Test]
+    public async Task subagent_stop_spools_behind_a_session_end_withheld_in_the_ordered_namespace() {
+        using var fx = new Fixture(HttpStatusCode.OK); // server up — only the ordering guard can hold the post back
+        // A withheld ordered-drain remainder, exactly as LifecycleSpoolDrain/DrainRoutesAsync leaves it.
+        fx.WriteOrderedTemp(Sid, """{"route":"session-end","body":"{\"session_id\":\"withheld\"}"}""");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+
+        // The guard saw the .ordered-* backlog: the fresh subagent-stop was spooled, NOT posted.
+        await Assert.That(fx.RouteOrder).DoesNotContain("subagent-stop");
+        var all = string.Concat(fx.SpoolFiles.Select(File.ReadAllText));
+        await Assert.That(all).Contains("\"route\":\"subagent-stop\"");
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
         readonly string _spoolPath;
@@ -294,6 +361,13 @@ public class ClaudeHookCommandTests {
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath) : [];
+
+        /// <summary>Drops a ".ordered-*" temp (the ordered drain's withheld-remainder namespace)
+        /// straight into the spool dir, simulating a session-end held back by a prior ordered pass.</summary>
+        public void WriteOrderedTemp(string sid, string jsonLine) {
+            Directory.CreateDirectory(_spoolPath);
+            File.WriteAllText(Path.Combine(_spoolPath, $"{sid}.ordered-1-1"), jsonLine + "\n");
+        }
 
         public void Dispose() { Client.Dispose(); try { Directory.Delete(_tmpHome, true); } catch { } }
     }

@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core;
 /// Default behaviour scrubs them so subscription auth (claude.ai login,
 /// ChatGPT account login) is used by <c>claude -p</c> / <c>codex exec</c>;
 /// a globally-set key would otherwise override subscription auth and break
-/// title generation / summaries (AI-755).
+/// title generation / summaries.
 /// </para>
 ///
 /// <para>

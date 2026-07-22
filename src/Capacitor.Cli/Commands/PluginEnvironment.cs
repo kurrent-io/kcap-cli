@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 /// Process-state seam for <see cref="PluginCommand"/>. Captures the values that
 /// <c>kcap plugin install/remove</c> would otherwise read from
 /// <see cref="Environment"/> / <see cref="Console"/>, so tests can supply
-/// fakes without mutating shared process state (see AI-741).
+/// fakes without mutating shared process state.
 ///
 /// <see cref="ResolvePluginPath"/> is a delegate (not a string) so the
 /// filesystem probing in <see cref="SetupCommand.ResolvePluginPath(string?)"/>
@@ -32,13 +32,26 @@ public sealed record PluginEnvironment(
     public string CodexUserHooksJson  => Path.Combine(CodexHome, "hooks.json");
     public string CodexConfigTomlPath => Path.Combine(CodexHome, "config.toml");
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);
+    public string CursorMcpJson       => CursorPaths.UserMcpJson(HomeDirectory);
     public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
+    public string CopilotMcpConfigJson => CopilotPaths.McpConfigJson(HomeDirectory);
+    public string CopilotInstructionsMd => CopilotPaths.InstructionsMd(HomeDirectory);
     public string GeminiSettingsJson   => GeminiPaths.SettingsJson(HomeDirectory);
+    public string GeminiInstructionsMd => GeminiPaths.GeminiMd(HomeDirectory);
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
+    public string KiroMcpJson          => KiroPaths.SettingsMcpJson(HomeDirectory);
+    public string KiroSkillsDir        => KiroPaths.SkillsDir(HomeDirectory);
     public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
+    public string PiKcapMcpExtension   => PiPaths.KcapMcpExtension(HomeDirectory);
+    public string PiAgentsMd           => PiPaths.AgentsMd(HomeDirectory);
     public string OpenCodeKcapPlugin    => OpenCodePaths.KcapPlugin(HomeDirectory);
+    public string OpenCodeMcpConfigJson => OpenCodePaths.McpConfigJson(HomeDirectory);
+    public string OpenCodeAgentsMd      => OpenCodePaths.AgentsMd(HomeDirectory);
     public string AntigravityHooksJson  => AntigravityPaths.GlobalHooksJson(HomeDirectory);
+    public string AntigravityMcpConfigJson  => AntigravityPaths.McpConfigJson(HomeDirectory);
+    public string AntigravityInstructionsMd => AntigravityPaths.InstructionsMd(HomeDirectory);
+    public string AntigravitySkillsDir      => AntigravityPaths.SkillsDir(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

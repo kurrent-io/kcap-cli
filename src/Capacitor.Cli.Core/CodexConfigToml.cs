@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Mcp;
 using Tomlyn;
 using Tomlyn.Model;
 using Tomlyn.Serialization;
@@ -25,24 +26,7 @@ public static class CodexConfigToml {
     static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
 
     /// <summary>
-    /// The kcap MCP servers auto-registered for Codex CLI in <c>~/.codex/config.toml</c>.
-    /// Codex reads MCP servers from the snake_case <c>[mcp_servers]</c> TOML table — note
-    /// this is NOT the camelCase <c>mcpServers</c> key used by the Claude/Codex plugin
-    /// *descriptor* JSON. <c>kcap-flows</c> is intentionally excluded: it launches a paid
-    /// hosted reviewer and stays Claude-only (AI-1056). <c>kcap-memory</c> IS included
-    /// (AI-1146): it is a free, harness-agnostic team-memory server, so Codex users going
-    /// through <c>kcap setup</c> get it alongside review/sessions.
-    /// </summary>
-    static readonly (string Name, string[] Args)[] KcapMcpServers = [
-        ("kcap-review",   ["mcp", "review"]),
-        ("kcap-sessions", ["mcp", "sessions"]),
-        ("kcap-memory",   ["mcp", "memory"])
-    ];
-
-    const string McpServerCommand = "kcap";
-
-    /// <summary>
-    /// AI-794 — enable network access for Codex's <c>workspace-write</c> sandbox so
+    /// enable network access for Codex's <c>workspace-write</c> sandbox so
     /// kcap skills (which shell out to <c>kcap …</c>) can reach the Capacitor server.
     /// Codex blocks all sandbox network by default; a constrained
     /// <c>network_proxy</c> allowlist keeps everything else closed.
@@ -260,18 +244,41 @@ public static class CodexConfigToml {
         var servers = GetOrAddTable(root, "mcp_servers");
         var changed = false;
 
-        foreach (var (name, args) in KcapMcpServers) {
-            // Never clobber an existing entry: a prior kcap registration is already
-            // correct, and a user may have customized it (e.g. an absolute-path command
-            // for a GUI host). Only create the server when it's missing entirely.
-            if (servers.ContainsKey(name)) continue;
+        foreach (var server in KcapMcpServers.ForCodex) {
+            // Never clobber an existing entry's command/args: a prior kcap registration is already
+            // correct, and a user may have customized it (e.g. an absolute-path command for a GUI
+            // host). For an existing entry we only ADDITIVELY set the read-only auto-approve key, and
+            // only when it is DEMONSTRABLY the read-only server: command == "kcap" AND args match the
+            // expected read-only args. The args check matters because the heal never rewrites args — a
+            // hand-written `[mcp_servers.kcap-review]` that actually points at a write-capable server
+            // (e.g. args = ["mcp","memory"]) would otherwise pass a command-only gate and be
+            // auto-approved under the read-only name. Also require the user hasn't set their own
+            // approval mode. This lets genuine pre-existing installs pick up trust; anything ambiguous
+            // keeps prompting.
+            if (servers.TryGetValue(server.Name, out var existingVal)) {
+                if (server.ReadOnly
+                 && existingVal is TomlTable existingTable
+                 && existingTable.TryGetValue("command", out var existingCmd)
+                 && existingCmd is string existingCmdStr && existingCmdStr == KcapMcpServers.Command
+                 && existingTable.TryGetValue("args", out var existingArgsObj)
+                 && existingArgsObj is TomlArray existingArgs && ArgsMatch(existingArgs, server.Args)
+                 && !existingTable.ContainsKey("default_tools_approval_mode")) {
+                    existingTable["default_tools_approval_mode"] = "approve";
+                    changed = true;
+                }
+                continue;
+            }
 
-            var entry = new TomlTable {
-                ["command"] = McpServerCommand,
-                ["args"]    = ToTomlArray(args)
+            var table = new TomlTable {
+                ["command"] = KcapMcpServers.Command,
+                ["args"]    = ToTomlArray(server.Args)
             };
-            servers[name] = entry;
-            changed        = true;
+            // Auto-approve read-only servers (pure reads: kcap-review, kcap-sessions) so Codex runs
+            // them without a prompt. kcap-memory (writes via save) is omitted → keeps prompting.
+            // (kcap-flows isn't in ForCodex at all.) Valid Codex values: auto | prompt | approve.
+            if (server.ReadOnly) table["default_tools_approval_mode"] = "approve";
+            servers[server.Name] = table;
+            changed = true;
         }
 
         return changed;
@@ -282,8 +289,8 @@ public static class CodexConfigToml {
 
         var changed = false;
 
-        foreach (var (name, _) in KcapMcpServers)
-            if (servers.Remove(name)) changed = true;
+        foreach (var server in KcapMcpServers.ForCodex)
+            if (servers.Remove(server.Name)) changed = true;
 
         // Don't leave a bare [mcp_servers] behind if we emptied it.
         if (servers.Count == 0 && root.Remove("mcp_servers")) changed = true;
@@ -296,6 +303,17 @@ public static class CodexConfigToml {
         foreach (var v in values) arr.Add(v);
 
         return arr;
+    }
+
+    /// <summary>True when a TOML <c>args</c> array equals the expected string args exactly (order +
+    /// values). Used to confirm an existing kcap-named server really is the expected read-only one
+    /// before the heal auto-approves it.</summary>
+    static bool ArgsMatch(TomlArray actual, string[] expected) {
+        if (actual.Count != expected.Length) return false;
+        for (var i = 0; i < expected.Length; i++)
+            if (actual[i] is not string s || s != expected[i]) return false;
+
+        return true;
     }
 
     static bool MutateNetworkAccess(TomlTable root, IReadOnlyCollection<string> allowDomains) {

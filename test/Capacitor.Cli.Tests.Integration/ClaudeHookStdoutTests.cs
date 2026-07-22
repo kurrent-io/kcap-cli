@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// WireMock server and captures stdout to validate the SessionStart
 /// <c>hookSpecificOutput</c> envelope shape — including the
 /// single-envelope invariant when both <c>top_clusters</c> and
-/// <c>version</c> are present (AI-768).
+/// <c>version</c> are present.
 ///
 /// Test payloads deliberately OMIT <c>transcript_path</c> so the
 /// session-start path short-circuits before
@@ -31,7 +31,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// A group key is insufficient: another file's test whose SUT writes to
 /// <c>Console.Out</c> (e.g. <c>CodexHookCommand</c> emitting
 /// <c>{"continue":true}</c>) can run under a DIFFERENT key and leak into the
-/// capture (AI-737). Do not re-add a group key here.
+/// capture. Do not re-add a group key here.
 /// </summary>
 public class ClaudeHookStdoutTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();

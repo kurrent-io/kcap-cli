@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
@@ -27,23 +28,36 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
     public string               Status            { get; set; } = "Starting";
-    public DateTime             CreatedAt         { get; }      = DateTime.UtcNow;
+    public DateTime             CreatedAt         { get; init; } = DateTime.UtcNow;
     public DateTime             LastOutputAt      { get; set; } = DateTime.UtcNow;
     public bool                 HasReceivedOutput { get; set; }
     public TerminalOutputBuffer OutputBuffer      { get; } = new();
 
+    /// <summary>Phase B (D2): the launch kind + (for a ReviewFlow launch) the flow identity,
+    /// captured from <see cref="LaunchAgentCommand"/> at construction. Reported in
+    /// <c>LiveAgents</c>/<c>DaemonStatusReport</c> so a restarted server can associate a surviving
+    /// unassigned reviewer with its role. Defaults preserve pre-D2 behavior for any non-D2 launch path.</summary>
+    public LaunchKind           Kind              { get; init; } = LaunchKind.Default;
+    public string?              FlowRunId         { get; init; }
+    public string?              FlowRole          { get; init; }
+
+    /// <summary>Phase B (D1): single-flight teardown latch — a plain field (not a property) so
+    /// <see cref="System.Threading.Interlocked.CompareExchange(ref int,int,int)"/> can gate it. Exactly
+    /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
+    public int CleanupStarted;
+
+    /// <summary>Phase B (D4): the child's exact start-identity captured ONCE at spawn (the
+    /// <c>ProcessStartToken</c>). Teardown uses THIS stored token — never a freshly-recaptured one — so a
+    /// pid recycled after the child exited can't be adopted and later killed. Null only when the pid was
+    /// never capturable (a non-live/degenerate pid — nothing to track).</summary>
+    public string? StartIdentity { get; set; }
+
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
 
-    /// <summary>
-    /// AI-1163 follow-up: the requester's repo root the launch-time worktree mirror copied from
-    /// (<see cref="LaunchAgentCommand.SyncFromRepoRoot"/>). Non-null only for a mirror-requester
-    /// review-flow reviewer. The reviewer process stays alive across rounds (to keep its context),
-    /// so its daemon-created worktree would otherwise stay frozen at the round-1 snapshot; keeping
-    /// the source here lets each subsequent round re-mirror the requester's <i>current</i> working
-    /// tree, so files created/edited while addressing findings reach the running reviewer.
-    /// </summary>
-    public string? SyncSourceRepoRoot { get; init; }
+    /// <summary>The per-reviewer LocalPermissionBridge token URL minted for an unattended review-flow
+    /// launch (null otherwise). Revoked on cleanup so the auto-approve path dies with the reviewer.</summary>
+    public string? ReviewerBridgeToken { get; init; }
 
     /// <summary>
     /// Reason string sent to the server when ending the AgentSession. Defaults to
@@ -101,7 +115,40 @@ internal record AgentInstance(
     /// atomic, and stale-by-one-resize is harmless for best-effort dims.</summary>
     public ushort CurrentCols { get; set; }
     public ushort CurrentRows { get; set; }
+
+    /// <summary>
+    /// The live ACP transcript forwarder for this agent, set once
+    /// <see cref="AgentOrchestrator.HandleLaunchAgent"/>'s post-registration bind
+    /// (<c>AcpSessionStarted</c>) succeeds and the forwarder is constructed. <see langword="null"/>
+    /// for every PTY agent (claude/codex — <see cref="HostedRuntimeStart.Transcript"/> is null for
+    /// them) and for an ACP agent whose initial bind failed (nothing to drain in that case — see
+    /// <see cref="AgentOrchestrator.StartAcpForwardingAsync"/>). Read by
+    /// <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> to run the bounded final-drain before
+    /// ending the session.
+    /// </summary>
+    public AcpForwarderHandle? AcpForwarder { get; set; }
+
+    /// <summary>
+    /// Per-agent/per-setup <see cref="CancellationTokenSource"/>, linked to the daemon's shutdown
+    /// token, created in <see cref="AgentOrchestrator.HandleLaunchAgent"/> BEFORE the fire-and-forget
+    /// <see cref="AgentOrchestrator.StartAcpForwardingAsync"/> call — so it exists immediately,
+    /// independent of whether the bind ever resolves. Both the bind/setup task and (once started) the
+    /// forwarder's run task use ITS token rather than the raw daemon-wide shutdown token, so
+    /// <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> can cancel just this agent's ACP work
+    /// (on drain-timeout, and unconditionally at finalize) without touching any other agent or the
+    /// daemon's own shutdown gate. <see langword="null"/> for every PTY agent (claude/codex) and set
+    /// exactly once, at launch, for every ACP-capable runtime — never re-created for the same agent.
+    /// </summary>
+    public CancellationTokenSource? AcpCts { get; set; }
 }
+
+/// <summary>
+/// Pairs a started <see cref="AcpTranscriptForwarder"/> with its fire-and-forget run task
+/// (<see cref="AgentOrchestrator.ForwardAcpTranscriptAsync"/>'s return
+/// value) so <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> can await the SAME task (bounded)
+/// at teardown without re-deriving or re-wrapping it.
+/// </summary>
+internal sealed record AcpForwarderHandle(AcpTranscriptForwarder Forwarder, Task RunTask);
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
 public class TerminalOutputBuffer {
@@ -139,6 +186,21 @@ public class TerminalOutputBuffer {
 
 internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly ConcurrentDictionary<string, AgentInstance>       _agents = new();
+
+    // Phase B (D4): durable PID records + this daemon's logical identity/epoch for
+    // crash-survivor reaping. Initialized in the ctor from config.
+    AgentPidRecordStore? _pidRecords;
+    AgentKillQuarantine? _quarantine;
+    OrphanReaper?        _orphanReaper;
+    string               _daemonId    = "";
+    string               _daemonEpoch = "";
+
+    // Phase B (D4 §6.4(2a)/(3)): single-flight latches so a slow sweep (each survivor consumes a
+    // ~5s TERM grace sequentially) can't overlap itself when the next heartbeat tick fires — otherwise
+    // sweeps accumulate, double-signal, and re-scan /proc concurrently. A tick whose prior sweep is still
+    // running is simply skipped. 0 = idle, 1 = running (Interlocked-gated).
+    int _orphanSweepRunning;
+    int _quarantineSweepRunning;
     readonly DaemonConfig                                      _config;
     readonly ServerConnection                                  _server;
     readonly WorktreeManager                                   _worktreeManager;
@@ -154,15 +216,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // reports these dims to the server right after the agent registers (and on
     // reconnect) so the read-only viewers (web/desktop xterm) lock to exactly the
     // width Claude drew for — otherwise the viewer auto-fits its panel and the
-    // mismatched columns garble the TUI (AI-884). PtyDefaults is the single source
+    // mismatched columns garble the TUI. PtyDefaults is the single source
     // of truth, shared with IPtyProcessFactory.Spawn's defaults so they can't drift.
     const ushort HostedPtyCols = PtyDefaults.Cols;
     const ushort HostedPtyRows = PtyDefaults.Rows;
 
     readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromSeconds(30));
 
-    // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
-    // AI-642: tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
+    // heartbeat tightened from 60 s SendAsync to round-trip Ping.
+    // tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
     // displaced-slot mismatch or a hung transport is caught within ~10 s
     // instead of ~25 s. This is independent of SignalR's transport timeout
     // (which stays at the 30 s default) — the heartbeat is the daemon's
@@ -171,7 +233,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
 
-    // AI-992: proactively refresh the active profile's auth token ahead of expiry so a
+    // proactively refresh the active profile's auth token ahead of expiry so a
     // continuously-running daemon keeps a WorkOS sliding-inactivity session alive (up to its
     // absolute lifetime) rather than forcing a `kcap login` after an idle period. The tick is
     // cheap (a token-file read + expiry compare) and only calls the refresh endpoint when the
@@ -179,6 +241,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // attempts to at most one per ProactiveRefreshMinInterval, so refresh traffic stays bounded
     // even for a failing refresh or a short-lived token that keeps re-entering the window.
     readonly PeriodicTimer _tokenRefresh = new(TimeSpan.FromSeconds(60));
+
+    // Task 12: periodic sweep of the cross-vendor lifecycle + transcript spools. Covers
+    // backlogs left behind by vendors whose session-end never fires another `kcap` hook process
+    // (Kiro/OpenCode watcher-owned session-end, Antigravity/Codex-desktop GUI idle/parent-exit) —
+    // see SpoolDrainLoop's doc comment. 60s mirrors the reaper-style cadence of the other timers;
+    // the drain's own per-tick budget keeps a slow/unreachable server from stalling the daemon.
+    readonly PeriodicTimer _spoolDrain = new(TimeSpan.FromSeconds(60));
 
     // Refresh once the token is within this much of its expiry. Comfortably above the 60 s tick
     // so the window is never stepped over.
@@ -230,6 +299,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _runtimeFactories  = runtimeFactories;
         _logger            = logger;
 
+        // Phase B (D4): per-daemon PID-record store + this daemon's logical id + boot epoch.
+        // Records live under "{stateDir}/{name}/agents" so they are unambiguously THIS daemon's own
+        // (the startup reap only touches its own leftovers). DaemonId is a stable per-name identity;
+        // DaemonEpoch is fresh per boot so the env-marker scan can tell a prior incarnation's
+        // survivors from the current incarnation's live children.
+        var recordRoot = Path.Combine(
+            config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+        _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        _quarantine  = new AgentKillQuarantine(logger);
+        _daemonId    = ComputeDaemonId(config.Name);
+        _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
+        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger);
+
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;
         _server.OnStopAgent              += HandleStopAgent;
@@ -238,7 +320,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnResizeTerminal         += HandleResizeTerminal;
         _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
         _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
-        _server.RefreshAgentWorktreeHandler   =  HandleRefreshAgentWorktree;
+        _server.ProbeBorrowSourceHandler      =  HandleProbeBorrowSource;
 
         _server.GetLiveAgentIds = () => [
             .. _agents
@@ -246,13 +328,241 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 .Select(kvp => kvp.Key)
         ];
 
+        // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
+        _server.GetLiveAgents = () => [.. BuildLiveAgents()];
+
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunTokenRefreshLoopAsync(_shutdownCts.Token);
+        _ = RunSpoolDrainLoopAsync(_shutdownCts.Token);
+        _ = RunDaemonStatusReportLoopAsync(_shutdownCts.Token); // Phase B (D2): periodic self-report
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
+
+    /// <summary>Phase B (D3): clock seam so the reviewer-TTL heartbeat check is testable with a
+    /// fixed time. Production uses the real UTC clock.</summary>
+    internal Func<DateTime> ClockUtc { get; set; } = () => DateTime.UtcNow;
+
+    /// <summary>Phase B (D3): the ReviewFlow agents the heartbeat should reap now — past
+    /// <see cref="DaemonConfig.ReviewerMaxLifetime"/> (reason <c>reviewer_ttl_expired</c>) or
+    /// <see cref="DaemonConfig.ReviewerIdleTimeout"/> (reason <c>reviewer_idle_expired</c>). Only
+    /// Running ReviewFlow agents; a <see cref="TimeSpan.Zero"/> bound disables it; interactive agents
+    /// are never returned. Pure (no side effects) so the heartbeat and tests share one decision.</summary>
+    internal IReadOnlyList<(string Id, string Reason)> FindReviewersToReap() {
+        var now    = ClockUtc();
+        var result = new List<(string, string)>();
+
+        foreach (var a in _agents.Values) {
+            if (a.Kind != LaunchKind.ReviewFlow || a.Status != "Running") continue;
+
+            if (_config.ReviewerMaxLifetime > TimeSpan.Zero && now - a.CreatedAt > _config.ReviewerMaxLifetime)
+                result.Add((a.Id, "reviewer_ttl_expired"));
+            else if (_config.ReviewerIdleTimeout > TimeSpan.Zero && now - a.LastOutputAt > _config.ReviewerIdleTimeout)
+                result.Add((a.Id, "reviewer_idle_expired"));
+        }
+
+        return result;
+    }
+
+    /// <summary>Phase B (D2): the daemon's self-report snapshot — its authoritative
+    /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
+    /// kill-quarantine). Pure; the send loop + tests share it.</summary>
+    internal DaemonStatusReport BuildStatusReport() =>
+        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()]);
+
+    /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
+
+    /// <summary>Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
+    /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
+    /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
+    /// the wire contract) keeps a slot reserved across the whole teardown, so a concurrent launch can't
+    /// observe a transiently-freed slot and over-admit. A persistent kill/record-write failure shrinks
+    /// admission (fails closed) rather than minting processes beyond the budget.</summary>
+    internal int EffectiveCount => _agents.Count + (_quarantine?.Count ?? 0);
+
+    /// <summary>Phase B (D4): this daemon's stable logical id = a hash of its name, written
+    /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
+    /// user is never mistaken for ours by the env-marker scan.</summary>
+    static string ComputeDaemonId(string name) =>
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name ?? "")))
+        [..16].ToLowerInvariant();
+
+    /// <summary>Phase B (D4 §6.4(2)/(2a)); L1-managed(b) extends this for Unix: capture the child's
+    /// EXACT start-identity ONCE, store it on the agent (teardown reuses it — never re-captures a
+    /// possibly-recycled pid), and persist the durable PID record FAIL-CLOSED. A write failure (I/O)
+    /// or a live-but-unidentifiable child THROWS — caught by the post-insert single-flight cleanup, so
+    /// a spawned child we cannot durably track never stays admitted holding capacity. A non-live/
+    /// degenerate pid (already gone, or pid&lt;=0) has nothing to track, so it returns cleanly rather
+    /// than failing an already-doomed launch.
+    ///
+    /// <paramref name="capturedStartIdentity"/> is the runtime's own natively-captured identity
+    /// (<see cref="IHostedAgentRuntime.StartIdentity"/>) — non-null on Unix (post-L1): the shim
+    /// captures (or definitively fails to capture) identity INSIDE pty_spawn, immediately post-fork,
+    /// which is the ONLY correct place to read it (the capture-binding rule — a post-hoc re-capture
+    /// here could adopt an unrelated process if the pid was already recycled by the time we get here).
+    /// Null means the runtime never captures this way (Windows; the ACP runtime has no PTY at all) —
+    /// that path falls back to the ORIGINAL post-hoc <see cref="ProcessIdentity.Capture"/>, unchanged
+    /// from before this task.</summary>
+    void PersistPidRecordOrThrow(AgentInstance agent, int pid, string? capturedStartIdentity) {
+        if (_pidRecords is null) return;
+
+        if (capturedStartIdentity is not null) {
+            // Unix (post-L1): NEVER re-capture — capturedStartIdentity is already the exact token
+            // read by the shim immediately after the child existed. "" is a deliberate,
+            // well-formed "identity_unavailable" record (capture was attempted and failed), NOT a
+            // launch failure — see UnixPtyProcess's design note for why agent.StartIdentity is set
+            // to "" rather than left null: CleanupAgentAsync's teardown check
+            // (`agent.StartIdentity is { } startIdentity && ... MatchesTri(pid, startIdentity) != false`)
+            // treats "" as permanently uncomparable (MatchesTri returns null — no ':' scheme
+            // separator), which is exactly "ambiguity never kills": a still-alive
+            // identity-unavailable agent gets quarantined and retried, never silently dropped.
+            //
+            // M1-A (spec §4.3): the record's identity_kind makes "" a well-formed, distinguishable
+            // IdentityUnavailable marker rather than an inferred-from-emptiness convention.
+            agent.StartIdentity = capturedStartIdentity; // "" is intentional, not a bug
+
+            var identityKind = capturedStartIdentity.Length == 0
+                ? PidIdentityKind.IdentityUnavailable
+                : PidIdentityKind.Present;
+
+            _pidRecords.Write(new AgentPidRecord(
+                agent.Id, pid, capturedStartIdentity, identityKind, agent.Kind.ToString(), agent.Vendor,
+                agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+
+            return;
+        }
+
+        // Legacy path (Windows / ACP runtimes with no shim-based capture): unchanged behavior.
+        var identity = ProcessIdentity.Capture(pid);
+        if (identity is null) {
+            if (ProcessIdentity.IsAlive(pid))
+                throw new InvalidOperationException(
+                    $"Could not capture start-identity for live agent {agent.Id} (pid {pid}) — failing launch closed");
+
+            return; // no live capturable process → nothing to record or leak
+        }
+
+        agent.StartIdentity = identity;
+
+        // Write throws on I/O failure → propagates → post-insert single-flight cleanup (fail closed):
+        // a spawned, capturable child we cannot durably record must not stay admitted without a record.
+        // This legacy path only reaches here with a non-null capture (see the guard above) — always Present.
+        _pidRecords.Write(new AgentPidRecord(
+            agent.Id, pid, identity, PidIdentityKind.Present, agent.Kind.ToString(), agent.Vendor,
+            agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>Delete an agent's PID record after its death is confirmed (teardown / confirmed reap).</summary>
+    void DeletePidRecord(string agentId) => _pidRecords?.Delete(agentId);
+
+    /// <summary>Test seams (this daemon's PID-record store) so a unit test can seed/inspect records
+    /// without a real launch. Never used in production.</summary>
+    internal void WritePidRecordForTest(AgentPidRecord record)     => _pidRecords?.Write(record);
+    internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
+    internal string DaemonIdForTest                                 => _daemonId;
+    internal string DaemonEpochForTest                             => _daemonEpoch;
+
+    /// <summary>Phase B (D4 §6.4(3) StopAgent fallback): the caller had no in-memory agent for
+    /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,
+    /// on Unix, carries the expected <c>KCAP_AGENT_ID</c> env — ambiguity spares), reap it by identity
+    /// and delete the record on confirmed death. This makes the server's registry-independent S2 stop
+    /// effective even against a NEW daemon incarnation that never knew the agent in memory.</summary>
+    async Task<bool> TryStopByPidRecordAsync(string agentId) {
+        if (_pidRecords is null) return false;
+
+        var record = _pidRecords.ReadAll().FirstOrDefault(r => r.AgentId == agentId);
+        if (record.AgentId != agentId) return false; // no record
+
+        var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _shutdownCts.Token);
+        if (confirmedGone) _pidRecords.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+
+        return confirmedGone;
+    }
+
+    /// <summary>Phase B (D4 §6.4(3)): run the startup orphan reap once — called by DaemonRunner
+    /// at boot under the daemon lock (next to WorktreeManager.CleanupOrphanedAsync), and re-run on each
+    /// heartbeat tick. SINGLE-FLIGHT: if a prior sweep is still running (a long /proc scan + sequential
+    /// TERM graces can outlast the 30s heartbeat, and the ctor-started heartbeat can overlap the boot
+    /// call), this tick is skipped rather than piling on. Best-effort: a reaper fault is logged and
+    /// swallowed, never faulting the caller.</summary>
+    internal async Task ReapOrphansOnceAsync(CancellationToken ct = default) {
+        if (_orphanReaper is null) return;
+        if (Interlocked.CompareExchange(ref _orphanSweepRunning, 1, 0) != 0) return; // a sweep is already in flight
+
+        try { await _orphanReaper.ReapOnceAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "OrphanReaper sweep faulted — continuing"); }
+        finally { Interlocked.Exchange(ref _orphanSweepRunning, 0); }
+    }
+
+    /// <summary>Phase B (D4 §6.4(2a)): retry the kill-quarantine once — SINGLE-FLIGHT, mirroring
+    /// <see cref="ReapOrphansOnceAsync"/>, so a slow retry (each entry a ~5s TERM grace) can't overlap the
+    /// next heartbeat tick. Skipped when empty or already running.</summary>
+    async Task RetryQuarantineOnceAsync(CancellationToken ct) {
+        if (_quarantine is not { Count: > 0 }) return;
+        if (Interlocked.CompareExchange(ref _quarantineSweepRunning, 1, 0) != 0) return;
+
+        try {
+            // Delete the durable PID record of every agent whose death the retry CONFIRMED — teardown
+            // retained it (with the current epoch) while the child was quarantined, so without this it
+            // would be skipped by the orphan sweep and leak until the next daemon restart.
+            foreach (var agentId in await _quarantine.RetryAllAsync(ct)) DeletePidRecord(agentId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "quarantine retry sweep faulted — continuing"); }
+        finally { Interlocked.Exchange(ref _quarantineSweepRunning, 0); }
+    }
+
+    /// <summary>Phase B (D2): build + send one status report, one-way, swallowing errors (an
+    /// old server has no handler; a transient send failure must not touch the agent loops).</summary>
+    internal async Task SendDaemonStatusReportOnceAsync() {
+        try { await _server.DaemonStatusReportAsync(BuildStatusReport()); }
+        catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed — ignoring"); }
+    }
+
+    async Task RunDaemonStatusReportLoopAsync(CancellationToken ct) {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        while (await timer.WaitForNextTickAsync(ct)) {
+            try { await SendDaemonStatusReportOnceAsync(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) { _logger.LogWarning(ex, "DaemonStatusReport loop tick faulted — continuing"); }
+        }
+    }
+
+    /// <summary>Phase B (D2): one <see cref="LiveAgentInfo"/> per currently-live (Starting or
+    /// Running), non-private agent, carrying its kind + flow identity. Mirrors the
+    /// <see cref="ServerConnection.GetLiveAgentIds"/> filter (private-local agents excluded).</summary>
+    internal IReadOnlyList<LiveAgentInfo> BuildLiveAgents() =>
+        [.. _agents.Values
+            .Where(a => a.Status is "Starting" or "Running" && !a.IsPrivate)
+            .Select(a => new LiveAgentInfo(a.Id, a.Kind.ToString(), a.CreatedAt, a.FlowRunId, a.FlowRole))];
+
+    /// <summary>Phase B: test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
+    /// PTY runtime, no real process/worktree) so unit tests can exercise <see cref="BuildLiveAgents"/>
+    /// / status-report / reviewer-TTL logic without a live launch. Never called in production.</summary>
+    internal AgentInstance SeedAgentForTest(
+            string id, LaunchKind kind = LaunchKind.Default, string status = "Running",
+            string? flowRunId = null, string? flowRole = null,
+            DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false,
+            IPtyProcess? pty = null, string? startIdentity = null) {
+        var agent = new AgentInstance(
+            id, null, "default", null, "/repo", "codex",
+            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance),
+            new WorktreeInfo("/repo", "b", "/repo"),
+            new CancellationTokenSource()) {
+            Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
+            CreatedAt = createdAt ?? DateTime.UtcNow, StartIdentity = startIdentity
+        };
+        agent.Status = status;
+        if (lastOutputAt is { } lo) agent.LastOutputAt = lo;
+        _agents[id] = agent;
+        return agent;
+    }
 
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
@@ -276,7 +586,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        // AI-1124: fail an unattended (review-flow) launch fast when the selected vendor's
+        // fail an unattended (review-flow) launch fast when the selected vendor's
         // runtime can't run unattended — before creating a worktree, so there's nothing to
         // clean up. Both shipped PTY launchers support it; this guards future vendors (and the
         // ACP/Cursor runtime, which does not).
@@ -289,8 +599,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
 
+        // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
+        // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
+        // is the user's real checkout — never removed on any path (spec's top safety invariant).
+        var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
+
+        // The per-reviewer bridge token URL (if this is an unattended review-flow launch), hoisted to
+        // method scope so the failure catch can revoke it when no AgentInstance was created to carry it.
+        string? reviewerToken = null;
+
         try {
-            if (ActiveCount >= _config.MaxConcurrentAgents) {
+            if (EffectiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return;
@@ -355,28 +674,66 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? $"refs/pull/{reviewInfo.PrNumber}/head"
                 : cmd.BaseRef;
 
-            worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
+            if (cmd.Borrowed) {
+                // Defense-in-depth re-authorization: the server already probed this cwd, but the
+                // daemon NEVER borrows a path just because the server said so (TOCTOU-safe). The
+                // reason is surfaced verbatim to the server via the catch → LaunchFailedAsync below;
+                // Phase B (server) keys off the `borrow_auth_failed:` prefix.
+                var auth = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(cmd.BorrowCwd ?? "");
 
-            // AI-1163: for a mirror-requester review flow the server sends the requester's repo root
-            // in SyncFromRepoRoot. Mirror its live working tree (uncommitted + untracked) into the
-            // fresh worktree BEFORE spawning, so round 1 sees in-progress code rather than committed
-            // HEAD. Daemon-validated + best-effort (see the helper); never fails the launch.
-            if (!string.IsNullOrEmpty(cmd.SyncFromRepoRoot)) {
-                await TrySyncWorktreeAtLaunchAsync(agentId, cmd.SyncFromRepoRoot, repoPath, worktree.Path);
+                if (!auth.Allowed) {
+                    throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
+                }
+
+                // Run IN the user's real (canonicalized) checkout. Deliberately SKIP CreateAsync, any
+                // base fetch / `git worktree add`, the launch-time mirror, and the attachment
+                // download-into-cwd — every one of those would mutate the user's own tree.
+                worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
+            } else {
+                worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
+
+                // Download attachments into worktree (best-effort)
+                if (attachmentIds is { Length: > 0 }) {
+                    try {
+                        var paths = await DownloadAttachmentsAsync(worktree.Path, attachmentIds);
+
+                        if (paths.Count > 0) {
+                            var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
+                            prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
+                        }
+                    } catch (Exception ex) {
+                        LogAttachmentDownloadFailed(ex, agentId);
+                    }
+                }
             }
 
-            // Download attachments into worktree (best-effort)
-            if (attachmentIds is { Length: > 0 }) {
-                try {
-                    var paths = await DownloadAttachmentsAsync(worktree.Path, attachmentIds);
+            // An unattended review-flow reviewer must auto-approve its kcap tool calls (no human is
+            // present): mint a dedicated bridge token bound to the launch's read-only kcap allowlist
+            // and hand the reviewer that token's URL as KCAP_DAEMON_URL. An invalid allowlist fails
+            // the launch FAST rather than falling back to a prompt that would hang.
+            var daemonBridgeUrl    = _permissionBridge.BaseUrl;
+            var effectiveAllowlist = cmd.McpAllowlist;
 
-                    if (paths.Count > 0) {
-                        var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
-                        prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
+            // Only Codex reviewers get a token: their MCP config-lock is what makes a bare tool name
+            // provably a bound kcap tool (see LocalPermissionBridge.IsReviewerToolAllowed). Claude
+            // reviewers run via bypassPermissions with only the flow-result channel, so they need
+            // none. Also guarded on the bridge listening (BaseUrl != null) — a graceful no-op otherwise.
+            if (isReviewFlow && daemonBridgeUrl is not null
+                && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
+                if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(cmd.McpAllowlist, out var reviewerServers, out var rejected)) {
+                    await _server.LaunchFailedAsync(agentId,
+                        $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
+
+                    if (work == WorkLocation.OwnedWorktree) {
+                        try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
                     }
-                } catch (Exception ex) {
-                    LogAttachmentDownloadFailed(ex, agentId);
+
+                    return;
                 }
+
+                daemonBridgeUrl    = _permissionBridge.RegisterReviewerToken(reviewerServers);
+                reviewerToken      = daemonBridgeUrl;   // the URL doubles as the revoke handle
+                effectiveAllowlist = reviewerServers;   // single source: the set the launcher materializes
             }
 
             var runtimeCtx = new RuntimeStartContext(
@@ -394,9 +751,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Cols: HostedPtyCols,
                 Rows: HostedPtyRows,
                 ServerUrl: _config.ServerUrl,
-                DaemonBridgeUrl: _permissionBridge.BaseUrl,
+                DaemonBridgeUrl: daemonBridgeUrl,
                 CapacitorPath: _config.CapacitorPath,
-                McpAllowlist: cmd.McpAllowlist
+                McpAllowlist: effectiveAllowlist,
+                Work: work,
+                DaemonId: _daemonId,       // Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
+                DaemonEpoch: _daemonEpoch
             );
 
             HostedRuntimeStart start;
@@ -411,9 +771,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
 
-                // Still need to clean up the worktree before returning
-                try { await WorktreeManager.RemoveAsync(worktree); } catch {
-                    /* best-effort */
+                // No AgentInstance was created, so CleanupAgentAsync won't run — revoke the reviewer
+                // token here (if we minted one) so it doesn't leak into the live-token set.
+                if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
+
+                // Still need to clean up the worktree before returning — but ONLY if we own it.
+                // A borrowed cwd is the user's real checkout; removing it here would `git worktree
+                // remove` the user's tree (spec's top safety invariant; mirrors CleanupAgentAsync).
+                if (work == WorkLocation.OwnedWorktree) {
+                    try { await WorktreeManager.RemoveAsync(worktree); } catch {
+                        /* best-effort */
+                    }
                 }
 
                 return;
@@ -427,19 +795,29 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var cts = new CancellationTokenSource();
 
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
-                McpConfigPath      = mcpConfigPath,
-                SyncSourceRepoRoot = string.IsNullOrEmpty(cmd.SyncFromRepoRoot) ? null : cmd.SyncFromRepoRoot,
-                CurrentCols        = HostedPtyCols,
-                CurrentRows        = HostedPtyRows
+                McpConfigPath       = mcpConfigPath,
+                CurrentCols         = HostedPtyCols,
+                CurrentRows         = HostedPtyRows,
+                Work                = work,
+                ReviewerBridgeToken = reviewerToken,
+                Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
+                FlowRunId           = cmd.FlowRunId,
+                FlowRole            = cmd.FlowRole
             };
             _agents[agentId] = agent;
+
+            // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
+            // immediately after the process exists (before registration) so a daemon crash right after
+            // this leaves a reapable record. FAIL-CLOSED: a write/identity failure throws → the catch
+            // routes it through the single-flight cleanup (the agent is already in _agents).
+            PersistPidRecordOrThrow(agent, runtime.Pid, runtime.StartIdentity);
 
             await RegisterAgentAsync(agent);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
             // a runtime, so without this the agent would sit in "Starting" until the heartbeat's
-            // StartupTimeout auto-stops it as stuck (AI-684 Fix B/E). Flip to Running immediately:
+            // StartupTimeout auto-stops it as stuck (Fix B/E). Flip to Running immediately:
             // the runtime factory's StartAsync already completed the ACP initialize/session-new
             // handshake by the time we get here, so the session really is established. PTY
             // runtimes are unaffected — they keep the existing on-first-chunk flip in
@@ -448,6 +826,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 agent.Status            = "Running";
                 agent.HasReceivedOutput = true;
                 if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+            }
+
+            // Bind + start live transcript forwarding for any runtime that exposes an ACP
+            // transcript source (Cursor today; null for every PTY runtime — no branch taken for
+            // claude/codex). Fire-and-forget from here, exactly like ReadAgentOutputAsync below: the
+            // bind call is IsReady-gated and can block across a reconnect outage (ConnectionRetry),
+            // and HandleLaunchAgent must never stall on it — a stalled launch would queue every OTHER
+            // inbound hub command behind it on this daemon's single SignalR connection.
+            // StartAcpForwardingAsync itself still enforces the load-bearing ordering (bind strictly
+            // after RegisterAgentAsync above, strictly before any AcpSessionEvents) by awaiting the
+            // bind before constructing the forwarder.
+            if (start.Transcript is { } transcript) {
+                // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
+                // FinalizeAgentRunAsync to cancel even if the agent finalizes before the bind below
+                // ever resolves (see AgentInstance.AcpCts).
+                var acpCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+                agent.AcpCts = acpCts;
+                _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor, acpCts);
             }
 
             // Start reading output
@@ -477,7 +873,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
-            if (worktree != null) {
+            // Phase B (D1): a post-insert failure (agent already in _agents — e.g. a throwing
+            // RegisterAgentAsync) routes teardown through the single-flight CleanupAgentAsync so it
+            // can't strand a live child; a pre-insert failure falls through to the transient cleanup below.
+            if (_agents.ContainsKey(agentId)) {
+                await CleanupAgentAsync(agentId);
+                await _server.LaunchFailedAsync(agentId, ex.Message);
+                return;
+            }
+
+            // If a reviewer token was minted before the failure and no AgentInstance was created to
+            // own it, revoke it here so it can't linger in the bridge's live-token set.
+            if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
+
+            // Only tear down a worktree we OWN. A borrowed cwd is the user's real checkout — never
+            // remove it, its branch, or its Claude project symlink on a failed launch (spec's top
+            // safety invariant; mirrors the normal-stop guard in CleanupAgentAsync). For a borrowed
+            // launch there is nothing daemon-created to clean up anyway (no CreateAsync, no mirror,
+            // no attachments), and StartAsync throwing means mcpConfigPath was never assigned.
+            if (worktree != null && work == WorkLocation.OwnedWorktree) {
                 if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
                     try {
                         // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup
@@ -599,7 +1013,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // full. Tie that await to BOTH this agent's stop (ReadCts) and daemon shutdown
         // so HandleStopAgent releasing ReadCts unblocks the read loop — otherwise a
         // stop mid-outage would leave the finally-block finalization/cleanup stalled
-        // until the whole daemon exits (AI-846).
+        // until the whole daemon exits.
         using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
 
         try {
@@ -635,8 +1049,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     } else {
                         // Hosted: the server is the only consumer, so back-pressure here when the
                         // queue is full (slow/down transport) — a chunk is never dropped, since
-                        // losing one byte garbles the whole redraw-TUI mirror (AI-844). sendCts
-                        // releases this await on agent stop or daemon shutdown (AI-846).
+                        // losing one byte garbles the whole redraw-TUI mirror. sendCts
+                        // releases this await on agent stop or daemon shutdown.
                         await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
                     }
                 }
@@ -688,7 +1102,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // whose ReadOutputAsync yields real terminal bytes (PTY). A no-terminal runtime
                 // (ACP/cursor) never has output to key off, so gate the check on
                 // EmitsTerminalOutput — such a runtime is Completed/Failed purely by exit code
-                // (AI-684 Fix B/E), never misclassified as a startup failure just for having
+                // (Fix B/E), never misclassified as a startup failure just for having
                 // produced no output.
                 if (agent.Runtime.EmitsTerminalOutput && IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
                     var output = ExtractTerminalText(agent.OutputBuffer);
@@ -719,6 +1133,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
 
             LogAgentExited(agent.Id, exitCode);
+
+            // For an ACP agent with a live forwarder, give the transcript a bounded chance to drain
+            // BEFORE ending the session — this must NEVER pin shutdown (see
+            // FinalDrainAcpTranscriptAsync's remarks); it always returns within AcpFinalDrainBudget
+            // regardless of outcome. PTY agents have no AcpForwarder and take none of this path — the
+            // runtime is disposed exactly where it always was, inside CleanupAgentAsync below.
+            if (agent.AcpForwarder is { } acpForwarder) {
+                await FinalDrainAcpTranscriptAsync(agent, acpForwarder);
+            }
+
+            // Cancel the per-agent ACP CTS unconditionally here — not only inside
+            // FinalDrainAcpTranscriptAsync's own timeout branch above — so a bind/setup task that's
+            // STILL in flight (the agent exited before its bind ever completed, so AcpForwarder is
+            // still null and the drain step above never ran at all) observes cancellation now and can
+            // abort at its liveness check (StartAcpForwardingAsync) before it ever registers a
+            // binding for an agent that is finalizing right now. Runs BEFORE EndAgentSessionAsync so
+            // any forwarder is fully stopped before the binding goes terminal server-side (the same
+            // ordering the drain above already protects). Idempotent/harmless if already cancelled by
+            // the drain step.
+            if (agent.AcpCts is { } acpCts) {
+                try { await acpCts.CancelAsync(); } catch { /* best-effort */ }
+            }
 
             // Tell the server to end the AgentSession. Claude doesn't reliably fire
             // its own session-end hook on SIGTERM/exit, so without this call the
@@ -760,6 +1196,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
+            // Drop the reconnect re-bind registration now that EndAgentSessionAsync above has
+            // (best-effort) made this binding terminal server-side — a later reconnect must not try
+            // to re-bind a session that's already ended. Unconditional — NOT gated on AcpForwarder
+            // having ever been set — so a binding a late/racing setup managed to register despite the
+            // cancellation above (StartAcpForwardingAsync's liveness check narrows but can't fully
+            // eliminate that window) still gets cleaned up here; UnregisterAcpBinding is a no-op when
+            // nothing was ever registered, so this call is always safe to make unconditionally.
+            _server.UnregisterAcpBinding(agent.Id);
+
             // Clean up worktree and unregister from server. Runs unconditionally — even
             // when end-session timed out and is still retrying in the background — so a
             // prolonged outage can never pin the agent in _agents or leak its worktree.
@@ -776,8 +1221,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     static readonly TimeSpan GracefulExitWait = TimeSpan.FromSeconds(15);
 
-    async Task HandleStopAgent(string agentId) {
+    internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
+            // Phase B (D4 §6.4(3)): no in-memory agent — this may be a survivor of a PRIOR
+            // daemon incarnation the server is still trying to stop (S2). Fall back to the PID record:
+            // reap by exact identity if a matching live process is still there.
+            await TryStopByPidRecordAsync(agentId);
             return;
         }
 
@@ -794,7 +1243,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Mark this as a user-initiated stop so the read-loop's finally-block
             // EndAgentSessionAsync call uses "agent_stopped" if it ends up being
             // the only successful call (e.g., transient SignalR failure here).
-            agent.PendingEndReason = "agent_stopped";
+            // Phase B (D3): but PRESERVE a backstop reason the heartbeat already stamped
+            // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
+            // default, so server-side attribution can tell a TTL/idle reap from a user stop.
+            if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
             _                      = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
             _                      = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
 
@@ -906,12 +1358,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin input ignored for private agents
 
-        // AI-1163 follow-up: for a mirror-requester review-flow reviewer, re-mirror the requester's
-        // current working tree into the (still-running) reviewer worktree BEFORE delivering this
-        // round, so it sees files created/edited since the previous round rather than the frozen
-        // round-1 snapshot. No-op for every other agent. See TryReSyncWorktreeForRoundAsync.
-        await TryReSyncWorktreeForRoundAsync(agent);
-
         var message = text;
 
         if (attachmentIds is { Length: > 0 }) {
@@ -922,7 +1368,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        // AI-30: PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
+        // PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
         // the CLI's TUI treats it as one pasted block and the following Enter is an unambiguous
         // submit keypress (see its doc comment for why a naive text-then-CR write mishandles
         // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
@@ -1026,154 +1472,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         => _repoMatcher.FindAsync(req.Owner, req.Repo, req.CandidatePaths ?? [], _shutdownCts.Token);
 
     /// <summary>
-    /// Handles the server's <c>RefreshAgentWorktree</c> client-result invocation (AI-774).
-    /// Syncs the source repo's current working-tree state into the reviewer agent's daemon-created
-    /// worktree so the reviewer sees Claude's latest uncommitted changes before a follow-up round.
-    /// Guards: agent must exist, must not be private, and must be an OwnedWorktree (not borrowed cwd).
+    /// Handles the server's <c>ProbeBorrowSource</c> client-result invocation (Phase A, task
+    /// A3): "can you borrow this path?". Delegates the actual policy (allowlist, git-root resolution,
+    /// symlink canonicalization) to <see cref="BorrowAuthorizer"/> — constructed fresh over the
+    /// daemon's current <see cref="DaemonConfig"/> so a config reload is picked up on the next probe —
+    /// and maps its <see cref="BorrowAuthResult"/> onto the wire-facing <see cref="BorrowProbeResult"/>.
     /// </summary>
-    async Task<RefreshAgentWorktreeResult> HandleRefreshAgentWorktree(RefreshAgentWorktreeCommand cmd) {
-        if (!_agents.TryGetValue(cmd.AgentId, out var agent))
-            return new RefreshAgentWorktreeResult(false, "agent not found");
+    async Task<BorrowProbeResult> HandleProbeBorrowSource(string path) {
+        var result = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(path);
 
-        if (agent.IsPrivate)
-            return new RefreshAgentWorktreeResult(false, "private agent");
-
-        if (agent.Work != WorkLocation.OwnedWorktree)
-            return new RefreshAgentWorktreeResult(false, "not an owned worktree");
-
-        // AI-1163: daemon-validate that the source is a checkout of the SAME repo before copying.
-        // The server may now pass a requester repo root that is not the daemon's exact checkout path
-        // (e.g. a git worktree), so identity + locality are confirmed here (origin match) rather than
-        // by server-side path equality.
-        if (!await IsAllowedSyncSourceAsync(cmd.SourceRepoRoot, agent.RepoPath))
-            return new RefreshAgentWorktreeResult(false, "source is not an allowed checkout of the same repo");
-
-        try {
-            await _worktreeManager.SyncFromSourceAsync(
-                cmd.SourceRepoRoot,
-                agent.Worktree.Path,
-                cmd.ExcludePaths,
-                _shutdownCts.Token
-            );
-
-            return new RefreshAgentWorktreeResult(true, null);
-        } catch (Exception ex) {
-            LogRefreshWorktreeFailed(ex, cmd.AgentId, cmd.SourceRepoRoot, agent.Worktree.Path);
-
-            return new RefreshAgentWorktreeResult(false, ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// AI-1163: launch-time worktree sync for a mirror-requester review flow. Mirrors the requester's
-    /// working-tree state (tracked + untracked, gitignore-respected) into the freshly-created reviewer
-    /// worktree before the reviewer process is spawned, so round 1 sees in-progress/uncommitted code.
-    /// Daemon-validated + best-effort: a source that doesn't resolve on this host, is outside the
-    /// repo-path allowlist, or isn't the same repo (origin mismatch) is skipped, leaving the worktree
-    /// at its checked-out HEAD; any failure is logged and swallowed so it never fails the launch.
-    /// </summary>
-    async Task TrySyncWorktreeAtLaunchAsync(string agentId, string sourceRepoRoot, string targetRepoPath, string worktreePath) {
-        try {
-            if (!await IsAllowedSyncSourceAsync(sourceRepoRoot, targetRepoPath)) {
-                LogLaunchSyncSkipped(agentId, sourceRepoRoot, "source not on the allowlist, not found on this host, or not a checkout of the same repo");
-
-                return;
-            }
-
-            await _worktreeManager.SyncFromSourceAsync(sourceRepoRoot, worktreePath, [], _shutdownCts.Token);
-        } catch (Exception ex) {
-            LogRefreshWorktreeFailed(ex, agentId, sourceRepoRoot, worktreePath);
-        }
-    }
-
-    /// <summary>
-    /// Worktree paths the daemon writes at launch — downloaded attachments, the overlaid vendor
-    /// config, and the generated MCP config — that are NOT part of the requester's git working
-    /// tree. Excluded from the per-round re-mirror so <see cref="WorktreeManager.SyncFromSourceAsync"/>'s
-    /// delete phase (which removes anything not in the source's <c>git ls-files</c> enumeration)
-    /// can't wipe the reviewer's own setup. The launch-time mirror needs no such list because it
-    /// runs before these are written.
-    /// </summary>
-    static readonly string[] DaemonManagedWorktreeExcludes = [".attached", ".claude", ".codex", ".mcp.json"];
-
-    /// <summary>
-    /// Upper bound on the per-round worktree re-mirror (<see cref="TryReSyncWorktreeForRoundAsync"/>).
-    /// The sync blocks round delivery by design (see there), so this caps a pathologically large or
-    /// slow sync: on expiry the round is delivered against a slightly stale mirror rather than
-    /// hanging. Only effective because <see cref="WorktreeManager.SyncFromSourceAsync"/> honours the
-    /// token in its copy/delete loops.
-    /// </summary>
-    static readonly TimeSpan RoundResyncTimeout = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// AI-1163 follow-up: re-mirror the requester's current working tree into a review-flow
-    /// reviewer's worktree before a follow-up round is delivered. The reviewer process stays alive
-    /// across rounds (to keep its context), so its daemon-created worktree would otherwise stay
-    /// frozen at the round-1 snapshot and never pick up files the requester created/edited while
-    /// addressing findings.
-    ///
-    /// This runs on the round-delivery path and the caller awaits it on purpose: the reviewer must
-    /// see the updated tree before it starts the new round, so the sync cannot be fire-and-forget.
-    /// It is bounded, though — capped by <see cref="RoundResyncTimeout"/> and cancellable (the
-    /// underlying sync honours the token in its copy/delete loops) — so a stuck or huge sync
-    /// degrades to a slightly stale mirror instead of blocking round delivery indefinitely. No-op
-    /// unless the agent was launched with a mirror source (<see cref="AgentInstance.SyncSourceRepoRoot"/>)
-    /// and owns its worktree — a borrowed cwd is the requester's own checkout and is never mutated.
-    /// Daemon-validated (same origin, allowlisted, resolves); every timeout/validation-skip/error is
-    /// logged and swallowed so a sync problem never fails round delivery.
-    /// </summary>
-    async Task TryReSyncWorktreeForRoundAsync(AgentInstance agent) {
-        if (agent.SyncSourceRepoRoot is not { } source) return;
-        if (agent.Work != WorkLocation.OwnedWorktree)    return;
-
-        try {
-            if (!await IsAllowedSyncSourceAsync(source, agent.RepoPath)) {
-                LogRoundResyncSkipped(agent.Id, source, "source not on the allowlist, not found on this host, or not a checkout of the same repo");
-
-                return;
-            }
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
-            cts.CancelAfter(RoundResyncTimeout);
-
-            await _worktreeManager.SyncFromSourceAsync(source, agent.Worktree.Path, DaemonManagedWorktreeExcludes, cts.Token);
-        } catch (OperationCanceledException) {
-            // Timed out, or the daemon is stopping: deliver the round against whatever synced rather
-            // than blocking on a stuck/huge sync. Best-effort staleness, logged for diagnosis.
-            LogRoundResyncSkipped(agent.Id, source, $"sync exceeded {RoundResyncTimeout.TotalSeconds:0}s or the daemon is stopping");
-        } catch (Exception ex) {
-            LogRefreshWorktreeFailed(ex, agent.Id, source, agent.Worktree.Path);
-        }
-    }
-
-    /// <summary>
-    /// AI-1163: daemon-side check that <paramref name="sourceRepoRoot"/> is a safe, valid sync source
-    /// for the reviewer worktree built from <paramref name="targetRepoPath"/>. It must (1) resolve on
-    /// this host, (2) satisfy the daemon's repo-path allowlist — the same policy applied to the launch
-    /// repo, so a server-provided source can't read files from a checkout the operator disallowed
-    /// (no-op when no allowlist is configured), and (3) be a checkout of the SAME repository, which we
-    /// establish by matching the <c>origin</c> remote.
-    ///
-    /// Origin-match is the right identity check here (not a weaker path/`.git` check): review flows
-    /// are only ever discovered and launched for repos with a matching GitHub origin
-    /// (<c>DiscoverDaemonsAsync</c> resolves the daemon by owner/repo <i>from</i> origin, and the
-    /// server requires repo_owner/repo_name), so both sides always have an origin — a no-origin repo
-    /// can't be a flow target. Git worktrees inherit the clone's <c>origin</c>, so a requester working
-    /// in a worktree (whose path differs from the daemon's checkout) still matches.
-    /// </summary>
-    async Task<bool> IsAllowedSyncSourceAsync(string sourceRepoRoot, string targetRepoPath) {
-        if (string.IsNullOrEmpty(sourceRepoRoot) || !Directory.Exists(sourceRepoRoot))
-            return false;
-
-        if (!_config.IsRepoAllowed(sourceRepoRoot))
-            return false;
-
-        var sourceOrigin = await GetOriginRemoteAsync(sourceRepoRoot);
-        var targetOrigin = await GetOriginRemoteAsync(targetRepoPath);
-
-        return sourceOrigin is not null &&
-               targetOrigin is not null &&
-               string.Equals(sourceOrigin, targetOrigin, StringComparison.OrdinalIgnoreCase);
+        return new BorrowProbeResult(result.Allowed, result.CanonicalCwd, result.CanonicalGitRoot, result.Reason);
     }
 
     /// <summary>
@@ -1210,6 +1518,163 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
         );
+    }
+
+    /// <summary>
+    /// Binds the ACP canonical session to <paramref name="agent"/> (<c>AcpSessionStarted</c>) —
+    /// this call MUST run after <see cref="RegisterAgentAsync"/> has already registered the agent (the server rejects a
+    /// bind for an unregistered agent) and strictly before any transcript event reaches the server;
+    /// callers (<see cref="HandleLaunchAgent"/>) enforce the first half by only calling this after
+    /// <c>await RegisterAgentAsync(agent)</c>, and this method enforces the second half itself by
+    /// awaiting the bind before ever constructing the forwarder. Once bound, registers the binding
+    /// for reconnect re-bind (<see cref="ServerConnection.RegisterAcpBinding"/>), builds the
+    /// synthesized <c>SessionStarted@Seq0</c> envelope (<see cref="AcpEventTranslator.BuildSessionStarted"/>),
+    /// and starts <see cref="ForwardAcpTranscriptAsync"/> as background work — the resulting task is
+    /// kept on <see cref="AgentInstance.AcpForwarder"/> so <see cref="FinalizeAgentRunAsync"/> can
+    /// coordinate the bounded final-drain at teardown.
+    ///
+    /// Best-effort: any failure in the bind/setup step is logged and swallowed, never propagated to
+    /// the caller. By the time this runs, <paramref name="agent"/> is already registered with the
+    /// server and its ACP process is already live — letting a transcript-plumbing failure escape
+    /// into <see cref="HandleLaunchAgent"/>'s outer catch would incorrectly route it through the
+    /// failed-launch cleanup path (worktree removal) against an agent that is actually running.
+    /// Degrades to "no live transcript for this session" rather than failing the launch.
+    ///
+    /// <b>Bind-vs-finalize stale-binding race:</b>
+    /// <paramref name="acpCts"/> is <paramref name="agent"/>'s <see cref="AgentInstance.AcpCts"/>,
+    /// created by the caller BEFORE this task was fired. Its token — not the raw daemon shutdown
+    /// token — gates the bind call below AND (once built) the forwarder's run task, so
+    /// <see cref="FinalizeAgentRunAsync"/> can cancel just this setup/forwarder. The bind call can
+    /// block for the length of a reconnect outage (<c>ConnectionRetry</c>); if the agent's whole
+    /// lifecycle finalizes while it's still in flight, a LATE successful bind must not register a
+    /// binding for what is by then a dead agent (it would leak into <c>_acpBindings</c> and be
+    /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
+    /// immediately below the bind await closes that race.
+    /// </summary>
+    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
+        try {
+            await _server.AcpSessionStartedAsync(
+                agent.Id,
+                vendor,
+                transcript.AcpSessionId,
+                transcript.Cwd,
+                transcript.ResolvedModel,
+                null, // metadata: no wire-contract fields required for the prototype
+                acpCts.Token
+            );
+
+            // Liveness check: the await above can span a reconnect outage.
+            // If finalize already ran (cancelling acpCts and/or removing the agent from _agents)
+            // while we were waiting, abort here — do not register a binding, build a forwarder, or
+            // start it for an agent that's finalizing or already gone.
+            if (acpCts.IsCancellationRequested || !_agents.ContainsKey(agent.Id)) {
+                LogAcpBindAbortedAgentGone(agent.Id);
+
+                return;
+            }
+
+            _server.RegisterAcpBinding(
+                agent.Id,
+                new AcpBindInfo(vendor, transcript.AcpSessionId, transcript.Cwd, transcript.ResolvedModel)
+            );
+
+            // Post-register re-check (TOCTOU): finalize can run between the liveness check above and
+            // this register, having already cancelled/unregistered+cleaned up the agent — leaving the
+            // binding we just registered stale (replayed on reconnect for a dead agent). Undo it. The
+            // finalizer's own unconditional UnregisterAcpBinding covers the mirror case (finalize after
+            // this point); UnregisterAcpBinding is idempotent so a double-remove is harmless.
+            if (acpCts.IsCancellationRequested || !_agents.ContainsKey(agent.Id)) {
+                _server.UnregisterAcpBinding(agent.Id);
+                LogAcpBindAbortedAgentGone(agent.Id);
+
+                return;
+            }
+
+            var sessionStarted = AcpEventTranslator.BuildSessionStarted(
+                seq: 0,
+                DateTimeOffset.UtcNow.ToString("O"),
+                cwd: transcript.Cwd,
+                model: transcript.ResolvedModel,
+                rawSessionId: transcript.AcpSessionId
+            );
+
+            var forwarder = new AcpTranscriptForwarder(
+                send: (batch, ct) => _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, batch, ct),
+                initialEnvelope: sessionStarted,
+                envelopes: transcript.Envelopes,
+                logger: _logger
+            );
+
+            var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
+            agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
+        } catch (Exception ex) {
+            LogAcpBindFailed(ex, agent.Id);
+        }
+    }
+
+    /// <summary>
+    /// Fire-and-forget wrapper around <see cref="AcpTranscriptForwarder.RunAsync"/> — a forwarder fault must NEVER
+    /// crash the agent or the daemon. <see cref="AcpTranscriptForwarder.RunAsync"/> already swallows
+    /// its own cancellation and retries indefinitely on a send failure, but this wrapper is the outer
+    /// safety net for anything else that could still escape it (e.g. the transcript channel itself
+    /// faulting from a translator bug upstream) — logged, never rethrown, so the returned task always
+    /// completes successfully and <see cref="FinalizeAgentRunAsync"/> can safely await it.
+    /// </summary>
+    async Task ForwardAcpTranscriptAsync(AgentInstance agent, AcpTranscriptForwarder forwarder, CancellationToken ct) {
+        try {
+            await forwarder.RunAsync(ct);
+        } catch (Exception ex) {
+            LogAcpForwarderFaulted(ex, agent.Id);
+        }
+    }
+
+    /// <summary>
+    /// Time budget for the ACP bounded final-drain — how long
+    /// <see cref="FinalDrainAcpTranscriptAsync"/> waits for the forwarder's run task to finish
+    /// draining (after the runtime is disposed) before giving up and letting
+    /// <see cref="FinalizeAgentRunAsync"/> proceed to <see cref="ServerConnection.EndAgentSessionAsync"/>
+    /// regardless. Deliberately small and independent of <see cref="EndAgentSessionBudget"/> — a
+    /// slow/stuck drain degrades to "no trailing transcript", never a stacked delay on top of the
+    /// session-end budget, and never pins shutdown (the primary invariant this exists to protect).
+    /// Settable so tests don't wait for the real value.
+    /// </summary>
+    internal TimeSpan AcpFinalDrainBudget { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Disposes the ACP runtime FIRST so its <c>DisposeAsync</c> completes the
+    /// transcript channel (courtesy-flushing any still-open aggregation run) — <paramref name="acpForwarder"/>'s
+    /// run task can only ever return once that channel completes — then gives the forwarder a FINITE
+    /// budget (<see cref="AcpFinalDrainBudget"/>) to drain whatever's left to the server before
+    /// returning UNCONDITIONALLY. Never throws and never blocks past the budget: a disposal fault or
+    /// a drain that exceeds it is logged, not propagated, so <see cref="FinalizeAgentRunAsync"/>'s
+    /// own outage-cleanup guarantee (<see cref="EndAgentSessionBudget"/>) is never compounded by this
+    /// call. This is also what keeps the forwarder stopped BEFORE the binding goes terminal (the
+    /// caller ends the session immediately after this returns) — the ordering the hot-loop
+    /// guard's edge case relies on in the normal (non-outage) flow.
+    ///
+    /// When the drain misses its budget, the forwarder is
+    /// presumably still blocked/retrying a send against an unresponsive connection —
+    /// <see cref="AcpTranscriptForwarder.RunAsync"/> otherwise retries indefinitely. Cancel
+    /// <paramref name="agent"/>'s per-agent <see cref="AgentInstance.AcpCts"/> so it unwinds
+    /// promptly (it is <c>ct</c>-aware at every await point) instead of leaking an orphaned task
+    /// that keeps sending against an agent that's finalizing right now.
+    /// </summary>
+    async Task FinalDrainAcpTranscriptAsync(AgentInstance agent, AcpForwarderHandle acpForwarder) {
+        try {
+            await agent.Runtime.DisposeAsync();
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "disposing ACP runtime for final transcript drain", agent.Id);
+        }
+
+        var completed = await Task.WhenAny(acpForwarder.RunTask, Task.Delay(AcpFinalDrainBudget));
+
+        if (completed != acpForwarder.RunTask) {
+            LogAcpFinalDrainTimedOut(agent.Id, AcpFinalDrainBudget.TotalSeconds);
+
+            if (agent.AcpCts is { } acpCts) {
+                try { await acpCts.CancelAsync(); } catch { /* best-effort — never let this pin teardown */ }
+            }
+        }
     }
 
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
@@ -1252,7 +1717,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// AgentStatusChanged) so per-session ownership is restored after a (re-)connect. Wired into
     /// <see cref="ServerConnection.ReRegisterAgentsHook"/> and awaited inside
     /// <see cref="ServerConnection.RegisterDaemon"/> BEFORE readiness is restored — so a
-    /// permission invoke gated on <c>IsReady</c> can't fire before ownership recovery (AI-864).
+    /// permission invoke gated on <c>IsReady</c> can't fire before ownership recovery.
     ///
     /// Each agent's re-registration is retried a bounded number of times before giving up, so a
     /// transient blip doesn't leave that agent's ownership unrestored while the daemon still
@@ -1273,7 +1738,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // Re-send the fixed PTY dims. The server stores them in memory, so a
                     // server restart (not just a daemon blip) wipes them — without this
                     // resend the read-only viewers never re-lock and the TUI garbles
-                    // again exactly as before the fix (AI-884). Best-effort: its own
+                    // again exactly as before the fix. Best-effort: its own
                     // catch keeps a dims-send failure from escaping to the retry handler
                     // (which would re-register the agent) or withholding readiness.
                     try {
@@ -1282,7 +1747,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         LogTerminalDimsSendFailed(ex, agent.Id);
                     }
 
-                    // AI-842: do NOT replay the full output buffer here. The old
+                    // do NOT replay the full output buffer here. The old
                     // replay re-sent the entire 2 MB ring on every reconnect, which
                     // the server appended to its own buffer and live-broadcast on
                     // top of the current screen — duplicated, and interleaved with
@@ -1395,6 +1860,29 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
         while (await _heartbeatTimer.WaitForNextTickAsync(ct)) {
+            // Phase B (D3): reap review-flow reviewers past their lifetime/idle backstop. Done
+            // before the per-agent loop so a reaped reviewer isn't also heartbeated this tick. Reason
+            // stamped on PendingEndReason so the end attribution is correct even if HandleStopAgent's
+            // own end call loses to the read-loop's.
+            // Phase B (D4 §6.4(2a)): retry killing any unconfirmed-death quarantined process,
+            // draining those confirmed gone (frees admission). Single-flight (skips if a prior retry runs).
+            _ = RetryQuarantineOnceAsync(ct);
+
+            // Phase B (D4 §6.4(3)): re-run the orphan reap — record pass is epoch-guarded (never
+            // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
+            // recordless survivors. Fire-and-forget; single-flight; swallows its own faults.
+            _ = ReapOrphansOnceAsync(ct);
+
+            foreach (var (id, reason) in FindReviewersToReap()) {
+                if (_agents.TryGetValue(id, out var reviewer)) {
+                    _logger.LogInformation(
+                        "Reaping review-flow reviewer {AgentId} ({Reason}); age {AgeHours:F1}h, idle {IdleHours:F1}h",
+                        id, reason, (ClockUtc() - reviewer.CreatedAt).TotalHours, (ClockUtc() - reviewer.LastOutputAt).TotalHours);
+                    reviewer.PendingEndReason = reason;
+                    _ = HandleStopAgent(id);
+                }
+            }
+
             // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
             // the local user is present and drives them directly).
             foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
@@ -1450,9 +1938,41 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    async Task RunSpoolDrainLoopAsync(CancellationToken ct) {
+        var loop = new SpoolDrainLoop(
+            _config.ServerUrl,
+            new HookSpool(PathHelpers.ConfigPath("spool")),
+            new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool")),
+            _logger,
+            onWhatsDoneRequested: SpawnWhatsDoneGenerator);
+
+        while (await _spoolDrain.WaitForNextTickAsync(ct)) {
+            // Defence in depth: TickAsync is intentionally total, but this runs as an
+            // unobserved background Task — guard here so the loop survives even if a
+            // future change lets an exception escape the tick.
+            try {
+                await loop.TickAsync(ct);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Spool-drain tick faulted — continuing loop");
+            }
+        }
+    }
+
     async Task CleanupAgentAsync(string agentId) {
-        if (!_agents.TryRemove(agentId, out var agent)) {
-            return;
+        // Phase B (D1): claim the single-flight teardown BEFORE removing the agent from _agents.
+        // TryGetValue (not TryRemove) keeps the agent COUNTED in ActiveCount for the whole teardown, so a
+        // concurrent launch can't observe an under-counted EffectiveCount mid-teardown and over-admit
+        // (the P2 admission race). The CompareExchange latch on the SAME instance guarantees exactly one
+        // teardown even if the launch-catch and the read-loop's finally race here.
+        if (!_agents.TryGetValue(agentId, out var agent)) return;
+        if (Interlocked.CompareExchange(ref agent.CleanupStarted, 1, 0) != 0) return;
+
+        // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
+        // path), so revoke its bridge token now — after any final submit_review_result was served.
+        if (agent.ReviewerBridgeToken is { } reviewerToken) {
+            try { _permissionBridge.RevokeReviewerToken(reviewerToken); } catch (Exception ex) { LogCleanupStepFailed(ex, "revoking reviewer bridge token", agentId); }
         }
 
         // Wake any attached local clients blocked on the user's stdin so they can flush the
@@ -1474,6 +1994,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.Work == WorkLocation.OwnedWorktree) {
             try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
+
+        // Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
+        // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
+        // if the child exited and its pid was recycled, a re-capture would adopt the unrelated process's
+        // identity and the heartbeat would later kill it. Quarantine ONLY when the pid is alive AND still
+        // matches the stored identity (a stuck child of ours) — retain the record + count it against
+        // admission (fail closed) so the heartbeat retries the kill to confirmed death. A dead pid, a
+        // recycled pid (proven mismatch), or an agent with no captured identity → confirmed gone, delete
+        // the record. Add to quarantine BEFORE removing from _agents so EffectiveCount never dips
+        // (Activeized→quarantined is count-preserving).
+        var pid = agent.Runtime.Pid;
+        // Quarantine (retain + count) when the child may still be OURS-and-alive: a stored identity that
+        // still matches (true) OR is uncomparable (null — unreadable/foreign token). Delete only on a
+        // proven-gone pid: dead, a conclusive recycle (MatchesTri == false), or an agent that was never
+        // identified. Collapsing the uncomparable case to "gone" would drop a live child's record.
+        if (agent.StartIdentity is { } startIdentity
+            && ProcessIdentity.IsAlive(pid)
+            && ProcessIdentity.MatchesTri(pid, startIdentity) != false) {
+            _quarantine?.Add(new AgentKillQuarantine.Entry(
+                agent.Id, pid, startIdentity, agent.Kind.ToString(), agent.CreatedAt, agent.FlowRunId, agent.FlowRole));
+            _logger.LogWarning(
+                "Agent {AgentId} (pid {Pid}) still alive after teardown — quarantined for heartbeat kill-retry", agent.Id, pid);
+        } else {
+            DeletePidRecord(agentId); // confirmed dead / conclusively recycled pid / never-identified
+        }
+
+        // Now drop the agent from the live registry — after a surviving child is already in quarantine,
+        // so a concurrent launch never sees EffectiveCount transiently under-count this agent.
+        _agents.TryRemove(agentId, out _);
 
         // Skip server unregister during shutdown — _ct is cancelled and the call
         // would throw TaskCanceledException. The server detects the daemon
@@ -1506,6 +2055,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _heartbeatTimer.Dispose();
         _daemonHeartbeat.Dispose();
         _tokenRefresh.Dispose();
+        _spoolDrain.Dispose();
     }
 
     /// <summary>
@@ -1611,17 +2161,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to spawn what's-done generator for session {SessionId}")]
     partial void LogWhatsDoneSpawnFailed(Exception? ex, string sessionId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh worktree for agent {AgentId} (source={Source}, target={Target})")]
-    partial void LogRefreshWorktreeFailed(Exception ex, string agentId, string source, string target);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "Launch-time worktree sync skipped for agent {AgentId} (source={Source}): {Reason}")]
-    partial void LogLaunchSyncSkipped(string agentId, string source, string reason);
-
-    [LoggerMessage(Level = LogLevel.Information, Message = "Per-round worktree re-sync skipped for agent {AgentId} (source={Source}): {Reason}")]
-    partial void LogRoundResyncSkipped(string agentId, string source, string reason);
-
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
+    partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
+    partial void LogAcpBindAbortedAgentGone(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP transcript forwarder faulted for agent {AgentId}")]
+    partial void LogAcpForwarderFaulted(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP final transcript drain for agent {AgentId} exceeded its {Seconds}s budget — proceeding to end the session; any undrained transcript is lost")]
+    partial void LogAcpFinalDrainTimedOut(string agentId, double seconds);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} linked to session {SessionId} via its transcript file (session-start hook fallback)")]
     partial void LogSessionIdDetected(string agentId, string sessionId);
@@ -1644,8 +2197,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only: register a pre-built agent so cleanup/lifecycle can be driven directly.</summary>
     internal void RegisterAgentForTest(AgentInstance agent) => _agents[agent.Id] = agent;
 
+    /// <summary>Test-only: look up a tracked agent by id (null if absent), so a launch test can
+    /// assert the resolved <see cref="AgentInstance.Work"/> / <see cref="AgentInstance.Worktree"/>.</summary>
+    internal AgentInstance? GetAgentForTest(string agentId) => _agents.GetValueOrDefault(agentId);
+
     /// <summary>Test-only entry point to the private cleanup path.</summary>
     internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
+
+    /// <summary>Phase B (D4 §6.4(2a)): drive one quarantine-retry sweep (drains confirmed-dead
+    /// entries and deletes their durable records) so a test needn't wait for a heartbeat tick.</summary>
+    internal Task RetryQuarantineForTest() => RetryQuarantineOnceAsync(_shutdownCts.Token);
 
     /// <summary>Test-only: number of agents currently tracked (for awaiting cleanup).</summary>
     internal int ActiveAgentCountForTest => _agents.Count;
@@ -1653,8 +2214,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
 
-    /// <summary>Test-only entry point to the private send-input handler (AI-30 bracketed-paste submit).</summary>
+    /// <summary>Test-only entry point to the private send-input handler (bracketed-paste submit).</summary>
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
+
+    /// <summary>Test-only entry point to the private probe-borrow-source handler.</summary>
+    internal Task<BorrowProbeResult> HandleProbeBorrowSourceForTest(string path) => HandleProbeBorrowSource(path);
 
     internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
     internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();

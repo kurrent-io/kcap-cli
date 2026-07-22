@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// Path layout for per-name daemon lock + PID + start-lock files (AI-630).
+/// Path layout for per-name daemon lock + PID + start-lock files.
 ///
 /// <para>The previous layout used singletons at <c>PathHelpers.ConfigPath("agent.pid")</c>
 /// and <c>PathHelpers.ConfigPath("agent.start.lock")</c>. Two daemons with
@@ -12,19 +12,44 @@ namespace Capacitor.Cli.Core;
 /// <c>~/.config/kcap</c>) wrote to different singletons and never saw
 /// each other, allowing two daemons under the same name to authenticate as
 /// the same GitHub ID and oscillate the server-side <c>DaemonRegistry</c>
-/// slot. The staging incident that motivated AI-630 was exactly that.</para>
+/// slot. The staging incident that motivated this fix was exactly that.</para>
 ///
 /// <para>This helper uses a <b>fixed location</b> under the home directory
 /// (<c>~/.config/kcap/daemons/</c>) regardless of <c>KCAP_CONFIG_DIR</c>,
 /// so cross-config-dir daemons under the same name now collide on the same
 /// <c>flock</c>. Sanitization is intentionally strict to keep filenames
-/// portable: only <c>[a-z0-9._-]</c> survives, anything else maps to <c>-</c>.</para>
+/// portable: only <c>[a-z0-9._-]</c> survives, anything else maps to <c>-</c>.
+/// The one exception is the opt-in <see cref="DaemonsDirEnvVar"/> test seam
+/// (never set in production) — see its remarks.</para>
 /// </summary>
 public static partial class DaemonLockPaths {
-    static readonly string DefaultDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".config", "kcap", "daemons"
-    );
+    /// <summary>
+    /// Opt-in override for the DEFAULT daemons directory, read lazily on every access so a test
+    /// assembly can redirect the whole process to a temp path before any daemon file is touched.
+    /// Production and the Aspire dev daemon never set this, so the deliberate cross-<c>KCAP_CONFIG_DIR</c>
+    /// collision on <c>~/.config/kcap/daemons/</c> is unchanged. It exists because this directory
+    /// ignores <c>KCAP_CONFIG_DIR</c> and the default daemon name is the OS username: a unit test
+    /// that reads this dir with <see cref="_overrideDir"/> cleared could otherwise resolve — and
+    /// <c>Process.Kill</c> — the developer's live daemon (its pid file lives here).
+    /// </summary>
+    public const string DaemonsDirEnvVar = "KCAP_DAEMONS_DIR";
+
+    /// <summary>
+    /// Pure default-directory resolution: the supplied <see cref="DaemonsDirEnvVar"/> value when
+    /// non-empty, else the fixed <c>~/.config/kcap/daemons/</c> home location. Kept env-free so the
+    /// production fallback can be asserted with an explicit argument (see the test) without mutating
+    /// the process-global environment variable — clearing it at runtime would race any parallel test
+    /// that reads <see cref="Directory"/> and re-expose the real daemons dir this seam exists to hide.
+    /// </summary>
+    internal static string ResolveDefaultDir(string? envValue) =>
+        !string.IsNullOrEmpty(envValue)
+            ? envValue
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".config", "kcap", "daemons"
+            );
+
+    static string DefaultDirectory => ResolveDefaultDir(Environment.GetEnvironmentVariable(DaemonsDirEnvVar));
 
     static string? _overrideDir;
 
@@ -96,7 +121,7 @@ public static partial class DaemonLockPaths {
     /// derived from <c>*.lock</c>, <c>*.pid</c>, <c>*.restart-pending</c>, and
     /// <c>*.version</c> files. Used by <c>daemon doctor</c> to classify held vs
     /// stale entries; covers orphan PID files that have no matching lock (e.g. a
-    /// pre-AI-630 daemon whose migration ran for the PID file but not the start
+    /// legacy daemon whose migration ran for the PID file but not the start
     /// lock, or a stop that removed the lock but left the PID behind) and
     /// marker-only leftovers (a crash between queueing a restart and applying it,
     /// or a version marker left after an unclean exit).

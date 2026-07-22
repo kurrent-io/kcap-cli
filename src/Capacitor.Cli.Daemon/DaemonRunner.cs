@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Pty.Unix;
 using Capacitor.Cli.Daemon.Pty.Windows;
@@ -62,7 +63,11 @@ public static partial class DaemonRunner {
             }
         }
 
-        // AI-1155: reopen fds 1/2 onto the capture file BEFORE building the host,
+        // Phase B (D3): reviewer lifetime/idle backstop overrides from env (seconds; 0 disables).
+        config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
+        config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);
+
+        // reopen fds 1/2 onto the capture file BEFORE building the host,
         // so even a crash during construction lands somewhere. On the detached
         // launch path the CLI closed our std pipes; without this a runtime/native
         // fatal message would go to a broken pipe and vanish. No-op under launchd
@@ -125,6 +130,23 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_CURSOR_PATH") is { Length: > 0 } envCursorPath)
             config.CursorPath = envCursorPath;
 
+        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_MODEL") is { Length: > 0 } envCursorModel)
+            config.CursorModel = envCursorModel;
+
+        if (Environment.GetEnvironmentVariable("KCAP_COPILOT_PATH") is { Length: > 0 } envCopilotPath)
+            config.CopilotPath = envCopilotPath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_KIRO_PATH") is { Length: > 0 } envKiroPath)
+            config.KiroPath = envKiroPath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_PATH") is { Length: > 0 } envOpenCodePath)
+            config.OpenCodePath = envOpenCodePath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
+            config.GeminiPath = envGeminiPath;
+
+        config.DebugFrames = ParseDebugFramesFlag(Environment.GetEnvironmentVariable("KCAP_ACP_DEBUG_FRAMES"));
+
         // Shared name resolution with the CLI supervisor — the CLI's
         // DaemonCommands and the daemon binary must agree on the name so
         // the per-name PID file the CLI inspects is the one the daemon
@@ -159,7 +181,7 @@ public static partial class DaemonRunner {
         // running under the same name on this machine. The lock content is
         // a fresh instance id that we'll also send over DaemonConnect so
         // the server can refuse a second daemon claiming the same
-        // (owner, name) slot (AI-630).
+        // (owner, name) slot.
         var daemonLock = awaitLock
             ? DaemonLock.TryAcquire(config.Name, TimeSpan.FromSeconds(5), config.Version)
             : DaemonLock.TryAcquire(config.Name, config.Version);
@@ -189,6 +211,18 @@ public static partial class DaemonRunner {
         if (OperatingSystem.IsWindows()) {
             builder.Services.AddSingleton<IPtyProcessFactory, WinPtyProcessFactory>();
         } else {
+            // L1-managed(a)/(b): one dedicated, daemon-lifetime native thread runs EVERY Unix
+            // pty_spawn call (never a thread-pool thread — see UnixSpawnerThread's own doc
+            // comment for why). Registered with no factory delegate so DI resolves it via its
+            // parameterless constructor, which already starts the thread. host.StopAsync() only
+            // stops registered IHostedServices — it does NOT dispose the ServiceProvider, so a
+            // plain AddSingleton<T>() IDisposable like this one is NOT disposed by StopAsync
+            // alone. Disposal (and therefore the thread's retirement, via UnixSpawnerThread.Dispose
+            // completing its queue) happens when disposing the host disposes the ServiceProvider —
+            // which is why the shutdown sequence below awaits host.StopAsync() and THEN
+            // DisposeHostAsync(host) on every exit path, after every hosted agent is already
+            // stopped, so normal shutdown retires the thread only once nothing needs it.
+            builder.Services.AddSingleton<UnixSpawnerThread>();
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 
@@ -204,7 +238,7 @@ public static partial class DaemonRunner {
             sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
         );
 
-        // Runtime-selection seam (AI-684 Task 10): one IHostedAgentRuntimeFactory per vendor.
+        // Runtime-selection seam: one IHostedAgentRuntimeFactory per vendor.
         // AgentOrchestrator selects by vendor from the resulting dictionary instead of driving
         // Prepare/BuildArgs/Spawn inline. PtyHostedAgentRuntimeFactory wraps each registered PTY
         // launcher (Claude, Codex); AcpHostedAgentRuntimeFactory speaks ACP JSON-RPC over stdio for
@@ -226,7 +260,20 @@ public static partial class DaemonRunner {
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
-            new AcpHostedAgentRuntimeFactory(sp.GetRequiredService<DaemonConfig>(), sp.GetRequiredService<ILoggerFactory>())
+            new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.Cursor,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<ServerConnection>() // spec-review Finding 4 — real production wiring
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.Copilot,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<ServerConnection>()
+            )
         );
 
         builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp =>
@@ -270,21 +317,43 @@ public static partial class DaemonRunner {
         // Set by the supervised restart strategy so we exit non-zero for a supervisor relaunch.
         var restartState = host.Services.GetRequiredService<RestartState>();
 
-        // AI-652 (extended by AI-684 Task 10): probe each registered runtime factory's CLI binary
+        // probe each registered runtime factory's CLI binary
         // so the DaemonConnect payload only advertises vendors this daemon can actually spawn —
         // now via IHostedAgentRuntimeFactory.IsAvailable() rather than IHostedAgentLauncher, so
         // Cursor (which has no IHostedAgentLauncher) is advertised once cursor-agent is installed.
         // The launch dialog filters its vendor selector by this list. Ordered alphabetically so the
         // wire format is stable across restarts.
-        config.SupportedVendors = host.Services.GetServices<IHostedAgentRuntimeFactory>()
+        var runtimeFactories = host.Services.GetServices<IHostedAgentRuntimeFactory>().ToArray();
+
+        config.SupportedVendors = runtimeFactories
             .Where(f => f.IsAvailable())
             .Select(f => f.Vendor)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
 
+        // Reviewer vendor override support: a strict subset of SupportedVendors — only vendors that
+        // can also run fully unattended without routing an interaction to a human. The server gates
+        // a review-flow vendor override on this list rather than SupportedVendors alone, so a vendor
+        // that's merely installed but has no unattended launcher is never offered as an override
+        // target.
+        config.UnattendedVendors = ComputeUnattendedVendors(runtimeFactories);
+
+        // IsAvailable()==false silently omits cursor from SupportedVendors above — correct
+        // behavior (the launch dialog just won't offer Cursor), but gave operators no clue WHY. One
+        // Warning at startup (not per-launch) so a missing/misconfigured cursor-agent install is
+        // visible in the daemon's own logs instead of only showing up as an absent vendor downstream.
+        if (ShouldWarnCursorUnavailable(runtimeFactories))
+            LogCursorUnavailable(logger, config.CursorPath);
+
+        // KCAP_ACP_DEBUG_FRAMES is a static, daemon-wide setting read once above — warn once here,
+        // at the point it takes effect, rather than lazily the first time some ACP call site actually
+        // logs full content (which could fire dozens of times across one busy session).
+        if (config.DebugFrames)
+            LogAcpDebugFramesEnabled(logger);
+
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
 
-        // AI-1155: if the previous daemon under this name vanished without
+        // if the previous daemon under this name vanished without
         // releasing its lock, it was SIGKILLed (macOS jetsam/OOM, `kill -9`),
         // lost power, or crashed hard — none of which the dying process can
         // log. Emit a breadcrumb now so the otherwise-silent death is on the
@@ -321,7 +390,7 @@ public static partial class DaemonRunner {
             LogLifetimeStopped(logger);
         });
 
-        // AI-630: if the server rejects our DaemonConnect because another
+        // if the server rejects our DaemonConnect because another
         // live daemon owns the (owner, name) slot, signal host shutdown
         // and remember to return exit code 3 instead of 0. Subscribe
         // before ConnectAsync so the initial-connect path is covered.
@@ -338,31 +407,51 @@ public static partial class DaemonRunner {
         // exactly what this bridge is meant to avoid.
         await host.StartAsync(lifetime.ApplicationStopping);
 
-        try {
-            await connection.ConnectAsync(lifetime.ApplicationStopping);
-        } catch (Exception ex) when (nameInUse) {
-            // ConnectAsync's initial-connect path threw because of
-            // NameInUse. OnNameInUse already fired and set our flag; the
-            // host hasn't started its main loop yet, so just clean up
-            // and exit cleanly with code 3.
-            _ = ex;
-            daemonLock.Dispose();
-            await host.StopAsync();
-
-            return 3;
-        }
-
-        var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-        await worktreeManager.CleanupOrphanedAsync();
-
+        // Phase B (D4 §6.4(3)): resolve the orchestrator (which wires OnLaunchAgent +
+        // GetLiveAgents in its ctor) and reap any hosted-agent children that outlived a PRIOR daemon run
+        // — all BEFORE ConnectAsync advertises this daemon and the server can dispatch launches. Doing
+        // it after connect would let new work be admitted while old capacity is still being reclaimed
+        // (those survivors aren't yet in EffectiveCount), and would leave a window where a launch races
+        // an unwired handler. Under the daemon lock; best-effort (swallows its own faults).
         var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
-        // Instantiate EvalRunner so it wires the per-phase eval handlers
-        // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
-        // ServerConnection. It's stateless beyond the handler assignment —
-        // cached context lives in EvalContextCache — so no disposal dance.
-        _ = host.Services.GetRequiredService<EvalRunner>();
 
+        // Once the orchestrator is resolved, the Unix IPtyProcessFactory has pulled in
+        // UnixSpawnerThread — whose foreground (non-background) OS thread is now running and
+        // parks forever until the ServiceProvider is disposed (host.StopAsync() alone does NOT
+        // retire it; see the block comment in the finally below). So EVERY exit path from here on
+        // — success, the nameInUse early-return, OR any exception out of ReapOrphansOnceAsync,
+        // ConnectAsync (non-nameInUse), CleanupOrphanedAsync, or EvalRunner resolution — MUST run
+        // the unified finally so DisposeHostAsync(host) fires and the process can actually exit
+        // instead of hanging. That is why everything below is wrapped in this single try/finally.
+        // Structural fix; backed by DaemonHostDisposalTests, which proves StopAsync-then-dispose
+        // is what retires the DI-owned UnixSpawnerThread.
         try {
+            // Phase B (D4 §6.4(3)): reap any hosted-agent children that outlived a PRIOR daemon run
+            // BEFORE ConnectAsync advertises this daemon (see the orchestrator-resolution comment
+            // above). Under the daemon lock; best-effort (swallows its own faults).
+            await orchestrator.ReapOrphansOnceAsync();
+
+            try {
+                await connection.ConnectAsync(lifetime.ApplicationStopping);
+            } catch (Exception ex) when (nameInUse) {
+                // ConnectAsync's initial-connect path threw because of NameInUse. OnNameInUse
+                // already fired and set our flag; the host hasn't started its main loop yet, so
+                // just exit with code 3 — the unified finally below disposes daemonLock,
+                // orchestrator, connection, and the host (retiring the spawner thread).
+                _ = ex;
+
+                return 3;
+            }
+
+            var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
+            await worktreeManager.CleanupOrphanedAsync();
+
+            // Instantiate EvalRunner so it wires the per-phase eval handlers
+            // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
+            // ServerConnection. It's stateless beyond the handler assignment —
+            // cached context lives in EvalContextCache — so no disposal dance.
+            _ = host.Services.GetRequiredService<EvalRunner>();
+
             // Wait without passing the lifetime token: WaitForShutdownAsync(token) treats
             // token cancellation as a fault, so a normal Ctrl+C / lifetime.StopApplication()
             // would surface as OperationCanceledException. The no-arg overload listens
@@ -375,6 +464,16 @@ public static partial class DaemonRunner {
             await orchestrator.DisposeAsync();
             await connection.DisposeAsync();
             await host.StopAsync();
+
+            // host.StopAsync() only STOPS IHostedServices — it does NOT dispose the
+            // ServiceProvider, so a plain AddSingleton<T>() IDisposable (e.g.
+            // UnixSpawnerThread, whose foreground, non-background OS thread parks
+            // forever on its queue until Dispose() completes it) is never released by
+            // StopAsync alone. Disposing the host is what disposes the ServiceProvider —
+            // and therefore every registered IDisposable singleton — so it must run
+            // after StopAsync on every shutdown path or the spawner thread's foreground
+            // thread keeps the process alive past WaitForShutdownAsync forever.
+            await DisposeHostAsync(host);
             LogCleanupCompleted(logger);
         }
 
@@ -382,11 +481,32 @@ public static partial class DaemonRunner {
         // failure-restart policy relaunches the now-updated binary.
         if (restartState.SupervisedRestart) return ExitCodes.RestartRequested;
 
-        // AI-630: if the daemon was shut down because the server told us
+        // if the daemon was shut down because the server told us
         // our (owner, name) slot is contested mid-run (heartbeat-triggered
         // path), exit with code 3 so wrappers (systemd, npm, CI) can tell
         // this apart from a normal Ctrl+C exit.
         return nameInUse ? 3 : 0;
+    }
+
+    /// <summary>
+    /// Disposes the host so its ServiceProvider — and therefore every registered
+    /// <see cref="IDisposable"/> singleton (e.g. <see cref="UnixSpawnerThread"/>) — is released.
+    /// <see cref="IHost"/> only surfaces <see cref="IDisposable"/>, but the concrete host built by
+    /// <see cref="HostApplicationBuilder"/> also implements <see cref="IAsyncDisposable"/>; prefer
+    /// that when present so any <c>IAsyncDisposable</c> singletons get their async path too, and
+    /// fall back to the synchronous <see cref="IDisposable.Dispose"/> otherwise. Must be called
+    /// AFTER <c>host.StopAsync()</c> on every shutdown path — <c>StopAsync()</c> only stops
+    /// <see cref="IHostedService"/>s, it never disposes the ServiceProvider. <c>internal</c> (not
+    /// <c>private</c>) so the regression test can drive the exact StopAsync-then-dispose sequence
+    /// against a minimal host and prove the ordering is what actually retires a DI-owned
+    /// <see cref="UnixSpawnerThread"/>.
+    /// </summary>
+    internal static async Task DisposeHostAsync(IHost host) {
+        if (host is IAsyncDisposable asyncDisposableHost) {
+            await asyncDisposableHost.DisposeAsync();
+        } else {
+            host.Dispose();
+        }
     }
 
     /// <summary>
@@ -406,8 +526,56 @@ public static partial class DaemonRunner {
         _                              => null
     };
 
+    /// <summary>Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
+    /// (<c>0</c> → <see cref="TimeSpan.Zero"/>, which disables the bound). Unset/blank/invalid/negative
+    /// → the supplied <paramref name="fallback"/>.</summary>
+    internal static TimeSpan ParseSecondsEnv(string name, TimeSpan fallback) {
+        var raw = Environment.GetEnvironmentVariable(name);
+
+        return int.TryParse(raw, out var secs) && secs >= 0 ? TimeSpan.FromSeconds(secs) : fallback;
+    }
+
+    /// <summary>
+    /// Parses <c>KCAP_ACP_DEBUG_FRAMES</c> ("1"/"true", case-insensitive, are On; anything else —
+    /// including unset/blank — is Off) into <see cref="DaemonConfig.DebugFrames"/>. Pulled out as a
+    /// pure predicate (mirroring <see cref="ParseLogLevel"/>) so it's testable without an env var.
+    /// </summary>
+    internal static bool ParseDebugFramesFlag(string? value) =>
+        value?.Trim() is { } v && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but
+    /// reports itself unavailable — the signal for <see cref="RunAsync"/>'s one-time startup
+    /// Warning. Pulled out as a pure predicate over the factory list (rather than inlined in
+    /// <see cref="RunAsync"/>) so it's testable without spinning up the whole DI host that method
+    /// builds.
+    /// </summary>
+    internal static bool ShouldWarnCursorUnavailable(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+        factories.FirstOrDefault(f => f.Vendor == "cursor") is { } cursorFactory && !cursorFactory.IsAvailable();
+
+    /// <summary>
+    /// Vendor tokens this daemon can run fully unattended — a strict subset of
+    /// <c>SupportedVendors</c> (installed) further filtered by
+    /// <see cref="IHostedAgentRuntimeFactory.SupportsUnattended"/>. Pulled out as a pure
+    /// function over the factory list (same reasoning as <see cref="ShouldWarnCursorUnavailable"/>)
+    /// so the reviewer-vendor-override capability advertisement is testable without spinning up
+    /// the whole DI host <see cref="RunAsync"/> builds.
+    /// </summary>
+    internal static string[] ComputeUnattendedVendors(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+        factories
+            .Where(f => f.IsAvailable() && f.SupportsUnattended)
+            .Select(f => f.Vendor)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToArray();
+
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Cursor ACP runtime unavailable: cursor-agent CLI not found (looked for '{CursorPath}'). Cursor will not be offered as a hosted-agent vendor until this is fixed. Set KCAP_CURSOR_PATH to the cursor-agent executable, or install the Cursor CLI, then restart the daemon.")]
+    static partial void LogCursorUnavailable(ILogger logger, string cursorPath);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "KCAP_ACP_DEBUG_FRAMES is enabled — ACP Debug logs may now contain full prompts, tool arguments, and file contents from every hosted Cursor session. Disable in any shared or persistently-logged environment.")]
+    static partial void LogAcpDebugFramesEnabled(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts.")]
     static partial void LogPriorUncleanExit(ILogger logger, string name, string pid);

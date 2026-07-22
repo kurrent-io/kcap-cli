@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// <summary>
 /// Tests for <see cref="DaemonLockPaths"/> — the name-sanitization rules and
 /// the per-name path layout that prevents two daemons under the same name
-/// from racing on the AI-630 lock.
+/// from racing on the lock.
 /// </summary>
 public class DaemonLockPathsTests {
     [Test]
@@ -41,9 +41,12 @@ public class DaemonLockPathsTests {
 
     [Test]
     public async Task Directory_LivesUnderDaemonsFolder() {
-        // Verify the production layout (no test override) uses the renamed
-        // ~/.config/kcap/daemons/ path, not the pre-AI-644 agents/ path.
-        await Assert.That(DaemonLockPaths.Directory.Replace('\\', '/'))
+        // Verify the PRODUCTION fallback (no KCAP_DAEMONS_DIR set) uses the renamed
+        // ~/.config/kcap/daemons/ path, not the legacy agents/ path. Asserted against the pure
+        // ResolveDefaultDir(null) rather than by clearing the process-global env var — clearing it
+        // would race any parallel test that reads DaemonLockPaths.Directory and briefly re-expose the
+        // real daemons dir (Qodo #289 finding 2/3). This is deterministic and touches no shared state.
+        await Assert.That(DaemonLockPaths.ResolveDefaultDir(null).Replace('\\', '/'))
             .EndsWith("/.config/kcap/daemons");
     }
 }

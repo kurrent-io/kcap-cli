@@ -89,52 +89,10 @@ public class LaunchAgentCommandWireFormatTests {
     }
 
     [Test]
-    public async Task DaemonDeserialises_SyncFromRepoRoot_WhenPresent() {
-        // AI-1163: a mirror-requester review-flow launch carries the requester's repo root so the
-        // daemon can sync its live working tree into the reviewer worktree before spawning.
-        var cmd = new LaunchAgentCommand(
-            AgentId:          "sync1234",
-            Prompt:           null,
-            Model:            "default",
-            Effort:           null,
-            RepoPath:         "/tmp/repo",
-            Tools:            null,
-            AttachmentIds:    null,
-            Vendor:           "codex",
-            Kind:             LaunchKind.ReviewFlow,
-            SyncFromRepoRoot: "/home/me/dev/kcap"
-        );
-
-        var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
-        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
-
-        await Assert.That(wire).Contains("\"sync_from_repo_root\":\"/home/me/dev/kcap\"");
-        await Assert.That(parsed.SyncFromRepoRoot).IsEqualTo("/home/me/dev/kcap");
-        await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.ReviewFlow);
-    }
-
-    [Test]
-    public async Task DaemonDeserialises_SyncFromRepoRoot_DefaultsToNull_WhenAbsent() {
-        // Version skew: an older server that predates AI-1163 omits the field entirely. The daemon
-        // must still bind the command (positional SignalR binding) and default the field to null —
-        // i.e. no launch-time sync — rather than failing to invoke LaunchAgent (cf. DEV-1665).
-        const string legacyWire =
-            """
-            {"agent_id":"legacy01","prompt":null,"model":"opus","effort":null,"repo_path":"/tmp/repo","tools":null,"attachment_ids":null,"vendor":"claude","kind":"reviewFlow"}
-            """;
-
-        var parsed = JsonSerializer.Deserialize(legacyWire, CapacitorJsonContext.Default.LaunchAgentCommand);
-
-        await Assert.That(parsed.SyncFromRepoRoot).IsNull();
-        await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.ReviewFlow);
-        await Assert.That(parsed.RepoPath).IsEqualTo("/tmp/repo");
-    }
-
-    [Test]
     public async Task Mcp_allowlist_round_trips_snake_case() {
-        // AI-1126 D-c: the server sends the flow definition's MCP allowlist so the daemon can
+        // D-c: the server sends the flow definition's MCP allowlist so the daemon can
         // thread it to the launcher (Task 6 materializes it). Appended last after
-        // SyncFromRepoRoot so older daemons/servers stay wire-compatible.
+        // BaseRef so older daemons/servers stay wire-compatible.
         var cmd = new LaunchAgentCommand(
             AgentId:       "mcp00001",
             Prompt:        null,
@@ -157,7 +115,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Legacy_payload_without_mcp_allowlist_deserializes_null() {
-        // Version skew: a server predating AI-1126 D-c never sends mcp_allowlist. The daemon
+        // Version skew: a server predating D-c never sends mcp_allowlist. The daemon
         // must still bind the command (positional SignalR binding) and default the field to
         // null — i.e. no allowlist materialization — rather than failing to invoke LaunchAgent.
         const string legacyWire =
@@ -174,7 +132,7 @@ public class LaunchAgentCommandWireFormatTests {
 
     [Test]
     public async Task Old_reader_ignores_mcp_allowlist() {
-        // AI-1126 D-c: a new server sends mcp_allowlist to an old daemon that predates this
+        // D-c: a new server sends mcp_allowlist to an old daemon that predates this
         // task. The old reader must ignore the unknown field and still bind everything else —
         // launches must not break just because the server got the new field first.
         var cmd = new LaunchAgentCommand(
@@ -195,6 +153,50 @@ public class LaunchAgentCommandWireFormatTests {
         await Assert.That(wire).Contains("\"mcp_allowlist\":[\"kcap-sessions\"]");
         await Assert.That(parsed.AgentId).IsEqualTo("old0001");
         await Assert.That(parsed.Vendor).IsEqualTo("claude");
+    }
+
+    [Test]
+    public async Task Borrowed_and_BorrowCwd_round_trip_snake_case() {
+        // Phase A: the server tells the daemon to launch against the user's own checkout
+        // (skip worktree creation) instead of a fresh daemon-owned worktree. Appended last after
+        // McpAllowlist, same wire-compat rule as the fields before it.
+        var cmd = new LaunchAgentCommand(
+            AgentId:       "borrow001",
+            Prompt:        null,
+            Model:         "opus",
+            Effort:        null,
+            RepoPath:      "/tmp/repo",
+            Tools:         null,
+            AttachmentIds: null,
+            Vendor:        "claude",
+            Borrowed:      true,
+            BorrowCwd:     "/some/path"
+        );
+
+        var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
+        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(wire).Contains("\"borrowed\":true");
+        await Assert.That(wire).Contains("\"borrow_cwd\":\"/some/path\"");
+        await Assert.That(parsed.Borrowed).IsTrue();
+        await Assert.That(parsed.BorrowCwd).IsEqualTo("/some/path");
+    }
+
+    [Test]
+    public async Task Legacy_payload_without_borrowed_fields_deserializes_defaults() {
+        // Version skew: an older server that predates the borrow feature never sends borrowed/borrow_cwd. The
+        // daemon must still bind the command (positional SignalR binding) and default Borrowed to
+        // false / BorrowCwd to null — i.e. behave exactly as an owned-worktree launch.
+        const string legacyWire =
+            """
+            {"agent_id":"legacy03","prompt":null,"model":"opus","effort":null,"repo_path":"/tmp/repo","tools":null,"attachment_ids":null,"vendor":"claude"}
+            """;
+
+        var parsed = JsonSerializer.Deserialize(legacyWire, CapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(parsed.Borrowed).IsFalse();
+        await Assert.That(parsed.BorrowCwd).IsNull();
+        await Assert.That(parsed.RepoPath).IsEqualTo("/tmp/repo");
     }
 
     [Test]
@@ -234,7 +236,7 @@ public class LaunchAgentCommandWireFormatTests {
 }
 
 /// <summary>
-/// Frozen snapshot of <see cref="LaunchAgentCommand"/>'s shape from BEFORE AI-1126 D-c added
+/// Frozen snapshot of <see cref="LaunchAgentCommand"/>'s shape from BEFORE D-c added
 /// <c>McpAllowlist</c> — used by <see cref="LaunchAgentCommandWireFormatTests.Old_reader_ignores_mcp_allowlist"/>
 /// to prove an old daemon build tolerates the new wire field rather than failing to bind.
 /// </summary>

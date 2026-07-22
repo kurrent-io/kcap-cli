@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -62,13 +63,15 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 if (filters.FilterSession is { } fs && !string.Equals(row.Id, fs, StringComparison.Ordinal)) continue;
                 if (normalizedCwd is not null &&
                     (row.Directory is null || !Norm(row.Directory).Equals(normalizedCwd, PathComparison))) continue;
-                if (sinceMs is { } cutoff && row.TimeCreated < cutoff) continue;
+                // A null TimeCreated ("unknown") is best-effort KEPT — only a KNOWN-older
+                // row is skipped by the since filter.
+                if (sinceMs is { } cutoff && row.TimeCreated is { } tc && tc < cutoff) continue;
 
                 result.Add(new DiscoveredSession(
                     SessionId:      row.Id, // raw ses_… — no GUID normalization
                     Vendor:         Vendor,
                     Cwd:            row.Directory,
-                    FirstTimestamp: FromEpoch(row.TimeCreated),
+                    FirstTimestamp: row.TimeCreated is { } created ? FromEpoch(created) : null,
                     SourceMeta:     new Dictionary<string, object?> {
                         ["Title"]       = row.Title,
                         ["TimeUpdated"] = row.TimeUpdated,
@@ -110,12 +113,23 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
             var meta = MetaFor(s);
 
-            int total, importable; string fingerprint;
+            int total, importable; string fingerprint; bool countTruncated;
             try {
-                (total, importable, fingerprint) = ComputeClassificationInfo(db, s.SessionId);
+                (total, importable, fingerprint, countTruncated) = ComputeClassificationInfo(db, s.SessionId);
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
                 continue;
+            }
+
+            if (countTruncated) {
+                // The below-cap counting/signature walk hit MaxCountingNodes, so the fingerprint
+                // can't see the WHOLE omitted subtree — a ledger AlreadyLoaded hit can no longer
+                // be trusted to reflect completeness. Surface it and fall through past the
+                // ledger check below (never silent).
+                Console.Error.WriteLine(
+                    $"[kcap] opencode: root {s.SessionId} descendant-count ceiling " +
+                    $"({OpenCodeDb.MaxCountingNodes}) hit — omitted-subtree signature is a lower " +
+                    "bound; skipping the completeness ledger for this session.");
             }
 
             if (importable < ctx.MinLines) {
@@ -125,9 +139,10 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
             // Completeness is tracked client-side (the ledger): a hit on this server with a
             // matching content fingerprint (parent transcript + children) means we already
-            // fully imported it AND it hasn't changed since — skip.
+            // fully imported it AND it hasn't changed since — skip. Never trusted when the
+            // below-cap counting walk was truncated (see above).
             lock (_ledgerLock) {
-                if (_ledger.IsComplete(ctx.BaseUrl, s.SessionId, fingerprint)) {
+                if (!countTruncated && _ledger.IsComplete(ctx.BaseUrl, s.SessionId, fingerprint)) {
                     results.Add(Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, total));
                     continue;
                 }
@@ -155,7 +170,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
         ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) return ImportOutcome.Skipped;
 
@@ -167,8 +182,14 @@ internal sealed class OpenCodeImportSource : IImportSource {
         var lineOffset = repair ? checked(c.ResumeFromLine + 1) : 0;
 
         // 1. session-start (lifecycle-before-transcript; idempotent server-side).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode",
-                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+        var startPayload = BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate);
+        // Step 3 visibility stamp — New-only, and never overrides the existing forcePrivate
+        // "private" stamp above (mutually exclusive: this only fires when !ctx.ForcePrivate).
+        if (!ctx.ForcePrivate && c.Status == ImportCommand.ClassificationStatus.New && ctx.DefaultVisibility is not null) {
+            startPayload["default_visibility"] = ctx.DefaultVisibility;
+        }
+
+        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode", startPayload, ct))
             return ImportOutcome.Failed;
 
         // 2. parent transcript (synthesize to a temp file; SendTranscriptBatches needs a path).
@@ -194,25 +215,61 @@ internal sealed class OpenCodeImportSource : IImportSource {
             try { File.Delete(tmpFile); } catch { }
         }
 
-        // 3. children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
+        // 3. descendants as subagents — BEFORE session-end so SubagentCompleted precedes
+        //    SessionEnded. A subagent-start posted here may REACTIVATE an already-Ended root
+        //    (Model A always routes SubagentStarted through
+        //    EnsureSessionExists(isReactivation:true)) — so per the finally-style re-close
+        //    contract, the session-end re-assertion below must run regardless of whether this
+        //    step throws. An early `Failed` return here would otherwise leave a reactivated root
+        //    stuck Active with no re-close ever posted.
+        //
+        //    Cancellation is handled the SAME way: a cancellation that arrives after a
+        //    descendant lifecycle already reactivated the root (e.g. right after a successful
+        //    subagent-start/content send, observed at the NEXT loop iteration's
+        //    ct.ThrowIfCancellationRequested()) must not skip the re-close below — it's recorded
+        //    here and rethrown only AFTER step 5 runs, never before.
+        var descendantsOk           = true;
+        OperationCanceledException? cancellation = null;
         try {
-            await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
-        } catch (OperationCanceledException) {
-            throw;
+            await ImportDescendantsAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
+        } catch (OperationCanceledException oce) {
+            cancellation = oce;
         } catch {
-            return ImportOutcome.Failed;
+            descendantsOk = false;
         }
 
-        // 4. native title (best-effort, like Copilot/Kiro).
-        if (!string.IsNullOrWhiteSpace(title))
+        // 4. native title (best-effort, like Copilot/Kiro). Skipped on cancellation — no new
+        //    outbound work once cancelled — but the terminal re-close in step 5 still runs.
+        if (cancellation is null && !string.IsNullOrWhiteSpace(title))
             await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
 
-        // 5. session-end (posted only after parent transcript + all children succeeded).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
-                BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
-            return ImportOutcome.Failed;
+        // 5. session-end — posted regardless of step 3's outcome, INCLUDING cancellation (see
+        //    the finally contract above). Uses CancellationToken.None deliberately: `ct` may
+        //    already be cancelled, and the whole point of this call is to re-assert the
+        //    terminal state even so — PostHookAsync/PostWithRetryAsync still bound this to a
+        //    fixed wall-clock budget (~30s), so it cannot hang.
+        var endOk = await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
+            BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), CancellationToken.None);
 
-        // 6. Record completeness in the ledger — ONLY now, after session-end succeeded.
+        // `cancellation` above only catches an OCE THROWN BY step 3. A cancellation that arrives
+        // AFTER descendants finish — most notably while step 4's PostSetTitleAsync is awaited,
+        // which catches OperationCanceledException internally (see its comment) — would
+        // otherwise never be observed: this call to session-end deliberately uses
+        // CancellationToken.None, and nothing downstream re-checked `ct`. Now that the
+        // uncancellable re-close has run (preserving the contract above), check `ct` one more
+        // time and propagate — preferring the already-captured exception (with its original
+        // throw site) when one exists — BEFORE evaluating endOk or writing completeness, so a
+        // run cancelled at any point never marks the ledger complete.
+        if (cancellation is not null) {
+            ExceptionDispatchInfo.Capture(cancellation).Throw();
+        } else if (ct.IsCancellationRequested) {
+            throw new OperationCanceledException(ct);
+        }
+
+        if (!endOk) return ImportOutcome.Failed;
+        if (!descendantsOk) return ImportOutcome.Failed;
+
+        // 6. Record completeness in the ledger — ONLY now, after a fully successful import.
         //    The fingerprint was computed at classify time and carried on SourceMeta.
         if (c.SourceMeta!.TryGetValue("Fingerprint", out var fpObj) && fpObj is string fp) {
             lock (_ledgerLock) {
@@ -224,18 +281,37 @@ internal sealed class OpenCodeImportSource : IImportSource {
         return repair ? ImportOutcome.Resumed : (sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded);
     }
 
-    async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
+    /// <summary>
+    /// Imports every TRANSITIVE descendant (recursive <c>parent_id</c> walk, depth-capped) as a
+    /// DIRECT subagent of the top-level root — the existing flatten shape; Model A's stream key
+    /// can't express deeper nesting, and flattening preserves content that today is silently
+    /// dropped beyond the first level. Descendants beyond the depth cap are surfaced (never
+    /// silent) via a stderr diagnostic. Throws on the first descendant whose lifecycle can't be
+    /// posted (caller wraps this in a finally-style re-close).
+    /// </summary>
+    async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
         using var db = new OpenCodeDb(_dbPath);
-        var children = db.QueryChildren(rootId); // ordered (time_created, id)
+        var (descendants, omitted, _, countTruncated) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
 
-        foreach (var child in children) {
+        if (omitted > 0) {
+            // Once the below-cap counting ceiling is hit, `omitted` is a LOWER BOUND, not an
+            // exact count — say so, rather than implying completeness.
+            var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
+            Console.Error.WriteLine(
+                $"[kcap] opencode: root {rootId} descendants_omitted={omitted}{lowerBoundNote} " +
+                $"(depth cap {OpenCodeDb.MaxDescendantDepth} exceeded)");
+        }
+
+        foreach (var d in descendants) {
             ct.ThrowIfCancellationRequested();
+            var child     = d.Row;
             var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(child.Id);
             var agentType = ResolveAgentType(db, child.Id);
 
             // No per-child completeness gate: a complete parent is skipped wholesale via the
-            // ledger, so children are only reached during an incomplete parent's import. Offset
-            // above the child's (rootId, agentId) HWM so a repair replays above ingested content.
+            // ledger, so descendants are only reached during an incomplete parent's import.
+            // Offset above the descendant's (rootId, agentId) HWM so a repair replays above
+            // ingested content.
             var chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, agentId, ct);
             var childOffset = chwm is { } v ? checked(v + 1) : 0;
 
@@ -312,24 +388,51 @@ internal sealed class OpenCodeImportSource : IImportSource {
         SourceMeta       = s.SourceMeta,
     };
 
-    // Parent total reconstructed lines, importable lines (gates MinLines), and a content
-    // fingerprint over the parent transcript AND its direct children — the ledger key, so a
-    // same-line-count mutation (tool completing, in-place edit, changed/added child) re-imports.
-    static (int Total, int Importable, string Fingerprint) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
+    // Fingerprint-schema version. The fingerprint used to cover only the parent transcript +
+    // its DIRECT QueryChildren, so an AlreadyLoaded ledger hit could skip a root wholesale
+    // forever even though its grandchildren were never imported (single-level discovery
+    // silently dropped them). The fingerprint is now recursive over EVERY descendant AND the
+    // omitted-subtree signature beyond the import cap (see below), and this version marker is
+    // fed into the hash too — bump it whenever the fingerprint's shape/inputs change, so every
+    // pre-upgrade ledger entry is cache-busted and the first post-upgrade import re-classifies
+    // and picks up whatever the old fingerprint couldn't see.
+    const string FingerprintSchemaVersion = "v3-recursive-descendants-with-omitted-signature";
+
+    // Parent total reconstructed lines, importable lines (gates MinLines), a content
+    // fingerprint over the parent transcript AND every transitive descendant — the ledger key,
+    // so a same-line-count mutation (tool completing, in-place edit, changed/added/removed
+    // descendant at any depth) re-imports — and whether the below-cap counting walk was
+    // truncated: when true, the fingerprint's omitted-subtree signature is a LOWER BOUND, and
+    // the caller must not trust a ledger match as complete.
+    static (int Total, int Importable, string Fingerprint, bool CountTruncated) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         void Feed(string s) { hash.AppendData(Encoding.UTF8.GetBytes(s)); hash.AppendData("\n"u8); }
 
+        Feed(" fpv:" + FingerprintSchemaVersion);
+
         int total = 0, importable = 0;
-        foreach (var line in db.SynthesizeLines(sessionId)) {  // parent reader fully drained before children query
+        foreach (var line in db.SynthesizeLines(sessionId)) {  // parent reader fully drained before descendant queries
             total++;
             if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
             Feed(line);
         }
-        foreach (var child in db.QueryChildren(sessionId)) {
-            Feed("\u0000child:" + child.Id);
-            foreach (var line in db.SynthesizeLines(child.Id)) Feed(line);
+        var (descendants, _, omittedIds, countTruncated) = db.QueryDescendants(sessionId);
+        // Fed unconditionally, including an EMPTY descendant set, so the fingerprint always
+        // reflects the descendant edge shape, not merely its presence.
+        Feed(" descendants:" + descendants.Count);
+        foreach (var d in descendants) {
+            Feed(" child:" + d.Row.Id + ":" + d.Depth);
+            foreach (var line in db.SynthesizeLines(d.Row.Id)) Feed(line);
         }
-        return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
+        // Fed too, by id — a descendant BEYOND the import cap is never imported, but its
+        // presence/absence must still invalidate the ledger: the old fingerprint hashed only
+        // the in-cap descendant list, so a newly-reachable capped
+        // descendant left the fingerprint unchanged and an AlreadyLoaded hit skipped the session
+        // wholesale forever — silently, since ImportDescendantsAsync (and its
+        // descendants_omitted diagnostic) never even ran.
+        Feed(" omitted:" + omittedIds.Count);
+        foreach (var oid in omittedIds) Feed(" omitted_child:" + oid);
+        return (total, importable, Convert.ToHexString(hash.GetHashAndReset()), countTruncated);
     }
 
     static Dictionary<string, object?> WithFingerprint(IReadOnlyDictionary<string, object?> src, string fingerprint) {
@@ -356,8 +459,12 @@ internal sealed class OpenCodeImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (cwd is not null) p["cwd"] = cwd;
+        // Fail-open git-root discovery, mirroring ImportChainsAsync
+        // so routed imports carry the same workspace_root the file-based path does.
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 
@@ -369,6 +476,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         };
         if (cwd is not null) p["cwd"] = cwd;
         if (endedAt is { } ts) p["ended_at"] = ts.ToString("O");
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 

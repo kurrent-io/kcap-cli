@@ -534,11 +534,11 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(stdout).Contains("trust");
     }
 
-    // AI-698 regression: when the top-level skills/ folder is present but one
+    // Regression: when the top-level skills/ folder is present but one
     // or more individual skill sub-folders are missing (packaging defect),
     // `plugin install --codex` must fail BEFORE writing hooks. The per-skill
     // preflight must run before InstallCodexHooks to maintain the atomicity
-    // guarantee from AI-676 — either everything installs or nothing does.
+    // guarantee from — either everything installs or nothing does.
     [Test]
     public async Task InstallCodex_fails_before_writing_hooks_when_individual_skill_folder_missing() {
         using var fakeHome   = new TempDir();
@@ -567,7 +567,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(stderr).Contains("Cannot install Codex plugin");
     }
 
-    // AI-676 P2: when the kcap plugin folder cannot be resolved (e.g.,
+    // when the kcap plugin folder cannot be resolved (e.g.,
     // the binary was hand-copied and the sibling `kcap/` tree is gone),
     // `plugin install --codex` must fail BEFORE writing hooks. Otherwise the
     // user ends up with hook entries pointing at a kcap binary whose
@@ -606,7 +606,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var toml       = await File.ReadAllTextAsync(configPath);
         await Assert.That(toml).Contains("[mcp_servers.kcap-review]");
         await Assert.That(toml).Contains("[mcp_servers.kcap-sessions]");
-        await Assert.That(toml).Contains("[mcp_servers.kcap-memory]"); // AI-1146
+        await Assert.That(toml).Contains("[mcp_servers.kcap-memory]");
     }
 
     [Test]
@@ -621,7 +621,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var toml = await File.ReadAllTextAsync(configPath);
         await Assert.That(toml).DoesNotContain("kcap-review");
         await Assert.That(toml).DoesNotContain("kcap-sessions");
-        await Assert.That(toml).DoesNotContain("kcap-memory"); // AI-1146
+        await Assert.That(toml).DoesNotContain("kcap-memory");
         await Assert.That(toml).Contains("my-tool"); // user's server preserved
     }
 

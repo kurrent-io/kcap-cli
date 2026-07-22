@@ -1,13 +1,16 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Spectre.Console;
@@ -29,12 +32,27 @@ public static class SetupCommand {
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
+        var skipCursorMcpFlag = args.Contains("--skip-cursor-mcp");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
+        var skipCopilotMcpFlag = args.Contains("--skip-copilot-mcp");
+        var skipCopilotInstructionsFlag = args.Contains("--skip-copilot-instructions");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
+        var skipGeminiMcpFlag = args.Contains("--skip-gemini-mcp");
+        var skipGeminiInstructionsFlag = args.Contains("--skip-gemini-instructions");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
+        var skipKiroMcpFlag  = args.Contains("--skip-kiro-mcp");
+        var skipKiroSkillsFlag = args.Contains("--skip-kiro-skills");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
+        var skipPiMcpFlag    = args.Contains("--skip-pi-mcp");
+        var skipPiInstructionsFlag = args.Contains("--skip-pi-instructions");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
+        var skipOpenCodeMcpFlag = args.Contains("--skip-opencode-mcp");
+        var skipOpenCodeInstructionsFlag = args.Contains("--skip-opencode-instructions");
         var skipAntigravityFlag = args.Contains("--skip-antigravity-hooks");
+        var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
+        var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
+        var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
+        var skipImport       = args.Contains("--skip-import");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -76,7 +94,7 @@ public static class SetupCommand {
         }
 
         // Step 1: Server
-        AnsiConsole.Write(new Rule("[yellow]Step 1/5 — Server[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 1/6 — Server[/]").LeftJustified());
         string serverUrl;
         string? preAuthToken = null;
         string  provider;
@@ -119,7 +137,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 2: Login
-        AnsiConsole.Write(new Rule("[yellow]Step 2/5 — Login[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
         if (loginComplete) {
             // WorkOS discovery already authenticated + saved the active (picked) profile.
@@ -153,15 +171,15 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 3: Default session visibility
-        AnsiConsole.Write(new Rule("[yellow]Step 3/5 — Default session visibility[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 3/6 — Default session visibility[/]").LeftJustified());
 
         string defaultVisibility;
 
         if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility") ?? "org_public").ToLowerInvariant();
 
-            if (defaultVisibility is not "private" and not "org_public" and not "public") {
-                await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: private, org_public, or public");
+            if (!AppConfig.ValidVisibilities.Contains(defaultVisibility)) {
+                await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}");
 
                 return 1;
             }
@@ -171,9 +189,10 @@ public static class SetupCommand {
             defaultVisibility = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
-                    .AddChoices("org_public", "private", "public")
+                    .AddChoices(AppConfig.ValidVisibilities)
                     .UseConverter(v => v switch {
                         "private"    => "All private — only you can see your sessions",
+                        "project"    => "Project repos public to fellow project members, others private",
                         "org_public" => "Org repos public, others private (default)",
                         "public"     => "All public — others can see all your sessions",
                         _            => v
@@ -185,7 +204,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 4: Coding agents
-        AnsiConsole.Write(new Rule("[yellow]Step 4/5 — Coding agents[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 4/6 — Coding agents[/]").LeftJustified());
         await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your coding agent CLIs.");
         await Console.Out.WriteLineAsync();
 
@@ -215,6 +234,20 @@ public static class SetupCommand {
             // probe covers a CLI/fresh install that hasn't created it yet.
             Antigravity: AntigravityPaths.IsInstalled() || AgentDetector.IsInstalled("antigravity"));
 
+        bool PromptYesNo(string text) =>
+            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
+
+        var detectedSummary = SetupDecisions.DetectedAgentsSummary(detected);
+
+        if (detectedSummary is not null)
+            await Console.Out.WriteLineAsync($"  Detected coding agents: {detectedSummary}");
+
+        // The single install-consent decision, replacing the nine per-vendor prompts. Made
+        // BEFORE CodingAgentsStep.Options is constructed, so it uses the LOCAL `noPrompt` (there
+        // is no `options` object yet). NoPrompt alone would not imply InstallAgents, so this must
+        // be set explicitly here or `--no-prompt` would silently stop installing agents.
+        var installAgents = SetupDecisions.DecideInstallAgents(detected, noPrompt, PromptYesNo);
+
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
         var claudeSettingsPath = legacyProjectScope
@@ -232,9 +265,24 @@ public static class SetupCommand {
             SkipOpenCode: skipOpenCodeFlag,
             SkipAntigravity: skipAntigravityFlag,
             NoPrompt:    noPrompt,
-            SkipCodexNetworkAccess: skipCodexNetworkFlag);
+            SkipCodexNetworkAccess: skipCodexNetworkFlag,
+            SkipCursorMcp: skipCursorMcpFlag,
+            SkipCopilotMcp: skipCopilotMcpFlag,
+            SkipCopilotInstructions: skipCopilotInstructionsFlag,
+            SkipGeminiMcp: skipGeminiMcpFlag,
+            SkipGeminiInstructions: skipGeminiInstructionsFlag,
+            SkipAntigravityMcp: skipAntigravityMcpFlag,
+            SkipAntigravityInstructions: skipAntigravityInstructionsFlag,
+            SkipAntigravitySkills: skipAntigravitySkillsFlag,
+            SkipOpenCodeMcp: skipOpenCodeMcpFlag,
+            SkipOpenCodeInstructions: skipOpenCodeInstructionsFlag,
+            SkipKiroMcp: skipKiroMcpFlag,
+            SkipKiroSkills: skipKiroSkillsFlag,
+            SkipPiMcp: skipPiMcpFlag,
+            SkipPiInstructions: skipPiInstructionsFlag,
+            InstallAgents: installAgents);
 
-        // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
+        // allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
         // proxy; self-hosted servers are added as exact hosts. Derived from the active
         // server URL plus every configured profile so switching profiles still works.
@@ -256,7 +304,20 @@ public static class SetupCommand {
             PiExtensionPath:      PiPaths.KcapExtension(),
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
             AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
-            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"));
+            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"),
+            CursorMcpPath:        CursorPaths.UserMcpJson(),
+            CopilotMcpPath:       CopilotPaths.McpConfigJson(),
+            CopilotInstructionsPath: CopilotPaths.InstructionsMd(),
+            GeminiInstructionsPath: GeminiPaths.GeminiMd(),
+            AntigravityMcpPath:       AntigravityPaths.McpConfigJson(),
+            AntigravityInstructionsPath: AntigravityPaths.InstructionsMd(),
+            AntigravitySkillsDir:     AntigravityPaths.SkillsDir(),
+            OpenCodeMcpPath:      OpenCodePaths.McpConfigJson(),
+            OpenCodeInstructionsPath: OpenCodePaths.AgentsMd(),
+            KiroMcpPath:          KiroPaths.SettingsMcpJson(),
+            KiroSkillsDir:        KiroPaths.SkillsDir(),
+            PiMcpExtensionPath:   PiPaths.KcapMcpExtension(),
+            PiAgentsMdPath:       PiPaths.AgentsMd());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -272,10 +333,38 @@ public static class SetupCommand {
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
-            RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers());
-
-        bool PromptYesNo(string text) =>
-            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
+            RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
+            // every non-Claude JSON harness registers the ForCursor subset — kcap-workitems
+            // is a Claude Code plugin-only tool (its session-id default rides the Claude hook env).
+            RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
+                CursorPaths.UserMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
+            RegisterCopilotMcp:       () => JsonMcpConfigWriter.Register(
+                CopilotPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
+            InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
+                CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body),
+            // Skills are already current when the on-disk marker matches this build AND
+            // every owned kcap-* folder is present; used to skip the prompt + re-copy
+            // (mirrors PluginCommand's postinstall fast path). A missing/stale marker — or a
+            // deleted skill folder — reads as "not current" → prompt + install (self-heals).
+            AgentSkillsCurrent:       AgentsSkillsInstaller.IsCurrent,
+            RegisterOpenCodeMcp:      () => JsonMcpConfigWriter.Register(
+                OpenCodePaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode")),
+            InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
+                OpenCodePaths.AgentsMd(), KcapAgentInstructions.Body),
+            RegisterKiroMcp:          () => JsonMcpConfigWriter.Register(
+                KiroPaths.SettingsMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("kiro")),
+            RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
+                GeminiPaths.SettingsJson(), KcapMcpServers.ForCursor, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
+            InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
+                GeminiPaths.GeminiMd(), KcapAgentInstructions.Body),
+            RegisterAntigravityMcp:   () => JsonMcpConfigWriter.Register(
+                AntigravityPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity")),
+            InstallAntigravityInstructions: () => AgentInstructionsWriter.Write(
+                AntigravityPaths.InstructionsMd(), KcapAgentInstructions.Body),
+            // Pi has no JSON MCP config — the "MCP" is a second extension file (kcap-mcp.ts).
+            InstallPiMcp:             PiMcpExtensionInstaller.Install,
+            InstallPiInstructions:    () => AgentInstructionsWriter.Write(
+                PiPaths.AgentsMd(), KcapAgentInstructions.Body));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
@@ -283,7 +372,7 @@ public static class SetupCommand {
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
-        // from headless agent CLI spawns by default (AI-755) so subscription auth
+        // from headless agent CLI spawns by default so subscription auth
         // wins. PAYG users with the keys set in their environment can opt back in
         // here; the rest never see this prompt.
         var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
@@ -328,7 +417,7 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         // Step 5: Daemon name + save
-        AnsiConsole.Write(new Rule("[yellow]Step 5/5 — Agent Daemon[/]").LeftJustified());
+        AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
         var    defaultName = Environment.UserName.ToLowerInvariant();
         string daemonName;
@@ -363,12 +452,49 @@ public static class SetupCommand {
         profileConfig = profileConfig with { Profiles = profiles };
         await AppConfig.SaveProfileConfig(profileConfig);
 
+        // Refresh the in-process resolved state to the exact values just
+        // saved, so any same-process work after this point (e.g. the import
+        // step) observes this server URL + profile rather than re-resolving
+        // CLI/env/repo precedence and possibly landing on something else.
+        AppConfig.SetResolvedState(serverUrl, activeName, defaultProfile);
+
         var finalTokens = await TokenStore.LoadAsync();
 
-        // AI-752: tell the server this user has finished CLI setup, so the dashboard
+        // tell the server this user has finished CLI setup, so the dashboard
         // can flip the new-tenant welcome modal from "Waiting for CLI to register"
         // to "Registered". Best-effort — never block setup completion on this.
         await PingCliSetupAsync(serverUrl);
+
+        await Console.Out.WriteLineAsync();
+
+        // Step 6: Import past sessions
+        AnsiConsole.Write(new Rule("[yellow]Step 6/6 — Import past sessions[/]").LeftJustified());
+
+        // detectPullRequest:false — Step 6 only needs (owner, name) to scope the repo import;
+        // PR/MR detection would run extra provider probes/subprocesses for nothing here.
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
+            Environment.CurrentDirectory, detectPullRequest: false);
+        (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
+            ? (o, n)
+            : null;
+
+        // Auth requirements are satisfied when no login is required at all (provider
+        // None), or the login this run just did (or already had) produced a usable,
+        // non-expired token — not merely "provider != None" (Decision 9).
+        // "usable token" = refresh-aware (mirrors the import path's own auth): an expired but
+        // refreshable token still counts. The probe is wrapped so a token I/O / refresh failure
+        // degrades to an ineligible (best-effort) skip rather than throwing out of setup — the
+        // import path's own errors are caught inside RunImportStepAsync, and this eligibility
+        // probe (awaited outside that boundary) must be equally non-fatal.
+        var authSatisfied = await IsAuthSatisfiedAsync(
+            provider, static async () => await TokenStore.GetValidTokensAsync() is not null);
+
+        await RunImportStepAsync(
+            currentRepo, authSatisfied, skipImport, noPrompt,
+            () => AnsiConsole.Prompt(new ConfirmationPrompt("Import past sessions from this repository?") { DefaultValue = true }),
+            serverUrl, activeName, defaultVisibility);
+
+        await Console.Out.WriteLineAsync();
 
         AnsiConsole.Write(new Rule("[green]Setup complete[/]").LeftJustified());
 
@@ -389,7 +515,7 @@ public static class SetupCommand {
 
         AnsiConsole.Write(grid);
 
-        // AI-836: hooks only load at coding-agent session start. The common case is a user
+        // hooks only load at coding-agent session start. The common case is a user
         // running `kcap setup` from inside an already-running session, which won't stream
         // live until it restarts — so tell them, but only when something was actually
         // installed (no point promising recording we never wired up).
@@ -413,6 +539,128 @@ public static class SetupCommand {
 
         return 0;
     }
+
+    /// <summary>
+    /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
+    /// token; any other provider needs a usable (valid-or-refreshable) token. The token probe is
+    /// injected so it's testable, and any exception it throws is treated as "not satisfied" — this
+    /// probe is awaited OUTSIDE <see cref="RunImportStepAsync"/>'s try/catch, so it must never
+    /// throw out of setup (the optional import failing must not fail <c>kcap setup</c>).
+    /// </summary>
+    internal static async Task<bool> IsAuthSatisfiedAsync(string provider, Func<Task<bool>> hasUsableToken) {
+        if (provider == AuthProvider.None) return true;
+
+        try {
+            return await hasUsableToken();
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Step 6 (import past sessions) decision + best-effort execution, extracted from
+    /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
+    /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
+    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
+    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
+    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
+    /// exit code is reported with a warning and swallowed — this method never throws and never
+    /// fails setup.
+    /// </summary>
+    internal static async Task RunImportStepAsync(
+            (string Owner, string Name)? currentRepo,
+            bool                          authSatisfied,
+            bool                          skipImport,
+            bool                          noPrompt,
+            Func<bool>                    promptYesNo,
+            string                        serverUrl,
+            string                        activeProfile,
+            string                        defaultVisibility) {
+        var decision = SetupDecisions.DecideImport(
+            currentRepo is not null, authSatisfied, skipImport, noPrompt, promptYesNo);
+
+        if (decision.Outcome == SetupDecisions.ImportOutcome.Skip) {
+            if (decision.SkipReason is not null)
+                AnsiConsole.MarkupLine($"  [dim]Skipping import — {Markup.Escape(decision.SkipReason)}.[/]");
+
+            return;
+        }
+
+        // Run: DecideImport only returns Run when hasCurrentRepo was true, so currentRepo is
+        // guaranteed non-null here.
+        var invocation = new ImportInvocation(
+            BaseUrl:            serverUrl,
+            Repo:               currentRepo!.Value,
+            DefaultVisibility:  defaultVisibility,
+            AutoSkipExclusions: true,
+            ForcePrivate:       false,
+            ActiveProfile:      activeProfile);
+
+        try {
+            var exitCode = await (ImportRunnerOverride ?? DefaultImportRunner)(invocation);
+
+            if (exitCode != 0) {
+                AnsiConsole.MarkupLine(
+                    "  [yellow]⚠[/] Import of past sessions did not complete. Run [cyan]kcap import[/] manually to retry.");
+            }
+        } catch (Exception ex) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]⚠[/] Import of past sessions failed: {Markup.Escape(ex.Message)}. Run [cyan]kcap import[/] manually to retry.");
+        }
+    }
+
+    /// <summary>
+    /// The arguments Step 6 pins into its embedded <see cref="ImportCommand.HandleImport"/> call.
+    /// A record (not a bare argument list) so tests can capture and assert on it via
+    /// <see cref="ImportRunnerOverride"/> without running a real import.
+    /// </summary>
+    internal sealed record ImportInvocation(
+        string                       BaseUrl,
+        (string Owner, string Name) Repo,
+        string?                      DefaultVisibility,
+        bool                         AutoSkipExclusions,
+        bool                         ForcePrivate,
+        string                       ActiveProfile);
+
+    /// <summary>
+    /// Test seam: when set, replaces the real <see cref="ImportCommand.HandleImport"/> call made
+    /// by <see cref="RunImportStepAsync"/>. Process-global static state — tests must reset it to
+    /// null (in a finally block) after use.
+    /// </summary>
+    internal static Func<ImportInvocation, Task<int>>? ImportRunnerOverride;
+
+    static Task<int> DefaultImportRunner(ImportInvocation inv) =>
+        ImportCommand.HandleImport(
+            baseUrl:                 inv.BaseUrl,
+            filterCwd:               null,
+            filterSession:           null,
+            minLines:                15,
+            generateSummaries:       false,
+            sources:                 BuildImportSources(),
+            explicitVendorSelection: false,
+            since:                   null,
+            scope:                   new ImportScope.Repo(inv.Repo.Owner, inv.Repo.Name),
+            skipConfirmation:        true,
+            forcePrivate:            inv.ForcePrivate,
+            activeProfile:           inv.ActiveProfile,
+            currentRepo:             inv.Repo,
+            needOrgPick:             false,
+            storedOrg:               null,
+            autoSkipExclusions:      inv.AutoSkipExclusions,
+            defaultVisibility:       inv.DefaultVisibility);
+
+    /// <summary>The nine supported import sources — mirrors Program.cs's `kcap import` construction.</summary>
+    static IReadOnlyList<IImportSource> BuildImportSources() => new IImportSource[] {
+        new ClaudeImportSource(),
+        new CodexImportSource(),
+        new CursorImportSource(),
+        new CopilotImportSource(),
+        new GeminiImportSource(),
+        new KiroImportSource(),
+        new PiImportSource(),
+        new OpenCodeImportSource(),
+        new AntigravityImportSource(),
+    };
 
     static async Task<(string ServerUrl, string? PreAuthToken, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
             string[] args, bool forceDevice) {
@@ -517,7 +765,7 @@ public static class SetupCommand {
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
 
-    // AI-752 — best-effort signal to the server that this user has completed CLI setup.
+    // best-effort signal to the server that this user has completed CLI setup.
     // Silently swallows network/auth/server errors: the welcome-modal nudge is a UX
     // affordance, not part of the contract of `kcap setup`.
     //
@@ -586,7 +834,7 @@ public static class SetupCommand {
     }
 
     /// <summary>
-    /// AI-836 — the end-of-setup reminder that live recording only starts on a
+    /// the end-of-setup reminder that live recording only starts on a
     /// <em>new</em> coding-agent session. Claude Code (and the other agents) load hooks
     /// at session start, so a session that was already running when setup installed the
     /// hooks keeps running without them and never streams live. Returns the Spectre-markup

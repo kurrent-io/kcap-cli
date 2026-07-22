@@ -74,6 +74,27 @@ public class KcapMcpRegistryTests {
     }
 
     [Test]
+    public async Task Resolve_KcapWorkItems_ReturnsDescriptor() {
+        var result = KcapMcpRegistry.Resolve("kcap-workitems");
+
+        await Assert.That(result).IsNotNull();
+    }
+
+    [Test]
+    public async Task Resolve_KcapWorkItems_CorrectArgs() {
+        var result = KcapMcpRegistry.Resolve("kcap-workitems");
+
+        await Assert.That(result!.Args).IsEquivalentTo(new[] { "mcp", "workitems" });
+    }
+
+    [Test]
+    public async Task Resolve_KcapWorkItems_StartsFlowsFalse() {
+        var result = KcapMcpRegistry.Resolve("kcap-workitems");
+
+        await Assert.That(result!.StartsFlows).IsFalse();
+    }
+
+    [Test]
     public async Task Resolve_KcapFlows_ReturnsDescriptor() {
         var result = KcapMcpRegistry.Resolve("kcap-flows");
 

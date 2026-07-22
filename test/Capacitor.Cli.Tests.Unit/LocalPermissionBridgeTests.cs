@@ -5,16 +5,19 @@ using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+[NotInParallel]
 public class LocalPermissionBridgeTests {
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
-            Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null
+            Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null,
+            ILogger<LocalPermissionBridge>? logger = null
         ) {
         var server = new FakeServerConnection(respond);
-        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
+        var bridge = new LocalPermissionBridge(server, logger ?? NullLogger<LocalPermissionBridge>.Instance);
 
         return (bridge, server);
     }
@@ -238,6 +241,8 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StopAsyncReleasesPort() {
         var (bridge, _) = CreateBridge();
+        TcpListener? probe    = null;
+        var          disposed = false;
 
         try {
             await bridge.StartAsync(CancellationToken.None);
@@ -247,17 +252,20 @@ public class LocalPermissionBridgeTests {
 
             // After stop, the port should accept a fresh bind. If StopAsync didn't release
             // it, this would either throw or hang.
-            var probe = new TcpListener(IPAddress.Loopback, port);
+            probe = new TcpListener(IPAddress.Loopback, port);
+            probe.Start();
 
-            try {
-                probe.Start();
-            } finally {
-                probe.Stop();
-            }
-        } finally {
-            // Ensure DisposeAsync runs even if the probe.Start() above throws — otherwise the
-            // listener / CTS leak into later tests in the same process.
+            // Keep the replacement listener bound while disposing the bridge. This reproduces
+            // the suite-level race where StopAsync released the port, another fixture claimed it,
+            // and the old listener's later Close() threw EADDRINUSE.
             await bridge.DisposeAsync();
+            disposed = true;
+        } finally {
+            probe?.Stop();
+
+            // Ensure cleanup still runs if setup or the assertion above fails. Dispose is
+            // intentionally idempotent, so retrying after a partial shutdown is safe.
+            if (!disposed) await bridge.DisposeAsync();
         }
     }
 
@@ -430,7 +438,7 @@ public class LocalPermissionBridgeTests {
         }
     }
 
-    // AI-1139 follow-up: a review-flow reviewer's own result-submission tool must be auto-approved
+    // Follow-up: a review-flow reviewer's own result-submission tool must be auto-approved
     // by the bridge WITHOUT surfacing a user prompt. Codex fires a PermissionRequest for the MCP
     // tool call even under `--ask-for-approval never`, and its hook bridges here; without this the
     // unattended reviewer blocks on a decision it can never get.
@@ -565,6 +573,303 @@ public class LocalPermissionBridgeTests {
             await bridge.DisposeAsync();
         }
     }
+
+    // ── Unattended reviewer-token auto-approval ──────────────────────────────────────
+
+    static async Task<string?> Behavior(HttpResponseMessage r) {
+        using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
+        return doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision").GetProperty("behavior").GetString();
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_auto_approves_bound_read_tool_without_server_round_trip() {
+        // deny if the server is ever consulted, so an accidental round-trip can't masquerade as allow.
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "get_pr_summary" };   // bare Codex name
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(await Behavior(r)).IsEqualTo("allow");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_auto_approves_server_qualified_tool_in_bound_allowlist() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "mcp__kcap_review__get_pr_summary" };  // Claude form
+            using var r = await client.PostAsync($"{reviewerUrl}/claude/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(await Behavior(r)).IsEqualTo("allow");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_auto_approves_submit_review_result() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "submit_review_result" };
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(await Behavior(r)).IsEqualTo("allow");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_denies_server_qualified_tool_outside_bound_allowlist() {
+        // Bound to kcap-review only; a kcap-memory (write) call is out of allowlist → DENY, never a prompt.
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("allow", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "mcp__kcap_memory__save_memory" };
+            using var r = await client.PostAsync($"{reviewerUrl}/claude/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);      // NOT deferred to the interactive path
+            await Assert.That(await Behavior(r)).IsEqualTo("deny");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_missing_tool_name_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_missing_session_id_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { tool_name = "get_pr_summary" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Shared_token_read_tool_still_prompts_no_escalation() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("allow", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client = CreateClient();
+            // Same tool, but on the SHARED (interactive) token → must go to the server, not auto-approve.
+            var payload = new { session_id = "abc", tool_name = "get_pr_summary" };
+            using var r = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Revoked_reviewer_token_returns_404() {
+        var (bridge, _) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+            bridge.RevokeReviewerToken(reviewerUrl);
+
+            using var client = CreateClient();
+            using var r1 = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+            using var r2 = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "submit_review_result" }));
+
+            await Assert.That((int)r1.StatusCode).IsEqualTo(404);
+            await Assert.That((int)r2.StatusCode).IsEqualTo(404);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Concurrent_reviewer_tokens_are_independent() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var urlA = bridge.RegisterReviewerToken(["kcap-review"]);
+            var urlB = bridge.RegisterReviewerToken(["kcap-review"]);
+            bridge.RevokeReviewerToken(urlA);
+
+            using var client = CreateClient();
+            using var rB = await client.PostAsync($"{urlB}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+            using var rA = await client.PostAsync($"{urlA}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+
+            await Assert.That((int)rB.StatusCode).IsEqualTo(200);   // B unaffected by revoking A
+            await Assert.That(await Behavior(rB)).IsEqualTo("allow");
+            await Assert.That((int)rA.StatusCode).IsEqualTo(404);   // A revoked
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_is_never_logged() {
+        var log = new CapturingLogger();
+        var (bridge, _) = CreateBridge(logger: log);
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+            var token       = new Uri(reviewerUrl).AbsolutePath.Trim('/');
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+
+            foreach (var msg in log.Messages)
+                await Assert.That(msg.Contains(token, StringComparison.Ordinal)).IsFalse();
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_denies_bare_tool_name_from_non_codex_vendor() {
+        // A bare tool name is only provably a kcap tool for a config-locked vendor (codex). On a
+        // claude-path reviewer token, a bare built-in like "Bash" must be DENIED, not auto-approved.
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("allow", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);        // not deferred to a prompt
+            await Assert.That(await Behavior(r)).IsEqualTo("deny");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_whitespace_session_id_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            // "----" → "" after dash-strip → not a usable session id → 400 before any auto-approval.
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "----", tool_name = "get_pr_summary" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_whitespace_tool_name_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "   " }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    /// <summary>A second bridge retries when its first probed port is already claimed in-process.</summary>
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task StartAsync_FirstPortAlreadyClaimed_RetriesAndRecovers() {
+        var (first, _)  = CreateBridge();
+        var (second, _) = CreateBridge();
+
+        try {
+            await first.StartAsync(CancellationToken.None);
+            var firstPort    = new Uri(first.BaseUrl!).Port;
+            var reservations = 0;
+
+            second.ReserveLoopbackPortOverrideForTest = () => {
+                if (Interlocked.Increment(ref reservations) == 1) return firstPort;
+
+                var probe = new TcpListener(IPAddress.Loopback, 0);
+                probe.Start();
+                try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
+            };
+
+            await second.StartAsync(CancellationToken.None);
+
+            await Assert.That(reservations).IsGreaterThanOrEqualTo(2);
+            await Assert.That(new Uri(second.BaseUrl!).Port).IsNotEqualTo(firstPort);
+        } finally {
+            await second.DisposeAsync();
+            await first.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task StartAsync_CancellationInterruptsClaimRetry() {
+        var (first, _)  = CreateBridge();
+        var (second, _) = CreateBridge();
+        using var cts = new CancellationTokenSource();
+
+        try {
+            await first.StartAsync(CancellationToken.None);
+            var firstPort = new Uri(first.BaseUrl!).Port;
+
+            second.ReserveLoopbackPortOverrideForTest = () => {
+                cts.Cancel();
+                return firstPort;
+            };
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() => second.StartAsync(cts.Token));
+            await Assert.That(second.BaseUrl).IsNull();
+        } finally {
+            await second.DisposeAsync();
+            await first.DisposeAsync();
+        }
+    }
+
+    [Test]
+    [Arguments(10048, true)]
+    [Arguments(32, true)]
+    [Arguments(48, true)]
+    [Arguments(98, true)]
+    [Arguments(5, false)]
+    public async Task IsAddressInUse_ClassifiesPlatformErrors(int errorCode, bool expected) {
+        await Assert.That(LocalPermissionBridge.IsAddressInUse(new HttpListenerException(errorCode)))
+            .IsEqualTo(expected);
+    }
+}
+
+sealed class CapturingLogger : ILogger<LocalPermissionBridge> {
+    public List<string> Messages { get; } = [];
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        => Messages.Add(formatter(state, exception));
 }
 
 /// <summary>

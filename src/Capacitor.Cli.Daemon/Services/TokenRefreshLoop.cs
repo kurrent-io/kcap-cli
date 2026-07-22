@@ -26,7 +26,7 @@ internal sealed class TokenStoreRefreshPort(TimeSpan window) : IProactiveTokenRe
 }
 
 /// <summary>
-/// Daemon-driven proactive auth-token refresh (AI-992). Auth tokens are otherwise refreshed
+/// Daemon-driven proactive auth-token refresh. Auth tokens are otherwise refreshed
 /// lazily — only once a hook hits an expired access token — so after an idle period the user
 /// sees a 401 and must re-run <c>kcap login</c>. This loop keeps the active profile's token
 /// warm by refreshing it <em>ahead</em> of expiry while the daemon runs, which for WorkOS's

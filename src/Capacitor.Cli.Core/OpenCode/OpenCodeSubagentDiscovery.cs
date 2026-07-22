@@ -5,7 +5,7 @@ using Capacitor.Cli.Core; // JsonElement Str/Obj extensions
 namespace Capacitor.Cli.Core.OpenCode;
 
 /// <summary>
-/// Discovery + lifecycle-payload glue for OpenCode subagents (AI-919 phase 2).
+/// Discovery + lifecycle-payload glue for OpenCode subagents.
 /// OpenCode runs a subagent as a child session (<c>session.parentID</c>) stored in its
 /// SQLite db — not on disk as JSONL — so the kcap plugin (which holds the in-process SDK
 /// <c>client</c>) fetches each child's messages and writes them as native

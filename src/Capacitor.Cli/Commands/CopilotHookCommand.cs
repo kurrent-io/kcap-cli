@@ -7,7 +7,7 @@ using Capacitor.Cli.Core.Copilot;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Single-binary dispatcher for GitHub Copilot CLI hooks (AI-815). Copilot
+/// Single-binary dispatcher for GitHub Copilot CLI hooks. Copilot
 /// command-hook payloads carry no uniform event-name field (sessionStart's
 /// payload is just <c>{sessionId, timestamp, cwd, source, initialPrompt}</c>),
 /// so the kcap hooks installer writes one entry per event with the event name
@@ -23,11 +23,11 @@ namespace Capacitor.Cli.Commands;
 ///                  --resume — the server's deterministic lifecycle event ids
 ///                  make the re-POST idempotent and the watcher resumes from
 ///                  the server watermark.
-///   sessionEnd   → spawn the detached copilot-finalize drainer FIRST (AI-897:
-///                  it must be created before — and outlive — the rest of the
+///   sessionEnd   → spawn the detached copilot-finalize drainer FIRST (it
+///                  must be created before — and outlive — the rest of the
 ///                  hook to capture the session.shutdown tail Copilot writes
 ///                  after the hook returns), then kill watcher + capped inline
-///                  drain (mirrors Claude's AI-813 pre-drain cap), then POST
+///                  drain (mirrors Claude's pre-drain cap), then POST
 ///                  /hooks/session-end/copilot.
 ///   agentStop    → no server POST. Fires at every turn end; used only to
 ///                  re-enliven a crashed watcher (mirrors Codex's Stop).
@@ -37,7 +37,7 @@ namespace Capacitor.Cli.Commands;
 /// Copilot treats hook stdout as optional, so this dispatcher emits nothing.
 /// </remarks>
 static class CopilotHookCommand {
-    // Mirror of ClaudeHookCommand.PreHookDrainCap (AI-813): Copilot kills the
+    // Mirror of ClaudeHookCommand.PreHookDrainCap: Copilot kills the
     // sessionEnd hook at its configured timeout (default 30s, but kcap.json
     // entries set 30 and users can lower it) — the drain must never starve the
     // session-end POST, or the session sticks "Active" forever.
@@ -97,6 +97,10 @@ static class CopilotHookCommand {
             return 0;
         }
 
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
@@ -110,7 +114,7 @@ static class CopilotHookCommand {
         }
 
         return eventName switch {
-            "sessionStart" => await HandleSessionStart(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile),
+            "sessionStart" => await HandleSessionStart(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile, spool),
             "sessionEnd"   => await HandleSessionEnd(baseUrl, node, dashedSessionId, sessionId, cwd),
             "agentStop"    => await HandleAgentStop(baseUrl, node, dashedSessionId, sessionId, cwd),
             "notification" => await HandleNotification(baseUrl, node, sessionId, cwd),
@@ -124,7 +128,8 @@ static class CopilotHookCommand {
             string    dashedSessionId,
             string    sessionId,
             string?   cwd,
-            Profile?  activeProfile
+            Profile?  activeProfile,
+            HookSpool spool
         ) {
         var source = TryGetString(node, "source") is { Length: > 0 } s ? s : "startup";
 
@@ -135,7 +140,12 @@ static class CopilotHookCommand {
             ["home_dir"]        = PathHelpers.HomeDirectory
         };
 
-        if (cwd is not null) forwarded["cwd"] = cwd;
+        if (cwd is not null) {
+            forwarded["cwd"] = cwd;
+
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
+        }
 
         if (TryGetString(node, "initialPrompt") is { } prompt) {
             forwarded["initial_prompt"] = prompt;
@@ -143,7 +153,7 @@ static class CopilotHookCommand {
 
         // Copilot stamps hook payloads with a unix-ms timestamp; forward it as
         // started_at so canonical SessionStarted carries the real start time
-        // (the server falls back to UtcNow when absent — AI-739 precedent).
+        // (the server falls back to UtcNow when absent — precedent).
         if (TryGetUnixMillis(node, "timestamp") is { } startedAt) {
             forwarded["started_at"] = startedAt.ToString("O");
         }
@@ -168,11 +178,14 @@ static class CopilotHookCommand {
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/copilot", enriched);
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
+        // permanent failure keeps the prior non-zero exit and skips the watcher.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/copilot", enriched, "copilot-hook",
+            spool, sessionId, route: "session-start/copilot");
 
-        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
-        // way skip the watcher — on a lapse its POSTs would 401 too.
-        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         await EnsureWatcherAsync(baseUrl, dashedSessionId, sessionId, node, cwd);
         return 0;
@@ -187,7 +200,7 @@ static class CopilotHookCommand {
         ) {
         var transcriptPath = TranscriptPathFor(dashedSessionId);
 
-        // AI-897: Copilot appends `session.shutdown` (per-model input/cache token
+        // Copilot appends `session.shutdown` (per-model input/cache token
         // aggregates) — and sometimes the final assistant turn — to events.jsonl
         // only AFTER this hook returns, by which point the live watcher is dead
         // (KillWatcher below) and the server's session-end StopAndDrain has run,
@@ -203,7 +216,7 @@ static class CopilotHookCommand {
 
         // Kill watcher + inline-drain BEFORE the POST so the server computes
         // stats over the full transcript — capped so a slow drain can't starve
-        // the session-end POST (mirror of ClaudeHookCommand / AI-813).
+        // the session-end POST (mirror of ClaudeHookCommand's pre-drain cap).
         try {
             var drained = await TimeBudget.RunCappedAsync(
                 async () => {

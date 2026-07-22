@@ -27,7 +27,7 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
     /// <summary>
     /// True when any of the OS-specific Cursor user dirs exists. Detection by
     /// directory presence — Cursor IDE users without the <c>cursor</c> shell
-    /// command on PATH must still be detected (AI-730 design, Q7).
+    /// command on PATH must still be detected (design, Q7).
     /// </summary>
     public static bool IsInstalled(string? home = null, OsPlatform? platform = null, string? appData = null) {
         home     ??= PathHelpers.HomeDirectory;
@@ -53,6 +53,12 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
     public static string UserHooksJson(string? home = null) {
         home ??= PathHelpers.HomeDirectory;
         return Path.Combine(home, ".cursor", "hooks.json");
+    }
+
+    /// <summary>Path to <c>~/.cursor/mcp.json</c> — same on every OS.</summary>
+    public static string UserMcpJson(string? home = null) {
+        home ??= PathHelpers.HomeDirectory;
+        return Path.Combine(home, ".cursor", "mcp.json");
     }
 
     /// <summary>Hook-event spool directory at <c>~/.cursor/kcap-pending/</c>.</summary>

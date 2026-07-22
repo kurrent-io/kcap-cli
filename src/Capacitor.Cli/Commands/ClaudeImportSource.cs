@@ -85,7 +85,7 @@ internal sealed class ClaudeImportSource(string? rootOverride = null) : IImportS
         );
     }
 
-    public Task<ImportOutcome> ImportSessionAsync(
+    public Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct

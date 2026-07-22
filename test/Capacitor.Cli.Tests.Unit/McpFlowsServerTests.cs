@@ -10,6 +10,16 @@ public class McpFlowsServerTests {
     static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => { recorded.Add(ts); return Task.CompletedTask; };
 
     [Test]
+    public async Task start_review_flow_description_discloses_the_paid_hosted_reviewer() {
+        // Contract: the paid-cost disclosure the Pi bridge (and every harness that shows the flows
+        // tool descriptions) relies on must actually be present in the tools/list output.
+        var startReviewFlow = McpFlowsServer.BuildToolsList().Single(t => t.Name == "start_review_flow");
+
+        await Assert.That(startReviewFlow.Description).Contains("PAID");
+        await Assert.That(startReviewFlow.Description.ToLowerInvariant()).Contains("hosted reviewer");
+    }
+
+    [Test]
     public async Task Roundless_start_renders_started_envelope() {
         var body = """{"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":null,"reviewer_session_id":null}""";
 
@@ -226,7 +236,7 @@ public class McpFlowsServerTests {
 
     [Test]
     public async Task Ack_attempt_times_out_and_is_swallowed() {
-        // AI-1127 E-c final review, Important: the shared MCP client normally has
+        // E-c final review, Important: the shared MCP client normally has
         // Timeout = InfiniteTimeSpan (the review-flow endpoints long-poll), so
         // AckRenderedMessagesAsync now bounds each POST attempt itself (PerAckPostTimeout, 15s).
         // Driving the real 15s bound here would make this test slow without adding coverage —

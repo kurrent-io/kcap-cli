@@ -295,6 +295,155 @@ static class ImportCommand {
         public IReadOnlyDictionary<string, object?>? SourceMeta { get; init; }
     }
 
+    /// <summary>
+    /// Reconciles Cursor subagent correlation against this run's actual routed plan, which may be
+    /// narrower than the same-workspace scan <see cref="CursorImportSource.ClassifyAsync"/> used
+    /// to discover links. An orphaned child — correlated to a parent that isn't itself in
+    /// <paramref name="routed"/> — has its child flags cleared so it imports standalone instead
+    /// of being silently skipped by <see cref="CursorImportSource.ImportSessionAsync"/>'s
+    /// nested-child skip (the server-side adoption sweep attaches it to its real parent later).
+    /// Conversely, a routed parent's <c>SubagentChildren</c> is pruned to children that are
+    /// actually in <paramref name="routed"/> — the wider discovery scan may only be used to
+    /// DISCOVER links, never to WIDEN the import plan with a session the caller filtered out.
+    /// Children whose parent IS in <paramref name="routed"/> are left untouched.
+    /// </summary>
+    internal static List<SessionClassification> ReconcileOrphanedCursorSubagentChildren(
+        List<SessionClassification> routed
+    ) {
+        var routedIds = routed.Select(c => c.SessionId).ToHashSet(StringComparer.Ordinal);
+
+        return [
+            .. routed.Select(c => {
+                if (c.SourceMeta is not { } meta) return c;
+
+                var reconciled = meta;
+                var changed    = false;
+
+                // Child side: an orphan whose parent isn't part of this run's routed plan must
+                // import standalone rather than being silently skipped by ImportSessionAsync.
+                if (meta.TryGetValue("IsSubagentChild", out var isChildObj) && isChildObj is true) {
+                    var parentId = meta.TryGetValue("ParentSessionId", out var parentIdObj) ? parentIdObj as string : null;
+
+                    // Parent is (or will be) imported in this same run — leave the nested-child
+                    // flags in place so CursorImportSource keeps skipping this child's own routed
+                    // import in favor of the parent importing it inline.
+                    if (parentId is null || !routedIds.Contains(parentId)) {
+                        var d = new Dictionary<string, object?>(reconciled);
+                        d.Remove("IsSubagentChild");
+                        d.Remove("ParentSessionId");
+                        reconciled = d;
+                        changed    = true;
+                    }
+                }
+
+                // Parent side: prune SubagentChildren down to children that are actually part of
+                // this run's routed plan. A child excluded from `routed` must never be attached
+                // and imported here.
+                if (reconciled.TryGetValue("SubagentChildren", out var kidsObj)
+                 && kidsObj is List<CursorImportSource.CursorSubagentChild> kids) {
+                    var keptKids = kids.Where(k => routedIds.Contains(k.SessionId)).ToList();
+
+                    if (keptKids.Count != kids.Count) {
+                        var d = new Dictionary<string, object?>(reconciled);
+                        if (keptKids.Count > 0) d["SubagentChildren"] = keptKids;
+                        else                     d.Remove("SubagentChildren");
+                        reconciled = d;
+                        changed    = true;
+                    }
+                }
+
+                return changed ? c with { SourceMeta = reconciled } : c;
+            })
+        ];
+    }
+
+    /// <summary>
+    /// A routed-phase
+    /// <c>AlreadyLoaded</c> classification (Cursor) is included in `routed` solely so its
+    /// <c>ImportSessionAsync</c> call can re-assert lifecycle hooks and backfill the
+    /// <c>repository</c> node on an already-fully-ingested session (the C2 suppressed-repo-import
+    /// contract), or — for a correlated nested child — because its parent needs it present in
+    /// `routed` to import it inline; neither case is "new work" on its own. Because nothing past
+    /// the parent's own watermark exists, its own call still returns <see cref="ImportOutcome.Loaded"/>
+    /// or <see cref="ImportOutcome.Resumed"/> (no line 0 to distinguish "nothing sent" from "brand
+    /// new"), and a nested child's own call always short-circuits to <see cref="ImportOutcome.Skipped"/>
+    /// (its content is sent inline by the parent, not by its own call). Without this check either
+    /// success would double-count on top of the classify-time <c>AlreadyLoaded</c> bucket the same
+    /// session already contributes to (as both Loaded/Already-loaded, or as both Excluded/Already-
+    /// loaded), and a parent replay would wrongly join <c>importedSessionIds</c> so a later
+    /// <c>--private</c> pass re-privates a session this run never actually (re)imported.
+    ///
+    /// <para>
+    /// Round-2 finding 1: an <c>AlreadyLoaded</c> parent can still ship brand-new content by
+    /// attaching a previously-unloaded nested child — real work that must NOT be suppressed just
+    /// because the parent's OWN outcome looks like a no-op replay. <c>sentChildContent</c> is the
+    /// out-of-band signal (see <see cref="ImportSessionResult"/>) that lets this distinguish the
+    /// two: only a replay that sent no child content either is truly lifecycle-only.
+    /// </para>
+    ///
+    /// <para>
+    /// This gate is vendor-NEUTRAL: <c>sentChildContent</c> carries a real signal for Cursor,
+    /// Antigravity, and Gemini alike (Copilot/Kiro/Pi/OpenCode permanently default it
+    /// <c>false</c>, which is already correct for their no-op replay shape).
+    /// </para>
+    ///
+    /// <para>
+    /// This gate alone only decides whether a replay is suppressed — it does NOT decide which
+    /// bucket a non-suppressed call lands in for counting. See
+    /// <see cref="IsSkippedChildContentOverride"/> and <see cref="ResolveRoutedOutcomeForCounting"/>
+    /// for the central aggregation boundary that fixes the case this gate can't: a <c>Skipped</c>
+    /// <c>AlreadyLoaded</c> call (e.g. Antigravity's) that attached genuinely-new nested-child
+    /// content must count as Loaded, even though its own raw outcome is <c>Skipped</c>.
+    /// </para>
+    /// </summary>
+    internal static bool IsLifecycleOnlyRoutedReplay(
+            ClassificationStatus  status,
+            ImportOutcome         outcome,
+            bool                  sentChildContent
+        ) =>
+        status == ClassificationStatus.AlreadyLoaded
+     && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed or ImportOutcome.Skipped
+     && !sentChildContent;
+
+    /// <summary>
+    /// True iff a <c>Skipped</c> <c>AlreadyLoaded</c> call attached genuinely-new nested-child
+    /// content — the only raw outcome whose Done-grid bucket needs
+    /// correcting. <c>Loaded</c>/<c>Resumed</c> already land correctly via the ordinary outcome
+    /// path and are deliberately left untouched (PRESERVED, not reclassified) — this predicate
+    /// does not engage for them. <c>Failed</c> is excluded by the same exact-match: a failed
+    /// lifecycle POST must always surface as Errored, never get reclassified as Loaded just
+    /// because content happened to post first.
+    /// </summary>
+    internal static bool IsSkippedChildContentOverride(
+            ClassificationStatus  status,
+            ImportOutcome         outcome,
+            bool                  sentChildContent
+        ) =>
+        status == ClassificationStatus.AlreadyLoaded
+     && outcome == ImportOutcome.Skipped
+     && sentChildContent;
+
+    /// <summary>
+    /// The single aggregation boundary — what outcome should this routed call count as for
+    /// the Done-grid's counters, per-vendor tracker, and printed line (
+    /// <c>null</c> = suppressed, don't count at all). This is a COUNTING-ONLY boundary: it
+    /// deliberately does NOT drive <c>importedSessionIds</c> / <c>--private</c> membership, which
+    /// stays governed by the pre-existing suppression check and outcome switch, unchanged from
+    /// before this ticket — see the call sites below for the exact membership condition.
+    /// <see cref="IsLifecycleOnlyRoutedReplay"/> requires <c>!sentChildContent</c> and
+    /// <see cref="IsSkippedChildContentOverride"/> requires <c>sentChildContent</c>, so the two
+    /// are mutually exclusive by construction — there's no ordering ambiguity between them.
+    /// </summary>
+    internal static ImportOutcome? ResolveRoutedOutcomeForCounting(
+            ClassificationStatus  status,
+            ImportOutcome         outcome,
+            bool                  sentChildContent
+        ) {
+        if (IsLifecycleOnlyRoutedReplay(status, outcome, sentChildContent))   return null;
+        if (IsSkippedChildContentOverride(status, outcome, sentChildContent)) return ImportOutcome.Loaded;
+        return outcome;
+    }
+
     internal sealed record ClassificationCounts(
             int New,
             int Partial,
@@ -429,9 +578,11 @@ static class ImportCommand {
             string                        activeProfile           = "default",
             (string Owner, string Name)?  currentRepo             = null,
             bool                          needOrgPick             = false,
-            string?                       storedOrg               = null
+            string?                       storedOrg               = null,
+            bool                          autoSkipExclusions      = false,
+            string?                       defaultVisibility       = null
         ) {
-        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
         var       display    = ImportDisplay.Create();
 
         // --- Sources ---
@@ -809,8 +960,10 @@ static class ImportCommand {
             var includedPathKeys = new HashSet<string>(StringComparer.Ordinal);
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
-            // meaningfully without a TTY on stdin.
-            var canPrompt = display.Tty && !Console.IsInputRedirected;
+            // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
+            // path regardless of TTY state (e.g. the embedded `kcap setup` import call, which must
+            // never block on stdin).
+            var canPrompt = display.Tty && !Console.IsInputRedirected && !autoSkipExclusions;
 
             if (canPrompt) {
                 foreach (var (key, sessions) in excludedByRepo) {
@@ -883,7 +1036,7 @@ static class ImportCommand {
         // contract was New/Partial only — but if a previous import advanced
         // the transcript watermark while a lifecycle POST failed, the session
         // is forever lifecycle-less under the old filter. Server-side
-        // idempotency (canonical event ids per AI-731) makes re-emission safe;
+        // idempotency (canonical event ids) makes re-emission safe;
         // CursorImportSource.ImportSessionAsync short-circuits the transcript
         // batch when there's nothing past the watermark and just fires the
         // lifecycle hooks.
@@ -893,6 +1046,13 @@ static class ImportCommand {
                     or ClassificationStatus.AlreadyLoaded
             )
             .ToList();
+
+        // a Cursor subagent child whose correlated parent isn't itself among
+        // `routed` (e.g. `--session <child>` excluded the parent from this run's classify slice,
+        // or the parent was classified but excluded from import for any other reason) must import
+        // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
+        // nested-child skip.
+        routed = ReconcileOrphanedCursorSubagentChildren(routed);
 
         var chains = BuildImportChains(fileBased);
 
@@ -1011,6 +1171,26 @@ static class ImportCommand {
         // sub-grid attributes Skipped-at-import to Excluded (not Errored).
         var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
 
+        // a SEPARATE tracker from `importedSessionIds`, used
+        // ONLY to decide what gets privatized under --private — never fed into the Done-grid
+        // counting (`importedSessionIds`/`doneBySource` stay exactly as they were; the
+        // cosmetic double-count concern is intentionally left alone). `importedSessionIds`
+        // only gains a Cursor session id when this run did "real new work" by the
+        // Loaded/Failed/AlreadyLoaded + SentChildContent accounting — but privacy must NOT
+        // depend on that classification: a lifecycle POST (subagent-stop/session-end) can fail
+        // AFTER a child transcript has already persisted new content (this run's own
+        // ImportSessionAsync then returns Failed), or a later retry can see the child read as
+        // already-complete (SentChildContent=false) even though a PRIOR run attached new
+        // content that was never privatized. Either way `importedSessionIds` would exclude the
+        // session and a public session would stay public. So every Cursor routed classification
+        // this run touches — regardless of its outcome — is unconditionally captured here when
+        // --private is requested, and privatized at the end independent of Loaded/Failed/
+        // AlreadyLoaded/SentChildContent. Scoped to Cursor (vendor == "cursor") because
+        // SentChildContent/this lifecycle-after-content-persisted shape is Cursor-specific;
+        // every other routed vendor's own default_visibility-on-session-start stamp already
+        // privatizes atomically and isn't exposed to this gap.
+        var privateScopeSessionIds = new ConcurrentBag<string>();
+
         static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
                 (int Loaded, int Skipped, int Failed) prev,
                 ImportOutcome                         outcome
@@ -1019,6 +1199,15 @@ static class ImportCommand {
             ImportOutcome.Skipped                         => (prev.Loaded, prev.Skipped              + 1, prev.Failed),
             _                                             => (prev.Loaded, prev.Skipped, prev.Failed + 1),
         };
+
+        // The chain path builds its own New-session-start payload (ImportSingleSessionAsync)
+        // and has no ImportContext/ForcePrivate of its own to guard against — so the
+        // force-private precedence is enforced HERE, up front, rather than via a per-call
+        // invariant. Zeroing it out before a New session's session-start POST guarantees a
+        // force-private import never stamps a non-private default, even if the session later
+        // fails mid-stream (before session-end / importedSessionIds, i.e. before the post-hoc
+        // SetVisibilityNoneForAll below would ever see it).
+        var chainDefaultVisibility = forcePrivate ? null : defaultVisibility;
 
         if (chains.Count > 0) {
             display.BeginPhase($"Importing {chains.Sum(c => c.Count)} sessions");
@@ -1038,7 +1227,7 @@ static class ImportCommand {
                             // lines are posted: MaxValue is the session's sendable-line count and
                             // Value advances per flushed batch via OnSessionProgress. A slot that
                             // has no batch yet (or whose total couldn't be counted) draws an
-                            // indeterminate stripe rather than a stuck 0% (AI-907).
+                            // indeterminate stripe rather than a stuck 0%.
                             var slots = new ProgressTask[ImportWorkerCount];
 
                             for (var i = 0; i < ImportWorkerCount; i++) {
@@ -1119,7 +1308,7 @@ static class ImportCommand {
                                 },
                             };
 
-                            r = await ImportChainsAsync(httpClient, baseUrl, chains, wrappedEvents, CancellationToken.None);
+                            r = await ImportChainsAsync(httpClient, baseUrl, chains, wrappedEvents, CancellationToken.None, sessionCwds, chainDefaultVisibility);
 
                             // After the await, all workers have drained; mark every slot idle.
                             for (var i = 0; i < ImportWorkerCount; i++) IdleSlot(i);
@@ -1142,7 +1331,7 @@ static class ImportCommand {
                     );
                 importResult = r!;
             } else {
-                importResult = await ImportChainsAsync(httpClient, baseUrl, chains, events, CancellationToken.None);
+                importResult = await ImportChainsAsync(httpClient, baseUrl, chains, events, CancellationToken.None, sessionCwds, chainDefaultVisibility);
             }
         } else {
             importResult = new(0, 0, 0);
@@ -1160,10 +1349,11 @@ static class ImportCommand {
             var importCtx = new ImportContext(
                 HttpClient: httpClient,
                 BaseUrl: baseUrl,
-                ForcePrivate: forcePrivate
+                ForcePrivate: forcePrivate,
+                DefaultVisibility: defaultVisibility
             );
 
-            async Task<ImportOutcome> ImportOne(SessionClassification c) {
+            async Task<ImportSessionResult> ImportOne(SessionClassification c) {
                 if (!byVendor.TryGetValue(c.Vendor, out var src)) {
                     return ImportOutcome.Failed;
                 }
@@ -1187,19 +1377,57 @@ static class ImportCommand {
                                 routed,
                                 new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                                 async (c, _) => {
-                                    var outcome = await ImportOne(c);
+                                    var result  = await ImportOne(c);
+                                    var outcome = result.Outcome;
 
-                                    routedOutcomesByVendor.AddOrUpdate(
-                                        c.Vendor,
-                                        addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
-                                        updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
-                                    );
+                                    // capture for privatization BEFORE
+                                    // any Loaded/Failed/AlreadyLoaded classification below — see the
+                                    // declaration comment on privateScopeSessionIds. Deliberately
+                                    // unconditional: even a Failed outcome (lifecycle POST failed
+                                    // after content already persisted) must still get privatized.
+                                    if (forcePrivate && c.Vendor == "cursor") {
+                                        privateScopeSessionIds.Add(c.SessionId);
+                                    }
 
-                                    switch (outcome) {
+                                    // An AlreadyLoaded session's routed call is a
+                                    // lifecycle/repo-backfill replay (or, for a nested child, an
+                                    // inline-handled no-op), not a new import — it must not
+                                    // double-count on top of the classify-time AlreadyLoaded
+                                    // bucket. sentChildContent overrides this for an AlreadyLoaded
+                                    // parent that attached a brand-new nested child — that IS
+                                    // real new work.
+                                    //
+                                    // `resolved` — not the raw `outcome` — is the single
+                                    // aggregation boundary that drives every counting/display
+                                    // consumer below (routedLoaded/routedExcluded/routedErrored,
+                                    // routedOutcomesByVendor, and the printed line). This is what
+                                    // fixes a Skipped AlreadyLoaded call (e.g. Antigravity's) that
+                                    // attached genuinely-new child content: it resolves to Loaded
+                                    // for counting even though its own raw outcome stays Skipped.
+                                    //
+                                    // importedSessionIds membership is explicitly EXCLUDED from
+                                    // this — it keeps switching on the raw `outcome`, gated by the
+                                    // same suppression (resolved is not null), so this makes no
+                                    // change to --private visibility for any vendor. See
+                                    // ResolveRoutedOutcomeForCounting's doc comment.
+                                    var resolved = ResolveRoutedOutcomeForCounting(c.Status, outcome, result.SentChildContent);
+
+                                    if (resolved is { } resolvedForVendor) {
+                                        routedOutcomesByVendor.AddOrUpdate(
+                                            c.Vendor,
+                                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), resolvedForVendor),
+                                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, resolvedForVendor)
+                                        );
+                                    }
+
+                                    if (resolved is not null && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed) {
+                                        importedSessionIds.Add(c.SessionId);
+                                    }
+
+                                    switch (resolved) {
                                         case ImportOutcome.Loaded:
                                         case ImportOutcome.Resumed:
                                             Interlocked.Increment(ref routedLoaded);
-                                            importedSessionIds.Add(c.SessionId);
 
                                             AnsiConsole.MarkupLine(
                                                 $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
@@ -1222,6 +1450,22 @@ static class ImportCommand {
                                             );
 
                                             break;
+                                        case null when outcome is ImportOutcome.Skipped:
+                                            // A suppressed Skipped replay is a plain no-op (could
+                                            // be a Cursor nested child, an Antigravity/OpenCode
+                                            // lifecycle-only repair, etc.), not always "nested
+                                            // under parent".
+                                            AnsiConsole.MarkupLine(
+                                                $"[grey]·[/] Already loaded [cyan]{Markup.Escape(c.SessionId)}[/] (no new content)"
+                                            );
+
+                                            break;
+                                        case null:
+                                            AnsiConsole.MarkupLine(
+                                                $"[grey]·[/] Refreshed [cyan]{Markup.Escape(c.SessionId)}[/] (repository backfill, already loaded)"
+                                            );
+
+                                            break;
                                     }
 
                                     bar.Increment(1);
@@ -1234,19 +1478,39 @@ static class ImportCommand {
                     routed,
                     new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                     async (c, _) => {
-                        var outcome = await ImportOne(c);
+                        var result  = await ImportOne(c);
+                        var outcome = result.Outcome;
 
-                        routedOutcomesByVendor.AddOrUpdate(
-                            c.Vendor,
-                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
-                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
-                        );
+                        // see the Tty branch above — unconditional
+                        // privatization capture, independent of the outcome classification below.
+                        if (forcePrivate && c.Vendor == "cursor") {
+                            privateScopeSessionIds.Add(c.SessionId);
+                        }
 
-                        switch (outcome) {
+                        // See the Tty branch above for why an AlreadyLoaded lifecycle-only
+                        // replay must not count as Loaded/Excluded, why sentChildContent
+                        // overrides that for a parent that attached brand-new nested-child
+                        // content, why `resolved` (not the raw `outcome`) drives every
+                        // counting/display consumer, and why importedSessionIds membership is
+                        // explicitly excluded from that and keeps switching on the raw `outcome`.
+                        var resolved = ResolveRoutedOutcomeForCounting(c.Status, outcome, result.SentChildContent);
+
+                        if (resolved is { } resolvedForVendor) {
+                            routedOutcomesByVendor.AddOrUpdate(
+                                c.Vendor,
+                                addValueFactory: _ => AddRoutedOutcome((0, 0, 0), resolvedForVendor),
+                                updateValueFactory: (_, prev) => AddRoutedOutcome(prev, resolvedForVendor)
+                            );
+                        }
+
+                        if (resolved is not null && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed) {
+                            importedSessionIds.Add(c.SessionId);
+                        }
+
+                        switch (resolved) {
                             case ImportOutcome.Loaded:
                             case ImportOutcome.Resumed:
                                 Interlocked.Increment(ref routedLoaded);
-                                importedSessionIds.Add(c.SessionId);
                                 display.Line($"Loading {c.SessionId} ({c.Vendor})");
 
                                 break;
@@ -1260,6 +1524,15 @@ static class ImportCommand {
                                 display.Line($"Failed {c.SessionId}");
 
                                 break;
+                            case null when outcome is ImportOutcome.Skipped:
+                                // See the Tty branch above.
+                                display.Line($"Already loaded {c.SessionId} (no new content)");
+
+                                break;
+                            case null:
+                                display.Line($"Refreshed {c.SessionId} (repository backfill, already loaded)");
+
+                                break;
                         }
                     }
                 );
@@ -1267,9 +1540,22 @@ static class ImportCommand {
         }
 
         // --- --private: mark all imported sessions owner-only ---
-        if (forcePrivate && !importedSessionIds.IsEmpty) {
-            display.BeginPhase("Marking imported sessions private");
-            await SetVisibilityNoneForAll(httpClient, baseUrl, [.. importedSessionIds]);
+        //
+        // the privatize set is importedSessionIds (chain-phase +
+        // routed-phase "real new work") UNIONED with privateScopeSessionIds (every Cursor
+        // routed classification touched this run under --private, regardless of outcome — see
+        // its declaration above). The union — not a replacement — keeps chain-phase and
+        // non-Cursor routed privatization exactly as before; it only widens what Cursor
+        // contributes so privacy no longer depends on the Loaded/Failed/AlreadyLoaded/
+        // SentChildContent accounting used for import counts.
+        if (forcePrivate) {
+            var toPrivatize = new HashSet<string>(importedSessionIds, StringComparer.Ordinal);
+            toPrivatize.UnionWith(privateScopeSessionIds);
+
+            if (toPrivatize.Count > 0) {
+                display.BeginPhase("Marking imported sessions private");
+                await SetVisibilityNoneForAll(httpClient, baseUrl, [.. toPrivatize]);
+            }
         }
 
         // --- Background phase (titles / summaries) ---
@@ -1517,7 +1803,16 @@ static class ImportCommand {
                 }
             }
 
-            // Scan from the end
+            // Scan from the end. Confirmed that Codex rollout
+            // records also key their per-record timestamp under root-level
+            // "timestamp" (same envelope shape session_meta/response_item/
+            // event_msg all share) — verified against
+            // test/data/codex/sessions/2026/05/07/rollout-...019e0228-....jsonl
+            // and .../2026/07/11/rollout-2026-07-11-update-plan-fixture.jsonl
+            // in the kcap-server repo, and against CodexImportSource /
+            // ImportCommand.ExtractCwdFromTranscript(codex: true) which reads
+            // the sibling "payload" envelope at the same root level. No second
+            // probe is needed.
             for (var i = tail.Count - 1; i >= 0; i--) {
                 try {
                     using var doc  = JsonDocument.Parse(tail[i]);
@@ -1762,7 +2057,7 @@ static class ImportCommand {
     /// <summary>
     /// Build a SessionId → repo lookup for every discovered transcript. Repo
     /// detection (git + `gh pr view`) is the slow part of the discovery phase
-    /// and ran sequentially per-session pre-AI-692, making `kcap import`
+    /// and previously ran sequentially per-session, making `kcap import`
     /// look frozen on large histories. This version deduplicates by cwd
     /// (transcripts in the same project share a repo) and runs detection in
     /// parallel, surfacing progress via a Spectre status spinner on a TTY and
@@ -1871,7 +2166,7 @@ static class ImportCommand {
             // segment). Trim the last separator-delimited segment ourselves
             // instead of Path.GetDirectoryName, which on Windows normalizes
             // '/' → '\' and would break the Ordinal set comparison for
-            // forward-slash transcript cwds (AI-820). Both '/' and '\' are
+            // forward-slash transcript cwds. Both '/' and '\' are
             // honored so mixed-style paths collapse consistently on every OS.
             var parent = TrimLastSegment(path);
 
@@ -2068,11 +2363,15 @@ static class ImportCommand {
 
             var encodedCwd = Path.GetFileName(cwdDir);
 
-            results.AddRange(
-                from jsonlFile in Directory.GetFiles(cwdDir, "*.jsonl")
-                let sessionId = NormalizeGuid(Path.GetFileNameWithoutExtension(jsonlFile))
-                select (sessionId, jsonlFile, encodedCwd)
-            );
+            try {
+                results.AddRange(
+                    from jsonlFile in Directory.GetFiles(cwdDir, "*.jsonl")
+                    let sessionId = NormalizeGuid(Path.GetFileNameWithoutExtension(jsonlFile))
+                    select (sessionId, jsonlFile, encodedCwd)
+                );
+            } catch {
+                // A hostile/inaccessible project dir must not abort the whole scan.
+            }
         }
 
         return results;
@@ -2213,7 +2512,9 @@ static class ImportCommand {
             string                            baseUrl,
             List<List<SessionClassification>> chains,
             ChainWorkerEvents                 events,
-            CancellationToken                 ct
+            CancellationToken                 ct,
+            IReadOnlyDictionary<string, string>? sessionCwds       = null,
+            string?                              defaultVisibility = null
         ) {
         var loaded  = 0;
         var resumed = 0;
@@ -2247,7 +2548,7 @@ static class ImportCommand {
                                 var linesSent = 0;
 
                                 try {
-                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct);
+                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds, defaultVisibility);
                                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                                     throw;
                                 } catch (Exception ex) {
@@ -2279,18 +2580,33 @@ static class ImportCommand {
 
     internal enum SessionImportOutcome { Loaded, Resumed, Errored }
 
+    /// <summary>
+    /// Prefer the already remap-/worktree-resolved cwd computed up front into
+    /// <paramref name="sessionCwds"/> (see <see cref="ResolveTranscriptReposAsync"/>) so
+    /// workspace_root discovery and repo detection agree with what the missing-cwd report
+    /// showed the user — falling back to the raw transcript cwd when this session has no
+    /// entry (e.g. a non-file source, or resolution failed to produce one). Shared by both
+    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/>.
+    /// </summary>
+    static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
+        sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
+            ? resolvedCwd
+            : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
+
     static async Task<(SessionImportOutcome Outcome, int LinesSent)> ImportSingleSessionAsync(
             HttpClient            httpClient,
             string                baseUrl,
             SessionClassification session,
             int                   slot,
             ChainWorkerEvents     events,
-            CancellationToken     ct
+            CancellationToken     ct,
+            IReadOnlyDictionary<string, string>? sessionCwds       = null,
+            string?                              defaultVisibility = null
         ) {
         // Denominator for the per-slot progress bar: the number of parent-transcript
         // lines this import will POST. For a resume, only the lines past the server's
         // watermark are sent. 0 when the file is missing/unreadable — the slot then
-        // stays indeterminate instead of stuck at 0% (AI-907). Skipped entirely when
+        // stays indeterminate instead of stuck at 0%. Skipped entirely when
         // no live bar consumes it (non-TTY) so we don't pre-scan every transcript.
         var sendableTotal = events.TrackPerSessionProgress
             ? SessionImporter.CountSendableLines(
@@ -2312,6 +2628,8 @@ static class ImportCommand {
 
         if (session.Status == ClassificationStatus.Partial) {
             try {
+                // Fail-closed tail: a rejected/half-applied resume must NOT be finalized
+                // (posting session-end after a gap would mark the session ended with a hole).
                 var linesSent = await SessionImporter.SendTranscriptBatches(
                     httpClient,
                     baseUrl,
@@ -2320,12 +2638,37 @@ static class ImportCommand {
                     agentId: null,
                     startLine: session.ResumeFromLine,
                     progress: perSessionProgress,
-                    vendor: session.Vendor
+                    vendor: session.Vendor,
+                    failOnError: true
                 );
+
+                // End-only reassertion: session-end has server-side idempotency guards,
+                // whereas the generic SessionStarted uses random ids — re-asserting start
+                // would duplicate it. So finalize a resumed session with end ONLY.
+                var resumeLastTs  = ExtractLastTimestamp(session.FilePath);
+                var resumeEndHook = new JsonObject {
+                    ["session_id"]      = session.SessionId,
+                    ["transcript_path"] = session.FilePath,
+                    ["cwd"]             = ResolveCwd(session, sessionCwds) ?? "",
+                    ["reason"]          = "Other",
+                    ["hook_event_name"] = "session_end",
+                    ["origin"]          = ImportOrigins.Historical,
+                };
+                if (resumeLastTs is not null) resumeEndHook["ended_at"] = resumeLastTs.Value.ToString("O");
+
+                using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
+                using var endResp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-end/{session.Vendor}", endContent, ct: ct);
+
+                if (!endResp.IsSuccessStatusCode) {
+                    events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
+
+                    return (SessionImportOutcome.Errored, linesSent);
+                }
 
                 return (SessionImportOutcome.Resumed, linesSent);
             } catch (HttpRequestException ex) {
-                events.OnSessionErrored(slot, session.SessionId, $"server unreachable: {ex.Message}");
+                // Includes the fail-closed tail's thrown rejection — do NOT finalize.
+                events.OnSessionErrored(slot, session.SessionId, $"resume tail failed: {ex.Message}");
 
                 return (SessionImportOutcome.Errored, 0);
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -2339,7 +2682,7 @@ static class ImportCommand {
 
         // status == New: session-start → import → session-end → enqueue background tasks
         var meta = session.Meta;
-        var cwd  = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
+        var cwd  = ResolveCwd(session, sessionCwds);
 
         var startHook = new JsonObject {
             ["session_id"]      = session.SessionId,
@@ -2348,10 +2691,24 @@ static class ImportCommand {
             ["source"]          = "Startup",
             ["hook_event_name"] = "session_start",
             ["model"]           = meta.Model,
+            ["origin"]          = ImportOrigins.Historical,
         };
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
+        // Step 3 visibility stamp (New-only — this branch only runs for ClassificationStatus.New;
+        // Partial returned above). The caller (HandleImport) already zeroed this out under
+        // forcePrivate, so no separate check is needed here.
+        if (defaultVisibility is not null) startHook["default_visibility"]          = defaultVisibility;
+
+        // best-effort git-root discovery from the (already remap-resolved) cwd, so
+        // historical imports carry the same workspace_root the live hooks do. Fail-open:
+        // GitRepository.FindRoot swallows I/O errors and returns null when no repo is found
+        // on this machine (e.g. the recorded path no longer exists), in which case the field
+        // is simply omitted.
+        if (!string.IsNullOrEmpty(cwd) && GitRepository.FindRoot(cwd) is { } workspaceRoot) {
+            startHook["workspace_root"] = workspaceRoot;
+        }
 
         // Codex sessions carry a `git` block on session_meta — prefer it over a fresh
         // RepositoryDetection probe (which reads the live git config and might disagree
@@ -2438,6 +2795,7 @@ static class ImportCommand {
             ["cwd"]             = cwd ?? "",
             ["reason"]          = "Other",
             ["hook_event_name"] = "session_end",
+            ["origin"]          = ImportOrigins.Historical,
         };
         if (lastTs is not null) endHook["ended_at"] = lastTs.Value.ToString("O");
 

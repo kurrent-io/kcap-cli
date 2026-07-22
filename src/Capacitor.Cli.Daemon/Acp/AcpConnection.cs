@@ -24,7 +24,7 @@ internal sealed class AcpRpcException : Exception {
 }
 
 /// <summary>
-/// Newline-delimited JSON-RPC 2.0 stdio transport for <c>cursor-agent acp</c> (AI-684 Task 7).
+/// Newline-delimited JSON-RPC 2.0 stdio transport for <c>cursor-agent acp</c>.
 /// Owns framing (one JSON object per line, UTF-8), outbound request/response correlation, and
 /// routing of inbound notifications and server→client requests. Decoupled from <see cref="System.Diagnostics.Process"/>
 /// — the ctor takes plain <see cref="Stream"/>s so tests can drive it over in-memory pipes; the
@@ -43,27 +43,35 @@ internal sealed class AcpRpcException : Exception {
 ///   exit early on a single bad line (a wire hiccup would otherwise silently wedge every pending
 ///   and future <see cref="RequestAsync"/> call).
 ///
-/// Per the AI-684 probe (<c>docs/acp-probe-findings.md</c>), ACP has no per-request
+/// Per the probe (<c>docs/acp-probe-findings.md</c>), ACP has no per-request
 /// <c>$/cancelRequest</c> frame — cancellation is session-level via the <c>session/cancel</c>
 /// notification, which the runtime sends through <see cref="NotifyAsync"/>. Cancelling the
 /// <see cref="CancellationToken"/> passed to <see cref="RequestAsync"/> only abandons the pending
 /// call on the client side (removes the correlation entry and faults the awaiter); it does not by
 /// itself tell the agent to stop working.
 /// </summary>
-internal sealed class AcpConnection : IAsyncDisposable {
+internal sealed partial class AcpConnection : IAsyncDisposable {
     readonly Stream                                                  _writeStream;
     readonly Stream                                                  _readStream;
     readonly ILogger                                                 _logger;
+    readonly bool                                                    _debugFrames;
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> _pending = new();
     readonly SemaphoreSlim                                           _writeGate = new(1, 1);
 
     long     _nextId;
     int      _disposed;
 
-    public AcpConnection(Stream writeStream, Stream readStream, ILogger logger) {
+    /// <param name="debugFrames">
+    /// <c>KCAP_ACP_DEBUG_FRAMES</c> (<see cref="DaemonConfig.DebugFrames"/>) — off by default. When
+    /// on, every inbound/outbound JSON-RPC frame is ALSO logged in full (length-capped) at Debug
+    /// (<see cref="LogInboundFrame"/>/<see cref="LogOutboundFrame"/>); the existing shape-only Debug
+    /// logging in <see cref="DispatchLineAsync"/> is unchanged either way.
+    /// </param>
+    public AcpConnection(Stream writeStream, Stream readStream, ILogger logger, bool debugFrames = false) {
         _writeStream = writeStream;
         _readStream  = readStream;
         _logger      = logger;
+        _debugFrames = debugFrames;
     }
 
     /// <summary>Raised for inbound agent→client notifications (e.g. <c>session/update</c>).</summary>
@@ -74,7 +82,14 @@ internal sealed class AcpConnection : IAsyncDisposable {
     /// <c>fs/*</c>, <c>terminal/*</c>). The read loop echoes the request's id verbatim in the
     /// response it writes back, with this delegate's return value as the JSON-RPC <c>result</c>.
     /// If unset, every inbound server request is answered with a method-not-found error — a safe
-    /// default-decline posture. AI-684 leaves this unset; AI-686 wires it to the permission bridge.
+    /// default-decline posture. This constructor leaves it unset; permission-bridge wiring assigns it.
+    ///
+    /// A handler returning <see langword="null"/> signals the method is unhandled: the connection
+    /// answers <c>-32601 Method not found</c>, the SAME response a fully unset handler produces —
+    /// never a null-result success, which would falsely claim we performed an operation (e.g. an
+    /// <c>fs/*</c>/<c>terminal/*</c> request) we never actually served. A handler that intends a
+    /// successful EMPTY result must return an explicit <see cref="JsonElement"/> (e.g. an empty
+    /// object via <see cref="JsonSerializer.SerializeToElement"/>), never <see langword="null"/>.
     ///
     /// Typed <see cref="JsonElement"/>? rather than <c>object?</c> (PR #244 review, Fix #3): the
     /// old <c>object?</c> contract let a handler return an un-serialized CLR object that
@@ -159,6 +174,13 @@ internal sealed class AcpConnection : IAsyncDisposable {
     }
 
     async Task DispatchLineAsync(string line, CancellationToken ct) {
+        // KCAP_ACP_DEBUG_FRAMES gate (Off by default) — an ACP frame can carry prompt/tool/file
+        // content, so the FULL frame is only ever logged when the operator has explicitly opted in.
+        // This is additive: the shape-only Debug logging further down (unparseable/unrecognized/
+        // wrong-typed frames) is unchanged regardless of this flag.
+        if (_debugFrames)
+            LogInboundFrame(AcpDebugFrameLog.Cap(line));
+
         JsonDocument doc;
 
         try {
@@ -306,22 +328,46 @@ internal sealed class AcpConnection : IAsyncDisposable {
                 error  = new AcpError(-32603, "Internal error", null);
                 result = null;
             }
+
+            // A handler that ran without throwing but returned null means "I don't handle this
+            // method" (e.g. AcpInteractionBridge's `_ => null` default for fs/*, terminal/*) — treat
+            // it exactly like the no-handler branch above, never a null-result success that would
+            // falsely acknowledge an operation we never performed.
+            if (result is null && error is null) {
+                _logger.LogDebug("ACP: OnServerRequest handler declined method={Method}; responding -32601 Method not found", method);
+                error = new AcpError(-32601, $"Method not found: {method}", null);
+            }
         }
 
         try {
-            await WriteServerResponseAsync(idClone, result, error, ct).ConfigureAwait(false);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // the final response write deliberately uses CancellationToken.None, not `ct` —
+            // this method's own doc comment guarantees exactly one response frame is written "no
+            // matter what happens", and `ct` is the SAME token AcpHostedAgentRuntime.DisposeAsync
+            // cancels to unblock a pending OnServerRequest handler (e.g. AcpInteractionBridge
+            // resolving to a well-formed `cancelled` result on disconnect — Task B3/B4). Gating the
+            // WRITE itself on that already-cancelled token would make WriteLineAsync's write-gate
+            // wait (`_writeGate.WaitAsync(ct)`) throw OperationCanceledException before a single byte
+            // goes out, silently violating the "always exactly one response frame" invariant (the
+            // exception propagates through this method's `when (ex is not OperationCanceledException)`
+            // guard, then DispatchLineAsync's identical guard, and is swallowed by RunAsync's
+            // "normal shutdown" catch) — the agent would see NO response at all instead of the
+            // well-formed cancelled/error result the handler already computed. The write is a single
+            // best-effort attempt against a stream that may itself be torn down (e.g. the process
+            // already exited) — that failure mode is unrelated to `ct` and is exactly what the
+            // fallback below still handles.
+            await WriteServerResponseAsync(idClone, result, error, CancellationToken.None).ConfigureAwait(false);
+        } catch (Exception ex) {
             // Serializing/writing the chosen response itself failed (e.g. a malformed JsonElement,
-            // or a transient write fault). The agent is still owed a response for this id — never
-            // leave it log-and-skipped by DispatchLineAsync's outer catch — so fall back to a
-            // minimal internal-error response. Best-effort: if even THIS write fails, there is
-            // nothing left to try (the wire itself is broken and the read loop will observe that
-            // via its own exception handling on the next read).
+            // or the underlying stream already closed). The agent is still owed a response for this
+            // id — never leave it log-and-skipped by DispatchLineAsync's outer catch — so fall back
+            // to a minimal internal-error response. Best-effort: if even THIS write fails, there is
+            // nothing left to try (the wire itself is broken and the read loop will observe that via
+            // its own exception handling on the next read).
             _logger.LogDebug(ex, "ACP: failed to write server-request response for method={Method}; sending internal-error fallback", method);
 
             try {
-                await WriteServerResponseAsync(idClone, null, new AcpError(-32603, "Internal error", null), ct).ConfigureAwait(false);
-            } catch (Exception fallbackEx) when (fallbackEx is not OperationCanceledException) {
+                await WriteServerResponseAsync(idClone, null, new AcpError(-32603, "Internal error", null), CancellationToken.None).ConfigureAwait(false);
+            } catch (Exception fallbackEx) {
                 _logger.LogDebug(fallbackEx, "ACP: internal-error fallback response also failed to write for method={Method}", method);
             }
         }
@@ -385,6 +431,12 @@ internal sealed class AcpConnection : IAsyncDisposable {
         try {
             await _writeStream.WriteAsync(bytes, ct).ConfigureAwait(false);
             await _writeStream.FlushAsync(ct).ConfigureAwait(false);
+
+            // Log the outbound frame only after it is actually on the wire — and still under the gate,
+            // so the debug log order matches wire order. A cancelled/failed write skips this, never
+            // leaving a line that implies a frame was sent when it wasn't.
+            if (_debugFrames)
+                LogOutboundFrame(AcpDebugFrameLog.Cap(json));
         } finally {
             _writeGate.Release();
         }
@@ -408,4 +460,10 @@ internal sealed class AcpConnection : IAsyncDisposable {
         await _writeStream.DisposeAsync().ConfigureAwait(false);
         await _readStream.DisposeAsync().ConfigureAwait(false);
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "ACP <<< {Frame}")]
+    partial void LogInboundFrame(string frame);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "ACP >>> {Frame}")]
+    partial void LogOutboundFrame(string frame);
 }

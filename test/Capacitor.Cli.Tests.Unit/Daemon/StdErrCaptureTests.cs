@@ -3,7 +3,7 @@ using Capacitor.Cli.Daemon;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-1155: on the detached launch path the CLI closes the daemon's std pipes,
+/// on the detached launch path the CLI closes the daemon's std pipes,
 /// so any output that bypasses the ILogger pipeline — the runtime's
 /// "Fatal error." dump, an abort() message, a FailFast — is written to a broken
 /// pipe and lost. The daemon reopens fds 1/2 onto a capture file when the CLI

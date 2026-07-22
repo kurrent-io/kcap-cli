@@ -224,7 +224,30 @@ public static class AppConfig {
     /// </summary>
     public static string NormalizeUrl(string url) => url.TrimEnd('/');
 
-    static readonly string[] ValidVisibilities = ["private", "org_public", "public"];
+    /// <summary>The full set of accepted <c>default_visibility</c> values, server-agnostic
+    /// (a server that gates Projects off simply treats <c>project</c> as owner-only).
+    /// Internal (not private) so other CLI-side surfaces that validate or offer this
+    /// value — e.g. <c>SetupCommand</c>'s <c>--default-visibility</c> flag and interactive
+    /// wizard choice list — can't drift out of sync with what config actually accepts.</summary>
+    internal static readonly string[] ValidVisibilities = ["private", "project", "org_public", "public"];
+
+    /// <summary>
+    /// Directly assigns <see cref="ResolvedServerUrl"/> and <see cref="ResolvedProfile"/>
+    /// to the given values, bypassing precedence resolution entirely — does
+    /// **not** call <see cref="ResolveServerUrl"/>. Used by <c>kcap setup</c>
+    /// immediately after saving a new/updated profile, so that any
+    /// same-process work afterward (e.g. the Step 6 import) observes the
+    /// exact normalized server URL and profile object just written to disk.
+    /// Re-running <see cref="ResolveServerUrl"/> instead could produce a
+    /// different result than what was just saved (e.g. a raw scheme-less
+    /// <c>--server-url</c> re-resolving to its unnormalized form, or a
+    /// <c>KCAP_URL</c>/<c>KCAP_PROFILE</c> override picking a different
+    /// server/profile than the one setup just wrote).
+    /// </summary>
+    public static void SetResolvedState(string serverUrl, string profileName, Profile profile) {
+        ResolvedServerUrl = serverUrl;
+        ResolvedProfile   = new ResolvedProfile(serverUrl, profileName, profile, null);
+    }
 
     public static async Task<ProfileConfig> LoadProfileConfig() {
         if (!File.Exists(ConfigPath))

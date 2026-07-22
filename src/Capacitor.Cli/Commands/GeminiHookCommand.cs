@@ -8,7 +8,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Single-binary dispatcher for Google Gemini CLI hooks (AI-887). Unlike
+/// Single-binary dispatcher for Google Gemini CLI hooks. Unlike
 /// Copilot, Gemini's command-hook stdin payload carries a uniform
 /// <c>hook_event_name</c> (PascalCase: <c>SessionStart</c> / <c>SessionEnd</c> /
 /// <c>Notification</c>), so this dispatcher self-routes on it like Claude — the
@@ -24,13 +24,13 @@ namespace Capacitor.Cli.Commands;
 ///                  so the server's deterministic lifecycle ids make the re-POST
 ///                  idempotent and the watcher resumes from the server watermark.
 ///   SessionEnd   → kill watcher + capped inline drain (mirror of the Copilot /
-///                  Claude AI-813 pre-drain cap), then POST /hooks/session-end/gemini.
+///                  Claude pre-drain cap), then POST /hooks/session-end/gemini.
 ///   Notification → best-effort forward to the Claude-shaped /hooks/notification.
 /// Gemini treats hook stdout as a JSON decision channel; this dispatcher emits
 /// nothing (no stdout) so every action is allowed.
 /// </remarks>
 static class GeminiHookCommand {
-    // Mirror of CopilotHookCommand.PreHookDrainCap (AI-813): the drain must
+    // Mirror of CopilotHookCommand.PreHookDrainCap: the drain must
     // never starve the session-end POST, or the session sticks "Active".
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
 
@@ -68,6 +68,10 @@ static class GeminiHookCommand {
             return 0;
         }
 
+        // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
@@ -77,7 +81,7 @@ static class GeminiHookCommand {
         }
 
         return eventName switch {
-            "SessionStart" => await HandleSessionStart(baseUrl, node, sessionId, cwd, activeProfile),
+            "SessionStart" => await HandleSessionStart(baseUrl, node, sessionId, cwd, activeProfile, spool),
             "SessionEnd"   => await HandleSessionEnd(baseUrl, node, sessionId, cwd),
             "Notification" => await HandleNotification(baseUrl, node, sessionId, cwd),
             _              => 0   // unknown / unsubscribed — fail-open like the other dispatchers
@@ -85,11 +89,12 @@ static class GeminiHookCommand {
     }
 
     static async Task<int> HandleSessionStart(
-            string   baseUrl,
-            JsonNode node,
-            string   sessionId,
-            string?  cwd,
-            Profile? activeProfile
+            string    baseUrl,
+            JsonNode  node,
+            string    sessionId,
+            string?   cwd,
+            Profile?  activeProfile,
+            HookSpool spool
         ) {
         var source = TryGetString(node, "source") is { Length: > 0 } s ? s : "startup";
 
@@ -100,7 +105,12 @@ static class GeminiHookCommand {
             ["home_dir"]        = PathHelpers.HomeDirectory
         };
 
-        if (cwd is not null) forwarded["cwd"] = cwd;
+        if (cwd is not null) {
+            forwarded["cwd"] = cwd;
+
+            // best-effort git-root discovery, fail-open (omitted when no repo is found).
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
+        }
 
         // Gemini stamps hook payloads with an ISO-8601 `timestamp`; forward it
         // as started_at so canonical SessionStarted carries the real start time
@@ -127,16 +137,27 @@ static class GeminiHookCommand {
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/gemini", enriched);
+        // Spawn-before-post: capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
+        // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
+        // durably spools the payload for a later drain pass. Only a permanent failure keeps the
+        // prior non-zero exit and skips the watcher; the next resume/startup retries.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/gemini", enriched, "gemini-hook",
+            spool, sessionId, route: "session-start/gemini");
 
-        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
-        // way skip the watcher — on a lapse its POSTs would 401 too.
-        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
-        EnsureWatcher(baseUrl, sessionId, node, cwd, source);
-        await Task.CompletedTask;
+        // Task 6: await (was fire-and-forget) so a spawn failure is observed here rather
+        // than silently swallowed, and the process isn't torn down before the spawn completes.
+        await EnsureWatcher(baseUrl, sessionId, node, cwd, source);
         return 0;
     }
+
+    /// <summary>Test seam mirroring <see cref="AgentHookPoster.ShouldSpawnAfter"/> — session-start
+    /// capture must start on <c>Posted</c> OR <c>Spooled</c>, never gated behind lifecycle-POST
+    /// delivery.</summary>
+    internal static bool SpawnGateForTest(HookPostOutcome o) => AgentHookPoster.ShouldSpawnAfter(o);
 
     static async Task<int> HandleSessionEnd(string baseUrl, JsonNode node, string sessionId, string? cwd) {
         var transcriptPath = TryGetString(node, "transcript_path");
@@ -155,7 +176,7 @@ static class GeminiHookCommand {
                         // teardown: kill each live child watcher, drain its tail, and finalize
                         // it (subagent-stop). Restart-safe — driven off the on-disk files,
                         // not an in-memory set. Shared with the watcher's parent-exit fallback
-                        // so a crash that bypasses this hook still finalizes subagents (AI-900).
+                        // so a crash that bypasses this hook still finalizes subagents.
                         await GeminiSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
                     },
                     PreHookDrainCap
@@ -228,7 +249,7 @@ static class GeminiHookCommand {
         return 0;
     }
 
-    static void EnsureWatcher(string baseUrl, string sessionId, JsonNode node, string? cwd, string source) {
+    static async Task EnsureWatcher(string baseUrl, string sessionId, JsonNode node, string? cwd, string source) {
         // Gemini hands us the transcript path directly (no derivation needed,
         // unlike Copilot). Empty/absent → skip (can't tail nothing).
         var transcriptPath = TryGetString(node, "transcript_path");
@@ -238,7 +259,10 @@ static class GeminiHookCommand {
         // one and resume appends to the same transcript.
         var skipTitle = source is "resume" or "clear";
 
-        _ = WatcherManager.EnsureWatcherRunning(
+        // Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
+        // caller instead of being silently dropped, and the host process doesn't exit before the
+        // spawn completes.
+        await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, transcriptPath,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: skipTitle, vendor: "gemini"

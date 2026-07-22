@@ -29,7 +29,7 @@ static class McpFlowsServer {
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
         // The authenticated client is created on the first tools/call, not at startup: kcap-flows
-        // auto-registers (AI-1056), so Claude Code spawns `kcap mcp flows` for every session —
+        // auto-registers, so Claude Code spawns `kcap mcp flows` for every session —
         // deferring keeps startup local-only (no GET /auth/config, token load, or stderr re-auth
         // hint) for sessions that never invoke a flows tool. Created on demand into a nullable
         // field (rather than a Lazy<Task>) so a transient creation failure leaves it null and the
@@ -49,7 +49,7 @@ static class McpFlowsServer {
             try {
                 if (client is null) {
                     client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
-                    // AI-1061: the review-flow endpoints long-poll (start_review_flow /
+                    // the review-flow endpoints long-poll (start_review_flow /
                     // submit_review_round block server-side up to ~10 min while the reviewer runs).
                     // The default 100s timeout would abort the POST, which the server sees as a
                     // cancel and tears the reviewer down — so disable the client-side deadline and
@@ -93,10 +93,11 @@ static class McpFlowsServer {
                 if (id is null) continue;
 
                 var response = method switch {
-                    "initialize" => BuildInitializeResponse(id),
+                    "initialize" => BuildInitializeResponse(id, request),
                     "tools/list" => BuildToolsListResponse(id, tools),
                     "tools/call" => await DispatchToolCallAsync(id, request),
-                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                    _            => McpProtocol.TryHandleStandardMethod(method, id)
+                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
                 };
 
                 await writer.WriteLineAsync(response);
@@ -112,7 +113,10 @@ static class McpFlowsServer {
         return 0;
     }
 
-    static async Task<string> HandleToolCallAsync(
+    // Internal (not private) so unit tests can drive the tool-call dispatch directly against a
+    // WireMock stub, without spawning the real stdio JSON-RPC process (that full-process path is
+    // Capacitor.Cli.Tests.Integration's job).
+    internal static async Task<string> HandleToolCallAsync(
             JsonNode            id,
             JsonObject          request,
             HttpClient          client,
@@ -134,6 +138,11 @@ static class McpFlowsServer {
 
             // The start/submit tools (and their generic aliases) may need async poll — handle separately.
             if (toolName is "start_review_flow" or "start_flow" or "submit_review_round" or "send_to_participant") {
+                // Dynamic flows: whether THIS call carried an inline definition_yaml. Uncoded
+                // (non-JSON `{"error":...}`) failures on such a start get the "server may not
+                // support dynamic flows" hint — coded rejections never do (new-server signal).
+                var wasDynamicStart = toolName is "start_flow" && arguments?["definition_yaml"] is not null;
+
                 using var postResponse = toolName switch {
                     "start_review_flow"   => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind")),
                     "start_flow"          => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id")),
@@ -146,10 +155,39 @@ static class McpFlowsServer {
                 if (postResponse.StatusCode == HttpStatusCode.Unauthorized)
                     return BuildToolResult(id, "Not logged in. Run 'kcap login' on the host shell.", isError: true);
 
-                if (!postResponse.IsSuccessStatusCode)
-                    return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
+                // Reviewer vendor override: version-skew seam (a 404 here means an old server with
+                // no versioned route — before any run started, no agent launched) plus an echo
+                // defense-in-depth check once the route matched. Only start_review_flow/start_flow
+                // ever carry "vendor" — submit_review_round/send_to_participant never do, so
+                // CheckVendorOverrideResult is a no-op for those.
+                var requestedVendor = arguments?["vendor"]?.GetValue<string>();
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName);
+                if (CheckVendorOverrideResult(toolName, requestedVendor, postResponse.StatusCode, postResponse.IsSuccessStatusCode, postBody, out var flowRunIdToClose) is { } vendorCheck) {
+                    // Best-effort: we have the run id from this same response (echo mismatch only —
+                    // the 404 case never has one) — close it defensively rather than leave a
+                    // wrongly-vendored reviewer running unattended.
+                    if (flowRunIdToClose is not null) {
+                        try {
+                            // The shared flows client uses Timeout.InfiniteTimeSpan (flow starts
+                            // long-poll), so bound THIS best-effort close with its own short
+                            // deadline — otherwise a stalled close would wedge the single-threaded
+                            // stdio MCP loop and the mismatch error would never be delivered.
+                            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                            using var closeResponse = await client.PostAsync(
+                                $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunIdToClose)}/close", null, closeCts.Token);
+                        } catch {
+                            // best-effort (incl. the timeout above); the run still shows up in the
+                            // Flows tab / stale-reviewer sweep either way.
+                        }
+                    }
+
+                    return BuildToolResult(id, vendorCheck.Message, vendorCheck.IsError);
+                }
+
+                if (!postResponse.IsSuccessStatusCode)
+                    return BuildToolResult(id, FormatFlowStartError((int)postResponse.StatusCode, postBody, wasDynamicStart), isError: true);
+
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart);
                 return BuildToolResult(id, payload, isError);
             }
 
@@ -166,7 +204,9 @@ static class McpFlowsServer {
             }
 
             if (!httpResponse.IsSuccessStatusCode) {
-                return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
+                // Decode coded envelopes here too (status/close previously printed the raw
+                // body) — FormatFlowStartError falls back to the raw HTTP line for uncoded bodies.
+                return BuildToolResult(id, FormatFlowStartError((int)httpResponse.StatusCode, body, wasDynamicStart: false), isError: true);
             }
 
             string statusPayload;
@@ -174,13 +214,13 @@ static class McpFlowsServer {
             if (toolName is "get_review_flow_status" or "get_flow_status") {
                 statusPayload = FormatStatusResponse(body, out var pendingIds);
 
-                // AI-1127 E-c: ack exactly the ids that were actually rendered into the text
+                // E-c: ack exactly the ids that were actually rendered into the text
                 // above, after the text is fully built — never before, never a superset.
                 var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
                 if (flowRunId is not null)
                     await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
             } else if (toolName is "close_review_flow" or "close_flow") {
-                // AI-1127 E-c: render pending_messages but never ack them — the server delivers
+                // E-c: render pending_messages but never ack them — the server delivers
                 // them atomically with the close, so there is nothing left to redeliver.
                 statusPayload = FormatCloseResponse(body, out _);
             } else {
@@ -221,11 +261,74 @@ static class McpFlowsServer {
     }
 
     /// <summary>
-    /// Posts to POST /api/flows/review/start. Shared by start_review_flow (reads the flow
-    /// kind from the "kind" arg) and its generic alias start_flow (reads it from
-    /// "definition_id" — the server treats kind == definition id, AI-1126 phase C).
+    /// Pure decision for the reviewer-vendor-override skew seam (404 = old server) + echo check on a
+    /// start response. Returns null to proceed normally (no override, or the override was echoed
+    /// back correctly); otherwise the tool-error to return, with <paramref name="flowRunIdToClose"/>
+    /// set (echo-mismatch case only) for the caller's best-effort close. Pure (no HttpClient) so it
+    /// is unit-testable and the close side effect stays with the caller.
     /// </summary>
-    static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
+    internal static (string Message, bool IsError)? CheckVendorOverrideResult(
+            string toolName, string? requestedVendor, HttpStatusCode statusCode, bool isSuccess, string postBody,
+            out string? flowRunIdToClose
+        ) {
+        flowRunIdToClose = null;
+
+        if (toolName is not ("start_review_flow" or "start_flow")) return null;
+        if (requestedVendor is null) return null;
+
+        // Primary seam: the versioned route either exists (server supports the feature) or
+        // doesn't (clean 404, no run started, no agent launched — see StartFlowAsync's
+        // route-selection logic).
+        if (statusCode == HttpStatusCode.NotFound)
+            return (
+                "Error: this server does not support reviewer vendor overrides on " +
+                "start_review_flow/start_flow — upgrade the kcap server before relying on a " +
+                "vendor override for review flows.",
+                true);
+
+        // Defense in depth: the route existed (matched, non-404), so a run may already be
+        // starting/started — assert the applied vendor actually matches what was requested.
+        if (!isSuccess) return null;
+
+        // Parse defensively: a malformed / non-object / wrong-typed body must NOT throw past this
+        // method (the outer catch would turn it into a generic error and SKIP the close). Any
+        // missing/invalid applied-vendor echo is treated as a hard mismatch; a valid flow_run_id is
+        // still salvaged so the best-effort close can run.
+        JsonObject? node = null;
+        try { node = JsonNode.Parse(postBody) as JsonObject; } catch (JsonException) { /* leave null → mismatch */ }
+
+        var applied = TryGetString(node, "applied_reviewer_vendor");
+
+        if (string.Equals(applied, requestedVendor, StringComparison.Ordinal)) return null;
+
+        flowRunIdToClose = TryGetString(node, "flow_run_id");
+
+        return (
+            $"Error: requested reviewer vendor '{requestedVendor}' but the server applied " +
+            $"'{applied ?? "(none)"}' — closed the run defensively. This should not happen " +
+            "when the versioned start route matched; please report it.",
+            true);
+    }
+
+    /// <summary>Reads a string property without throwing on a missing key, a null, or a
+    /// wrong-typed (e.g. numeric) value — a wrong-typed applied-vendor echo must read as "no valid
+    /// echo" (→ hard mismatch), never crash the defensive close path.</summary>
+    static string? TryGetString(JsonObject? obj, string key) =>
+        obj is not null && obj.TryGetPropertyValue(key, out var v) && v is JsonValue jv && jv.TryGetValue<string>(out var s)
+            ? s
+            : null;
+
+    /// <summary>
+    /// Posts to POST /api/flows/review/start (or, when a vendor override is present, the versioned
+    /// sibling POST /api/flows/review/start/vendor-override). Shared by start_review_flow (reads
+    /// the flow kind from the "kind" arg) and its generic alias start_flow (reads it from
+    /// "definition_id" — the server treats kind == definition id, phase C).
+    /// start_flow additionally accepts an inline "definition_yaml" (dynamic flows): the MCP
+    /// schema can't express the xor, so exactly-one is enforced here, BEFORE any HTTP call;
+    /// start_review_flow stays catalog-only (kind remains required there). Internal (not private)
+    /// so unit tests can drive it directly against a WireMock stub.
+    /// </summary>
+    internal static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
             HttpClient         client,
             string             apiRoot,
             JsonObject?        arguments,
@@ -234,15 +337,45 @@ static class McpFlowsServer {
             RepositoryPayload? repoInfo,
             string             kindArgName
         ) {
-        var kind         = GetRequiredArg(arguments, kindArgName);
+        string? kind;
+        string? definitionYaml = null;
+
+        if (kindArgName == "definition_id") {
+            kind           = arguments?[kindArgName]?.GetValue<string>();
+            definitionYaml = arguments?["definition_yaml"]?.GetValue<string>();
+
+            if ((kind is null) == (definitionYaml is null))
+                throw new ArgumentException(
+                    "provide exactly one of definition_id (catalog flow) or definition_yaml (dynamic flow).");
+        } else {
+            kind = GetRequiredArg(arguments, kindArgName);
+        }
+
         var targetKind   = GetRequiredArg(arguments, "target_kind");
         var targetRef    = GetRequiredArg(arguments, "target_ref");
         var targetTitle  = GetRequiredArg(arguments, "target_title");
         var context      = GetRequiredArg(arguments, "context");
         var instructions = arguments?["instructions"]?.GetValue<string>();
         var mode         = arguments?["mode"]?.GetValue<string>();
+        var vendor       = arguments?["vendor"]?.GetValue<string>();
 
         var sessionId = ArgParsing.ResolveSessionIdFromEnv();
+
+        // B2: this machine's stable id, matched server-side against each connected daemon's
+        // registration id to prove the reviewer would run on the SAME host as this requester. Same
+        // call the daemon reports at registration (ServerConnection), so the ids are identical — the
+        // last piece that lets the server pick the borrow path instead of a mirrored worktree.
+        // requester_machine_id is optional on the wire: if resolving it throws (e.g. an unwritable
+        // config dir on first-run create), degrade to null so the server just falls back to the
+        // mirror rather than aborting the whole flow-start.
+        string? machineId;
+        try {
+            machineId = MachineId.Get();
+        } catch (Exception e) {
+            await Console.Error.WriteLineAsync(
+                $"kcap mcp flows: could not resolve machine id ({e.Message}); starting review flow without requester_machine_id (server falls back to mirror)");
+            machineId = null;
+        }
 
         var body = new StartReviewFlowDto(
             Kind:                 kind,
@@ -259,11 +392,23 @@ static class McpFlowsServer {
             DaemonName:           null,
             RepoPath:             repoRoot,
             Mode:                 mode,
-            Async:                true
+            Async:                true,
+            RequesterMachineId:   machineId,
+            DefinitionYaml:       definitionYaml,
+            Vendor:               vendor
         );
 
+        // A request carrying a vendor override posts to the versioned sibling route — its mere
+        // existence is the server's capability signal. A server that predates this feature has no
+        // such route registered and returns a clean 404 before any handler runs, so the caller can
+        // fail closed BEFORE any run has started. A request with no override keeps using the
+        // original route, on any server version, unchanged.
+        var startPath = vendor is not null
+            ? $"{apiRoot}/api/flows/review/start/vendor-override"
+            : $"{apiRoot}/api/flows/review/start";
+
         return await client.PostAsync(
-            $"{apiRoot}/api/flows/review/start",
+            startPath,
             JsonContent.Create(body, McpJsonContext.Default.StartReviewFlowDto)
         );
     }
@@ -312,7 +457,7 @@ static class McpFlowsServer {
     static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
     static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
     static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
-    // AI-1127 E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
+    // E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
     // review-flow endpoints long-poll), so without a per-attempt bound a hung ack POST would block
     // indefinitely — stalling the tool response the driver is waiting on. Mirrors PerGetTimeout's
     // per-attempt bounding of PollUntilTerminalAsync's GETs.
@@ -327,7 +472,7 @@ static class McpFlowsServer {
     // Maximum consecutive transient failures (5xx / network / TLS) before giving up.
     const int MaxTransientRetries = 5;
 
-    /// <summary>AI-1127 E-c: a multi-participant start records the run only — no round exists to
+    /// <summary> E-c: a multi-participant start records the run only — no round exists to
     /// poll, so the old poll path must not run. Returns null unless the body is exactly that shape
     /// (round-full starts and old servers fall through to the existing logic unchanged). Today's
     /// server never puts pending_messages on a round-less start (a brand-new run has no
@@ -360,12 +505,46 @@ static class McpFlowsServer {
         }
     }
 
+    /// <summary>One canonical guidance line for the server's coded server_catching_up rejection,
+    /// shared by every surface that renders it (start/submit/poll/status/close here, plus both
+    /// sidecar branches in McpFlowResultServer) so the advice can never drift between tools.</summary>
+    internal const string ServerCatchingUpGuidance =
+        "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
+
+    /// <summary>Maps a non-2xx start/submit (or poll) response body to the tool error text.
+    /// Status-agnostic contract (dynamic flows): ANY body carrying a string "error" code plus a
+    /// "message" is a coded rejection from a dynamic-flows-aware server — surface the server
+    /// message verbatim, prefixed with the code, and never add the old-server hint. Only an
+    /// UNCODED failure on a start that included definition_yaml gets the "may not support
+    /// dynamic flows" hint (the coded body is the new-server capability signal), keeping the
+    /// raw body either way.</summary>
+    internal static string FormatFlowStartError(int status, string body, bool wasDynamicStart) {
+        try {
+            var node = JsonNode.Parse(body) as JsonObject;
+            if (node?["error"] is JsonValue ev && ev.TryGetValue<string>(out var code) && code.Length > 0
+                && node["message"] is JsonValue mv && mv.TryGetValue<string>(out var message)) {
+                if (code == "server_catching_up")
+                    return $"Error ({code}): {message}\n{ServerCatchingUpGuidance}";
+
+                return $"Error ({code}): {message}";
+            }
+        } catch (JsonException) {
+            // not JSON — fall through to the uncoded path
+        }
+
+        var hint = wasDynamicStart
+            ? "dynamic start failed — this server may not support dynamic flows (upgrade the server or use a catalog definition). "
+            : "";
+
+        return $"Error: {hint}HTTP {status} — {body}";
+    }
+
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
-    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
+    /// Otherwise poll GET /api/flows/{id} until the started round is terminal.
     /// <paramref name="toolName"/> is the tool that initiated the round (one of
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
-    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
+    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart) {
         if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
             if (roundlessPendingIds.Count > 0 &&
                 JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
@@ -390,7 +569,7 @@ static class McpFlowsServer {
             return new(formatted, false);
         }
 
-        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName);
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName, wasDynamicStart);
     }
 
     /// <summary>Tool family that started the round determines which status tool the graceful-cap
@@ -400,7 +579,7 @@ static class McpFlowsServer {
     static string StatusToolNameFor(string toolName) =>
         toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
 
-    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName) {
+    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName, bool wasDynamicStart) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
         var pollStartedAt         = DateTimeOffset.UtcNow;
         var deadline              = pollStartedAt + PollCap;
@@ -434,11 +613,12 @@ static class McpFlowsServer {
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
                     return new("Not logged in. Run 'kcap login' on the host shell.", true);
 
-                // Fix #4: non-transient 4xx (e.g. 400, 403) fail immediately.
+                // Fix #4: non-transient 4xx (e.g. 400, 403, 409 budget_unverifiable) fail
+                // immediately — coded bodies surface via FormatFlowStartError like the POST path.
                 var statusCode = (int)resp.StatusCode;
                 if (statusCode is >= 400 and < 500) {
                     var errBody = await resp.Content.ReadAsStringAsync();
-                    return new($"Error: HTTP {statusCode} — {errBody}", true);
+                    return new(FormatFlowStartError(statusCode, errBody, wasDynamicStart), true);
                 }
 
                 // Fix #4: 5xx / other non-success counts toward the transient budget.
@@ -495,7 +675,7 @@ static class McpFlowsServer {
     internal static string FormatPolledRoundResult(JsonObject node, string flowRunId) =>
         FormatPolledRoundResult(node, flowRunId, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatPolledRoundResult(JsonObject node, string flowRunId, out IReadOnlyList<string> pendingIds) {
         var roundNumber = node["round_number"]?.GetValue<int>();
         var resultKind  = node["round_result_kind"]?.GetValue<string>() ?? node["round_status"]?.GetValue<string>() ?? "";
@@ -518,7 +698,7 @@ static class McpFlowsServer {
     /// </summary>
     internal static string FormatRoundResponse(string body) => FormatRoundResponse(body, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatRoundResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
@@ -551,7 +731,7 @@ static class McpFlowsServer {
 
     internal static string FormatStatusResponse(string body) => FormatStatusResponse(body, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatStatusResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
@@ -599,7 +779,7 @@ static class McpFlowsServer {
     /// </summary>
     internal static string FormatCloseResponse(string body) => FormatCloseResponse(body, out _);
 
-    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    /// <summary> E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
     internal static string FormatCloseResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
@@ -620,7 +800,7 @@ static class McpFlowsServer {
         }
     }
 
-    /// <summary>AI-1127 E-c: renders the fold-computed undelivered sidecar messages carried on a
+    /// <summary> E-c: renders the fold-computed undelivered sidecar messages carried on a
     /// status/round/close response. Returns the rendered ids so the caller can ack exactly what
     /// the driver will actually see (never more).</summary>
     internal static IReadOnlyList<string> AppendPendingMessages(StringBuilder sb, JsonObject node) {
@@ -628,7 +808,7 @@ static class McpFlowsServer {
 
         // Render entries into a scratch buffer first so the header count reflects what actually
         // got rendered, not the raw array length — a malformed (non-object) entry is skipped
-        // below, and the header must not overcount past what the driver will see (AI-1127 E-c
+        // below, and the header must not overcount past what the driver will see (E-c
         // final review, Minor: header used arr.Count while entries were filtered).
         var ids     = new List<string>();
         var entries = new StringBuilder();
@@ -663,7 +843,7 @@ static class McpFlowsServer {
     static string StringField(JsonObject o, string name) =>
         o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : "";
 
-    /// <summary>AI-1127 E-c: deliver-once ack for pending messages. Callers must invoke this
+    /// <summary> E-c: deliver-once ack for pending messages. Callers must invoke this
     /// AFTER the response text has been fully formatted, passing only the ids that were actually
     /// rendered into that text — never before, never a superset. No-op (no HTTP call at all) when
     /// <paramref name="messageIds"/> is empty, which keeps this byte-compatible with servers that
@@ -685,7 +865,7 @@ static class McpFlowsServer {
 
         async Task<bool> TryPostAsync() {
             try {
-                // AI-1127 E-c final review, Important: bound each attempt — the shared client has
+                // E-c final review, Important: bound each attempt — the shared client has
                 // no client-side deadline (Timeout = InfiniteTimeSpan, needed for the long-polling
                 // round endpoints), so an unbounded ack POST could hang the tool response the
                 // driver is waiting on. A timeout surfaces as OperationCanceledException, which
@@ -733,10 +913,10 @@ static class McpFlowsServer {
             _                                                 => throw new ArgumentException("Invalid argument: async must be a boolean")
         };
 
-    static string BuildInitializeResponse(JsonNode id) =>
+    static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kcap-flows", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-flows", "1.0.0")),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -764,10 +944,11 @@ static class McpFlowsServer {
         return envelope.ToJsonString();
     }
 
-    static McpTool[] BuildToolsList() => [
+    internal static McpTool[] BuildToolsList() => [
         new(
             "start_review_flow",
             "Start a new review flow. This hands the work to a SEPARATE hosted reviewer agent and iterates to sign-off — it is NOT how you review something yourself. " +
+            "COST: this spawns a PAID hosted reviewer (a real model running to completion), so only start one when a review flow is genuinely wanted. " +
             "Only call this when the user explicitly asked for a review *flow* / to submit for review; for an ordinary 'review my PR' or 'code review' request, review directly and do NOT call this tool. " +
             "Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later. " +
@@ -781,7 +962,8 @@ static class McpFlowsServer {
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that.")
+                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that."),
+                    ["vendor"]       = new("string", "Optional. Override the reviewer's vendor for this run (e.g. 'claude' instead of the kind's default). Only valid for single-participant flow kinds — rejected for a multi-participant definition. The daemon that will host this run must have that vendor installed and able to run fully unattended, or the call fails naming the vendor and daemon. Reviewer model override is not yet supported — the vendor's own default model is always used. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex').")
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
             )
@@ -826,7 +1008,7 @@ static class McpFlowsServer {
         ),
         new(
             "start_flow",
-            "Start a new agent flow from the server's flow-definition catalog. This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
+            "Start a new agent flow from the server's flow-definition catalog (definition_id) or from an inline YAML definition (definition_yaml — dynamic flows). This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
             "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
@@ -834,15 +1016,17 @@ static class McpFlowsServer {
             new(
                 "object",
                 new() {
-                    ["definition_id"] = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition)."),
+                    ["definition_id"]   = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition). Provide exactly one of definition_id or definition_yaml — never both, never neither."),
+                    ["definition_yaml"] = new("string", "Inline flow-definition YAML document for a dynamic (non-catalog) flow — the full definition, same schema as catalog definitions. Provide exactly one of definition_id or definition_yaml — never both, never neither. Requires a server with dynamic flows enabled. Every participant MUST declare 'workspace: none' (the parser rejects a missing workspace) and a concrete model id (no 'default')."),
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
-                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that.")
+                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that."),
+                    ["vendor"]         = new("string", "Optional. Override the reviewer's vendor for this run (e.g. 'claude' instead of the kind's default). Only valid for single-participant catalog flow kinds — rejected for a multi-participant definition and for the definition_yaml (dynamic) form, where each participant already declares its own vendor. The daemon that will host this run must have that vendor installed and able to run fully unattended, or the call fails naming the vendor and daemon. Reviewer model override is not yet supported — the vendor's own default model is always used. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex').")
                 },
-                ["definition_id", "target_kind", "target_ref", "target_title", "context"]
+                ["target_kind", "target_ref", "target_title", "context"]
             )
         ),
         new(
@@ -888,9 +1072,13 @@ static class McpFlowsServer {
     ];
 }
 
-/// <summary>CLI-side DTO for POST /api/flows/review/start — mirrors the server's StartReviewFlowRequest fields.</summary>
+/// <summary>CLI-side DTO for POST /api/flows/review/start — mirrors the server's StartReviewFlowRequest fields.
+/// Kind and DefinitionYaml are mutually exclusive (server-enforced too): a catalog start carries kind and
+/// null-omits definition_yaml; a dynamic start carries definition_yaml and null-omits kind — the
+/// WhenWritingNull context config keeps the absent one off the wire entirely, so catalog starts stay
+/// byte-compatible with servers that predate dynamic flows.</summary>
 record StartReviewFlowDto(
-    [property: JsonPropertyName("kind")]                   string  Kind,
+    [property: JsonPropertyName("kind")]                   string? Kind,
     [property: JsonPropertyName("target_kind")]            string  TargetKind,
     [property: JsonPropertyName("target_ref")]             string  TargetRef,
     [property: JsonPropertyName("target_title")]           string  TargetTitle,
@@ -904,12 +1092,19 @@ record StartReviewFlowDto(
     [property: JsonPropertyName("daemon_name")]            string? DaemonName,
     [property: JsonPropertyName("repo_path")]              string? RepoPath,
     [property: JsonPropertyName("mode")]                   string? Mode,
-    [property: JsonPropertyName("async")]                  bool    Async
+    [property: JsonPropertyName("async")]                  bool    Async,
+    [property: JsonPropertyName("requester_machine_id")]  string? RequesterMachineId = null,
+    [property: JsonPropertyName("definition_yaml")]        string? DefinitionYaml = null,
+    // Reviewer vendor override: optional, single-participant catalog flow kinds only. Omitted
+    // (null) leaves the server's existing no-override behavior byte-identical on any server
+    // version — see StartFlowAsync's route-selection logic, which only posts this alongside a
+    // request to the versioned start route.
+    [property: JsonPropertyName("vendor")]                 string? Vendor = null
 );
 
 /// <summary>
 /// CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.
-/// Participant is optional (AI-1126 D-b): the review alias (submit_review_round) always leaves it
+/// Participant is optional (D-b): the review alias (submit_review_round) always leaves it
 /// null, which the WhenWritingNull context config omits from the wire entirely, keeping the alias
 /// byte-compatible with servers that predate the field. The generic alias (send_to_participant)
 /// always supplies it; the server validates it against the flow definition.
@@ -921,7 +1116,7 @@ record SubmitReviewRoundDto(
     [property: JsonPropertyName("participant")]  string? Participant = null
 );
 
-/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — AI-1127 E-c deliver-once ack.</summary>
+/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — E-c deliver-once ack.</summary>
 record AckFlowMessagesDto(
     [property: JsonPropertyName("message_ids")] IReadOnlyList<string> MessageIds
 );

@@ -1,5 +1,5 @@
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -112,6 +112,53 @@ public class HookSpoolTests {
 
             await Assert.That(seen[0]).IsEqualTo("old"); // temp first
             await Assert.That(seen).Contains("""{"n":"newlive"}""");
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // Task 12 / BLOCKER-1: the ordered drain (LifecycleSpoolDrain / DrainRoutesAsync) uses a
+    // distinct ".ordered-*" temp namespace precisely so it can deliberately WITHHOLD a phase's
+    // remainder mid-pass (e.g. a session-end held back until the transcript tail is done) without
+    // the unrelated route-agnostic FIFO drain (DrainAllAsync, still used by Claude/Cursor) sweeping
+    // it up and delivering it immediately via the wrong poster — reintroducing the exact ordering
+    // race the two-phase drain exists to prevent.
+    [Test]
+    public async Task DrainAllAsync_never_recovers_an_ordered_drain_temp() {
+        var dir = TmpDir();
+        Directory.CreateDirectory(dir);
+        try {
+            // A withheld ordered-drain remainder — as DrainRoutesAsync would leave it — sitting
+            // right alongside a fresh route-agnostic append for the SAME session.
+            await File.WriteAllTextAsync(Path.Combine(dir, $"{SidA}.ordered-123-1"),
+                "{\"route\":\"session-end\",\"body\":\"withheld\"}\n");
+            var spool = new HookSpool(dir);
+            spool.Append(SidA, "session-start", """{"n":"fresh"}""");
+
+            var seen = new List<string>();
+            await spool.DrainAllAsync(SidA, (route, body) => { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+                TimeSpan.FromSeconds(5), CancellationToken.None);
+
+            // Only the fresh, route-agnostic entry was delivered — the ordered-drain temp was never
+            // touched (still on disk, byte-for-byte).
+            await Assert.That(seen).IsEquivalentTo(["""{"n":"fresh"}"""]);
+            await Assert.That(File.Exists(Path.Combine(dir, $"{SidA}.ordered-123-1"))).IsTrue();
+            await Assert.That(await File.ReadAllTextAsync(Path.Combine(dir, $"{SidA}.ordered-123-1")))
+                .IsEqualTo("{\"route\":\"session-end\",\"body\":\"withheld\"}\n");
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task HasBacklog_sees_an_ordered_drain_temp_even_though_DrainAllAsync_ignores_it() {
+        var dir = TmpDir();
+        Directory.CreateDirectory(dir);
+        try {
+            await File.WriteAllTextAsync(Path.Combine(dir, $"{SidA}.ordered-1-1"),
+                "{\"route\":\"session-end\",\"body\":\"x\"}\n");
+            var spool = new HookSpool(dir);
+
+            // Ordering guards (ClaudeHookCommand.CurrentSessionHasBacklog / CursorHookCommand) must
+            // see this as backlog so they defer their OWN fresh post rather than race ahead of a
+            // withheld ordered-drain phase still in flight for this session.
+            await Assert.That(spool.HasBacklog(SidA)).IsTrue();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 

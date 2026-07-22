@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Gemini;
 namespace Capacitor.Cli.Core.Antigravity;
 
 /// <summary>
-/// Filesystem layout for Google Antigravity (AI-1157/AI-1158). Antigravity is a
+/// Filesystem layout for Google Antigravity. Antigravity is a
 /// GUI IDE (VS Code fork, Windsurf/Codeium lineage) whose agent state lives under
 /// the SHARED <c>~/.gemini</c> home in an <c>antigravity</c> subdir (so paths reuse
 /// <see cref="GeminiPaths.Root"/> and honor <c>GEMINI_CLI_HOME</c>). Each conversation
@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Core.Antigravity;
 /// kcap control hooks. Per-workspace installs live under <c>&lt;root&gt;/.agents/plugins/kcap/</c>.
 /// ⚠️ The <c>~/.gemini/antigravity-cli/</c> dir is the <c>agy</c> CLI's config root — the
 /// GUI does NOT read it, so installing hooks there (as #256 originally did) is invisible
-/// to the running IDE (AI-1158 GUI re-test).
+/// to the running IDE (GUI re-test).
 ///
 /// ⚠️ <c>~/.gemini</c> is shared with the Gemini CLI — <see cref="GeminiPaths.IsInstalled"/>
 /// must require a Gemini-specific marker so an Antigravity-only home doesn't read as
@@ -34,6 +34,23 @@ public static class AntigravityPaths {
     /// <summary>The kcap capture plugin dir the GUI loads: <c>&lt;gui-config&gt;/plugins/kcap</c>.</summary>
     public static string PluginDir(string? home = null, string? geminiCliHome = null)
         => Path.Combine(GuiConfigRoot(home, geminiCliHome), "plugins", AntigravityHooks.BlockName);
+
+    /// <summary>MCP server config the Antigravity IDE reads: <c>&lt;gui-config&gt;/mcp_config.json</c>.
+    /// This is Antigravity's OWN MCP file — NOT the Gemini CLI's <c>~/.gemini/settings.json</c> — with
+    /// the plain <c>mcpServers</c> command/args/env shape (<c>McpConfigShape.Standard</c>).</summary>
+    public static string McpConfigJson(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GuiConfigRoot(home, geminiCliHome), "mcp_config.json");
+
+    /// <summary>Global steering/context file the IDE loads: <c>&lt;gemini-root&gt;/GEMINI.md</c> —
+    /// SHARED with the Gemini CLI (both hardcode <c>~/.gemini/GEMINI.md</c>), so kcap's single
+    /// marker-delimited block serves both. Honors <c>GEMINI_CLI_HOME</c> via <see cref="GeminiPaths.Root"/>.</summary>
+    public static string InstructionsMd(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "GEMINI.md");
+
+    /// <summary>Global skills dir the IDE reads: <c>&lt;gemini-root&gt;/skills</c>. Antigravity does NOT
+    /// read the agent-agnostic <c>~/.agents/skills</c>, so kcap installs its skills here instead.</summary>
+    public static string SkillsDir(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "skills");
 
     /// <summary>Per-conversation "brain" dir: <c>&lt;root&gt;/brain/&lt;id&gt;</c>.</summary>
     public static string BrainDir(string conversationId, string? home = null, string? geminiCliHome = null)
@@ -62,7 +79,7 @@ public static class AntigravityPaths {
     public static string? ConversationDbFromTranscript(string transcriptPath) {
         // Require the EXACT shape …/brain/<id>/.system_generated/logs/transcript_full.jsonl —
         // validate each segment so an unexpected path fails open (returns null) instead of
-        // being mapped to a guessed <root>/conversations/<derived>.db (AI-1157 review).
+        // being mapped to a guessed <root>/conversations/<derived>.db.
         if (!string.Equals(Path.GetFileName(transcriptPath), "transcript_full.jsonl", StringComparison.Ordinal))
             return null;
 

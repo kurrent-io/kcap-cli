@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -25,6 +27,27 @@ public class ClaudeLauncherReviewFlowTests {
             Review:        null,
             ReviewLaunch:  null
         );
+
+    // review-detail branch (IsReview: true) — mirrors CodexLauncherTests' NewReviewCtx.
+    static LauncherContext NewReviewCtx(string model) {
+        var mcp = new ReviewLaunchBuilder.ReviewMcpServer(
+            Command: "/opt/kcap",
+            Args: ["mcp", "review", "--owner", "acme", "--repo", "widgets", "--pr", "42"],
+            Env: new Dictionary<string, string> { ["KCAP_URL"] = "https://srv" });
+
+        return new(
+            AgentId: "a-rev",
+            SourceRepoPath: "/tmp/repo",
+            Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+            Prompt: null,
+            Model: model,
+            Effort: null,
+            Tools: null,
+            IsReview: true,
+            IsReviewFlow: false,
+            Review: new ReviewLaunchInfo("acme", "widgets", 42),
+            ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: "Review PR acme/widgets#42", Mcp: mcp));
+    }
 
     [Test]
     public async Task Review_flow_launch_bypasses_permissions() {
@@ -98,7 +121,52 @@ public class ClaudeLauncherReviewFlowTests {
         await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
     }
 
-    // === AI-1126 D-c: definition MCP allowlist materialization ===
+    // === Required bugfix: "default" model sentinel must never reach the real `claude` binary ===
+    // Mirrors CodexLauncher.AddModelArg's existing sentinel check. Every catalog reviewer vendor
+    // override necessarily carries this sentinel (there is no model-override mechanism yet), so
+    // this fix is load-bearing the moment a review flow ever launches Claude.
+
+    [Test]
+    [Arguments("default")]
+    [Arguments("Default")]
+    [Arguments("DEFAULT")]
+    public async Task Review_flow_launch_omits_model_when_default_sentinel(string model) {
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true, model: model)).Args;
+
+        await Assert.That(args).DoesNotContain("--model");
+        await Assert.That(args).DoesNotContain(model);
+    }
+
+    [Test]
+    public async Task Review_flow_launch_still_emits_model_when_concrete() {
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true, model: "claude-sonnet-4-5")).Args;
+
+        await Assert.That(args).Contains("--model");
+        var i = Array.IndexOf(args, "--model");
+        await Assert.That(args[i + 1]).IsEqualTo("claude-sonnet-4-5");
+    }
+
+    [Test]
+    [Arguments("default")]
+    [Arguments("Default")]
+    [Arguments("DEFAULT")]
+    public async Task Review_detail_launch_omits_model_when_default_sentinel(string model) {
+        var args = NewLauncher().BuildArgs(NewReviewCtx(model)).Args;
+
+        await Assert.That(args).DoesNotContain("--model");
+        await Assert.That(args).DoesNotContain(model);
+    }
+
+    [Test]
+    public async Task Review_detail_launch_still_emits_model_when_concrete() {
+        var args = NewLauncher().BuildArgs(NewReviewCtx("claude-sonnet-4-5")).Args;
+
+        await Assert.That(args).Contains("--model");
+        var i = Array.IndexOf(args, "--model");
+        await Assert.That(args[i + 1]).IsEqualTo("claude-sonnet-4-5");
+    }
+
+    // === D-c: definition MCP allowlist materialization ===
 
     [Test]
     public async Task ReviewFlow_with_allowlist_merges_servers_into_mcp_config() {
@@ -200,5 +268,52 @@ public class ClaudeLauncherReviewFlowTests {
         var argsEmpty = launcher.BuildArgs(NewCtx(isReviewFlow: true) with { McpAllowlist = [] }).Args;
 
         await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
+    }
+
+    // === Phase A: read-only argv for a borrowed reviewer ===
+
+    [Test]
+    public async Task Review_flow_borrowed_cwd_denies_write_and_exec_tools_instead_of_bypass() {
+        // A borrowed reviewer runs in the user's REAL checkout — bypassPermissions would
+        // auto-approve writes there. Use an explicit deny-list instead of --permission-mode
+        // plan (which reshapes tool use, incl. the injected flow-result MCP tool).
+        var ctx  = NewCtx(isReviewFlow: true) with { Work = WorkLocation.BorrowedCwd };
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        await Assert.That(args).DoesNotContain("--permission-mode");
+        await Assert.That(args).DoesNotContain("bypassPermissions");
+        await Assert.That(args).DoesNotContain("plan");
+
+        await Assert.That(args).Contains("--disallowedTools");
+        var i      = Array.IndexOf(args, "--disallowedTools");
+        var denied = args[i + 1];
+
+        foreach (var tool in new[] { "Agent", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash" }) {
+            await Assert.That(denied).Contains(tool);
+        }
+
+        await Assert.That(args).Contains("--strict-mcp-config");
+        await Assert.That(args).Contains("--mcp-config");
+    }
+
+    [Test]
+    public async Task Review_flow_owned_worktree_args_byte_identical_to_today() {
+        // Regression: the owned path's argv must stay exactly as it is today.
+        var ctx  = NewCtx(isReviewFlow: true) with { Work = WorkLocation.OwnedWorktree };
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap").BuildArgs(ctx).Args;
+
+        const string expectedMcpConfig =
+            """{"mcpServers":{"kcap-flow-result":{"command":"/opt/kcap","args":["mcp","flow-result"],"env":{"KCAP_URL":"https://t.example","KCAP_FLOW_AGENT_ID":"a-1"}}}}""";
+
+        string[] expected = [
+            "--permission-mode", "bypassPermissions",
+            "--strict-mcp-config",
+            "--mcp-config", expectedMcpConfig,
+            "--disallowedTools", "Agent",
+            "--model", "sonnet",
+            "--", "review this"
+        ];
+
+        await Assert.That(args).IsEquivalentTo(expected, CollectionOrdering.Matching);
     }
 }
