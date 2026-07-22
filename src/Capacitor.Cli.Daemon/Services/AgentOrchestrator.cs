@@ -361,6 +361,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnAckResolvedCandidates       += HandleAckResolvedCandidates;
         _server.GetResolvedStartupCandidates  =  () => [.. _resolvedLedger?.Snapshot() ?? []];
 
+        // Phase B2-b (sequenced-settlement design): mirror the per-platform startup-completeness signals
+        // into the DaemonConnect payload (the periodic DaemonStatusReport carries them via
+        // BuildStatusReport). Additive/inert until the paired server PR consumes them; finalized
+        // alongside the sequenced counters in a later task.
+        _server.GetStartupReapComplete         =  ComputeStartupReapComplete;
+        _server.GetUnresolvedStartupCandidates =  () => [.. _orphanReaper?.BlockedCandidates() ?? []];
+        _server.GetStartupDiscovery            =  () => _orphanReaper?.CurrentDiscovery;
+
         _server.GetLiveAgentIds = () => [
             .. _agents
                 .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsPrivate)
@@ -415,7 +423,38 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch (Epoch/counters
             // finalized in a later task); the field is additive/inert until the paired server PR reads it.
             Epoch: _daemonEpoch,
-            ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []]);
+            // Phase B2-b (sequenced-settlement design): the per-platform startup-completeness signals.
+            // StartupReapComplete is a computed roll-up; UnresolvedStartupCandidates always lists the
+            // blocked known-id set so a completion-false report carries its reason; StartupDiscovery
+            // surfaces the recordless-survivor marker-scan state (Pending/Complete/Failed on Linux,
+            // NotApplicable off it). Additive/inert until the paired server PR consumes them.
+            StartupReapComplete: ComputeStartupReapComplete(),
+            ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []],
+            UnresolvedStartupCandidates: [.. _orphanReaper?.BlockedCandidates() ?? []],
+            StartupDiscovery: _orphanReaper?.CurrentDiscovery);
+
+    /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
+    /// roll-up. A blocked known-id candidate (pending_marker / legacy_unresolvable /
+    /// identity_unresolvable) always keeps it false. Otherwise completion is platform-specific:
+    /// <list type="bullet">
+    /// <item><b>Linux</b> — needs BOTH no blocked candidates AND one clean env-marker-scan pass
+    /// (<see cref="MarkerScanState.Complete"/>): the scan is the only proof a recordless survivor was
+    /// enumerated.</item>
+    /// <item><b>Windows with <c>RecordlessSurvivorsImpossible</c></b> — trivially complete once the
+    /// record pass leaves nothing blocked (the boot-chain attestation proves no recordless class
+    /// exists).</item>
+    /// <item><b>pre-W1 Windows + macOS</b> — record-pass-only completion (a weakened proof: there is no
+    /// scan and no boot-chain guarantee, so "no blocked record-tracked candidates" is the best available
+    /// signal).</item>
+    /// </list></summary>
+    internal bool ComputeStartupReapComplete() {
+        var blocked = _orphanReaper?.BlockedCandidates().Count ?? 0;
+        if (blocked > 0) return false;
+        if (OperatingSystem.IsLinux())
+            return _orphanReaper?.CurrentDiscovery.MarkerScanState == MarkerScanState.Complete;
+        if (OperatingSystem.IsWindows() && _recordlessSurvivorsImpossible) return true;
+        return true; // pre-W1 Windows / macOS: record-pass-only completion (no blocked record-tracked candidates)
+    }
 
     /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
@@ -535,6 +574,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test seam: seed a kill-quarantine entry so a test can drive the drain hook without a
     /// real launch+teardown. Mirrors <see cref="WritePidRecordForTest"/>; never used in production.</summary>
     internal void QuarantineForTest(AgentKillQuarantine.Entry entry) => _quarantine?.Add(entry);
+
+    /// <summary>Phase B2-b (sequenced-settlement design): test seam — persist a marker-candidate source
+    /// so a test can assert it surfaces as a <c>pending_marker</c> blocked candidate (keeping
+    /// <see cref="ComputeStartupReapComplete"/> false) without a real recordless survivor. The pid is
+    /// irrelevant: <see cref="OrphanReaper.BlockedCandidates"/> lists every persisted source WITHOUT a
+    /// liveness check, and the assertion reads the blocked surface directly via
+    /// <see cref="BuildStatusReport"/> (no scan runs, so the dead pid is never resolved away). Never used
+    /// in production.</summary>
+    internal void SeedPendingMarkerCandidateForTest(string agentId, string oldEpoch) =>
+        _markerCandidates!.Write(new MarkerCandidate(agentId, _daemonId, oldEpoch, 999_999));
 
     /// <summary>Phase B (D4 §6.4(3) StopAgent fallback): the caller had no in-memory agent for
     /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,

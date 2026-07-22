@@ -28,6 +28,46 @@ internal sealed class OrphanReaper(
         Action<string, string, string?, string?>? onRecordResolved = null,
         MarkerCandidateStore? markerStore = null,
         Action<string, string>? onMarkerResolved = null) {
+    /// <summary>Phase B2-b (sequenced-settlement design): the recordless-survivor env-marker-scan
+    /// status, advertised on the daemon's startup-completeness signals. Seeded per-platform:
+    /// <c>Pending</c> on Linux (a scan runs and must complete one clean pass), <c>NotApplicable</c> on
+    /// Windows (no scan — layer-1 containment) and macOS (env redaction makes the scan find nothing).
+    /// The Linux scan flips it to <c>Complete</c> after one clean enumeration pass or <c>Failed</c> on an
+    /// enumeration error (retried next heartbeat); off Linux it stays <c>NotApplicable</c> forever.</summary>
+    public StartupDiscovery CurrentDiscovery { get; private set; } =
+        new(OperatingSystem.IsLinux() ? MarkerScanState.Pending : MarkerScanState.NotApplicable);
+
+    /// <summary>Phase B2-b (sequenced-settlement design): the known-id prior-incarnation candidates
+    /// that are BLOCKED — each keeps <c>StartupReapComplete</c> false until resolved. Three sources,
+    /// each with its reason:
+    /// <list type="bullet">
+    /// <item><c>identity_unresolvable</c> — a prior-epoch <see cref="PidIdentityKind.IdentityUnavailable"/>
+    /// record the record pass can never resolve (no comparable token); the Linux env-marker scan may
+    /// still reap it, macOS requires a manual kill.</item>
+    /// <item><c>legacy_unresolvable</c> — a macOS prior-epoch <see cref="PidIdentityKind.Present"/> record
+    /// whose live pid is still alive but whose token is ambiguous (a cross-scheme mismatch spared every
+    /// pass).</item>
+    /// <item><c>pending_marker</c> — any persisted marker-candidate source (a recordless prior-epoch
+    /// survivor whose live triple no longer matches, so it stays pending). Listed WITHOUT a liveness
+    /// check — a source on disk is a blocking candidate until the resolution matrix clears it. Flow
+    /// identity is unknown for a recordless survivor (the env is untrusted), so it is omitted.</item>
+    /// </list>
+    /// Flow fields for the record-tracked reasons come from the TRUSTED durable record. Uses the
+    /// ctor-injected <c>markerStore</c>/<c>store</c>/<c>currentEpoch</c>.</summary>
+    public IReadOnlyList<UnresolvedStartupCandidate> BlockedCandidates() {
+        var list = new List<UnresolvedStartupCandidate>();
+        foreach (var r in store.ReadAll()) {
+            if (string.Equals(r.DaemonEpoch, currentEpoch, StringComparison.Ordinal)) continue; // current-incarnation
+            if (r.IdentityKind == PidIdentityKind.IdentityUnavailable)
+                list.Add(new(r.AgentId, StartupCandidateUnresolvedReason.IdentityUnresolvable, r.FlowRunId, r.FlowRole));
+            else if (OperatingSystem.IsMacOS() && ProcessIdentity.IsAlive(r.Pid) && ProcessIdentity.MatchesTri(r.Pid, r.StartIdentity) is null)
+                list.Add(new(r.AgentId, StartupCandidateUnresolvedReason.LegacyUnresolvable, r.FlowRunId, r.FlowRole));
+        }
+        foreach (var m in markerStore?.ReadAll() ?? [])
+            list.Add(new(m.AgentId, StartupCandidateUnresolvedReason.PendingMarker));
+        return list;
+    }
+
     /// <summary>Run all passes once. Best-effort throughout — a failure on one process never aborts the
     /// sweep of the others.</summary>
     public async Task ReapOnceAsync(CancellationToken ct = default) {
@@ -116,6 +156,11 @@ internal sealed class OrphanReaper(
             pids = EnumeratePids();
         } catch (Exception ex) {
             logger.LogWarning(ex, "OrphanReaper: process enumeration failed — skipping env-marker scan this tick");
+            // Phase B2-b (sequenced-settlement design): an enumeration failure leaves discovery FAILED on
+            // Linux (retried next heartbeat); keep the last successful scan time so a prior clean pass is
+            // still remembered. Off Linux there is no scan, so CurrentDiscovery stays NotApplicable.
+            if (OperatingSystem.IsLinux())
+                CurrentDiscovery = new StartupDiscovery(MarkerScanState.Failed, CurrentDiscovery.LastSuccessfulScanAt);
             return;
         }
 
@@ -160,6 +205,16 @@ internal sealed class OrphanReaper(
                 logger.LogWarning(ex, "OrphanReaper: env-marker reap failed for pid {Pid}", pid);
             }
         }
+
+        // Phase B2-b (sequenced-settlement design): one clean env-marker-scan pass completed —
+        // enumeration succeeded and every candidate was walked (never cancelled mid-pass; a cancel
+        // returns early above, leaving discovery unchanged). On Linux this is the completeness proof, so
+        // flip to Complete and stamp the scan time. A pass that merely SPARED a pending_marker candidate
+        // is still clean here — that spared source blocks completion via BlockedCandidates, not via the
+        // pass state. Off Linux there is no scan (EnumeratePids returns empty), so CurrentDiscovery stays
+        // NotApplicable.
+        if (OperatingSystem.IsLinux())
+            CurrentDiscovery = new StartupDiscovery(MarkerScanState.Complete, DateTimeOffset.UtcNow);
     }
 
     /// <summary>Resolve a marker-candidate source through the asymmetric matrix. Because a recordless

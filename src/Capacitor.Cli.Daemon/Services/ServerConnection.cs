@@ -95,6 +95,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// Optional — null when not wired (tests / early startup) ⇒ no candidates advertised.</summary>
     public Func<ResolvedStartupCandidate[]>? GetResolvedStartupCandidates { get; set; }
 
+    /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-completeness signals,
+    /// re-advertised on <c>DaemonConnect</c> alongside the periodic <c>DaemonStatusReport</c>. Set by
+    /// <see cref="AgentOrchestrator"/> at startup; optional — null when not wired (tests / early startup)
+    /// ⇒ the additive field defaults (StartupReapComplete/StartupDiscovery null, no blocked candidates).</summary>
+    public Func<bool>?                         GetStartupReapComplete         { get; set; }
+    public Func<UnresolvedStartupCandidate[]>? GetUnresolvedStartupCandidates { get; set; }
+    public Func<StartupDiscovery?>?            GetStartupDiscovery            { get; set; }
+
     /// <summary>Phase B (D2): send the periodic daemon self-report ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
     /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
@@ -414,7 +422,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // additive fields are wire-compatible with old servers (ignored) and inert until the
                     // paired server PR consumes them.
                     RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
-                    ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke()
+                    ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke(),
+                    // Phase B2-b (sequenced-settlement design): the per-platform startup-completeness
+                    // signals. Null getters (tests / early startup) leave the additive fields at their
+                    // defaults, wire-compatible with old servers.
+                    StartupReapComplete: GetStartupReapComplete?.Invoke(),
+                    UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
+                    StartupDiscovery: GetStartupDiscovery?.Invoke()
                 ),
                 cancellationToken: _ct
             );
