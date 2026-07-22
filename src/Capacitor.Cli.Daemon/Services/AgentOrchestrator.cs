@@ -195,6 +195,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     string               _daemonId    = "";
     string               _daemonEpoch = "";
 
+    // Phase B2-b (sequenced-settlement design §4.2.4): the durable positive-death-evidence outbox.
+    // Fed at every CONFIRMED-gone seam — the OrphanReaper record pass (Hook A), the quarantine drain
+    // (Hook B), and the StopAgent-fallback reap (Hook C) — always ledger-append BEFORE source-delete so
+    // a crash between the two re-derives from the leftover source and Upsert (idempotent on the
+    // source-stable (AgentId, OldEpoch) key) collapses onto the committed entry. Lives in the same
+    // state dir as _pidRecords, under the same atomic temp+rename discipline.
+    ResolvedCandidatesLedger? _resolvedLedger;
+
     // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
     // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
     // DaemonConnect payload; a Linux/macOS value is inert (the server consumes it only on Windows).
@@ -316,7 +324,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
         _recordlessSurvivorsImpossible = config.RecordlessSurvivorsImpossible;
-        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger);
+
+        // Phase B2-b (sequenced-settlement design §4.2.4): the resolved-candidates ledger shares the PID
+        // record root so all durable per-daemon state lives together. The OrphanReaper's record-pass
+        // callback (Hook A) emits into it before the source delete; the drain (Hook B) and StopAgent
+        // fallback (Hook C) below emit directly. All three are append-before-delete + idempotent.
+        _resolvedLedger = new ResolvedCandidatesLedger(recordRoot, logger);
+        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger,
+            onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role));
 
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;
@@ -474,6 +489,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal string DaemonEpochForTest                             => _daemonEpoch;
     internal bool   RecordlessSurvivorsImpossibleForTest           => _recordlessSurvivorsImpossible;
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the resolved-candidates ledger's
+    /// un-acked snapshot, so a test can assert the confirmed-gone hooks (quarantine drain / StopAgent
+    /// fallback / record pass) emitted positive per-id death evidence. Never used in production.</summary>
+    internal IReadOnlyList<ResolvedStartupCandidate> ResolvedLedgerSnapshotForTest => _resolvedLedger?.Snapshot() ?? [];
+
+    /// <summary>Test seam: seed a kill-quarantine entry so a test can drive the drain hook without a
+    /// real launch+teardown. Mirrors <see cref="WritePidRecordForTest"/>; never used in production.</summary>
+    internal void QuarantineForTest(AgentKillQuarantine.Entry entry) => _quarantine?.Add(entry);
+
     /// <summary>Phase B (D4 §6.4(3) StopAgent fallback): the caller had no in-memory agent for
     /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,
     /// on Unix, carries the expected <c>KCAP_AGENT_ID</c> env — ambiguity spares), reap it by identity
@@ -486,7 +510,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (record.AgentId != agentId) return false; // no record
 
         var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _shutdownCts.Token);
-        if (confirmedGone) _pidRecords.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+        if (confirmedGone) {
+            // Phase B2-b (sequenced-settlement design §4.2.4) Hook C: ledger-append the positive per-id
+            // death evidence (from the TRUSTED record — its epoch + flow identity) BEFORE deleting the
+            // source record. A crash between the two leaves a committed entry + leftover record; the next
+            // boot's OrphanReaper record pass re-derives it and Upsert (idempotent on the source-stable
+            // (AgentId, OldEpoch) key) collapses onto the committed entry, then completes the delete.
+            _resolvedLedger?.Upsert(agentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
+            _pidRecords.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+        }
 
         return confirmedGone;
     }
@@ -518,7 +550,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Delete the durable PID record of every agent whose death the retry CONFIRMED — teardown
             // retained it (with the current epoch) while the child was quarantined, so without this it
             // would be skipped by the orphan sweep and leak until the next daemon restart.
-            foreach (var agentId in await _quarantine.RetryAllAsync(ct)) DeletePidRecord(agentId);
+            //
+            // Phase B2-b (sequenced-settlement design §4.2.4) Hook B: for each drained (confirmed-dead)
+            // entry, ledger-append its positive per-id death evidence BEFORE deleting the record. The
+            // shipped _quarantine is current-incarnation only, so its entries carry the CURRENT epoch —
+            // emit (AgentId, _daemonEpoch, flow…). That same-epoch id is harmless per outbox idempotency
+            // (prior-epoch proofs come from the record pass + marker scan) and gives the server id-level
+            // absence proof. Append-before-delete: a crash between the two leaves a committed entry + the
+            // retained record (its DaemonEpoch == _daemonEpoch), which the next boot's OrphanReaper record
+            // pass reconciles on the source-stable (AgentId, OldEpoch) key (single emit) then deletes.
+            foreach (var e in await _quarantine.RetryAllAsync(ct)) {
+                _resolvedLedger?.Upsert(e.AgentId, _daemonEpoch, e.FlowRunId, e.FlowRole);
+                DeletePidRecord(e.AgentId);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { _logger.LogWarning(ex, "quarantine retry sweep faulted — continuing"); }

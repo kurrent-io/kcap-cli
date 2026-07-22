@@ -83,4 +83,96 @@ public class LedgerHookTests {
         await Assert.That(entry.OldEpoch).IsEqualTo("old-epoch");
         await Assert.That(store.ReadAll()).IsEmpty();
     }
+
+    [Test]
+    public async Task Quarantine_drain_returns_entries_and_confirmed_ones_are_emittable() {
+        var q = new AgentKillQuarantine(NullLogger.Instance);
+        using var dummy = DummyProcess.StartSleep(30);
+        var id = ProcessIdentity.Capture(dummy.Pid)!;
+        dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5)); // confirmed dead -> will drain
+
+        q.Add(new AgentKillQuarantine.Entry("q1", dummy.Pid, id, "ReviewFlow", DateTimeOffset.UtcNow, "flow-1", "reviewer"));
+        var drained = await q.RetryAllAsync(CancellationToken.None);
+
+        await Assert.That(drained.Select(e => e.AgentId)).IsEquivalentTo(new[] { "q1" });
+        await Assert.That(drained.Single().FlowRole).IsEqualTo("reviewer");
+    }
+
+    // ── Quarantine-drain hook — crash both sides (parent §8). The drain's durable source is the RETAINED
+    // AgentPidRecord (teardown quarantines AND keeps the record); the drain emits (AgentId, epoch-at-drain,
+    // flow…) then deletes the record. After a crash the record's DaemonEpoch == that same epoch, so the
+    // next boot's OrphanReaper record pass reconciles on the source-stable (AgentId, OldEpoch) key (NOT
+    // Generation, which the pre-append source lacks).
+    [Test]
+    public async Task Quarantine_drain_crash_between_append_and_delete_reconciles_single_emit() {
+        var (store, ledger, _) = NewPair();
+        using var dummy = DummyProcess.StartSleep(30);
+        var pid = dummy.Pid; var id = ProcessIdentity.Capture(pid)!;
+        dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5));
+        store.Write(new AgentPidRecord("qr", pid, id, PidIdentityKind.Present, "ReviewFlow", "codex",
+            "flow-1", "reviewer", "did", "drain-epoch", DateTimeOffset.UtcNow));
+        var committed = ledger.Upsert("qr", "drain-epoch", "flow-1", "reviewer"); // drain appended
+        // crash before DeletePidRecord → committed entry + leftover record
+
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+            onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
+        await reaper.ReapOnceAsync();
+        await Assert.That(store.ReadAll()).IsEmpty();
+        await Assert.That(ledger.Snapshot().Single().Generation).IsEqualTo(committed.Generation); // single emit
+    }
+
+    [Test]
+    public async Task Quarantine_drain_crash_before_append_re_derives_next_boot() {
+        var (store, ledger, _) = NewPair();
+        using var dummy = DummyProcess.StartSleep(30);
+        var pid = dummy.Pid; var id = ProcessIdentity.Capture(pid)!;
+        dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5));
+        store.Write(new AgentPidRecord("qr", pid, id, PidIdentityKind.Present, "ReviewFlow", "codex",
+            "flow-1", "reviewer", "did", "drain-epoch", DateTimeOffset.UtcNow));
+        await Assert.That(ledger.Snapshot()).IsEmpty(); // crash before append → record only
+
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+            onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
+        await reaper.ReapOnceAsync();
+        await Assert.That(ledger.Snapshot().Single().AgentId).IsEqualTo("qr");
+        await Assert.That(store.ReadAll()).IsEmpty();
+    }
+
+    // ── StopAgent-fallback hook — crash both sides (parent §8). TryStopByPidRecordAsync emits
+    // (agentId, record.DaemonEpoch, record.flow…) before deleting the record; same durable source +
+    // (AgentId, OldEpoch) reconciliation as the drain hook.
+    [Test]
+    public async Task Stop_fallback_crash_between_append_and_delete_reconciles_single_emit() {
+        var (store, ledger, _) = NewPair();
+        using var dummy = DummyProcess.StartSleep(30);
+        var pid = dummy.Pid; var id = ProcessIdentity.Capture(pid)!;
+        dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5));
+        store.Write(new AgentPidRecord("sf", pid, id, PidIdentityKind.Present, "ReviewFlow", "codex",
+            "flow-2", "reviewer", "did", "stop-epoch", DateTimeOffset.UtcNow));
+        var committed = ledger.Upsert("sf", "stop-epoch", "flow-2", "reviewer"); // stop-fallback appended
+        // crash before _pidRecords.Delete → committed entry + leftover record
+
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+            onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
+        await reaper.ReapOnceAsync();
+        await Assert.That(store.ReadAll()).IsEmpty();
+        await Assert.That(ledger.Snapshot().Single().Generation).IsEqualTo(committed.Generation);
+    }
+
+    [Test]
+    public async Task Stop_fallback_crash_before_append_re_derives_next_boot() {
+        var (store, ledger, _) = NewPair();
+        using var dummy = DummyProcess.StartSleep(30);
+        var pid = dummy.Pid; var id = ProcessIdentity.Capture(pid)!;
+        dummy.Kill(); dummy.WaitForExit(TimeSpan.FromSeconds(5));
+        store.Write(new AgentPidRecord("sf", pid, id, PidIdentityKind.Present, "ReviewFlow", "codex",
+            "flow-2", "reviewer", "did", "stop-epoch", DateTimeOffset.UtcNow));
+        await Assert.That(ledger.Snapshot()).IsEmpty(); // crash before append
+
+        var reaper = new OrphanReaper(store, "did", "new-epoch", NullLogger.Instance,
+            onRecordResolved: (a, e, fr, role) => ledger.Upsert(a, e, fr, role));
+        await reaper.ReapOnceAsync();
+        await Assert.That(ledger.Snapshot().Single().AgentId).IsEqualTo("sf");
+        await Assert.That(store.ReadAll()).IsEmpty();
+    }
 }
