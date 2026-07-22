@@ -75,8 +75,30 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
         }
     }
 
-    // Task 12 stubs (replaced in later tasks):
-    Task HandleDuplicateLocked(SequencedItem item, CacheEntry existing) => Task.CompletedTask;
+    /// <summary>Phase B2-b (sequenced-settlement design): an exact-duplicate <c>(Epoch, Seq, CommandId)</c>
+    /// is ANSWERED, never re-executed — <c>Accepted</c> while still processing, or <c>Processed</c> with the
+    /// cached <c>OutcomeKind</c> + a LIVE <c>CurrentState</c> read. A DIFFERENT CommandId at an already-accepted
+    /// Seq is a protocol-invariant violation → <c>duplicate_collision</c>. Called under <c>_lock</c>.</summary>
+    Task HandleDuplicateLocked(SequencedItem item, CacheEntry existing) {
+        if (!string.Equals(existing.CommandId, item.CommandId, StringComparison.Ordinal)) {
+            // A DIFFERENT command claiming an accepted Seq — protocol invariant violation.
+            _ = _sendRejected(new CommandRejected(item.Epoch, item.Seq, item.CommandId, CommandRejectedReason.DuplicateCollision, item.AgentId));
+            return Task.CompletedTask;
+        }
+
+        if (!existing.Processed) {
+            _ = _sendAck(new CommandAck(_epoch, item.Seq, item.CommandId, CommandAckState.Accepted));
+        } else {
+            // CurrentState is read LIVE at ack time (immutable execution fact vs current liveness);
+            // the readLiveness delegate reads the daemon lifecycle collections with confirmed-death precedence.
+            var live = _readLiveness(existing.Outcome.AgentId ?? item.AgentId);
+            _ = _sendAck(new CommandAck(_epoch, item.Seq, item.CommandId, CommandAckState.Processed,
+                existing.Outcome.Kind, live, existing.Outcome.AgentId ?? item.AgentId, existing.Outcome.SessionId));
+        }
+        return Task.CompletedTask;
+    }
+
+    // Task 12 stub (replaced in a later task):
     Task HandleNonNextLocked(SequencedItem item) => Task.CompletedTask;
 
     Task RejectLocked(SequencedItem item, CommandRejectedReason reason) {

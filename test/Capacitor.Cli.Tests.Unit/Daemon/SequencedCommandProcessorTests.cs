@@ -69,4 +69,26 @@ public class SequencedCommandProcessorTests {
         await Assert.That(p.LastProcessedSeq).IsEqualTo(2L);                    // contiguous prefix reaches 2
         await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.InternalError); // synth emitted the reject
     }
+
+    [Test] public async Task Duplicate_of_a_processed_command_is_acked_with_outcome_and_live_state_not_reexecuted() {
+        var h = new Harness(); await using var p = h.P();
+        var runs = 0;
+        var item = h.Launch(1);
+        await p.SubmitAsync(item, () => { runs++; return Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a", "sess")); });
+        await p.SubmitAsync(item, () => { runs++; return Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)); });
+        await Assert.That(runs).IsEqualTo(1);                                    // no re-execution
+        var ack = h.Acks.Single();
+        await Assert.That(ack.State).IsEqualTo(CommandAckState.Processed);
+        await Assert.That(ack.OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchExecuted);
+        await Assert.That(ack.CurrentState).IsEqualTo(AgentLiveness.Live);       // read live at ack time
+    }
+
+    [Test] public async Task Different_command_id_at_an_accepted_seq_is_a_duplicate_collision() {
+        var h = new Harness(); await using var p = h.P();
+        await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        // Same Seq, different CommandId:
+        await p.SubmitAsync(new SequencedItem(SequencedKind.Launch, "e1", 1, "OTHER", "a1"),
+            () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.DuplicateCollision);
+    }
 }
