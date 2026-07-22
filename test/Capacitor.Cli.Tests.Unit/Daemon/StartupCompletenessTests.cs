@@ -47,6 +47,29 @@ public partial class AgentOrchestratorVendorTests {
             .IsEqualTo(StartupCandidateUnresolvedReason.PendingMarker);
     }
 
+    // Phase B2-b (sequenced-settlement design §5.5): a PRESENT prior-epoch record that the record pass
+    // spared (a transient ambiguous identity read on Linux, or a record-pass fault) is still on disk and
+    // therefore UNRESOLVED — confirmed-dead records are deleted. It must keep completion FALSE (surfaced as
+    // identity_unresolvable), never be silently omitted (the paired server would treat omission as proof of
+    // death and launch a duplicate). Deterministic: BlockedCandidates() just reads the store, so seed it
+    // directly with a dead pid (so the macOS legacy-live arm can't catch it) — the else arm must.
+    [Test]
+    public async Task Spared_prior_epoch_present_record_blocks_completion_as_identity_unresolvable() {
+        await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
+            new Dictionary<string, IHostedAgentLauncher>());
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "spared", 999_999, "mac:boot:uid", PidIdentityKind.Present, "ReviewFlow", "codex",
+            "flow-1", "reviewer", orch.DaemonIdForTest, "old-epoch", DateTimeOffset.UtcNow));
+
+        var report = orch.BuildStatusReport();
+        await Assert.That(report.StartupReapComplete).IsFalse();
+        var blocked = report.UnresolvedStartupCandidates!.Single(c => c.AgentId == "spared");
+        await Assert.That(blocked.Reason).IsEqualTo(StartupCandidateUnresolvedReason.IdentityUnresolvable);
+        await Assert.That(blocked.FlowRunId).IsEqualTo("flow-1");   // from the TRUSTED record
+        await Assert.That(blocked.FlowRole).IsEqualTo("reviewer");
+        await Assert.That(orch.ComputeStartupReapComplete()).IsFalse();
+    }
+
     // Phase B2-b (sequenced-settlement design §4.2.4): the ledger's un-acked snapshot is re-reported on
     // every status report until the server prunes it per-entry via AckResolvedCandidates. The seam and
     // the underlying ledger Ack are SYNCHRONOUS (void) — no await (would be CS4008).

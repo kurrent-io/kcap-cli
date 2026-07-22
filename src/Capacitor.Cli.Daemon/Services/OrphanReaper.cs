@@ -63,8 +63,11 @@ internal sealed class OrphanReaper(
     /// check — a source on disk is a blocking candidate until the resolution matrix clears it. Flow
     /// identity is unknown for a recordless survivor (the env is untrusted), so it is omitted.</item>
     /// </list>
-    /// Flow fields for the record-tracked reasons come from the TRUSTED durable record. Uses the
-    /// ctor-injected <c>markerStore</c>/<c>store</c>/<c>currentEpoch</c>.</summary>
+    /// A THIRD arm catches EVERY OTHER prior-epoch record still on disk (a Present record the record pass
+    /// SPARED — a transient ambiguous identity read on Linux, or a record-pass fault): confirmed-dead
+    /// records are deleted at reap time, so any survivor is unresolved and blocks (identity_unresolvable),
+    /// never silently omitted. Flow fields for the record-tracked reasons come from the TRUSTED durable
+    /// record. Uses the ctor-injected <c>markerStore</c>/<c>store</c>/<c>currentEpoch</c>.</summary>
     public IReadOnlyList<UnresolvedStartupCandidate> BlockedCandidates() {
         var list = new List<UnresolvedStartupCandidate>();
         foreach (var r in store.ReadAll()) {
@@ -73,6 +76,15 @@ internal sealed class OrphanReaper(
                 list.Add(new(r.AgentId, StartupCandidateUnresolvedReason.IdentityUnresolvable, r.FlowRunId, r.FlowRole));
             else if (OperatingSystem.IsMacOS() && ProcessIdentity.IsAlive(r.Pid) && ProcessIdentity.MatchesTri(r.Pid, r.StartIdentity) is null)
                 list.Add(new(r.AgentId, StartupCandidateUnresolvedReason.LegacyUnresolvable, r.FlowRunId, r.FlowRole));
+            else
+                // Phase B2-b (sequenced-settlement design §5.5): any OTHER prior-epoch record still on disk
+                // was SPARED by the record pass (a transient ambiguous identity read on Linux, or a
+                // record-pass fault) — NOT confirmed dead. The spec requires completion to stay false until
+                // every record is confirmed dead, so it blocks (identity_unresolvable). Confirmed-dead
+                // records are already deleted, so this never fires for a resolved one; a record whose
+                // process died between passes blocks only until the next reap tick deletes it (safe — a
+                // false-incomplete only delays relaunch, never mints a duplicate).
+                list.Add(new(r.AgentId, StartupCandidateUnresolvedReason.IdentityUnresolvable, r.FlowRunId, r.FlowRole));
         }
         foreach (var m in markerStore?.ReadAll() ?? [])
             list.Add(new(m.AgentId, StartupCandidateUnresolvedReason.PendingMarker));
