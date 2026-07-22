@@ -87,6 +87,40 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(orch.BuildStatusReport().LastProcessedSeq).IsEqualTo(1L);
     }
 
+    // Phase B2-b (sequenced-settlement design §4.2.6): the daemon-side heal-barrier contract. A
+    // StopAgentV2 at Seq = M that terminally processes advances LastProcessedSeq to M; once the agent's
+    // death is confirmed it is absent from BOTH LiveAgents and Quarantined, so a later report PROVES the
+    // id's absence at watermark M. The seeded agent uses NoopPtyProcess (pid 0 / not-alive), so
+    // HandleStopAgent -> CleanupAgentAsync confirms death immediately (no quarantine), removing it from
+    // _agents. This is verification that Tasks 12–16 compose into the barrier obligation.
+    [Test]
+    public async Task Stop_via_v2_advances_watermark_and_a_later_report_omits_the_confirmed_dead_id() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+            new Dictionary<string, IHostedAgentLauncher>());
+        var agent = orch.SeedAgentForTest("rev", LaunchKind.ReviewFlow, status: "Running", flowRunId: "f", flowRole: "reviewer");
+        var epoch = orch.DaemonEpochForTest;
+
+        await orch.HandleStopAgentV2ForTest(new StopAgentV2("rev", epoch, 1, "cmd-1"));
+
+        var report = orch.BuildStatusReport();
+        await Assert.That(report.LastProcessedSeq).IsEqualTo(1L);                          // stop at M=1 terminally processed
+        await Assert.That(report.LiveAgents.Select(x => x.Id)).DoesNotContain("rev");      // confirmed dead (Noop pty) -> absent
+        await Assert.That(report.Quarantined.Select(x => x.Id)).DoesNotContain("rev");
+    }
+
+    // Phase B2-b (sequenced-settlement design §5): an un-Seq'd launch (old server) runs the legacy
+    // unsequenced lane and must NEVER advance the sequenced watermark.
+    [Test]
+    public async Task Legacy_unsequenced_launch_never_advances_the_watermark() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+            new Dictionary<string, IHostedAgentLauncher>());
+        // No Epoch/Seq/CommandId -> legacy lane.
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand("x", "hi", "opus", null, "/tmp", null, null, "bogus"));
+        await Assert.That(orch.BuildStatusReport().HighestAcceptedSeq).IsEqualTo(0L);
+    }
+
     /// <summary>A live-pid-backed pty double whose TerminateAsync deliberately does NOT kill (so teardown
     /// quarantines the "surviving" child). Mirrors LaunchCleanupTests' private LiveNoKillPtyProcess.</summary>
     sealed class LivePtyDouble(int pid) : IPtyProcess {

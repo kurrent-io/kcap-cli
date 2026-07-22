@@ -2460,6 +2460,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.6): test-only entry point to the sequenced
+    /// stop handler so a heal-barrier test can drive a Seq'd <see cref="StopAgentV2"/> through the
+    /// processor's serial lane (advances the watermark; the confirmed-dead id then falls out of both
+    /// LiveAgents and Quarantined). Mirrors <see cref="HandleStopAgentForTest"/>.</summary>
+    internal Task HandleStopAgentV2ForTest(StopAgentV2 cmd) => HandleStopAgentV2(cmd);
+
     /// <summary>Test-only entry point to the private send-input handler (bracketed-paste submit).</summary>
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
 
