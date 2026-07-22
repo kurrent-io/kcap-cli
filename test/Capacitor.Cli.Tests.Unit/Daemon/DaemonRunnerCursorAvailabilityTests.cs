@@ -69,15 +69,14 @@ public class DaemonRunnerCursorAvailabilityTests {
     }
 
     [Test]
-    public async Task ComputeUnattendedVendors_IncludesAvailableCursor_WhenUnattendedEnabled() {
+    public async Task ComputeUnattendedVendors_ExcludesAvailableCursor_WithoutCertification() {
         IHostedAgentRuntimeFactory[] factories = [
             new FakeRuntimeFactory("claude", isAvailable: true, supportsUnattended: true),
             new FakeRuntimeFactory("codex", isAvailable: true, supportsUnattended: true),
-            new FakeRuntimeFactory("cursor", isAvailable: true, supportsUnattended: true),
+            new FakeRuntimeFactory("cursor", isAvailable: true, supportsUnattended: false),
         ];
 
-        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories))
-            .IsEquivalentTo(["claude", "codex", "cursor"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(DaemonRunner.ComputeUnattendedVendors(factories)).IsEquivalentTo(["claude", "codex"]);
     }
 
     [Test]

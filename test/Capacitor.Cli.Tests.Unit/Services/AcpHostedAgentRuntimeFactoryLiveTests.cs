@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
@@ -57,25 +56,6 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             Console.WriteLine($"[ai-688-live] UNEXPECTED RequestAcpInteractionAsync: kind={request.Kind} tool={request.ToolName}");
 
             return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null));
-        }
-    }
-
-    sealed class CaptureLoggerProvider : ILoggerProvider {
-        public ConcurrentQueue<string> Messages { get; } = new();
-
-        public ILogger CreateLogger(string categoryName) => new CaptureLogger(Messages);
-        public void Dispose() { }
-
-        sealed class CaptureLogger(ConcurrentQueue<string> messages) : ILogger {
-            public IDisposable BeginScope<TState>(TState state) where TState : notnull => NoopScope.Instance;
-            public bool IsEnabled(LogLevel logLevel) => true;
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-                    Func<TState, Exception?, string> formatter) => messages.Enqueue(formatter(state, exception));
-        }
-
-        sealed class NoopScope : IDisposable {
-            public static readonly NoopScope Instance = new();
-            public void Dispose() { }
         }
     }
 
@@ -152,74 +132,6 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
         }
     }
 
-    /// <summary>AI-1408 go/no-go: the real Cursor ACP process must load the review-flow result
-    /// server delivered in <c>session/new.mcpServers</c>, call its submission tool, and keep every
-    /// permission decision inside the unattended ACP bridge rather than routing one to the UI.</summary>
-    [Test]
-    public async Task StartAsync_AgainstRealCursorAgentAcp_LoadsFlowResultMcpWithoutHumanInteraction() {
-        Skip.Unless(
-            Environment.GetEnvironmentVariable(LiveGateEnvVar) == "1",
-            $"Gated live E2E against a real 'cursor-agent acp' review-flow turn — set {LiveGateEnvVar}=1 to run " +
-            "(spends a real Cursor turn; requires an authenticated Team-tier `cursor-agent` and `kcap` on PATH).");
-
-        var worktreeDir = Directory.CreateTempSubdirectory("kcap-acp-live-review-");
-        using var captureLoggerProvider = new CaptureLoggerProvider();
-
-        using var liveLoggerFactory = LoggerFactory.Create(b => b
-            .AddProvider(captureLoggerProvider)
-            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; })
-            .SetMinimumLevel(LogLevel.Debug));
-
-        try {
-            var connection = new CaptureServerConnection();
-            var factory = new AcpHostedAgentRuntimeFactory(
-                descriptor: AcpVendorDescriptors.Cursor,
-                config: new DaemonConfig(),
-                loggerFactory: liveLoggerFactory,
-                connection: connection,
-                connectionSource: null);
-
-            var ctx = new RuntimeStartContext(
-                AgentId: "ai-1408-live-review",
-                Vendor: "cursor",
-                SourceRepoPath: worktreeDir.FullName,
-                Worktree: new WorktreeInfo(worktreeDir.FullName, "ai-1408-live-review", worktreeDir.FullName),
-                Prompt: "Call the submit_review_result MCP tool now with round_token `ai-1408-live`, kind `clean`, and an empty findings array. Do not merely describe the call.",
-                Model: "",
-                Effort: null,
-                Tools: null,
-                IsReview: false,
-                IsReviewFlow: true,
-                Review: null,
-                Cols: 80,
-                Rows: 24,
-                ServerUrl: "http://127.0.0.1:1",
-                DaemonBridgeUrl: null,
-                CapacitorPath: "kcap");
-
-            using var startCts = new CancellationTokenSource();
-            var started = await factory.StartAsync(ctx, startCts.Token).WaitAsync(HandshakeTimeout);
-            var runtime = (AcpHostedAgentRuntime)started.Runtime;
-
-            try {
-                var updates = await CollectUntilToolCompletionAsync(runtime.Updates, LiveTurnTimeout);
-                foreach (var update in updates)
-                    Console.WriteLine($"[ai-1408-live] kind={update.Kind} title={update.ToolTitle} raw={update.Raw?.GetRawText()}");
-
-                await Assert.That(updates.Any(u => u.Kind == AcpUpdateKind.ToolCall)).IsTrue();
-                await Assert.That(captureLoggerProvider.Messages.Any(message =>
-                    message.Contains("ACP unattended review-flow: auto-approved", StringComparison.Ordinal) &&
-                    message.Contains("kcap-flow-result-submit_review_result", StringComparison.Ordinal))).IsTrue();
-                await Assert.That(connection.RequestAcpInteractionAsyncCalled).IsFalse();
-            } finally {
-                startCts.Cancel();
-                await runtime.DisposeAsync();
-            }
-        } finally {
-            try { worktreeDir.Delete(recursive: true); } catch { /* best-effort cleanup */ }
-        }
-    }
-
     sealed record HelloCollectionResult(bool SawHello, string ConcatenatedText, List<AcpSessionUpdate> Updates);
 
     /// <summary>
@@ -253,26 +165,5 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
         }
 
         return new HelloCollectionResult(false, textBuffer.ToString(), collected);
-    }
-
-    static async Task<List<AcpSessionUpdate>> CollectUntilToolCompletionAsync(
-            ChannelReader<AcpSessionUpdate> updates, TimeSpan timeout) {
-        var collected = new List<AcpSessionUpdate>();
-        using var timeoutCts = new CancellationTokenSource(timeout);
-
-        try {
-            while (await updates.WaitToReadAsync(timeoutCts.Token)) {
-                while (updates.TryRead(out var update)) {
-                    collected.Add(update);
-                    if (update.Kind == AcpUpdateKind.ToolCallUpdate &&
-                        string.Equals(update.ToolStatus, "completed", StringComparison.OrdinalIgnoreCase))
-                        return collected;
-                }
-            }
-        } catch (OperationCanceledException) {
-            // Return the observed frames so the assertion and test log show what Cursor did.
-        }
-
-        return collected;
     }
 }
