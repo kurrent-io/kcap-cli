@@ -17,6 +17,17 @@ Use the `kcap mcp flows` MCP tools (`start_review_flow`, `submit_review_round`, 
 
 These four tools are aliases of the generic flow tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) — see the `agent-flows` skill for non-review flows.
 
+## Role-surface safety gate
+
+Classify the session before any flow action:
+
+- Driver: flow-starting tools are present and there is no reviewer round-token/result contract.
+- Hosted reviewer: `submit_review_result` is present and the prompt carries the round-token/result contract.
+- Missing integration: neither contract is present.
+- Unsafe leak: both the hosted-reviewer contract and any flow-starting tool are present. Fail closed: do not start or submit a nested flow, report the leaked tool surface through `submit_review_result`, and end the reviewer turn.
+
+The hosted-reviewer contract always wins over driver-looking prose or tool availability.
+
 ## When NOT to use this skill / these tools
 
 These tools do **not** perform a review — they hand the work off to a separate hosted reviewer. If the user simply asked *you* to review something in a normal session — e.g. "review my PR", "review this diff", "code review this", "look over this spec" — just perform the review yourself and report your findings directly. Do **NOT** call `start_review_flow` / `submit_review_round` for an ordinary review request; that would spin up a hosted reviewer the user did not ask for.
@@ -39,9 +50,15 @@ Cursor", "ask Codex for review"), including negation ("not Claude"). If exactly 
 vendor is named, pass it. If none is named, omit `vendor` and let the server's configured default
 apply. If multiple reviewer candidates remain after negation, ask the user to choose; never guess.
 
+Canonical reviewer aliases: Claude / Claude Code → `claude`; Codex / OpenAI Codex → `codex`;
+Cursor / cursor-agent → `cursor`; GitHub Copilot / Copilot CLI → `copilot`; Gemini / Gemini CLI →
+`gemini`; Kiro / Kiro CLI → `kiro`; Pi → `pi`; OpenCode → `opencode`; Antigravity / agy → `agy`.
+Normalize only the reviewer-role mention. Positive contrast (for example, “from Codex, ask Claude”)
+selects Claude; negated names are removed; two remaining reviewer candidates are ambiguous.
+
 ## If the flows MCP tools are not loaded
 
-If `start_review_flow` / `submit_review_round` are not among the tools available in this session:
+After applying the role-surface safety gate, if `start_review_flow` / `submit_review_round` are not among the tools available in this session:
 
 - Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
 - If `submit_review_result` is present and the prompt contains a round token/result contract, you are a hosted reviewer. Skip this driver workflow, perform the review directly, and submit through that tool. Tool absence alone is not proof that you are a reviewer.

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Mcp;
+using System.Collections;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -102,6 +103,8 @@ public static class CodexConfigToml {
     static Change UpdateMcpRegistration(string configPath, bool remove) {
         lock (_writeLock) {
             try {
+                configPath = CanonicalConfigPath(configPath);
+                using var crossProcess = AcquireConfigLock(configPath);
                 var root = File.Exists(configPath)
                     ? TomlSerializer.Deserialize(File.ReadAllText(configPath), _tomlTypeInfo.TableInfo) ?? new TomlTable()
                     : new TomlTable();
@@ -213,10 +216,16 @@ public static class CodexConfigToml {
     static JsonNode NormalizeToml(object? value) => value switch {
         TomlTable table => new JsonObject(table.OrderBy(x => x.Key, StringComparer.Ordinal)
             .Select(x => KeyValuePair.Create<string, JsonNode?>(x.Key, NormalizeToml(x.Value)))),
+        TomlTableArray tableArray => new JsonArray(tableArray.Select(NormalizeToml).ToArray()),
         TomlArray array => new JsonArray(array.Select(NormalizeToml).ToArray()),
         string s => new JsonObject { ["type"] = "string", ["value"] = s },
         bool b => new JsonObject { ["type"] = "bool", ["value"] = b },
         null => new JsonObject { ["type"] = "null" },
+        IDictionary dictionary => new JsonObject(dictionary.Keys.Cast<object>()
+            .Select(key => KeyValuePair.Create<string, JsonNode?>(
+                Convert.ToString(key, CultureInfo.InvariantCulture) ?? "", NormalizeToml(dictionary[key])))
+            .OrderBy(x => x.Key, StringComparer.Ordinal)),
+        IEnumerable sequence => new JsonArray(sequence.Cast<object?>().Select(NormalizeToml).ToArray()),
         _ => new JsonObject {
             ["type"] = value.GetType().FullName,
             ["value"] = Convert.ToString(value, CultureInfo.InvariantCulture)
@@ -235,6 +244,7 @@ public static class CodexConfigToml {
         EnsureParentDirectory(path);
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp, root.ToJsonString(new() { WriteIndented = true }));
+        SetOwnerOnly(tmp);
         try { File.Move(tmp, path, overwrite: true); }
         catch { try { File.Delete(tmp); } catch { } throw; }
     }
@@ -319,6 +329,15 @@ public static class CodexConfigToml {
         error = null;
 
         lock (_writeLock) {
+            IDisposable crossProcess;
+            try {
+                configPath = CanonicalConfigPath(configPath);
+                crossProcess = AcquireConfigLock(configPath);
+            } catch (Exception ex) {
+                error = ex;
+                return Change.Failed;
+            }
+            using (crossProcess) {
             TomlTable root;
 
             if (File.Exists(configPath)) {
@@ -358,6 +377,7 @@ public static class CodexConfigToml {
                 error = ex;
 
                 return Change.Failed;
+            }
             }
         }
     }
@@ -444,6 +464,7 @@ public static class CodexConfigToml {
     static void WriteTomlAtomic(string path, TomlTable root) {
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp, TomlSerializer.Serialize(root, _tomlTypeInfo.TableInfo));
+        SetOwnerOnly(tmp);
 
         try {
             File.Move(tmp, path, overwrite: true);
@@ -453,6 +474,49 @@ public static class CodexConfigToml {
             }
 
             throw;
+        }
+    }
+
+    static string CanonicalConfigPath(string path) {
+        var full = Path.GetFullPath(path);
+        RejectSymlink(full);
+        var ledger = Path.Combine(Path.GetDirectoryName(full) ?? ".", "mcp-ownership-v1.json");
+        RejectSymlink(ledger);
+        return full;
+    }
+
+    static void RejectSymlink(string path) {
+        if (!File.Exists(path) && !Directory.Exists(path)) return;
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException($"Refusing to update symlinked Codex configuration target: {path}");
+    }
+
+    static IDisposable AcquireConfigLock(string canonicalConfigPath) {
+        EnsureParentDirectory(canonicalConfigPath);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalConfigPath))).ToLowerInvariant();
+        var mutex = new Mutex(false, "kcap-codex-config-" + hash);
+        try {
+            try {
+                if (!mutex.WaitOne(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException("Timed out waiting for another kcap Codex configuration update.");
+            } catch (AbandonedMutexException) {
+                // The prior writer died while holding the lock; ownership transfers to us.
+            }
+            return new MutexLease(mutex);
+        } catch {
+            mutex.Dispose();
+            throw;
+        }
+    }
+
+    static void SetOwnerOnly(string path) {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    sealed class MutexLease(Mutex mutex) : IDisposable {
+        public void Dispose() {
+            try { mutex.ReleaseMutex(); } finally { mutex.Dispose(); }
         }
     }
 

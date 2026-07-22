@@ -603,8 +603,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var policyMatches = string.Equals(certification.Vendor, cmd.Vendor, StringComparison.Ordinal)
                 && string.Equals(certification.RequiredLauncherPolicyVersion,
                     DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal)
+                && string.Equals(version, certification.ExpectedCliVersion, StringComparison.Ordinal)
                 && DaemonRunner.CliVersionAllowed(version, certification.AllowedCliRanges);
             if (!policyMatches) {
+                _config.UnattendedVendorCapabilities =
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config);
+                try { await _server.ReRegisterAsync(); } catch { /* launch still fails closed */ }
                 await _server.LaunchFailedAsync(cmd.AgentId,
                     $"reviewer_certification_changed: '{cmd.Vendor}' no longer matches server certification revision '{certification.Revision}'. Restart the daemon after updating the reviewer CLI.");
                 return;

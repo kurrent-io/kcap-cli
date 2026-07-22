@@ -490,4 +490,35 @@ public class CodexConfigTomlTests {
         await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Unchanged);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_preserves_owned_entry_with_table_array_edit() {
+        var path = TempConfig();
+        CodexConfigToml.RegisterKcapMcpServers(path);
+        var root = ReadToml(path);
+        var flows = (TomlTable)((TomlTable)root["mcp_servers"])["kcap-flows"];
+        var rules = new TomlTableArray { new TomlTable { ["name"] = "user-rule" } };
+        flows["rules"] = rules;
+        File.WriteAllText(path, TomlSerializer.Serialize(root));
+
+        CodexConfigToml.RegisterKcapMcpServers(path); // relinquishes the changed claim
+        var change = CodexConfigToml.UnregisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That(servers.ContainsKey("kcap-flows")).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_writes_owner_only_files_on_unix() {
+        if (OperatingSystem.IsWindows()) return;
+        var path = TempConfig();
+
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var ledger = Path.Combine(Path.GetDirectoryName(path)!, "mcp-ownership-v1.json");
+        var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        await Assert.That(File.GetUnixFileMode(path)).IsEqualTo(expected);
+        await Assert.That(File.GetUnixFileMode(ledger)).IsEqualTo(expected);
+    }
 }

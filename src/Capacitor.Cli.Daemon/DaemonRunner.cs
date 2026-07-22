@@ -611,7 +611,7 @@ public static partial class DaemonRunner {
     internal static bool CliVersionAllowed(string? rawVersion, string ranges) {
         var normalized = (rawVersion ?? "").TrimStart('v', 'V').Split('-', '+')[0];
         if (!Version.TryParse(normalized, out var version)) return false;
-        if (string.IsNullOrWhiteSpace(ranges)) return true;
+        if (string.IsNullOrWhiteSpace(ranges)) return false;
         return ranges.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(range => range.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .All(term => MatchVersionTerm(version, term)));

@@ -129,5 +129,6 @@ public class DaemonRunnerCursorAvailabilityTests {
         await Assert.That(DaemonRunner.CliVersionAllowed("v1.2.3", ">=1.2.0 <2.0.0")).IsTrue();
         await Assert.That(DaemonRunner.CliVersionAllowed("2.0.0", ">=1.2.0 <2.0.0")).IsFalse();
         await Assert.That(DaemonRunner.CliVersionAllowed(null, ">=1.2.0")).IsFalse();
+        await Assert.That(DaemonRunner.CliVersionAllowed("1.2.3", "")).IsFalse();
     }
 }

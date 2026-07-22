@@ -1252,7 +1252,9 @@ public sealed record ReviewerCertificationRequirement(
     string Vendor,
     string AllowedCliRanges,
     string RequiredLauncherPolicyVersion,
-    string Revision);
+    string Revision,
+    string ExpectedDaemonConnectionId,
+    string ExpectedCliVersion);
 
 /// <summary>
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves

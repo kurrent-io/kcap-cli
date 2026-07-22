@@ -157,7 +157,7 @@ static class McpFlowsServer {
 
                 // Catalog-start protocol-v2 skew seam (404 means an old server, before any run
                 // started) plus an explicit-vendor echo check once the route matched.
-                var requestedVendor = arguments?["vendor"]?.GetValue<string>();
+                var requestedVendor = NormalizeVendor(arguments?["vendor"]?.GetValue<string>());
 
                 if (!wasDynamicStart && CheckVendorOverrideResult(toolName, requestedVendor, postResponse.StatusCode, postResponse.IsSuccessStatusCode, postBody, out var flowRunIdToClose) is { } vendorCheck) {
                     // Best-effort: we have the run id from this same response (echo mismatch only —
@@ -354,7 +354,7 @@ static class McpFlowsServer {
         var context      = GetRequiredArg(arguments, "context");
         var instructions = arguments?["instructions"]?.GetValue<string>();
         var mode         = arguments?["mode"]?.GetValue<string>();
-        var vendor       = arguments?["vendor"]?.GetValue<string>();
+        var vendor       = NormalizeVendor(arguments?["vendor"]?.GetValue<string>());
 
         var sessionId = ArgParsing.ResolveSessionIdFromEnv();
 
@@ -440,6 +440,13 @@ static class McpFlowsServer {
             $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/rounds",
             JsonContent.Create(body, McpJsonContext.Default.SubmitReviewRoundDto)
         );
+    }
+
+    static string? NormalizeVendor(string? vendor) {
+        if (vendor is null) return null;
+        var normalized = vendor.Trim().ToLowerInvariant();
+        if (normalized.Length == 0) throw new ArgumentException("vendor must not be blank.");
+        return normalized;
     }
 
     static string BuildFlowUrl(string apiRoot, JsonObject? arguments) {
@@ -682,6 +689,15 @@ static class McpFlowsServer {
         if (roundNumber.HasValue) { sb.Append("round_number: "); sb.AppendLine(roundNumber.Value.ToString()); }
         sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
         sb.Append("result_kind: "); AppendLine(sb, resultKind);
+        if (TryGetString(node, "requested_reviewer_vendor") is { } requestedVendor) {
+            sb.Append("requested_reviewer_vendor: "); AppendLine(sb, requestedVendor);
+        }
+        if (TryGetString(node, "applied_reviewer_vendor") is { } appliedVendor) {
+            sb.Append("applied_reviewer_vendor: "); AppendLine(sb, appliedVendor);
+        }
+        if (TryGetString(node, "reviewer_vendor_source") is { } vendorSource) {
+            sb.Append("reviewer_vendor_source: "); AppendLine(sb, vendorSource);
+        }
         if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
 
         pendingIds = AppendPendingMessages(sb, node);
@@ -1035,6 +1051,7 @@ static class McpFlowsServer {
         ),
         new(
             "start_flow",
+            "COST / EXPLICIT INTENT: call only after the user explicitly asks to start or run an agent flow. The participants execute paid hosted models. " +
             "Start a new agent flow from the server's flow-definition catalog (definition_id) or from an inline YAML definition (definition_yaml — dynamic flows). This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +

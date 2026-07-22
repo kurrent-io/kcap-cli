@@ -254,7 +254,8 @@ public partial class AgentOrchestratorVendorTests {
             Vendor: "claude",
             Kind: LaunchKind.ReviewFlow,
             ReviewerCertification: new ReviewerCertificationRequirement(
-                "claude", ">=1.0.0", DaemonRunner.ClaudeLauncherPolicyVersion, "revision-2"));
+                "claude", ">=1.0.0", DaemonRunner.ClaudeLauncherPolicyVersion, "revision-2",
+                "connection-1", "1.0.0"));
 
         await orch.HandleLaunchAgentForTest(cmd);
 
