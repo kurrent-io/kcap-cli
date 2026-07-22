@@ -32,9 +32,17 @@ internal sealed partial class ResolvedCandidatesLedger {
         lock (_lock) {
             var key = (agentId, oldEpoch);
             if (_entries.TryGetValue(key, out var existing)) return existing; // idempotent — no new generation
-            var entry = new ResolvedStartupCandidate(_nextGeneration++, agentId, oldEpoch, flowRunId, flowRole);
+            var entry = new ResolvedStartupCandidate(_nextGeneration, agentId, oldEpoch, flowRunId, flowRole);
             _entries[key] = entry;
-            Persist();
+            // Phase B2-b (sequenced-settlement design §5.5): persist the PROSPECTIVE state (with the
+            // post-increment high-water) BEFORE committing the counter in memory, and roll back the
+            // in-memory entry if the durable write throws — so memory never leads disk. A leftover
+            // in-memory-only entry would otherwise satisfy the next sweep's idempotent short-circuit above
+            // WITHOUT persisting, and the caller would then delete the durable source (append-before-delete
+            // is the invariant that keeps a crash re-derivable).
+            try { PersistState(_nextGeneration + 1); }
+            catch { _entries.Remove(key); throw; }
+            _nextGeneration++; // commit the counter only after a durable write succeeded
             return entry;
         }
     }
@@ -73,10 +81,15 @@ internal sealed partial class ResolvedCandidatesLedger {
         }
     }
 
-    void Persist() {
+    // Ack removes an entry then persists. A persist failure there leaves memory BEHIND disk, which is
+    // benign: the entry re-loads + re-reports on the next restart and the server re-acks it idempotently.
+    // So this direction needs NO rollback (only Upsert's memory-leads-disk direction does).
+    void Persist() => PersistState(_nextGeneration);
+
+    void PersistState(long nextGeneration) {
         var tmp = _path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
         File.WriteAllText(tmp, JsonSerializer.Serialize(
-            new Persisted(_nextGeneration, [.. _entries.Values]), LedgerJsonCtx.Default.Persisted));
+            new Persisted(nextGeneration, [.. _entries.Values]), LedgerJsonCtx.Default.Persisted));
         File.Move(tmp, _path, overwrite: true); // atomic same-directory rename
     }
 }

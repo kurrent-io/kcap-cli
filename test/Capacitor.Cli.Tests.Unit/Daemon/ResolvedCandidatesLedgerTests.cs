@@ -31,6 +31,28 @@ public class ResolvedCandidatesLedgerTests {
         await Assert.That(reopened.Upsert("a2", "e0", null, null).Generation).IsEqualTo(2L);
     }
 
+    // Phase B2-b (sequenced-settlement design §5.5): Upsert must be transactional with its durable write.
+    // If the atomic write fails, the in-memory entry AND the generation counter must roll back so memory
+    // never leads disk — otherwise the next sweep's idempotent short-circuit returns the unpersisted entry
+    // without persisting, and the caller then deletes the durable source (violating append-before-delete).
+    [Test] public async Task Upsert_rolls_back_entry_and_generation_when_the_durable_write_fails() {
+        var l = New(out var dir);
+        // Force the durable write to throw: remove the state dir so PersistState's temp write fails.
+        Directory.Delete(dir, recursive: true);
+
+        await Assert.That(() => { l.Upsert("a1", "e0", null, null); }).Throws<Exception>();
+        await Assert.That(l.Snapshot()).IsEmpty(); // no phantom in-memory entry
+
+        // The failed mint did NOT consume a generation: after the dir is restored, the SAME key mints
+        // generation 1 (not 2).
+        Directory.CreateDirectory(dir);
+        await Assert.That(l.Upsert("a1", "e0", null, null).Generation).IsEqualTo(1L);
+
+        // No partial/leftover file leads a fresh reload to a phantom entry.
+        var reopened = new ResolvedCandidatesLedger(dir, NullLogger.Instance);
+        await Assert.That(reopened.Snapshot().Single().AgentId).IsEqualTo("a1");
+    }
+
     [Test] public async Task Ack_prunes_sparsely_without_head_of_line_blocking() {
         var l = New(out _);
         var g1 = l.Upsert("a1", "e0", null, null);
