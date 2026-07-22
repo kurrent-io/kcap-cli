@@ -83,6 +83,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev ${{ contains(matrix.rid, 'musl') && 'musl-tools' || '' }}
 
+      # musl-tools (installed above) provides the musl-gcc cross-compiler CompilePtyShim needs
+      # for the two musl RIDs on a native (non-container) runner. Fail loudly here if the
+      # install silently didn't provide it, rather than inside the opaque CompilePtyShim Exec.
+      # Skipped under matrix.container: the Alpine path below installs its own native
+      # build-base toolchain (cc/gcc against musl libc directly), no musl-gcc cross-compiler
+      # needed there.
+      - name: Verify musl toolchain (musl RIDs only)
+        if: contains(matrix.rid, 'musl') && !matrix.container
+        run: musl-gcc --version
+
       - uses: actions/checkout@v6
 
       - name: Setup .NET
@@ -111,19 +121,83 @@ jobs:
           -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
           -o publish/daemon/
 
-      # The daemon's UnixPtyInterop hard-imports libpty_shim on macOS ARM64. If
-      # the macOS-only build target ever silently fails to produce the dylib,
-      # the npm package would ship a daemon that crashes on PTY resize. Fail
-      # loudly here instead of distributing a broken artifact.
-      - name: Verify libpty_shim built (osx-arm64)
-        if: matrix.rid == 'osx-arm64'
+      # The daemon's UnixPtyInterop hard-imports libpty_shim on every non-win-x64 RID (macOS
+      # ARM64's variadic-ioctl workaround, and every Linux RID's containment shim as of L1-build).
+      # If CompilePtyShim ever silently fails to produce the shim for a given RID, the npm
+      # package would ship a daemon that crashes on first PTY use. Fail loudly here instead of
+      # distributing a broken artifact.
+      - name: Verify libpty_shim built
+        if: matrix.rid != 'win-x64'
         shell: bash
         run: |
-          if [ ! -f publish/daemon/libpty_shim.dylib ]; then
-            echo "::error::libpty_shim.dylib missing from publish/daemon/ on osx-arm64"
+          ext="so"
+          if [[ "${{ matrix.rid }}" == osx-* ]]; then ext="dylib"; fi
+          if [ ! -f "publish/daemon/libpty_shim.$ext" ]; then
+            echo "::error::libpty_shim.$ext missing from publish/daemon/ on ${{ matrix.rid }}"
             ls -la publish/daemon/
             exit 1
           fi
+
+      # Per-RID acceptance beyond "the file exists": the shim's recorded machine type must match
+      # the RID it was built for (catches a wrong-arch artifact that would otherwise only fail at
+      # runtime on the target device), and it must actually be loadable and callable, not just a
+      # correctly-named file (reuses the Task 4 NativeTestHost's spawn-dummy mode, which loads
+      # the shim and calls the real production pty_spawn path end to end).
+      - name: Verify shim machine type and load-and-call smoke
+        if: matrix.rid != 'win-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext="so"; if [[ "${{ matrix.rid }}" == osx-* ]]; then ext="dylib"; fi
+          shim="publish/daemon/libpty_shim.$ext"
+
+          case "${{ matrix.rid }}" in
+            *-arm64) want_arch="arm64|aarch64" ;;
+            *-x64)   want_arch="x86-64|x86_64" ;;
+          esac
+
+          if [[ "$ext" == "dylib" ]]; then
+            actual=$(lipo -info "$shim" | grep -oE 'arm64|x86_64' | head -1)
+          else
+            actual=$(readelf -h "$shim" | grep -i "Machine:" | grep -oE 'X86-64|AArch64' | tr '[:upper:]' '[:lower:]')
+          fi
+
+          if ! echo "$actual" | grep -qEi "$want_arch"; then
+            echo "::error::libpty_shim machine type ($actual) does not match RID ${{ matrix.rid }} (expected $want_arch)"
+            exit 1
+          fi
+
+          # Load-and-call smoke: spawn-dummy loads the shim (built for THIS RID, right next to
+          # the daemon build output) via the SAME UnixPtyProcessFactory/pty_spawn path the
+          # daemon itself uses in production, and prints a PID= line once the child exists.
+          # Building/running via `dotnet run` (rather than the AOT-published daemon binary)
+          # keeps this step independent of the publish/npm-packaging steps below, at the cost of
+          # a JIT run instead of the AOT one; acceptable here since this is a load/call smoke,
+          # not a perf or AOT-compatibility check (AOT publish itself is already exercised by
+          # "Publish daemon AOT binary" above).
+          dotnet run --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- spawn-dummy > smoke-output.txt 2>&1 &
+          HOST_PID=$!
+          sleep 3
+          kill "$HOST_PID" 2>/dev/null || true
+          wait "$HOST_PID" 2>/dev/null || true
+          cat smoke-output.txt
+          if ! grep -q '^PID=' smoke-output.txt; then
+            echo "::error::load-and-call smoke did not see a PID= line from spawn-dummy on ${{ matrix.rid }}"
+            exit 1
+          fi
+
+      # macOS-only: the mac: incarnation-identity scheme (design spec §4.3, M1-A) has no useful
+      # emulation off real hardware, so its one CI acceptance gate is a runtime-capture smoke
+      # here in the per-RID packaging checks — capture this process's own identity and a spawned
+      # child's, and assert both are present and distinct (proves the kernel primitive actually
+      # works and varies per process, not a mock). ci.yml has no macOS runner at all, so this
+      # cannot live there — see the Global Constraints note in the design spec.
+      - name: Verify mac incarnation-identity runtime capture (osx-arm64 only)
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- mac-identity-smoke
 
       # `kcap import --opencode` reads opencode.db via Microsoft.Data.Sqlite +
       # SQLitePCLRaw.bundle_e_sqlite3. NativeAOT does NOT statically link the engine and we
@@ -185,9 +259,11 @@ jobs:
           mkdir -p npm/${{ matrix.npm-package }}/bin
           cp publish/cli/${{ matrix.cli-binary }} npm/${{ matrix.npm-package }}/bin/
           cp publish/daemon/${{ matrix.daemon-binary }} npm/${{ matrix.npm-package }}/bin/
-          if [ -f publish/daemon/libpty_shim.dylib ]; then
-            cp publish/daemon/libpty_shim.dylib npm/${{ matrix.npm-package }}/bin/
-          fi
+          for ext in so dylib; do
+            if [ -f "publish/daemon/libpty_shim.$ext" ]; then
+              cp "publish/daemon/libpty_shim.$ext" npm/${{ matrix.npm-package }}/bin/
+            fi
+          done
 
       - name: Create release archive
         shell: bash
@@ -195,9 +271,11 @@ jobs:
           mkdir -p archive
           cp publish/cli/${{ matrix.cli-binary }} archive/
           cp publish/daemon/${{ matrix.daemon-binary }} archive/
-          if [ -f publish/daemon/libpty_shim.dylib ]; then
-            cp publish/daemon/libpty_shim.dylib archive/
-          fi
+          for ext in so dylib; do
+            if [ -f "publish/daemon/libpty_shim.$ext" ]; then
+              cp "publish/daemon/libpty_shim.$ext" archive/
+            fi
+          done
           cd archive
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
             7z a ../kcap-${{ matrix.rid }}.zip *

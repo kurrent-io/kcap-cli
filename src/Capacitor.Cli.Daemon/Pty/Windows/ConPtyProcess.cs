@@ -14,6 +14,7 @@ public sealed class ConPtyProcess : IPtyProcess {
     readonly IntPtr                  _hOutputPipe;
     readonly FileStream              _outputStream;
     readonly FileStream              _inputStream;
+    readonly SafeFileHandle          _jobHandle; // SafeHandle so a thrown exception before the ctor still gets cleaned up by the caller's catch path
     readonly CancellationTokenSource _cts = new();
     bool                             _disposed;
     int                              _pcClosed;
@@ -22,12 +23,21 @@ public sealed class ConPtyProcess : IPtyProcess {
     public bool HasExited { get; private set; }
     public int? ExitCode  { get; private set; }
 
-    ConPtyProcess(IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream) {
+    // Test-only seam: exposes the raw job handle value so tests can QUERY the job's limit flags
+    // (a read-only structural proof that breakaway is impossible). Does not transfer ownership —
+    // the job is still torn down exclusively via _jobHandle.Dispose() in DisposeAsync.
+    // IRON RULE: a test must NEVER AssignProcessToJobObject(this handle, self). This job carries
+    // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so joining the test host and then disposing this
+    // process would close the last handle and have the OS kill the test host.
+    internal IntPtr JobHandleForTests => _jobHandle.DangerousGetHandle();
+
+    ConPtyProcess(IntPtr hPC, IntPtr hProcess, IntPtr hOutputPipe, FileStream outputStream, FileStream inputStream, SafeFileHandle jobHandle) {
         _hPC          = hPC;
         _hProcess     = hProcess;
         _hOutputPipe  = hOutputPipe;
         _outputStream = outputStream;
         _inputStream  = inputStream;
+        _jobHandle    = jobHandle;
     }
 
     static (string command, bool isCmd) ResolveCommand(string command) {
@@ -155,81 +165,238 @@ public sealed class ConPtyProcess : IPtyProcess {
         }
 
         if (!CreatePipe(out var ptyOutputRead, out var ptyOutputWrite, ref pipeSa, 0)) {
-            throw new InvalidOperationException($"CreatePipe (output) failed: {Marshal.GetLastWin32Error()}");
+            // The input pipe (both ends) is already created at this point — close it before
+            // throwing so an output-pipe failure doesn't leak the two input handles.
+            var err = Marshal.GetLastWin32Error();
+            CloseHandle(ptyInputRead);
+            CloseHandle(ptyInputWrite);
+            throw new InvalidOperationException($"CreatePipe (output) failed: {err}");
         }
 
         var size = new ConPtyInterop.COORD { X = (short)cols, Y = (short)rows };
         var hr   = CreatePseudoConsole(size, ptyInputRead, ptyOutputWrite, 0, out var hPC);
 
         if (hr != 0) {
+            // CreatePseudoConsole takes ownership of ptyInputRead/ptyOutputWrite ONLY on success
+            // (they're closed just below in that case). On failure it owns nothing, and this throw is
+            // BEFORE the committed/try-catch cleanup scope that guards the parent pipe ends — so close
+            // ALL FOUR handles here or every failed CreatePseudoConsole leaks both ends of both pipes.
+            CloseHandle(ptyInputRead);
+            CloseHandle(ptyInputWrite);
+            CloseHandle(ptyOutputRead);
+            CloseHandle(ptyOutputWrite);
+
             throw new InvalidOperationException($"CreatePseudoConsole failed: HRESULT 0x{hr:X8}");
         }
 
         CloseHandle(ptyInputRead);
         CloseHandle(ptyOutputWrite);
 
-        var attrListSize = IntPtr.Zero;
-        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attrListSize);
-        var attrList = Marshal.AllocHGlobal(attrListSize);
-
-        if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref attrListSize)) {
-            Marshal.FreeHGlobal(attrList);
-
-            throw new InvalidOperationException($"InitializeProcThreadAttributeList failed: {Marshal.GetLastWin32Error()}");
-        }
-
-        if (!UpdateProcThreadAttribute(
-                attrList,
-                0,
-                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                hPC,
-                IntPtr.Size,
-                IntPtr.Zero,
-                IntPtr.Zero
-            )) {
-            DeleteProcThreadAttributeList(attrList);
-            Marshal.FreeHGlobal(attrList);
-
-            throw new InvalidOperationException($"UpdateProcThreadAttribute failed: {Marshal.GetLastWin32Error()}");
-        }
-
-        var si = new ConPtyInterop.STARTUPINFOEXW();
-        si.StartupInfo.cb      = Marshal.SizeOf<ConPtyInterop.STARTUPINFOEXW>();
-        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        si.lpAttributeList     = attrList;
-
-        var envBlock = BuildEnvironmentBlock(extraEnv);
+        // OWNERSHIP / CLEANUP SCOPE: hPC (the pseudoconsole) and the two parent-side pipe ends
+        // (ptyInputWrite, ptyOutputRead) belong to THIS method until the success path transfers
+        // them into the returned ConPtyProcess — hPC into the object, and the pipe ends into its
+        // stdio FileStreams (via SafeFileHandles). Every fail-closed exit AFTER CreatePseudoConsole
+        // used to leak all three: each throw path disposed the JOB handle but never released the
+        // pseudoconsole or the pipe ends. Because a CreateProcessW failure is a NORMAL fail-closed
+        // outcome (bad path / blocked nesting / the fail-closed UI-restricted-job case exercised by
+        // the W5 test), repeated failed launches leaked one pseudoconsole + two kernel handles each.
+        // The outer catch below releases them on ANY failure; `committed` flips true only once
+        // ownership has been handed to the returned object, so the success path never double-closes
+        // a now-owned handle. The raw pipe locals are additionally zeroed the instant their
+        // SafeFileHandles take ownership, so even a throw in the final wiring can't close a handle a
+        // SafeFileHandle already owns (the outer catch skips any zeroed handle).
+        var committed = false;
 
         try {
-            const uint creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+            // §4.1: bind the child to a KILL_ON_JOB_CLOSE job at creation time (via the
+            // PROC_THREAD_ATTRIBUTE_JOB_LIST attribute below), not by AssignProcessToJobObject
+            // after the fact — there is no window where the child exists uncontained.
+            var hJob = CreateJobObjectW(IntPtr.Zero, null);
 
-            if (!CreateProcessW(
-                    null,
-                    cmdLine.ToString(),
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    false,
-                    creationFlags,
-                    envBlock,
-                    cwd,
-                    ref si,
-                    out var pi
-                )) {
-                throw new InvalidOperationException($"CreateProcessW failed: {Marshal.GetLastWin32Error()}");
+            if (hJob == IntPtr.Zero) {
+                throw new InvalidOperationException($"CreateJobObjectW failed: {Marshal.GetLastWin32Error()}");
             }
 
-            CloseHandle(pi.hThread);
+            var limitInfo = new ConPtyInterop.JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+                BasicLimitInformation = new ConPtyInterop.JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                    LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                }
+            };
 
-            var outputSafeHandle = new SafeFileHandle(ptyOutputRead, ownsHandle: true);
-            var inputSafeHandle  = new SafeFileHandle(ptyInputWrite, ownsHandle: true);
-            var outputStream     = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
-            var inputStream      = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
+            if (!SetInformationJobObject(
+                    hJob, JobObjectExtendedLimitInformation, ref limitInfo,
+                    (uint)Marshal.SizeOf<ConPtyInterop.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())) {
+                var err = Marshal.GetLastWin32Error();
+                CloseHandle(hJob);
 
-            return new(hPC, pi.hProcess, ptyOutputRead, outputStream, inputStream) { Pid = pi.dwProcessId };
-        } finally {
-            DeleteProcThreadAttributeList(attrList);
-            Marshal.FreeHGlobal(attrList);
-            Marshal.FreeHGlobal(envBlock);
+                throw new InvalidOperationException($"SetInformationJobObject failed: {err}");
+            }
+
+            var jobHandle = new SafeFileHandle(hJob, ownsHandle: true);
+
+            var attrListSize = IntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref attrListSize);
+            var attrList = Marshal.AllocHGlobal(attrListSize);
+
+            if (!InitializeProcThreadAttributeList(attrList, 2, 0, ref attrListSize)) {
+                Marshal.FreeHGlobal(attrList);
+                jobHandle.Dispose();
+
+                throw new InvalidOperationException($"InitializeProcThreadAttributeList failed: {Marshal.GetLastWin32Error()}");
+            }
+
+            if (!UpdateProcThreadAttribute(
+                    attrList,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                    hPC,
+                    IntPtr.Size,
+                    IntPtr.Zero,
+                    IntPtr.Zero
+                )) {
+                DeleteProcThreadAttributeList(attrList);
+                Marshal.FreeHGlobal(attrList);
+                jobHandle.Dispose();
+
+                throw new InvalidOperationException($"UpdateProcThreadAttribute failed: {Marshal.GetLastWin32Error()}");
+            }
+
+            // PROC_THREAD_ATTRIBUTE_JOB_LIST's value is a pointer to an ARRAY of job handles — one
+            // element here. The child becomes a job member at the instant CreateProcessW succeeds:
+            // there is no suspended-then-assign window (AssignProcessToJobObject after the fact
+            // would have one).
+            var jobArray = Marshal.AllocHGlobal(IntPtr.Size);
+            Marshal.WriteIntPtr(jobArray, 0, hJob);
+
+            if (!UpdateProcThreadAttribute(
+                    attrList,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                    jobArray,
+                    IntPtr.Size,
+                    IntPtr.Zero,
+                    IntPtr.Zero
+                )) {
+                var err = Marshal.GetLastWin32Error();
+                Marshal.FreeHGlobal(jobArray);
+                DeleteProcThreadAttributeList(attrList);
+                Marshal.FreeHGlobal(attrList);
+                jobHandle.Dispose();
+
+                throw new InvalidOperationException($"UpdateProcThreadAttribute(JOB_LIST) failed: {err}");
+            }
+
+            var si = new ConPtyInterop.STARTUPINFOEXW();
+            si.StartupInfo.cb      = Marshal.SizeOf<ConPtyInterop.STARTUPINFOEXW>();
+            si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            si.lpAttributeList     = attrList;
+
+            var envBlock = BuildEnvironmentBlock(extraEnv);
+
+            try {
+                const uint creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
+
+                if (!CreateProcessW(
+                        null,
+                        cmdLine.ToString(),
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        false,
+                        creationFlags,
+                        envBlock,
+                        cwd,
+                        ref si,
+                        out var pi
+                    )) {
+                    // CreateProcessW failure (bad path, access-denied, blocked nesting — all common)
+                    // means no child was ever created, so the job has no members. Close its handle
+                    // BEFORE throwing: the outer finally only frees the HGlobal buffers, never the
+                    // job kernel handle, so without this the job would leak to GC finalization. The
+                    // pseudoconsole + pipe ends are released by the outermost catch (committed == false).
+                    var err = Marshal.GetLastWin32Error();
+                    jobHandle.Dispose();
+
+                    throw new InvalidOperationException($"CreateProcessW failed: {err}");
+                }
+
+                // OWNERSHIP-TRANSFER DISCIPLINE (declared outside the try so the catch can dispose
+                // whatever was constructed): each raw pipe end is transferred into its SafeFileHandle
+                // and its raw local zeroed in the SAME step, BEFORE the next owner is constructed — so
+                // the outermost catch (which closes any still-nonzero raw local) can never double-close
+                // a handle a SafeFileHandle already owns, no matter which step throws (the second wrap,
+                // a FileStream ctor, or the ConPtyProcess ctor). On any failure the catch explicitly
+                // disposes every owner it DID construct so a pipe end / stream is never leaked to GC on
+                // this fail-closed path; a FileStream owns and closes its SafeFileHandle on Dispose, and
+                // Dispose is idempotent, so disposing the stream (when present) and only otherwise the
+                // bare SafeFileHandle releases each handle exactly once.
+                SafeFileHandle? outputSafeHandle = null;
+                SafeFileHandle? inputSafeHandle  = null;
+                FileStream?     outputStream     = null;
+                FileStream?     inputStream      = null;
+
+                try {
+                    CloseHandle(pi.hThread);
+
+                    // Keep the output-read value as a plain alias for the _hOutputPipe peek/read the
+                    // returned object needs; ownership still moves to outputSafeHandle below.
+                    var outputPipeRaw = ptyOutputRead;
+
+                    outputSafeHandle = new SafeFileHandle(ptyOutputRead, ownsHandle: true);
+                    ptyOutputRead    = IntPtr.Zero; // ownership moved — outer catch must not close it
+
+                    inputSafeHandle  = new SafeFileHandle(ptyInputWrite, ownsHandle: true);
+                    ptyInputWrite    = IntPtr.Zero; // ownership moved — outer catch must not close it
+
+                    outputStream = new FileStream(outputSafeHandle, FileAccess.Read, bufferSize: 4096, isAsync: false);
+                    inputStream  = new FileStream(inputSafeHandle, FileAccess.Write, bufferSize: 4096, isAsync: false);
+
+                    var process = new ConPtyProcess(hPC, pi.hProcess, outputPipeRaw, outputStream, inputStream, jobHandle) { Pid = pi.dwProcessId };
+                    committed = true; // hPC + both pipe ends now owned by `process` / its streams
+                    return process;
+                } catch {
+                    // Post-create failure: the child exists but we can't finish wiring it up. Kill
+                    // it via the job (closes over descendants too) and confirm death before
+                    // propagating — the caller's teardown/quarantine machinery must never see an
+                    // ambiguous "maybe spawned".
+                    TerminateJobObject(hJob, 1);
+
+                    var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+
+                    while (DateTime.UtcNow < deadline) {
+                        if (GetExitCodeProcess(pi.hProcess, out var code) && code != STILL_ACTIVE) break;
+                        Thread.Sleep(50);
+                    }
+
+                    CloseHandle(pi.hProcess);
+
+                    // Release each pipe-end owner exactly once: prefer the FileStream (it owns and
+                    // closes its SafeFileHandle), else the bare SafeFileHandle if its stream was never
+                    // constructed. Ends still held as raw non-zero locals are closed by the outer catch.
+                    if (outputStream is not null) outputStream.Dispose(); else outputSafeHandle?.Dispose();
+                    if (inputStream  is not null) inputStream.Dispose();  else inputSafeHandle?.Dispose();
+
+                    jobHandle.Dispose();
+
+                    throw;
+                }
+            } finally {
+                Marshal.FreeHGlobal(jobArray);
+                DeleteProcThreadAttributeList(attrList);
+                Marshal.FreeHGlobal(attrList);
+                Marshal.FreeHGlobal(envBlock);
+            }
+        } catch {
+            // Fail-closed release of the pseudoconsole + any parent pipe end no owner took. hPC is
+            // always still ours here (transferred to the returned object only at `committed`); each
+            // pipe end is zeroed the moment a SafeFileHandle owns it, so this closes each at most
+            // once — never a handle now owned by the returned object or a live SafeFileHandle.
+            if (!committed) {
+                ClosePseudoConsole(hPC);
+                if (ptyInputWrite != IntPtr.Zero) CloseHandle(ptyInputWrite);
+                if (ptyOutputRead != IntPtr.Zero) CloseHandle(ptyOutputRead);
+            }
+
+            throw;
         }
     }
 
@@ -390,6 +557,7 @@ public sealed class ConPtyProcess : IPtyProcess {
         }
 
         CloseHandle(_hProcess);
+        _jobHandle.Dispose(); // last handle to the job closes here → OS kills leader + all descendants
         _cts.Dispose();
     }
 

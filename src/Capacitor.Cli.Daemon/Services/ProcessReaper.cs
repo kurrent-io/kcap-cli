@@ -59,13 +59,19 @@ internal static class ProcessReaper {
                 return false;
         }
 
-        // Ours (the EXACT start token already proves this is the same incarnation recorded at spawn).
-        // Unix env guard, defense-in-depth: only kill if the live process ALSO still carries our
-        // KCAP_AGENT_ID. Unreadable OR mismatched env → SPARE and retain the record: it means ownership
-        // can't be proven strongly enough to kill, NOT that the process is gone. Reporting confirmed-gone
-        // here would strand a live child and drop its durable tracking (esp. on macOS, where the marker
-        // scan can't recover it). Only Dead / a conclusive token recycle return confirmed-gone.
-        if (!OperatingSystem.IsWindows()) {
+        // Ours: the EXACT start token already proves this is the same incarnation recorded at spawn, and
+        // a proven exact (pid, start-identity) match is SUFFICIENT authorization to kill on every
+        // platform. On LINUX ONLY we additionally require the live process to still carry our
+        // KCAP_AGENT_ID as defense-in-depth — on Linux env IS readable via /proc/{pid}/environ, so an
+        // unreadable OR mismatched value → SPARE and retain the record (ownership can't be proven
+        // strongly enough to kill, NOT that the process is gone; reporting confirmed-gone would strand a
+        // live child and drop its durable tracking). We deliberately do NOT apply this env guard on
+        // macOS: macOS redacts other processes' env, so requiring it would ALWAYS spare and defeat the
+        // exact mac:{bootsessionuuid}:{p_uniqueid} incarnation identity that is the whole point of the
+        // macOS record kill (M1-A eventual leader recovery). Windows has no scan path either. The safety
+        // invariant is unweakened: only a proven exact identity match reaches here (Ambiguous/null still
+        // SPARES above); Dead / a conclusive token recycle return confirmed-gone above.
+        if (OperatingSystem.IsLinux()) {
             var envAgentId = ProcessIdentity.ReadAgentEnv(pid, "KCAP_AGENT_ID");
             if (envAgentId is null || !string.Equals(envAgentId, record.AgentId, StringComparison.Ordinal)) {
                 logger.LogWarning(

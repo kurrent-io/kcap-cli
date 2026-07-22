@@ -127,4 +127,74 @@ internal static partial class ConPtyInterop
         public int dwProcessId;
         public int dwThreadId;
     }
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string? lpName);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetInformationJobObject(
+        IntPtr hJob, int JobObjectInformationClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool TerminateJobObject(IntPtr hJob, uint uExitCode);
+
+    // JOBOBJECTINFOCLASS.JobObjectExtendedLimitInformation
+    internal const int JobObjectExtendedLimitInformation = 9;
+
+    // JOBOBJECT_BASIC_LIMIT_INFORMATION.LimitFlags: kill every process in the job the instant
+    // the LAST handle to the job object closes (clean dispose, crash, task-manager kill — all
+    // of them). Deliberately the ONLY flag we set: no UI-restriction flags (those would block
+    // job nesting when the daemon itself already runs inside an enclosing job), no breakaway
+    // flags (so a descendant literally cannot CreateProcess its way out of the job).
+    internal const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    // The two breakaway-allowed flags we deliberately DON'T set. Asserted absent by the
+    // job-flags test: with neither present, a descendant's CreateProcess(CREATE_BREAKAWAY_FROM_JOB)
+    // fails with ERROR_ACCESS_DENIED, so nothing can escape the job by construction.
+    internal const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK        = 0x00000800;
+    internal const uint JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000;
+
+    // PROC_THREAD_ATTRIBUTE_JOB_LIST — grows the existing 1-entry attribute list
+    // (PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE) to 2 entries. The value is a POINTER TO AN ARRAY
+    // of job handles (we pass an array of exactly one).
+    internal static readonly IntPtr PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+        public long  PerProcessUserTimeLimit;
+        public long  PerJobUserTimeLimit;
+        public uint  LimitFlags;
+        public nuint MinimumWorkingSetSize;
+        public nuint MaximumWorkingSetSize;
+        public uint  ActiveProcessLimit;
+        public nuint Affinity;
+        public uint  PriorityClass;
+        public uint  SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct IO_COUNTERS {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS                       IoInfo;
+        public nuint                              ProcessMemoryLimit;
+        public nuint                              JobMemoryLimit;
+        public nuint                              PeakProcessMemoryUsed;
+        public nuint                              PeakJobMemoryUsed;
+    }
 }

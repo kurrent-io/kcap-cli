@@ -65,6 +65,50 @@ internal sealed class AgentPidRecordStore(string stateDir, ILogger logger) {
                 continue;
             }
 
+            // A parseable record whose `start_identity` deserialized to NULL (the wire had an
+            // explicit `null`, which System.Text.Json happily binds to the non-nullable positional
+            // parameter) is malformed — quarantine it. Guard BEFORE the .Length checks below so a
+            // null token can never NRE and abort the whole sweep (OrphanReaper enumerates ReadAll()
+            // directly, so one bad record must not take down reaping for every other agent).
+            if (record.StartIdentity is null) {
+                logger.LogWarning("AgentPidRecordStore: record {Path} has a null start_identity; quarantining as .corrupt", path);
+                TryQuarantine(path);
+                continue;
+            }
+
+            var token = record.StartIdentity;
+
+            // An UNKNOWN numeric identity_kind (e.g. a corrupt `identity_kind: 99`, or a value a
+            // future daemon writes) deserializes to an out-of-range enum that is NEITHER Present
+            // NOR IdentityUnavailable, so it slips past BOTH consistency predicates below and would
+            // be treated as a valid new shape. Reject any undefined value outright. NOTE: a LEGACY
+            // record with no identity_kind key decodes to Present (the zero value), which IS defined
+            // — so this never fires on the backward-compat path.
+            if (!Enum.IsDefined(record.IdentityKind)) {
+                logger.LogWarning(
+                    "AgentPidRecordStore: record {Path} has an unknown identity_kind ({Kind}); quarantining as .corrupt",
+                    path, (int)record.IdentityKind);
+                TryQuarantine(path);
+                continue;
+            }
+
+            // M1-A (spec §4.3): the only rejected shapes are NEW-schema-inconsistent combinations —
+            // Present claiming a comparable identity with an empty token, or IdentityUnavailable
+            // claiming NO comparable identity while still carrying a nonempty one. A LEGACY record
+            // (no identity_kind key at all) always decodes as Present (PidIdentityKind's zero value)
+            // and is never rejected here, however old its token scheme.
+            var inconsistent =
+                (record.IdentityKind == PidIdentityKind.Present && token.Length == 0) ||
+                (record.IdentityKind == PidIdentityKind.IdentityUnavailable && token.Length != 0);
+
+            if (inconsistent) {
+                logger.LogWarning(
+                    "AgentPidRecordStore: record {Path} has an inconsistent identity_kind/start_identity combination ({Kind}, token length {Len}); quarantining as .corrupt",
+                    path, record.IdentityKind, record.StartIdentity.Length);
+                TryQuarantine(path);
+                continue;
+            }
+
             results.Add(record);
         }
 

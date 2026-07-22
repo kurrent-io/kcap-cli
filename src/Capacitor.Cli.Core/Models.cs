@@ -960,6 +960,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
 [JsonSerializable(typeof(AgentPidRecord))]
+[JsonSerializable(typeof(PidIdentityKind))]
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
@@ -1296,22 +1297,38 @@ public readonly record struct DaemonStatusReport(
         QuarantinedAgentInfo[] Quarantined
     );
 
+/// <summary>M1-A (spec §4.3): distinguishes a record with a comparable start-identity
+/// (<see cref="Present"/>) from one where native capture failed (<see cref="IdentityUnavailable"/>
+/// — <see cref="AgentPidRecord.StartIdentity"/> is <c>""</c>, a deliberate well-formed marker,
+/// not a launch failure). <see cref="Present"/> MUST be the zero value: a pre-M1-A record's
+/// JSON has no <c>identity_kind</c> key at all, and System.Text.Json's constructor-based
+/// deserialization gives a missing value-type constructor parameter <c>default(T)</c> — this
+/// is precisely how the backward-compat rule ("missing identity_kind + nonempty start_identity
+/// ⇒ present") is satisfied with NO custom converter.</summary>
+public enum PidIdentityKind {
+    Present             = 0,
+    IdentityUnavailable = 1,
+}
+
 /// <summary>Phase B (D4 §6.4(2)): the durable per-agent PID record written atomically at spawn
 /// to <c>&lt;state-dir&gt;/agents/{agentId}.json</c>, so a restarted daemon can reap a surviving child
 /// by EXACT identity. <see cref="StartIdentity"/> is the <c>ProcessStartToken</c> string
-/// (kernel starttime / absolute start ticks — exact, no tolerance). <see cref="DaemonId"/> = hash of
-/// the daemon state-dir path (stable logical identity); <see cref="DaemonEpoch"/> = fresh per boot.</summary>
+/// (kernel starttime / absolute start ticks / macOS incarnation id — exact, no tolerance), or
+/// <c>""</c> when <see cref="IdentityKind"/> is <see cref="PidIdentityKind.IdentityUnavailable"/>.
+/// <see cref="DaemonId"/> = hash of the daemon state-dir path (stable logical identity);
+/// <see cref="DaemonEpoch"/> = fresh per boot.</summary>
 public readonly record struct AgentPidRecord(
-        string         AgentId,
-        int            Pid,
-        string         StartIdentity,
-        string         Kind,
-        string         Vendor,
-        string?        FlowRunId,
-        string?        FlowRole,
-        string         DaemonId,
-        string         DaemonEpoch,
-        DateTimeOffset SpawnedAt
+        string          AgentId,
+        int             Pid,
+        string          StartIdentity,
+        PidIdentityKind IdentityKind,
+        string          Kind,
+        string          Vendor,
+        string?         FlowRunId,
+        string?         FlowRole,
+        string          DaemonId,
+        string          DaemonEpoch,
+        DateTimeOffset  SpawnedAt
     );
 
 public readonly record struct ReviewLaunchInfo(

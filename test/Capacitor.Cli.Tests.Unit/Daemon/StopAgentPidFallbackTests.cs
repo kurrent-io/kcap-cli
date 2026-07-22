@@ -21,7 +21,7 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(identity).IsNotNull();
 
         orch.WritePidRecordForTest(new AgentPidRecord(
-            "ghost", dummy.Pid, identity!, "ReviewFlow", "codex", "f1", "reviewer",
+            "ghost", dummy.Pid, identity!, PidIdentityKind.Present, "ReviewFlow", "codex", "f1", "reviewer",
             orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
 
         await orch.HandleStopAgent("ghost");

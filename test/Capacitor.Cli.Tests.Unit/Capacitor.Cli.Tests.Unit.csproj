@@ -5,10 +5,13 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
+        <!-- DummyProcess declares a chmod LibraryImport for the native-shim test fixtures. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\Capacitor.Cli\Capacitor.Cli.csproj" />
         <ProjectReference Include="..\..\src\Capacitor.Cli.Daemon\Capacitor.Cli.Daemon.csproj" />
+        <ProjectReference Include="..\Capacitor.Cli.Tests.Unit.NativeTestHost\Capacitor.Cli.Tests.Unit.NativeTestHost.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="TUnit" />

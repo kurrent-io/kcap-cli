@@ -211,6 +211,18 @@ public static partial class DaemonRunner {
         if (OperatingSystem.IsWindows()) {
             builder.Services.AddSingleton<IPtyProcessFactory, WinPtyProcessFactory>();
         } else {
+            // L1-managed(a)/(b): one dedicated, daemon-lifetime native thread runs EVERY Unix
+            // pty_spawn call (never a thread-pool thread — see UnixSpawnerThread's own doc
+            // comment for why). Registered with no factory delegate so DI resolves it via its
+            // parameterless constructor, which already starts the thread. host.StopAsync() only
+            // stops registered IHostedServices — it does NOT dispose the ServiceProvider, so a
+            // plain AddSingleton<T>() IDisposable like this one is NOT disposed by StopAsync
+            // alone. Disposal (and therefore the thread's retirement, via UnixSpawnerThread.Dispose
+            // completing its queue) happens when disposing the host disposes the ServiceProvider —
+            // which is why the shutdown sequence below awaits host.StopAsync() and THEN
+            // DisposeHostAsync(host) on every exit path, after every hosted agent is already
+            // stopped, so normal shutdown retires the thread only once nothing needs it.
+            builder.Services.AddSingleton<UnixSpawnerThread>();
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 
@@ -402,32 +414,44 @@ public static partial class DaemonRunner {
         // (those survivors aren't yet in EffectiveCount), and would leave a window where a launch races
         // an unwired handler. Under the daemon lock; best-effort (swallows its own faults).
         var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
-        await orchestrator.ReapOrphansOnceAsync();
 
+        // Once the orchestrator is resolved, the Unix IPtyProcessFactory has pulled in
+        // UnixSpawnerThread — whose foreground (non-background) OS thread is now running and
+        // parks forever until the ServiceProvider is disposed (host.StopAsync() alone does NOT
+        // retire it; see the block comment in the finally below). So EVERY exit path from here on
+        // — success, the nameInUse early-return, OR any exception out of ReapOrphansOnceAsync,
+        // ConnectAsync (non-nameInUse), CleanupOrphanedAsync, or EvalRunner resolution — MUST run
+        // the unified finally so DisposeHostAsync(host) fires and the process can actually exit
+        // instead of hanging. That is why everything below is wrapped in this single try/finally.
+        // Structural fix; backed by DaemonHostDisposalTests, which proves StopAsync-then-dispose
+        // is what retires the DI-owned UnixSpawnerThread.
         try {
-            await connection.ConnectAsync(lifetime.ApplicationStopping);
-        } catch (Exception ex) when (nameInUse) {
-            // ConnectAsync's initial-connect path threw because of
-            // NameInUse. OnNameInUse already fired and set our flag; the
-            // host hasn't started its main loop yet, so just clean up
-            // and exit cleanly with code 3.
-            _ = ex;
-            daemonLock.Dispose();
-            await host.StopAsync();
+            // Phase B (D4 §6.4(3)): reap any hosted-agent children that outlived a PRIOR daemon run
+            // BEFORE ConnectAsync advertises this daemon (see the orchestrator-resolution comment
+            // above). Under the daemon lock; best-effort (swallows its own faults).
+            await orchestrator.ReapOrphansOnceAsync();
 
-            return 3;
-        }
+            try {
+                await connection.ConnectAsync(lifetime.ApplicationStopping);
+            } catch (Exception ex) when (nameInUse) {
+                // ConnectAsync's initial-connect path threw because of NameInUse. OnNameInUse
+                // already fired and set our flag; the host hasn't started its main loop yet, so
+                // just exit with code 3 — the unified finally below disposes daemonLock,
+                // orchestrator, connection, and the host (retiring the spawner thread).
+                _ = ex;
 
-        var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-        await worktreeManager.CleanupOrphanedAsync();
+                return 3;
+            }
 
-        // Instantiate EvalRunner so it wires the per-phase eval handlers
-        // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
-        // ServerConnection. It's stateless beyond the handler assignment —
-        // cached context lives in EvalContextCache — so no disposal dance.
-        _ = host.Services.GetRequiredService<EvalRunner>();
+            var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
+            await worktreeManager.CleanupOrphanedAsync();
 
-        try {
+            // Instantiate EvalRunner so it wires the per-phase eval handlers
+            // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
+            // ServerConnection. It's stateless beyond the handler assignment —
+            // cached context lives in EvalContextCache — so no disposal dance.
+            _ = host.Services.GetRequiredService<EvalRunner>();
+
             // Wait without passing the lifetime token: WaitForShutdownAsync(token) treats
             // token cancellation as a fault, so a normal Ctrl+C / lifetime.StopApplication()
             // would surface as OperationCanceledException. The no-arg overload listens
@@ -440,6 +464,16 @@ public static partial class DaemonRunner {
             await orchestrator.DisposeAsync();
             await connection.DisposeAsync();
             await host.StopAsync();
+
+            // host.StopAsync() only STOPS IHostedServices — it does NOT dispose the
+            // ServiceProvider, so a plain AddSingleton<T>() IDisposable (e.g.
+            // UnixSpawnerThread, whose foreground, non-background OS thread parks
+            // forever on its queue until Dispose() completes it) is never released by
+            // StopAsync alone. Disposing the host is what disposes the ServiceProvider —
+            // and therefore every registered IDisposable singleton — so it must run
+            // after StopAsync on every shutdown path or the spawner thread's foreground
+            // thread keeps the process alive past WaitForShutdownAsync forever.
+            await DisposeHostAsync(host);
             LogCleanupCompleted(logger);
         }
 
@@ -452,6 +486,27 @@ public static partial class DaemonRunner {
         // path), exit with code 3 so wrappers (systemd, npm, CI) can tell
         // this apart from a normal Ctrl+C exit.
         return nameInUse ? 3 : 0;
+    }
+
+    /// <summary>
+    /// Disposes the host so its ServiceProvider — and therefore every registered
+    /// <see cref="IDisposable"/> singleton (e.g. <see cref="UnixSpawnerThread"/>) — is released.
+    /// <see cref="IHost"/> only surfaces <see cref="IDisposable"/>, but the concrete host built by
+    /// <see cref="HostApplicationBuilder"/> also implements <see cref="IAsyncDisposable"/>; prefer
+    /// that when present so any <c>IAsyncDisposable</c> singletons get their async path too, and
+    /// fall back to the synchronous <see cref="IDisposable.Dispose"/> otherwise. Must be called
+    /// AFTER <c>host.StopAsync()</c> on every shutdown path — <c>StopAsync()</c> only stops
+    /// <see cref="IHostedService"/>s, it never disposes the ServiceProvider. <c>internal</c> (not
+    /// <c>private</c>) so the regression test can drive the exact StopAsync-then-dispose sequence
+    /// against a minimal host and prove the ordering is what actually retires a DI-owned
+    /// <see cref="UnixSpawnerThread"/>.
+    /// </summary>
+    internal static async Task DisposeHostAsync(IHost host) {
+        if (host is IAsyncDisposable asyncDisposableHost) {
+            await asyncDisposableHost.DisposeAsync();
+        } else {
+            host.Dispose();
+        }
     }
 
     /// <summary>

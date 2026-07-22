@@ -17,11 +17,12 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
     /// </summary>
     internal static readonly TimeSpan InputSubmitDelay = TimeSpan.FromMilliseconds(50);
 
-    public string Vendor              => vendor;
-    public int    Pid                 => pty.Pid;
-    public bool   HasExited           => pty.HasExited;
-    public int?   ExitCode            => pty.ExitCode;
-    public bool   EmitsTerminalOutput => true;
+    public string  Vendor              => vendor;
+    public int     Pid                 => pty.Pid;
+    public bool    HasExited           => pty.HasExited;
+    public int?    ExitCode            => pty.ExitCode;
+    public string? StartIdentity       => pty.StartIdentity;
+    public bool    EmitsTerminalOutput => true;
 
     public IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default) => pty.ReadOutputAsync(ct);
 
