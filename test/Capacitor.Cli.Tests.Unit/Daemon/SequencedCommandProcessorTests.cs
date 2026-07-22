@@ -130,4 +130,38 @@ public class SequencedCommandProcessorTests {
         await Assert.That(p.LastProcessedSeq).IsEqualTo(1L);        // rejected-as-item is terminal
         await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.DaemonCapacity);
     }
+
+    // Phase B2-b (sequenced-settlement design §5.5): a retransmitted duplicate of a LaunchRejected command
+    // must carry the CACHED rejection reason on its processed CommandAck, as the SAME wire token
+    // CommandRejected.Reason serializes to, so the server can tell daemon_capacity (requeue) from semantic
+    // (fail) for exactly the lost-rejection case the identity cache exists to answer.
+    [Test] public async Task Duplicate_of_a_capacity_rejected_launch_carries_the_daemon_capacity_wire_token() {
+        var h = new Harness(); await using var p = h.P();
+        var item = h.Launch(1);
+        await p.SubmitAsync(item, () => Task.FromResult(
+            new CommandOutcome(CommandOutcomeKind.LaunchRejected, "a", RejectReason: CommandRejectedReason.DaemonCapacity)));
+        await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        var ack = h.Acks.Single();
+        await Assert.That(ack.State).IsEqualTo(CommandAckState.Processed);
+        await Assert.That(ack.OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchRejected);
+        await Assert.That(ack.RejectionReason).IsEqualTo("daemon_capacity");
+    }
+
+    [Test] public async Task Duplicate_of_a_semantically_rejected_launch_carries_the_semantic_wire_token() {
+        var h = new Harness(); await using var p = h.P();
+        var item = h.Launch(1);
+        await p.SubmitAsync(item, () => Task.FromResult(
+            new CommandOutcome(CommandOutcomeKind.LaunchRejected, "a", RejectReason: CommandRejectedReason.Semantic)));
+        await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await Assert.That(h.Acks.Single().RejectionReason).IsEqualTo("semantic");
+    }
+
+    // A duplicate of a non-rejected (executed) command has no cached reject reason -> null RejectionReason.
+    [Test] public async Task Duplicate_of_an_executed_launch_has_no_rejection_reason() {
+        var h = new Harness(); await using var p = h.P();
+        var item = h.Launch(1);
+        await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a", "sess")));
+        await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await Assert.That(h.Acks.Single().RejectionReason).IsNull();
+    }
 }

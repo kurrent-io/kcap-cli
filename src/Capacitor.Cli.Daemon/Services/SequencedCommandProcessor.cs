@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Logging;
@@ -95,11 +96,25 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
             // CurrentState is read LIVE at ack time (immutable execution fact vs current liveness);
             // the readLiveness delegate reads the daemon lifecycle collections with confirmed-death precedence.
             var live = _readLiveness(existing.Outcome.AgentId ?? item.AgentId);
+            // Phase B2-b (sequenced-settlement design §5.5): carry the CACHED rejection reason so a
+            // retransmitted duplicate of a rejected launch is still distinguishable as daemon_capacity
+            // (requeue) vs semantic (fail) — the exact lost-rejection case the identity cache answers.
+            var reason = existing.Outcome.RejectReason is { } r ? RejectReasonWireToken(r) : null;
             _ = _sendAck(new CommandAck(_epoch, item.Seq, item.CommandId, CommandAckState.Processed,
-                existing.Outcome.Kind, live, existing.Outcome.AgentId ?? item.AgentId, existing.Outcome.SessionId));
+                existing.Outcome.Kind, live, existing.Outcome.AgentId ?? item.AgentId, existing.Outcome.SessionId, reason));
         }
         return Task.CompletedTask;
     }
+
+    /// <summary>Phase B2-b (sequenced-settlement design §5.5): the wire token a cached
+    /// <see cref="CommandRejectedReason"/> carries on a processed-duplicate <see cref="CommandAck"/> —
+    /// serialized through the SAME context the SignalR hub uses for <c>CommandRejected.Reason</c>, so a
+    /// retransmitted duplicate reads <c>daemon_capacity</c>/<c>semantic</c> identically to the first
+    /// rejection (the ack's <c>RejectionReason</c> is a STRING; the outcome's <c>RejectReason</c> is the
+    /// enum). NEVER <c>.ToString()</c> — that emits the C# name, not the <c>[JsonStringEnumMemberName]</c>
+    /// snake_case token.</summary>
+    static string RejectReasonWireToken(CommandRejectedReason reason) =>
+        JsonSerializer.Serialize(reason, CapacitorJsonContext.Default.CommandRejectedReason).Trim('"');
 
     /// <summary>Phase B2-b (sequenced-settlement design): a non-next Seq (a gap — Seq &gt; HighestAcceptedSeq+1,
     /// or a too-low already-retired Seq below the frontier) is NEVER accepted out of order. Emit wrong_next so
