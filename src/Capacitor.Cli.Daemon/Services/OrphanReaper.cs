@@ -24,7 +24,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </list>
 /// </summary>
 internal sealed class OrphanReaper(
-        AgentPidRecordStore store, string daemonId, string currentEpoch, ILogger logger) {
+        AgentPidRecordStore store, string daemonId, string currentEpoch, ILogger logger,
+        Action<string, string, string?, string?>? onRecordResolved = null) {
     /// <summary>Run both passes once. Best-effort throughout — a failure on one process never aborts the
     /// sweep of the others.</summary>
     public async Task ReapOnceAsync(CancellationToken ct = default) {
@@ -54,6 +55,13 @@ internal sealed class OrphanReaper(
             try {
                 var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, logger, ct);
                 if (confirmedGone) {
+                    // Phase B2-b (sequenced-settlement design §4.2.4): ledger-append BEFORE
+                    // source-deletion. A crash between the two leaves a committed entry + leftover
+                    // source; the next boot re-derives it and Upsert (idempotent on the source-stable
+                    // (AgentId, OldEpoch) key) collapses onto the committed entry, then deletes the
+                    // leftover. Flow fields come from the TRUSTED record. Emitted ONLY for this
+                    // positive confirmed-gone branch — never for spared/ambiguous records.
+                    onRecordResolved?.Invoke(record.AgentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
                     store.Delete(record.AgentId); // killed+confirmed, already-gone, or proven identity mismatch
                     logger.LogInformation(
                         "OrphanReaper: reaped leftover agent {AgentId} (pid {Pid}) from a prior daemon run",
