@@ -252,14 +252,30 @@ internal sealed class OrphanReaper(
     /// via the marker scan carries TRUSTED flow identity — written from the daemon's own AgentInstance
     /// into the durable record at spawn — so pull FlowRunId/FlowRole (and the trusted DaemonEpoch) FROM
     /// THAT RECORD via the record-resolved sink, so its role can be individually healed. Never trust flow
-    /// from the mutable env.</summary>
+    /// from the mutable env.
+    /// <para>The env agentId is UNTRUSTED for role authority — a prior-epoch DESCENDANT can inherit a
+    /// still-live leader's <c>KCAP_AGENT_ID</c> env triple (the descendant-outlives-leader residual) and
+    /// be reaped under a DIFFERENT pid. Matching a durable record on agentId ALONE would then emit a false
+    /// trusted-flow death proof for the LIVE leader AND delete its record. So only trust a record that
+    /// ALSO corroborates the reaped pid AND the prior epoch (<c>r.Pid == c.Pid &amp;&amp; r.DaemonEpoch ==
+    /// c.OldEpoch</c>): the live leader's record (its own pid, a different/current epoch) then can't be
+    /// matched by a descendant killed under another pid, and the resolution falls back to the recordless
+    /// null-flow path — NO record delete. The legitimate identity_unavailable case is unaffected: there
+    /// the record genuinely IS the reaped pid, so pid + epoch + agentId all corroborate.</para></summary>
     void EmitAndClear(MarkerCandidate c) {
-        var record = store.ReadAll().FirstOrDefault(r => string.Equals(r.AgentId, c.AgentId, StringComparison.Ordinal));
-        if (!string.IsNullOrEmpty(record.AgentId))
+        var record = store.ReadAll().FirstOrDefault(r =>
+            string.Equals(r.AgentId, c.AgentId, StringComparison.Ordinal)
+            && r.Pid == c.Pid
+            && string.Equals(r.DaemonEpoch, c.OldEpoch, StringComparison.Ordinal));
+        if (!string.IsNullOrEmpty(record.AgentId)) {
+            // Corroborated identity_unavailable record: emit its TRUSTED flow and clear the record.
             onRecordResolved?.Invoke(record.AgentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
-        else
+            store.Delete(c.AgentId);
+        } else {
+            // Pure recordless survivor, OR a non-corroborating record that belongs to a LIVE leader: the
+            // env is untrusted -> null flow, and NEVER delete a record we didn't corroborate.
             onMarkerResolved?.Invoke(c.AgentId, c.OldEpoch);
-        store.Delete(c.AgentId);   // clears the identity_unavailable record (no-op for a pure recordless survivor)
+        }
         markerStore?.Delete(c.AgentId);
         logger.LogInformation(
             "OrphanReaper: resolved marker-candidate {AgentId} (pid {Pid}) of a prior daemon incarnation", c.AgentId, c.Pid);

@@ -108,6 +108,49 @@ public class MarkerCandidateResolutionTests {
         await Assert.That(markers.ReadAll()).IsEmpty();
     }
 
+    // Phase B2-b (sequenced-settlement design): the env agentId on a marker candidate is UNTRUSTED for
+    // role authority. A prior-epoch DESCENDANT that inherited a still-live leader X's KCAP_AGENT_ID env
+    // triple (the descendant-outlives-leader residual) and is reaped under a DIFFERENT pid must NOT be
+    // corroborated against X's still-on-disk leader record: matching on agentId ALONE would emit a FALSE
+    // trusted-flow death proof for the LIVE leader AND delete its durable record (stranding it).
+    // EmitAndClear must also corroborate the reaped pid + the prior epoch. Cross-platform: the marker
+    // resolves via branch (a) (!IsAlive of the reaped pid), which needs no env-marker scan.
+    [Test]
+    public async Task Marker_resolution_does_not_delete_or_falsely_resolve_a_non_corroborating_live_leader_record() {
+        var (store, markers, _) = New();
+
+        // The reaped descendant: a real, test-owned process, killed so branch (a) (!IsAlive) resolves it.
+        using var descendant = DummyProcess.StartSleep(30);
+        var reapedPid = descendant.Pid;
+        descendant.Kill();
+        descendant.WaitForExit(TimeSpan.FromSeconds(5));
+
+        // The LIVE leader X's durable record: X's OWN pid (alive, != the reaped pid) and the CURRENT
+        // epoch (a live current-incarnation leader). Neither the reaped pid nor the marker's prior epoch
+        // corroborates — the record pass skips a current-epoch record, so the live process is untouched.
+        var leaderPid = Environment.ProcessId; // alive, distinct from the reaped pid, carries no KCAP_* env
+        store.Write(new AgentPidRecord("leader-x", leaderPid, "tok", PidIdentityKind.Present,
+            "ReviewFlow", "codex", "flow-x", "leader", "did", "cur", DateTimeOffset.UtcNow));
+
+        // The marker candidate carries the descendant's INHERITED agentId (leader-x), the PRIOR epoch,
+        // and the reaped (dead) pid.
+        markers.Write(new MarkerCandidate("leader-x", "did", "old", reapedPid));
+
+        var recordResolved = new List<(string a, string e, string? fr, string? role)>();
+        var markerResolved = new List<(string, string)>();
+        var reaper = new OrphanReaper(store, "did", "cur", NullLogger.Instance,
+            onRecordResolved: (a, e, fr, role) => recordResolved.Add((a, e, fr, role)),
+            markerStore: markers, onMarkerResolved: (a, e) => markerResolved.Add((a, e)));
+        await reaper.ReapOnceAsync();
+
+        // The live leader's record is UNTOUCHED — not deleted, no trusted-flow death proof emitted for it.
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "leader-x")).IsTrue();
+        await Assert.That(recordResolved).IsEmpty();
+        // The resolution falls back to the recordless (null-flow) path and still clears the marker source.
+        await Assert.That(markerResolved).IsEquivalentTo(new[] { ("leader-x", "old") });
+        await Assert.That(markers.ReadAll()).IsEmpty();
+    }
+
     [Test]
     public async Task Identity_unavailable_record_resolved_via_marker_scan_emits_trusted_flow() {
         if (!OperatingSystem.IsLinux()) return;
