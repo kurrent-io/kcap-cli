@@ -68,6 +68,25 @@ public class SequencedSettlementWireTests {
         await Assert.That(pruneJson).Contains("\"generation\":3");
     }
 
+    // Phase B2-b (sequenced-settlement design §5.5): the report/connect payloads advertise
+    // HighestResolutionGeneration (the daemon-lifetime monotonic high-water) alongside the resolved-
+    // candidates array, so once sparse acks prune entries the server still knows the generation frontier.
+    // Additive/optional — old-shape construction leaves it null.
+    [Test]
+    public async Task HighestResolutionGeneration_round_trips_on_report_and_connect() {
+        var reportRt = JsonSerializer.Deserialize<DaemonStatusReport>(JsonSerializer.Serialize(
+            new DaemonStatusReport(1, [], [], HighestResolutionGeneration: 7), Opts), Opts);
+        await Assert.That(reportRt.HighestResolutionGeneration).IsEqualTo(7L);
+
+        // Old-shape construction still leaves it null.
+        await Assert.That(new DaemonStatusReport(1, [], []).HighestResolutionGeneration).IsNull();
+
+        var connectRt = JsonSerializer.Deserialize<DaemonConnect>(JsonSerializer.Serialize(
+            new DaemonConnect("d", "linux", [], 5, [], HighestResolutionGeneration: 9), Opts), Opts);
+        await Assert.That(connectRt.HighestResolutionGeneration).IsEqualTo(9L);
+        await Assert.That(new DaemonConnect("d", "linux", [], 5, []).HighestResolutionGeneration).IsNull();
+    }
+
     [Test]
     public async Task LaunchAgentCommand_gains_optional_sequencing_fields() {
         var legacy = new LaunchAgentCommand("a1", "hi", "opus", null, "/repo", null, null, "claude");

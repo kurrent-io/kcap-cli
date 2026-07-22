@@ -1331,7 +1331,11 @@ public readonly record struct DaemonStatusReport(
         bool?                         StartupReapComplete           = null,
         ResolvedStartupCandidate[]?   ResolvedStartupCandidates     = null,
         UnresolvedStartupCandidate[]? UnresolvedStartupCandidates   = null,
-        StartupDiscovery?             StartupDiscovery              = null
+        StartupDiscovery?             StartupDiscovery              = null,
+        // Phase B2-b (sequenced-settlement design §5.5): the daemon-lifetime monotonic high-water of the
+        // resolved-candidates ledger, advertised alongside ResolvedStartupCandidates so that once sparse
+        // acks prune entries the server still knows the generation frontier. Additive/optional.
+        long?                         HighestResolutionGeneration   = null
     );
 
 // ── Phase B2-b (sequenced-settlement design): startup-completeness / heal-barrier report DTOs ──
@@ -1617,7 +1621,11 @@ public readonly record struct DaemonConnect(
         UnresolvedStartupCandidate[]? UnresolvedStartupCandidates   = null,
         StartupDiscovery?             StartupDiscovery              = null,
         bool?                         RecordlessSurvivorsImpossible = null, // absent/false ⇒ has a recordless class
-        bool                          SupportsSequencedCommands     = false // THE capability gate
+        bool                          SupportsSequencedCommands     = false, // THE capability gate
+        // Phase B2-b (sequenced-settlement design §5.5): the daemon-lifetime monotonic high-water of the
+        // resolved-candidates ledger, advertised alongside ResolvedStartupCandidates so that once sparse
+        // acks prune entries the server still knows the generation frontier. Additive/optional.
+        long?                         HighestResolutionGeneration   = null
     );
 
 public readonly record struct AgentRegistered(

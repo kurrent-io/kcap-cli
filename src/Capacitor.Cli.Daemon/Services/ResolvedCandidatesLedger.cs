@@ -51,6 +51,12 @@ internal sealed partial class ResolvedCandidatesLedger {
         lock (_lock) return [.. _entries.Values.OrderBy(e => e.Generation)];
     }
 
+    /// <summary>Phase B2-b (sequenced-settlement design §5.5): the daemon-lifetime monotonic high-water
+    /// of minted generations — 0 before any mint, N after N distinct Upserts. Persists across prunes and
+    /// restarts (<see cref="_nextGeneration"/> is never decremented and Load restores it), so once sparse
+    /// acks prune entries the server still learns the generation frontier.</summary>
+    public long HighestResolutionGeneration { get { lock (_lock) return _nextGeneration - 1; } }
+
     public void Ack(IEnumerable<ResolvedCandidateAck> entries) {
         lock (_lock) {
             var changed = false;

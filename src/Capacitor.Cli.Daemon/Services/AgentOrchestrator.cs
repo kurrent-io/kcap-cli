@@ -373,6 +373,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // re-advertises the un-acked snapshot alongside the periodic DaemonStatusReport.
         _server.OnAckResolvedCandidates       += HandleAckResolvedCandidates;
         _server.GetResolvedStartupCandidates  =  () => [.. _resolvedLedger?.Snapshot() ?? []];
+        // Phase B2-b (sequenced-settlement design §5.5): advertise the ledger's monotonic high-water on
+        // the connect payload (BuildStatusReport carries it on the periodic self-report) so the server
+        // learns the generation frontier even after sparse acks prune entries.
+        _server.GetHighestResolutionGeneration =  () => _resolvedLedger?.HighestResolutionGeneration;
 
         // Phase B2-b (sequenced-settlement design): mirror the per-platform startup-completeness signals
         // into the DaemonConnect payload (the periodic DaemonStatusReport carries them via
@@ -463,7 +467,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             StartupReapComplete: ComputeStartupReapComplete(),
             ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []],
             UnresolvedStartupCandidates: [.. _orphanReaper?.BlockedCandidates() ?? []],
-            StartupDiscovery: _orphanReaper?.CurrentDiscovery);
+            StartupDiscovery: _orphanReaper?.CurrentDiscovery,
+            // Phase B2-b (sequenced-settlement design §5.5): the resolved-candidates ledger's monotonic
+            // high-water, so once sparse acks prune entries the server still knows the generation frontier.
+            HighestResolutionGeneration: _resolvedLedger?.HighestResolutionGeneration);
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
     /// roll-up. A blocked known-id candidate (pending_marker / legacy_unresolvable /

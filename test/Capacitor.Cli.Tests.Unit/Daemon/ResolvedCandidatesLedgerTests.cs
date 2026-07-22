@@ -53,6 +53,25 @@ public class ResolvedCandidatesLedgerTests {
         await Assert.That(reopened.Snapshot().Single().AgentId).IsEqualTo("a1");
     }
 
+    // Phase B2-b (sequenced-settlement design §5.5): the daemon-lifetime monotonic high-water — 0 before
+    // any mint, N after N distinct Upserts — and unchanged by an Ack that prunes entries (so once sparse
+    // acks prune the ledger the server still learns the generation frontier). Survives restart because
+    // _nextGeneration is never decremented and Load restores it.
+    [Test] public async Task HighestResolutionGeneration_reports_the_monotonic_high_water() {
+        var l = New(out var dir);
+        await Assert.That(l.HighestResolutionGeneration).IsEqualTo(0L); // nothing minted yet
+        var g1 = l.Upsert("a1", "e0", null, null);
+        l.Upsert("a2", "e0", null, null);
+        l.Upsert("a3", "e0", null, null);
+        await Assert.That(l.HighestResolutionGeneration).IsEqualTo(3L);
+
+        l.Ack([new ResolvedCandidateAck(g1.Generation, "a1", "e0")]); // prune a1
+        await Assert.That(l.HighestResolutionGeneration).IsEqualTo(3L); // unchanged by a prune
+
+        var reopened = new ResolvedCandidatesLedger(dir, NullLogger.Instance);
+        await Assert.That(reopened.HighestResolutionGeneration).IsEqualTo(3L); // survives restart
+    }
+
     [Test] public async Task Ack_prunes_sparsely_without_head_of_line_blocking() {
         var l = New(out _);
         var g1 = l.Upsert("a1", "e0", null, null);

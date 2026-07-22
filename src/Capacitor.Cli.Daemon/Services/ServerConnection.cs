@@ -112,6 +112,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<UnresolvedStartupCandidate[]>? GetUnresolvedStartupCandidates { get; set; }
     public Func<StartupDiscovery?>?            GetStartupDiscovery            { get; set; }
 
+    /// <summary>Phase B2-b (sequenced-settlement design §5.5): the resolved-candidates ledger's
+    /// daemon-lifetime monotonic high-water, re-advertised on <c>DaemonConnect</c> alongside
+    /// <see cref="GetResolvedStartupCandidates"/> so that once sparse acks prune entries the server still
+    /// knows the generation frontier. Null when unwired (tests / early startup) ⇒ the additive field
+    /// stays null, wire-compatible with old servers.</summary>
+    public Func<long?>?                        GetHighestResolutionGeneration { get; set; }
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-command watermark counters
     /// (the processor's HighestAcceptedSeq / LastProcessedSeq) and the kill-quarantine snapshot, mirrored
     /// onto the enriched <c>DaemonConnect</c> payload alongside the periodic <c>DaemonStatusReport</c>. Set
@@ -489,7 +496,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     Epoch: GetDaemonEpoch?.Invoke() ?? _config.DaemonEpoch,
                     HighestAcceptedSeq: GetHighestAcceptedSeq?.Invoke(),
                     LastProcessedSeq: GetLastProcessedSeq?.Invoke(),
-                    SupportsSequencedCommands: true
+                    SupportsSequencedCommands: true,
+                    // Phase B2-b (sequenced-settlement design §5.5): the resolved-candidates ledger's
+                    // monotonic high-water alongside the re-advertised snapshot above.
+                    HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke()
                 ),
                 cancellationToken: _ct
             );
