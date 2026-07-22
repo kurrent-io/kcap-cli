@@ -956,6 +956,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveCompleted))]
 [JsonSerializable(typeof(EvalRetrospectiveFailed))]
 [JsonSerializable(typeof(DaemonConnect))]
+[JsonSerializable(typeof(UnattendedVendorCapability))]
+[JsonSerializable(typeof(IReadOnlyList<UnattendedVendorCapability>))]
 [JsonSerializable(typeof(LiveAgentInfo))]
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
@@ -1242,8 +1244,15 @@ public readonly record struct LaunchAgentCommand(
         // associate a surviving unassigned reviewer with its role). Appended last, same wire-compat
         // rule as the fields above — old daemons ignore them, old servers never set them.
         string?            FlowRunId = null,
-        string?            FlowRole  = null
+        string?            FlowRole  = null,
+        ReviewerCertificationRequirement? ReviewerCertification = null
     );
+
+public sealed record ReviewerCertificationRequirement(
+    string Vendor,
+    string AllowedCliRanges,
+    string RequiredLauncherPolicyVersion,
+    string Revision);
 
 /// <summary>
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves
@@ -1415,8 +1424,16 @@ public readonly record struct DaemonConnect(
         // subset of SupportedVendors — every entry here MUST also appear there). Null from a daemon
         // build that predates this field — that daemon is simply not an override-eligible target for
         // ANY vendor. There is deliberately no fallback that widens a null to anything non-null.
-        string[]? UnattendedVendors = null
+        string[]? UnattendedVendors = null,
+        IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities = null
     );
+
+public sealed record UnattendedVendorCapability(
+    string Vendor,
+    string? CliVersion,
+    string LauncherPolicyVersion,
+    bool BorrowedReviewSupported
+);
 
 public readonly record struct AgentRegistered(
         string  AgentId,

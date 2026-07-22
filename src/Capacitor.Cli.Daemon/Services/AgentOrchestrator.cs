@@ -596,6 +596,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
+            var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
+                ? DaemonRunner.ProbeCliVersion(_config.ClaudePath)
+                : null;
+            var policyMatches = string.Equals(certification.Vendor, cmd.Vendor, StringComparison.Ordinal)
+                && string.Equals(certification.RequiredLauncherPolicyVersion,
+                    DaemonRunner.ClaudeLauncherPolicyVersion, StringComparison.Ordinal)
+                && DaemonRunner.CliVersionAllowed(version, certification.AllowedCliRanges);
+            if (!policyMatches) {
+                await _server.LaunchFailedAsync(cmd.AgentId,
+                    $"reviewer_certification_changed: '{cmd.Vendor}' no longer matches server certification revision '{certification.Revision}'. Restart the daemon after updating the reviewer CLI.");
+                return;
+            }
+        }
+
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
 

@@ -114,6 +114,23 @@ public class McpFlowsServerTests {
     }
 
     [Test]
+    public async Task Status_response_renders_vendor_audit_and_participants() {
+        var body = """
+            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+             "requested_reviewer_vendor":"claude","applied_reviewer_vendor":"claude",
+             "reviewer_vendor_source":"explicit",
+             "participants":[{"role":"reviewer","vendor":"claude","model":"sonnet","stopped":false}]}
+            """;
+
+        var text = McpFlowsServer.FormatStatusResponse(body);
+
+        await Assert.That(text).Contains("requested_reviewer_vendor: claude");
+        await Assert.That(text).Contains("applied_reviewer_vendor: claude");
+        await Assert.That(text).Contains("reviewer_vendor_source: explicit");
+        await Assert.That(text).Contains("reviewer: vendor=claude model=sonnet status=running");
+    }
+
+    [Test]
     public async Task Round_response_renders_pending_messages() {
         var body = """
             {"flow_run_id":"f1","round_id":"r1","status":"findings","result_kind":"findings","result_text":"some findings",

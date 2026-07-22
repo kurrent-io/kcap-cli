@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+
 namespace Capacitor.Cli.Daemon;
 
 public class DaemonConfig {
@@ -71,6 +73,7 @@ public class DaemonConfig {
     /// yet or in tests that bypass the runner.
     /// </summary>
     public string[]? UnattendedVendors { get; set; }
+    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities { get; set; }
 
     public string WorktreeRoot { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

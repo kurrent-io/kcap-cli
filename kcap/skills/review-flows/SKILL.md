@@ -30,13 +30,22 @@ Once the user has explicitly opted into a flow (see above), pick the `kind`:
 - Spec or design document → `kind: "spec-review"`
 - Code changes or a pull request → `kind: "code-review"`
 
+## Choosing the reviewer vendor
+
+Treat the driver harness and reviewer as independent. A request such as "ask Claude to review"
+selects `vendor: "claude"` even when the current driver is Codex; mentions of the driver do not
+select a reviewer. Anchor vendor language to the reviewer role ("Claude reviewer", "review with
+Cursor", "ask Codex for review"), including negation ("not Claude"). If exactly one reviewer
+vendor is named, pass it. If none is named, omit `vendor` and let the server's configured default
+apply. If multiple reviewer candidates remain after negation, ask the user to choose; never guess.
+
 ## If the flows MCP tools are not loaded
 
-If `start_review_flow` / `submit_review_round` are not among the tools available in this session, do NOT try to obtain them:
+If `start_review_flow` / `submit_review_round` are not among the tools available in this session:
 
 - Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
-- The absence is deliberate: hosted review-flow reviewers run with all MCP servers stripped, so a reviewer cannot start a nested flow.
-- If you were asked to review a spec, design, or code and these tools are absent, you are most likely the hosted reviewer inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested review directly, then deliver your result by calling the `submit_review_result` tool (from the injected `kcap-flow-result` server) exactly as the "Result contract" section of your prompt instructs, quoting its round token — `kind: "findings"` plus your findings text, or `kind: "clean"`. The tool is the ONLY delivery channel: the server does not read your reply text, so ending with `FINDINGS:`/`NO FINDINGS` markers delivers nothing and the round would sit unresolved until its timeout. If the tool call fails, retry it.
+- If `submit_review_result` is present and the prompt contains a round token/result contract, you are a hosted reviewer. Skip this driver workflow, perform the review directly, and submit through that tool. Tool absence alone is not proof that you are a reviewer.
+- If neither the flows tools nor the reviewer result contract is present, the integration is missing. Tell the user to run `kcap setup` or reinstall/update the kcap plugin, then restart the harness. Do not start a shell JSON-RPC workaround or edit MCP configuration from the session.
 
 ## Core rules
 
@@ -52,6 +61,10 @@ If `start_review_flow` / `submit_review_round` are not among the tools available
 
 - **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Tell the user to run `kcap agent` on a machine with the repo cloned (or pass an explicit `daemon_name` + `repo_path`).
 - **`400` starting `daemon_outdated:`** — the daemon's kcap is too old to host flow participants. Tell the user to update (`npm i -g @kurrent/kcap`) and restart `kcap agent`.
+- **`reviewer_vendor_required`** — no explicit vendor and no server default; ask the user to name a reviewer or have an admin configure `Flows:Review:DefaultVendor`.
+- **`reviewer_vendor_unavailable`** — the selected vendor is not installed/certified unattended on an eligible daemon; do not silently fall back to another vendor.
+- **`client_upgrade_required`, `flow_client_protocol_required`, or `flow_client_protocol_unsupported`** — update kcap; reserved review aliases fail closed on stale clients.
+- **`reserved_review_alias_shape`** — an admin changed a reserved alias to an invalid participant shape; restore exactly one participant named `reviewer`.
 - **`400` starting `participant_unavailable:`** — the reviewer agent died and automatic relaunch is not available yet. Close this flow and start a new one, carrying your context forward; re-submitting will keep failing.
 - **A round result of `unclear` whose text is exactly `participant_died` or `participant_stopped`** — the reviewer agent crashed or was stopped mid-round. The run stays open but has no live reviewer: close the flow and start a new one.
 
@@ -78,7 +91,7 @@ if findings:
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — optional; by default, on the same machine, the reviewer's worktree is mirrored from your working tree including uncommitted changes, so it reads the actual source. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a review task. |
+| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (explicit reviewer vendor; omit for server default), `instructions`, `mode` (`context-only` — optional) | Once, at the start of a review task. |
 | `submit_review_round` | `flow_run_id`, `context` | `instructions` | After addressing findings. Pass the same `flow_run_id` and the updated context. |
 | `get_review_flow_status` | `flow_run_id` | — | Poll or check the current status of a flow (running, waiting, completed, failed). |
 | `close_review_flow` | `flow_run_id` | — | Only after the reviewer returns `clean`. |

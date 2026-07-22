@@ -48,9 +48,9 @@ public class McpCanonicalContractTests {
     }
 
     [Test]
-    public async Task Codex_subset_excludes_flows_but_keeps_memory() {
+    public async Task Codex_subset_keeps_flows_and_memory() {
         var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();
-        await Assert.That(names).DoesNotContain("kcap-flows");
+        await Assert.That(names).Contains("kcap-flows");
         await Assert.That(names).Contains("kcap-memory");
     }
 

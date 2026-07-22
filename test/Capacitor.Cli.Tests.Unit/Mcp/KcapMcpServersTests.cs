@@ -10,9 +10,9 @@ public class KcapMcpServersTests {
     }
 
     [Test]
-    public async Task ForCodex_excludes_flows_and_workitems() {
+    public async Task ForCodex_excludes_only_workitems() {
         var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-memory" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory" });
     }
 
     [Test]

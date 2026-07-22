@@ -6,6 +6,13 @@
 
 The `kcap` CLI records Claude Code sessions by forwarding hook payloads and transcript data to a Kurrent Capacitor server. It also hosts an agent daemon for remote Claude CLI management and provides PR review context via MCP tools.
 
+Review flows use a vendor-neutral catalog-start v2 protocol: reserved `spec-review`/`code-review`
+aliases select an explicit or server-default reviewer independently of the driver. Codex setup
+registers `kcap-flows` without auto-approval and tracks only newly-created global TOML entries in
+`mcp-ownership-v1.json`, so uninstall preserves manual/customized MCP configuration. Daemons retain
+the string unattended-vendor list for compatibility and additionally advertise structured Claude
+CLI/launcher-policy certification; Claude borrowed-worktree review is not certified.
+
 ## Tech stack
 
 - .NET 10, NativeAOT compiled

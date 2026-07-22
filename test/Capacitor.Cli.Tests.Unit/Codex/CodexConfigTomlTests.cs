@@ -218,15 +218,18 @@ public class CodexConfigTomlTests {
         var servers  = (TomlTable)ReadToml(path)["mcp_servers"];
         var review   = (TomlTable)servers["kcap-review"];
         var sessions = (TomlTable)servers["kcap-sessions"];
+        var flows    = (TomlTable)servers["kcap-flows"];
         var memory   = (TomlTable)servers["kcap-memory"];
 
         await Assert.That((string)review["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(review)).IsEquivalentTo(new[] { "mcp", "review" });
         await Assert.That((string)sessions["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(sessions)).IsEquivalentTo(new[] { "mcp", "sessions" });
+        await Assert.That(ArgsOf(flows)).IsEquivalentTo(new[] { "mcp", "flows" });
         // kcap-memory is now auto-registered for Codex too.
         await Assert.That((string)memory["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(memory)).IsEquivalentTo(new[] { "mcp", "memory" });
+        await Assert.That(File.Exists(Path.Combine(Path.GetDirectoryName(path)!, "mcp-ownership-v1.json"))).IsTrue();
     }
 
     [Test]
@@ -238,16 +241,18 @@ public class CodexConfigTomlTests {
         var servers  = (TomlTable)ReadToml(path)["mcp_servers"];
         var review   = (TomlTable)servers["kcap-review"];
         var sessions = (TomlTable)servers["kcap-sessions"];
+        var flows    = (TomlTable)servers["kcap-flows"];
         var memory   = (TomlTable)servers["kcap-memory"];
 
         // Read-only servers auto-approve (never prompt); kcap-memory (writes via save) keeps the default.
         await Assert.That((string)review["default_tools_approval_mode"]).IsEqualTo("approve");
         await Assert.That((string)sessions["default_tools_approval_mode"]).IsEqualTo("approve");
+        await Assert.That(flows.ContainsKey("default_tools_approval_mode")).IsFalse();
         await Assert.That(memory.ContainsKey("default_tools_approval_mode")).IsFalse();
     }
 
     [Test]
-    public async Task RegisterKcapMcpServers_heals_existing_entry_without_overriding_user_mode() {
+    public async Task RegisterKcapMcpServers_preserves_existing_entries_without_claiming_or_healing() {
         var path = TempConfig();
         // Pre-existing kcap entries: kcap-review with no approval mode (older install); kcap-sessions
         // where the user deliberately chose "prompt".
@@ -266,7 +271,7 @@ public class CodexConfigTomlTests {
 
         await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
         var servers = (TomlTable)ReadToml(path)["mcp_servers"];
-        await Assert.That((string)((TomlTable)servers["kcap-review"])["default_tools_approval_mode"]).IsEqualTo("approve");    // healed (was absent)
+        await Assert.That(((TomlTable)servers["kcap-review"]).ContainsKey("default_tools_approval_mode")).IsFalse();
         await Assert.That((string)((TomlTable)servers["kcap-sessions"])["default_tools_approval_mode"]).IsEqualTo("prompt");  // user choice preserved
     }
 
@@ -318,6 +323,7 @@ public class CodexConfigTomlTests {
         var text = File.ReadAllText(path);
         await Assert.That(text).Contains("[mcp_servers.kcap-review]");
         await Assert.That(text).Contains("[mcp_servers.kcap-sessions]");
+        await Assert.That(text).Contains("[mcp_servers.kcap-flows]");
         await Assert.That(text).Contains("[mcp_servers.kcap-memory]");
         await Assert.That(text).DoesNotContain("mcpServers");
     }
@@ -356,6 +362,7 @@ public class CodexConfigTomlTests {
         await Assert.That((string)((TomlTable)servers["my-tool"])["command"]).IsEqualTo("my-tool"); // user's preserved
         await Assert.That(servers.ContainsKey("kcap-review")).IsTrue();
         await Assert.That(servers.ContainsKey("kcap-sessions")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-flows")).IsTrue();
         await Assert.That(servers.ContainsKey("kcap-memory")).IsTrue();
     }
 
@@ -438,6 +445,7 @@ public class CodexConfigTomlTests {
         await Assert.That(servers.ContainsKey("my-tool")).IsTrue();
         await Assert.That(servers.ContainsKey("kcap-review")).IsFalse();
         await Assert.That(servers.ContainsKey("kcap-sessions")).IsFalse();
+        await Assert.That(servers.ContainsKey("kcap-flows")).IsFalse();
         await Assert.That(servers.ContainsKey("kcap-memory")).IsFalse();
     }
 
@@ -449,5 +457,37 @@ public class CodexConfigTomlTests {
         var change = CodexConfigToml.UnregisterKcapMcpServers(path);
 
         await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Unchanged);
+    }
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_preserves_owned_entry_changed_by_user() {
+        var path = TempConfig();
+        CodexConfigToml.RegisterKcapMcpServers(path);
+        var root = ReadToml(path);
+        var flows = (TomlTable)((TomlTable)root["mcp_servers"])["kcap-flows"];
+        flows["command"] = "/opt/homebrew/bin/kcap";
+        File.WriteAllText(path, TomlSerializer.Serialize(root));
+
+        var change = CodexConfigToml.UnregisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That((string)((TomlTable)servers["kcap-flows"])["command"])
+            .IsEqualTo("/opt/homebrew/bin/kcap");
+        await Assert.That(servers.ContainsKey("kcap-review")).IsFalse();
+    }
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_corrupt_ledger_preserves_everything() {
+        var path = TempConfig();
+        CodexConfigToml.RegisterKcapMcpServers(path);
+        var ledger = Path.Combine(Path.GetDirectoryName(path)!, "mcp-ownership-v1.json");
+        File.WriteAllText(ledger, "not json");
+        var before = File.ReadAllText(path);
+
+        var change = CodexConfigToml.UnregisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Unchanged);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(before);
     }
 }

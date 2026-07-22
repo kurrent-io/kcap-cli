@@ -26,10 +26,11 @@ public static class KcapMcpServers {
             "Attach the current session to a work item (issue, PR, or a brand-new item), and list what a session is attached to."),
     ];
 
-    /// <summary>Codex omits `kcap-flows` (paid hosted reviewer, Claude-only) and
-    /// `kcap-workitems` (Claude Code plugin only, not yet exposed to Codex).</summary>
+    /// <summary>Codex receives flows so any driver can explicitly route a reserved review alias
+    /// to any certified reviewer vendor. Flows remains non-read-only and is never auto-approved.
+    /// Workitems remains Claude-plugin-only.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCodex =>
-        All.Where(s => s.Name is not ("kcap-flows" or "kcap-workitems")).ToArray();
+        All.Where(s => s.Name != "kcap-workitems").ToArray();
 
     /// <summary>The shared set for every non-Claude JSON harness (Cursor, Copilot, OpenCode,
     /// Kiro, Gemini, Antigravity) — omits `kcap-workitems` (Claude Code plugin only;

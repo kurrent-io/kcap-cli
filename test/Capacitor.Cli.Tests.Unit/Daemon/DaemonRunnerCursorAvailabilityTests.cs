@@ -105,4 +105,29 @@ public class DaemonRunnerCursorAvailabilityTests {
     public async Task ComputeUnattendedVendors_NoFactoriesReturnsEmptyArray() {
         await Assert.That(DaemonRunner.ComputeUnattendedVendors([])).IsEmpty();
     }
+
+    [Test]
+    public async Task ComputeUnattendedVendorCapabilities_AdvertisesClaudePolicyFacts() {
+        IHostedAgentRuntimeFactory[] factories = [
+            new FakeRuntimeFactory("claude", isAvailable: true, supportsUnattended: true),
+            new FakeRuntimeFactory("codex", isAvailable: true, supportsUnattended: true),
+        ];
+
+        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
+            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" });
+
+        await Assert.That(capabilities).Count().IsEqualTo(1);
+        await Assert.That(capabilities[0].Vendor).IsEqualTo("claude");
+        await Assert.That(capabilities[0].CliVersion).IsNull();
+        await Assert.That(capabilities[0].LauncherPolicyVersion)
+            .IsEqualTo(DaemonRunner.ClaudeLauncherPolicyVersion);
+        await Assert.That(capabilities[0].BorrowedReviewSupported).IsFalse();
+    }
+
+    [Test]
+    public async Task CliVersionAllowed_EvaluatesConfiguredRange() {
+        await Assert.That(DaemonRunner.CliVersionAllowed("v1.2.3", ">=1.2.0 <2.0.0")).IsTrue();
+        await Assert.That(DaemonRunner.CliVersionAllowed("2.0.0", ">=1.2.0 <2.0.0")).IsFalse();
+        await Assert.That(DaemonRunner.CliVersionAllowed(null, ">=1.2.0")).IsFalse();
+    }
 }

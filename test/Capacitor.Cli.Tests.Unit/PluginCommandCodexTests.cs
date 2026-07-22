@@ -610,7 +610,7 @@ public class PluginCommandCodexInstallIntegrationTests {
     }
 
     [Test]
-    public async Task RemoveCodex_user_scope_removes_mcp_servers_preserving_user_entries() {
+    public async Task RemoveCodex_user_scope_preserves_unowned_manual_mcp_servers() {
         using var fakeHome = new TempDir();
         var configPath = SeedCodexConfigWithKcapServers(fakeHome.Path);
 
@@ -619,9 +619,9 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(exit).IsEqualTo(0);
 
         var toml = await File.ReadAllTextAsync(configPath);
-        await Assert.That(toml).DoesNotContain("kcap-review");
-        await Assert.That(toml).DoesNotContain("kcap-sessions");
-        await Assert.That(toml).DoesNotContain("kcap-memory");
+        await Assert.That(toml).Contains("kcap-review");
+        await Assert.That(toml).Contains("kcap-sessions");
+        await Assert.That(toml).Contains("kcap-memory");
         await Assert.That(toml).Contains("my-tool"); // user's server preserved
     }
 

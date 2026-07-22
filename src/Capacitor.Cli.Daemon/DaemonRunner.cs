@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Pty.Unix;
@@ -337,6 +338,7 @@ public static partial class DaemonRunner {
         // that's merely installed but has no unattended launcher is never offered as an override
         // target.
         config.UnattendedVendors = ComputeUnattendedVendors(runtimeFactories);
+        config.UnattendedVendorCapabilities = ComputeUnattendedVendorCapabilities(runtimeFactories, config);
 
         // IsAvailable()==false silently omits cursor from SupportedVendors above — correct
         // behavior (the launch dialog just won't offer Cursor), but gave operators no clue WHY. One
@@ -567,6 +569,69 @@ public static partial class DaemonRunner {
             .Select(f => f.Vendor)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
+
+    internal const string ClaudeLauncherPolicyVersion = "claude-unattended-v1";
+
+    internal static IReadOnlyList<UnattendedVendorCapability> ComputeUnattendedVendorCapabilities(
+            IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config) {
+        var unattended = ComputeUnattendedVendors(factories);
+        var capabilities = new List<UnattendedVendorCapability>();
+        foreach (var vendor in unattended) {
+            if (!string.Equals(vendor, "claude", StringComparison.Ordinal)) continue;
+            capabilities.Add(new(
+                vendor,
+                ProbeCliVersion(config.ClaudePath),
+                ClaudeLauncherPolicyVersion,
+                BorrowedReviewSupported: false));
+        }
+        return capabilities;
+    }
+
+    internal static string? ProbeCliVersion(string cliPath) {
+        try {
+            using var process = Process.Start(new ProcessStartInfo {
+                FileName = cliPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                ArgumentList = { "--version" }
+            });
+            if (process is null || !process.WaitForExit(3000)) {
+                try { process?.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+            var output = process.StandardOutput.ReadToEnd().Trim();
+            if (output.Length == 0) output = process.StandardError.ReadToEnd().Trim();
+            var token = output.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault(part => part.Any(char.IsDigit));
+            return token?.TrimStart('v', 'V');
+        } catch { return null; }
+    }
+
+    internal static bool CliVersionAllowed(string? rawVersion, string ranges) {
+        var normalized = (rawVersion ?? "").TrimStart('v', 'V').Split('-', '+')[0];
+        if (!Version.TryParse(normalized, out var version)) return false;
+        if (string.IsNullOrWhiteSpace(ranges)) return true;
+        return ranges.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(range => range.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .All(term => MatchVersionTerm(version, term)));
+    }
+
+    static bool MatchVersionTerm(Version version, string term) {
+        var op = term.StartsWith(">=") || term.StartsWith("<=") ? term[..2]
+            : term.StartsWith('>') || term.StartsWith('<') || term.StartsWith('=') ? term[..1]
+            : "=";
+        var start = op == "=" && !term.StartsWith('=') ? 0 : op.Length;
+        if (!Version.TryParse(term[start..], out var boundary)) return false;
+        var comparison = version.CompareTo(boundary);
+        return op switch {
+            ">=" => comparison >= 0,
+            "<=" => comparison <= 0,
+            ">" => comparison > 0,
+            "<" => comparison < 0,
+            _ => comparison == 0
+        };
+    }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);

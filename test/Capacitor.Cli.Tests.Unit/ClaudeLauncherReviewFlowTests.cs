@@ -297,6 +297,15 @@ public class ClaudeLauncherReviewFlowTests {
     }
 
     [Test]
+    public async Task Review_flow_borrowed_cwd_is_rejected_before_launcher_writes() {
+        var ctx = NewCtx(isReviewFlow: true) with { Work = WorkLocation.BorrowedCwd };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => NewLauncher().Prepare(ctx));
+
+        await Assert.That(ex.Message).Contains("owned review worktree");
+    }
+
+    [Test]
     public async Task Review_flow_owned_worktree_args_byte_identical_to_today() {
         // Regression: the owned path's argv must stay exactly as it is today.
         var ctx  = NewCtx(isReviewFlow: true) with { Work = WorkLocation.OwnedWorktree };

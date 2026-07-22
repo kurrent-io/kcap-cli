@@ -8,9 +8,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Reviewer vendor override — the CLI-side version-skew seam (a new sibling
-/// POST /api/flows/review/start/vendor-override, whose mere existence is the server's
-/// capability signal) plus the echo defense-in-depth check on top of it.
+/// Vendor-neutral catalog-start v2 plus the requested/applied echo defense-in-depth check.
 /// </summary>
 public class McpFlowsServerVendorOverrideTests {
     static JsonObject StartArguments(string? vendor = null) {
@@ -39,7 +37,7 @@ public class McpFlowsServerVendorOverrideTests {
     [Test]
     public async Task StartFlowAsync_with_vendor_posts_to_the_versioned_route_and_carries_vendor() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/flows/review/start/vendor-override").UsingPost())
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                 """{"flow_run_id":"f1","status":"running","round_id":null,"round_number":null,"applied_reviewer_vendor":"claude"}"""));
         using var client = new HttpClient();
@@ -51,16 +49,17 @@ public class McpFlowsServerVendorOverrideTests {
         await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
 
         var hit  = server.LogEntries.Single();
-        await Assert.That(hit.RequestMessage.Path).IsEqualTo("/api/flows/review/start/vendor-override");
+        await Assert.That(hit.RequestMessage.Path).IsEqualTo("/api/flows/review/start/v2");
 
         var body = JsonNode.Parse(hit.RequestMessage.Body!)!.AsObject();
         await Assert.That(body["vendor"]!.GetValue<string>()).IsEqualTo("claude");
+        await Assert.That(body["client_flow_protocol_version"]!.GetValue<int>()).IsEqualTo(2);
     }
 
     [Test]
-    public async Task StartFlowAsync_without_vendor_posts_to_the_legacy_route_and_omits_the_field() {
+    public async Task StartFlowAsync_without_vendor_posts_to_v2_and_omits_vendor() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                 """{"flow_run_id":"f1","status":"running","round_id":null,"round_number":null}"""));
         using var client = new HttpClient();
@@ -72,7 +71,7 @@ public class McpFlowsServerVendorOverrideTests {
         await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
 
         var hit = server.LogEntries.Single();
-        await Assert.That(hit.RequestMessage.Path).IsEqualTo("/api/flows/review/start");
+        await Assert.That(hit.RequestMessage.Path).IsEqualTo("/api/flows/review/start/v2");
 
         // WhenWritingNull byte-compat discipline (matching RequesterMachineId/DefinitionYaml):
         // an omitted vendor must never appear on the wire at all, not even as "vendor":null.
@@ -80,9 +79,9 @@ public class McpFlowsServerVendorOverrideTests {
     }
 
     [Test]
-    public async Task StartFlowAsync_never_posts_to_the_versioned_route_when_vendor_is_absent() {
+    public async Task StartFlowAsync_always_posts_catalog_starts_to_v2_when_vendor_is_absent() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                 """{"flow_run_id":"f1","status":"running","round_id":null,"round_number":null}"""));
         // The versioned route is deliberately left unstubbed: WireMock's default 404 for it
@@ -112,11 +111,13 @@ public class McpFlowsServerVendorOverrideTests {
     [Test]
     [Arguments("start_review_flow")]
     [Arguments("start_flow")]
-    public async Task CheckVendorOverrideResult_is_a_noop_when_vendor_was_never_requested(string toolName) {
+    public async Task CheckVendorOverrideResult_404_requires_protocol_v2_even_without_explicit_vendor(string toolName) {
         var result = McpFlowsServer.CheckVendorOverrideResult(
             toolName, requestedVendor: null, HttpStatusCode.NotFound, isSuccess: false, postBody: "", out var flowRunIdToClose);
 
-        await Assert.That(result).IsNull();
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Value.IsError).IsTrue();
+        await Assert.That(result.Value.Message).Contains("protocol v2");
         await Assert.That(flowRunIdToClose).IsNull();
     }
 
@@ -221,7 +222,7 @@ public class McpFlowsServerVendorOverrideTests {
     [Test]
     public async Task Echo_match_returns_normal_result_with_no_close_call() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/flows/review/start/vendor-override").UsingPost())
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                 """{"flow_run_id":"f1","status":"running","round_id":null,"round_number":null,"applied_reviewer_vendor":"claude"}"""));
         using var client = new HttpClient();
@@ -239,7 +240,7 @@ public class McpFlowsServerVendorOverrideTests {
     [Test]
     public async Task Echo_mismatch_fails_and_closes_the_run_defensively() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/flows/review/start/vendor-override").UsingPost())
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                 """{"flow_run_id":"f1","status":"running","round_id":null,"round_number":null,"applied_reviewer_vendor":"codex"}"""));
         server.Given(Request.Create().WithPath("/api/flows/f1/close").UsingPost())
@@ -262,7 +263,7 @@ public class McpFlowsServerVendorOverrideTests {
     [Test]
     public async Task Echo_mismatch_close_failure_is_swallowed_mismatch_error_still_returned() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/flows/review/start/vendor-override").UsingPost())
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v2").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                 """{"flow_run_id":"f1","status":"running","round_id":null,"round_number":null,"applied_reviewer_vendor":"codex"}"""));
         server.Given(Request.Create().WithPath("/api/flows/f1/close").UsingPost())

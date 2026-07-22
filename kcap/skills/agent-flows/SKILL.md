@@ -34,6 +34,12 @@ Once the user has explicitly opted into a flow (see above), pick the `definition
 - Code changes or a pull request → `definition_id: "code-review"` (built-in; same as `review-flows`' `code-review` kind)
 - Anything else → the definition id the user named, or one you look up in the server's flow-definition catalog at `/admin/flows`. If you're unsure which definition applies, ask the user rather than guessing.
 
+For the reserved `spec-review` and `code-review` aliases, reviewer-vendor language is role-bound:
+pass the one vendor explicitly named as the reviewer, ignore driver-harness mentions, honor
+negation, omit the vendor when none is named, and ask when multiple candidates remain. Custom
+catalog definitions keep their authored vendors unless an explicit single-participant override is
+requested; dynamic definitions always carry vendors per participant and reject a top-level override.
+
 ## Composing a dynamic flow
 
 If nothing in the catalog fits — no `definition_id` covers the roles or workflow you need — compose one inline instead: pass `definition_yaml` to `start_flow` in place of `definition_id`. Provide exactly one of the two, never both. (`start_review_flow` / `submit_review_round` stay catalog-only — this only applies to the generic `start_flow`.)
@@ -81,8 +87,8 @@ mcp:
 If `start_flow` / `send_to_participant` are not among the tools available in this session, do NOT try to obtain them:
 
 - Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
-- The absence is deliberate: hosted flow participants run with all MCP servers stripped, so a participant cannot start a nested flow.
-- If you were asked to do work and these tools are absent, you are most likely the hosted participant inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested work directly, then deliver your result by calling the `submit_review_result` tool (from the injected `kcap-flow-result` server) exactly as the "Result contract" section of your prompt instructs, quoting its round token — `kind: "findings"` plus your result text, or `kind: "clean"`. The tool is the ONLY delivery channel: the server does not read your reply text, so result markers in your final message deliver nothing and the round would sit unresolved until its timeout. If the tool call fails, retry it.
+- Only treat the session as a hosted participant when `submit_review_result` is present and the prompt carries the round-token/result contract. Tool absence alone is not proof.
+- If neither the flow-driver tools nor that reviewer contract is present, tell the user to run `kcap setup` or reinstall/update the plugin and restart the harness. Do not hand-roll JSON-RPC or edit MCP configuration from the session.
 
 ## Core rules
 
