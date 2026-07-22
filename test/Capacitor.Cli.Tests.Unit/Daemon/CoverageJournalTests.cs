@@ -17,7 +17,7 @@ public class CoverageJournalTests {
         public bool AwareBoot(bool contained = true) {
             using var l = DaemonLock.TryAcquire("alpha")!;
             return new CoverageJournal(StateDir, NullLogger.Instance)
-                .RecordBoot(l.InstanceId, l.PriorInstanceId, contained);
+                .RecordBoot(l.InstanceId, l.PriorInstanceId, priorLockReadFailed: l.PriorLockIndeterminate, contained);
         }
         // An unaware/old boot: acquires the real lock (mints a fresh InstanceId) but writes NO journal.
         public void UnawareBoot() { using var l = DaemonLock.TryAcquire("alpha")!; }
@@ -62,6 +62,21 @@ public class CoverageJournalTests {
         // Genesis-eligibility is "journal absent", but a prior lock InstanceId ⇒ un-journaled history ⇒ false.
         h.UnawareBoot(); // prior lock id exists; state dir has no journal
         await Assert.That(h.AwareBoot()).IsFalse();
+    }
+
+    [Test] public async Task Indeterminate_prior_lock_is_not_genesis_even_with_absent_journal() {
+        using var h = new Harness();
+        // A read-failed / blank prior lock (priorLockReadFailed = true) with an absent journal must NOT be
+        // treated as genesis — an unreadable prior lock could hide an intervening boot, so it fails closed
+        // (regression: previously null priorLockInstanceId alone drove genesis, conflating empty-vs-unreadable).
+        var covered = new CoverageJournal(h.StateDir, NullLogger.Instance)
+            .RecordBoot("me", priorLockInstanceId: null, priorLockReadFailed: true, thisEpochContained: true);
+        await Assert.That(covered).IsFalse();
+        // A genuinely empty prior lock (readFailed = false, id = null) with an absent journal is still genesis.
+        using var h2 = new Harness();
+        var genesis = new CoverageJournal(h2.StateDir, NullLogger.Instance)
+            .RecordBoot("me", priorLockInstanceId: null, priorLockReadFailed: false, thisEpochContained: true);
+        await Assert.That(genesis).IsTrue();
     }
 
     [Test] public async Task Corrupt_coverage_state_is_false() {

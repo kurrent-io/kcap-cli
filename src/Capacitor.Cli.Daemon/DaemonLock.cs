@@ -60,16 +60,24 @@ internal sealed class DaemonLock : IDisposable {
     /// </summary>
     public string? PriorInstanceId { get; }
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.3): true iff the lock file was NON-EMPTY
+    /// but its content could not be read into a prior InstanceId (a read fault, or blank/garbage
+    /// content). Distinguishes an unreadable prior lock from a genuinely empty first-ever/genesis slot
+    /// (where this is false and <see cref="PriorInstanceId"/> is null): the coverage boot-chain treats
+    /// an indeterminate prior as fail-closed, NEVER as genesis.</summary>
+    public bool PriorLockIndeterminate { get; }
+
     DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId,
-               bool priorExitWasUnclean, int? priorHolderPid, string? priorInstanceId) {
-        _stream             = stream;
-        _lockPath           = lockPath;
-        _pidPath            = pidPath;
-        _versionPath        = versionPath;
-        InstanceId          = instanceId;
-        PriorExitWasUnclean = priorExitWasUnclean;
-        PriorHolderPid      = priorHolderPid;
-        PriorInstanceId     = priorInstanceId;
+               bool priorExitWasUnclean, int? priorHolderPid, string? priorInstanceId, bool priorLockIndeterminate) {
+        _stream                = stream;
+        _lockPath              = lockPath;
+        _pidPath               = pidPath;
+        _versionPath           = versionPath;
+        InstanceId             = instanceId;
+        PriorExitWasUnclean    = priorExitWasUnclean;
+        PriorHolderPid         = priorHolderPid;
+        PriorInstanceId        = priorInstanceId;
+        PriorLockIndeterminate = priorLockIndeterminate;
     }
 
     /// <summary>
@@ -113,18 +121,28 @@ internal sealed class DaemonLock : IDisposable {
 
         // Capture the previous holder's InstanceId from the lock-file content BEFORE we overwrite it —
         // the persistent per-boot nonce the coverage boot-chain uses to detect an intervening
-        // (possibly unaware) boot. Read failures degrade to null (fail-closed downstream).
+        // (possibly unaware) boot. A genuinely EMPTY file is a first-ever/genesis slot (priorInstanceId
+        // stays null, NOT indeterminate). A non-empty file we cannot read into an id — a read fault OR
+        // blank/garbage content — is INDETERMINATE: the coverage boot-chain must fail-closed there and
+        // never conflate it with genesis. The read is bounded (the content is a 32-char GUID + newline),
+        // so a corrupt/oversized lock file can't drive an unbounded allocation.
         string? priorInstanceId = null;
+        var priorLockIndeterminate = false;
         try {
             if (stream.Length > 0) {
                 stream.Position = 0;
-                var buf = new byte[stream.Length];
+                var len = (int)Math.Min(stream.Length, 4096);
+                var buf = new byte[len];
                 var n = stream.Read(buf, 0, buf.Length);
                 priorInstanceId = System.Text.Encoding.UTF8.GetString(buf, 0, n)
                     .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .FirstOrDefault();
+                priorLockIndeterminate = string.IsNullOrEmpty(priorInstanceId); // non-empty file, no id ⇒ indeterminate
             }
-        } catch { priorInstanceId = null; }
+        } catch {
+            priorInstanceId = null;
+            priorLockIndeterminate = true; // non-empty-but-unreadable ⇒ fail-closed, never genesis
+        }
 
         try {
             // Rewrite the file content with the fresh instance id. Truncate
@@ -150,7 +168,7 @@ internal sealed class DaemonLock : IDisposable {
             try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
         }
 
-        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid, priorInstanceId);
+        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid, priorInstanceId, priorLockIndeterminate);
     }
 
     /// <summary>

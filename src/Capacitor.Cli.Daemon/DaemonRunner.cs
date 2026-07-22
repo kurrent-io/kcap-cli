@@ -210,7 +210,8 @@ public static partial class DaemonRunner {
         var coverageStateDir = Path.Combine(
             config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
         config.RecordlessSurvivorsImpossible = new CoverageJournal(coverageStateDir, NullLogger.Instance)
-            .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId, thisEpochContained: OperatingSystem.IsWindows());
+            .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId,
+                priorLockReadFailed: daemonLock.PriorLockIndeterminate, thisEpochContained: OperatingSystem.IsWindows());
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(daemonLock);

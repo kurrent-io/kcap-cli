@@ -38,7 +38,7 @@ internal sealed partial class CoverageJournal(string stateDir, ILogger logger) {
 
     /// <summary>Fold this boot and persist the new journal atomically BEFORE Connect/spawn. Returns
     /// cumulative_covered. Never throws — an I/O failure returns false (fail-closed).</summary>
-    public bool RecordBoot(string myInstanceId, string? priorLockInstanceId, bool thisEpochContained) {
+    public bool RecordBoot(string myInstanceId, string? priorLockInstanceId, bool priorLockReadFailed, bool thisEpochContained) {
         try {
             var journalExists = File.Exists(_journalPath);
             var prior         = journalExists ? ReadJournal() : null; // null ⇒ present-but-corrupt
@@ -49,8 +49,10 @@ internal sealed partial class CoverageJournal(string stateDir, ILogger logger) {
                 // atomically initialize it) AND the captured prior lock shows no pre-existing InstanceId
                 // (a genuine first-ever boot for this name). A previously-used dir whose journal is gone
                 // but whose prior lock DOES carry an InstanceId is un-journaled history that re-pointing/
-                // deleting the dir cannot launder ⇒ false.
-                var genesis = priorLockInstanceId is null;
+                // deleting the dir cannot launder ⇒ false. An INDETERMINATE prior lock (non-empty but
+                // unreadable/garbage) is NOT genesis either — an unreadable prior could hide an intervening
+                // boot, so it must fail-closed (never conflate "unreadable" with "genuinely empty").
+                var genesis = !priorLockReadFailed && priorLockInstanceId is null;
                 covered = genesis && thisEpochContained;
             } else if (prior is not { Initialized: true } t) {
                 covered = false; // journal present but corrupt / not fully initialized -> fail-closed
