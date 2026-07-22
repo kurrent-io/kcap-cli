@@ -75,6 +75,84 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         }
     }
 
+    /// <summary>Copies the source checkout's tracked and untracked non-ignored files into an owned
+    /// worktree. This preserves dirty-review context without giving a reviewer the live checkout.</summary>
+    public async Task SyncFromSourceAsync(
+            string sourceRepoRoot, string targetWorktreePath,
+            string[] excludePaths, CancellationToken ct) {
+        if (string.IsNullOrEmpty(sourceRepoRoot))
+            throw new ArgumentException("Source repo root must not be empty.", nameof(sourceRepoRoot));
+        if (string.IsNullOrEmpty(targetWorktreePath))
+            throw new ArgumentException("Target worktree path must not be empty.", nameof(targetWorktreePath));
+
+        var source = Path.GetFullPath(sourceRepoRoot);
+        var target = Path.GetFullPath(targetWorktreePath);
+        if (string.Equals(source, target, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Source and target paths are the same: {source}");
+        if (!Directory.Exists(source))
+            throw new InvalidOperationException($"Source repo root does not exist: {source}");
+        if (!File.Exists(Path.Combine(source, ".git")) && !Directory.Exists(Path.Combine(source, ".git")))
+            throw new InvalidOperationException($"Source path does not appear to be a git repo (no .git entry): {source}");
+
+        var psi = NewGitPsi(source, ["ls-files", "-co", "--exclude-standard", "-z"]);
+        using var proc = Process.Start(psi)!;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(GitTimeout);
+        string stdout;
+        try {
+            stdout = await proc.StandardOutput.ReadToEndAsync(timeout.Token);
+            await proc.WaitForExitAsync(timeout.Token);
+        } catch (OperationCanceledException) {
+            try { proc.Kill(true); } catch { /* best-effort */ }
+            throw;
+        }
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"git ls-files failed in {source}: {await proc.StandardError.ReadToEndAsync(ct)}");
+
+        var alwaysExcluded = new[] {
+            ".git" + Path.DirectorySeparatorChar, ".git",
+            ".capacitor" + Path.DirectorySeparatorChar + "worktrees"
+        };
+        var callerExcluded = excludePaths
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p => p.Replace('/', Path.DirectorySeparatorChar).TrimEnd(Path.DirectorySeparatorChar))
+            .ToArray();
+        var copied = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var rawPath in stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries)) {
+            ct.ThrowIfCancellationRequested();
+            var rel = rawPath.Replace('/', Path.DirectorySeparatorChar);
+            if (rel.Contains(".." + Path.DirectorySeparatorChar) || rel == "..") continue;
+            if (IsUnderExcluded(rel, alwaysExcluded) || IsUnderExcluded(rel, callerExcluded)) continue;
+
+            var srcFile = Path.Combine(source, rel);
+            if (!File.Exists(srcFile)) continue;
+            var dstFile = Path.Combine(target, rel);
+            if (Path.GetDirectoryName(dstFile) is { } dstDir) Directory.CreateDirectory(dstDir);
+            File.Copy(srcFile, dstFile, overwrite: true);
+            copied.Add(rel);
+        }
+
+        foreach (var existingFile in Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories)) {
+            ct.ThrowIfCancellationRequested();
+            var rel = Path.GetRelativePath(target, existingFile);
+            if (IsUnderExcluded(rel, alwaysExcluded) || IsUnderExcluded(rel, callerExcluded)) continue;
+            if (!copied.Contains(rel)) File.Delete(existingFile);
+        }
+
+        LogSyncCompleted(source, target, copied.Count);
+    }
+
+    static bool IsUnderExcluded(string rel, string[] prefixes) {
+        foreach (var prefix in prefixes) {
+            if (rel.Equals(prefix, StringComparison.Ordinal) ||
+                rel.StartsWith(prefix + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
     public Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null) {
         // Legacy global root — clean up any leftover worktrees from before the per-repo change
         var worktreePaths = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
@@ -181,6 +259,9 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Cleaning up orphaned worktree: {Path}")]
     partial void LogCleaningUp(string path);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Synced {FileCount} files from {Source} into worktree {Target}")]
+    partial void LogSyncCompleted(string source, string target, int fileCount);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to clean up {Path}")]
     partial void LogCleanupFailed(Exception ex, string path);

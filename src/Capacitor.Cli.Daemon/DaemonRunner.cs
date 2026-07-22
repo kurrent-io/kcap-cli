@@ -587,18 +587,28 @@ public static partial class DaemonRunner {
             .ToArray();
 
     internal const string ClaudeLauncherPolicyVersion = "claude-unattended-v1";
+    internal const string CursorLauncherPolicyVersion = "cursor-unattended-v3";
+    internal const string CodexLauncherPolicyVersion = "codex-unattended-v1";
+    internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
 
     internal static IReadOnlyList<UnattendedVendorCapability> ComputeUnattendedVendorCapabilities(
             IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config) {
         var unattended = ComputeUnattendedVendors(factories);
         var capabilities = new List<UnattendedVendorCapability>();
         foreach (var vendor in unattended) {
-            if (!string.Equals(vendor, "claude", StringComparison.Ordinal)) continue;
+            var factory = factories.First(f => string.Equals(f.Vendor, vendor, StringComparison.Ordinal));
+            var (cliPath, policyVersion) = vendor switch {
+                "claude"  => (config.ClaudePath, ClaudeLauncherPolicyVersion),
+                "cursor"  => (config.CursorPath, CursorLauncherPolicyVersion),
+                "codex"   => (config.CodexPath, CodexLauncherPolicyVersion),
+                "copilot" => (config.CopilotPath, CopilotLauncherPolicyVersion),
+                _         => ("", $"{vendor}-unattended-v1")
+            };
             capabilities.Add(new(
                 vendor,
-                ProbeCliVersion(config.ClaudePath),
-                ClaudeLauncherPolicyVersion,
-                BorrowedReviewSupported: false));
+                string.IsNullOrEmpty(cliPath) ? null : ProbeCliVersion(cliPath),
+                policyVersion,
+                factory.SupportsBorrowedReviewFlow));
         }
         return capabilities;
     }

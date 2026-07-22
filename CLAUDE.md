@@ -10,8 +10,11 @@ Review flows use a vendor-neutral catalog-start v2 protocol: reserved `spec-revi
 aliases select an explicit or server-default reviewer independently of the driver. Codex setup
 registers `kcap-flows` without auto-approval and tracks only newly-created global TOML entries in
 `mcp-ownership-v1.json`, so uninstall preserves manual/customized MCP configuration. Daemons retain
-the string unattended-vendor list for compatibility and additionally advertise structured Claude
-CLI/launcher-policy certification; Claude borrowed-worktree review is not certified.
+the string unattended-vendor list for compatibility and additionally advertise structured
+per-vendor CLI/launcher-policy capabilities. Cursor serves borrowed review context from a
+daemon-owned snapshot (dirty tracked and non-ignored untracked files, refreshed between rounds),
+because its zero-interaction modes may write; Claude borrowed-worktree review remains uncertified
+and therefore fails closed to an owned worktree.
 
 ## Tech stack
 

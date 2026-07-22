@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -132,12 +133,9 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
         }
     }
 
-    /// <summary>Certification probe: drives the production review-flow launch shape against
-    /// a real Cursor ACP process and a tiny local stdio MCP server. Success proves the exact
-    /// <c>--force --approve-mcps --trust</c> launch can invoke the required result channel without
-    /// producing an ACP permission/elicitation request. The runtime's Fail interaction policy makes
-    /// this stronger than merely asserting that no request reached the server: any such frame reaps
-    /// the child before the marker can be written.</summary>
+    /// <summary>Borrowed-snapshot certification probe: Cursor runs in a daemon-owned copy of the
+    /// authorized checkout. Even an explicit mutation changes only that disposable snapshot; the
+    /// source checkout remains byte-identical and the result MCP completes with zero interaction.</summary>
     [Test]
     public async Task ReviewFlow_AgainstRealCursorAgentAcp_CallsResultMcp_WithZeroInteractionRequests() {
         Skip.Unless(
@@ -146,9 +144,15 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             "(spends a real Cursor turn; requires an authenticated Cursor subscription).");
         Skip.When(OperatingSystem.IsWindows(), "The gated probe's tiny stdio MCP fixture is a POSIX executable script.");
 
-        var worktreeDir = Directory.CreateTempSubdirectory("kcap-acp-review-live-");
-        var markerPath  = Path.Combine(worktreeDir.FullName, "result-called");
-        var mcpPath     = Path.Combine(worktreeDir.FullName, "fake-kcap");
+        var rootDir     = Directory.CreateTempSubdirectory("kcap-acp-review-live-");
+        var sourceDir   = Directory.CreateDirectory(Path.Combine(rootDir.FullName, "borrowed-source"));
+        var worktreeDir = Directory.CreateDirectory(Path.Combine(rootDir.FullName, "owned-snapshot"));
+        var markerPath  = Path.Combine(rootDir.FullName, "result-called");
+        var mcpPath     = Path.Combine(rootDir.FullName, "fake-kcap");
+        var protectedPath = Path.Combine(sourceDir.FullName, "protected.txt");
+        var snapshotPath  = Path.Combine(worktreeDir.FullName, "protected.txt");
+        File.WriteAllText(protectedPath, "ORIGINAL\n");
+        File.Copy(protectedPath, snapshotPath);
         File.WriteAllText(mcpPath, FakeFlowResultMcpScript);
         File.SetUnixFileMode(mcpPath,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -168,9 +172,9 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             var ctx = new RuntimeStartContext(
                 AgentId: markerPath,
                 Vendor: "cursor",
-                SourceRepoPath: worktreeDir.FullName,
-                Worktree: new WorktreeInfo(worktreeDir.FullName, "live-review", worktreeDir.FullName),
-                Prompt: "Call the submit_review_result MCP tool exactly once with verdict CLEAN and summary 'live certification'. Do not use any other tool.",
+                SourceRepoPath: sourceDir.FullName,
+                Worktree: new WorktreeInfo(worktreeDir.FullName, "snapshot", sourceDir.FullName),
+                Prompt: "Read protected.txt. Try to replace it with MUTATED using any file-edit or shell tool available, but do not work around unavailable tools. Then call submit_review_result exactly once with verdict CLEAN and summary 'live borrowed certification'.",
                 Model: "",
                 Effort: null,
                 Tools: null,
@@ -181,7 +185,8 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
                 Rows: 24,
                 ServerUrl: "http://kcap.test",
                 DaemonBridgeUrl: null,
-                CapacitorPath: mcpPath);
+                CapacitorPath: mcpPath,
+                Work: WorkLocation.OwnedWorktree);
 
             using var startCts = new CancellationTokenSource();
             var started = await factory.StartAsync(ctx, startCts.Token).WaitAsync(HandshakeTimeout);
@@ -195,16 +200,18 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
                 await Assert.That(File.Exists(markerPath)).IsTrue();
                 await Assert.That(connection.RequestAcpInteractionAsyncCalled).IsFalse();
                 await Assert.That(runtime.HasExited).IsFalse();
+                await Assert.That(File.ReadAllText(protectedPath)).IsEqualTo("ORIGINAL\n");
+                await Assert.That(File.ReadAllText(snapshotPath)).StartsWith("MUTATED");
             } finally {
                 startCts.Cancel();
                 await runtime.DisposeAsync();
             }
         } finally {
-            try { worktreeDir.Delete(recursive: true); } catch { /* best-effort cleanup */ }
+            try { rootDir.Delete(recursive: true); } catch { /* best-effort cleanup */ }
         }
     }
 
-    const string FakeFlowResultMcpScript = """
+    internal const string FakeFlowResultMcpScript = """
 #!/usr/bin/env python3
 import json
 import os

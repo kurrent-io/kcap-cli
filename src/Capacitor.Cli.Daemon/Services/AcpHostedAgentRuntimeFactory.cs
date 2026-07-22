@@ -44,6 +44,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
     public string Vendor             => descriptor.Vendor;
     public bool   SupportsUnattended => descriptor.SupportsUnattended;
+    public bool   SupportsBorrowedReviewFlow => descriptor.SupportsBorrowedReviewFlow;
+    public bool   BorrowedReviewRequiresOwnedSnapshot =>
+        descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.OwnedSnapshot;
 
     public bool IsAvailable() => CliResolver.Exists(descriptor.ResolveBinaryPath(config));
 
@@ -126,6 +129,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
+        if (ctx.Work != WorkLocation.OwnedWorktree &&
+            descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.OwnedSnapshot)
+            throw new InvalidOperationException(
+                $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
         if (descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.Unsupported)
             throw new InvalidOperationException(
@@ -188,6 +195,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
+        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree &&
+            descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.OwnedSnapshot)
+            throw new InvalidOperationException(
+                $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
         var argv = new List<string>(descriptor.Argv);
 

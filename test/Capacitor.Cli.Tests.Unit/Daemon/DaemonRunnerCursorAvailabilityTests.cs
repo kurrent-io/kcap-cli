@@ -15,9 +15,12 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// </summary>
 public class DaemonRunnerCursorAvailabilityTests {
     /// <summary>Minimal <see cref="IHostedAgentRuntimeFactory"/> stand-in — only <see cref="Vendor"/>/<see cref="IsAvailable"/>/<see cref="SupportsUnattended"/> matter here.</summary>
-    sealed class FakeRuntimeFactory(string vendor, bool isAvailable, bool supportsUnattended = false) : IHostedAgentRuntimeFactory {
+    sealed class FakeRuntimeFactory(
+            string vendor, bool isAvailable, bool supportsUnattended = false,
+            bool supportsBorrowedReviewFlow = false) : IHostedAgentRuntimeFactory {
         public string Vendor             { get; } = vendor;
         public bool   SupportsUnattended { get; } = supportsUnattended;
+        public bool   SupportsBorrowedReviewFlow { get; } = supportsBorrowedReviewFlow;
 
         public bool IsAvailable() => isAvailable;
 
@@ -116,12 +119,30 @@ public class DaemonRunnerCursorAvailabilityTests {
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
             factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" });
 
+        await Assert.That(capabilities).Count().IsEqualTo(2);
+        var claude = capabilities.Single(c => c.Vendor == "claude");
+        await Assert.That(claude.CliVersion).IsNull();
+        await Assert.That(claude.LauncherPolicyVersion)
+            .IsEqualTo(DaemonRunner.ClaudeLauncherPolicyVersion);
+        await Assert.That(claude.BorrowedReviewSupported).IsFalse();
+    }
+
+    [Test]
+    public async Task ComputeUnattendedVendorCapabilities_AdvertisesBorrowedSupportPerFactory() {
+        IHostedAgentRuntimeFactory[] factories = [
+            new FakeRuntimeFactory("cursor", isAvailable: true, supportsUnattended: true,
+                supportsBorrowedReviewFlow: true),
+        ];
+
+        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
+            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" });
+
         await Assert.That(capabilities).Count().IsEqualTo(1);
-        await Assert.That(capabilities[0].Vendor).IsEqualTo("claude");
+        await Assert.That(capabilities[0].Vendor).IsEqualTo("cursor");
         await Assert.That(capabilities[0].CliVersion).IsNull();
         await Assert.That(capabilities[0].LauncherPolicyVersion)
-            .IsEqualTo(DaemonRunner.ClaudeLauncherPolicyVersion);
-        await Assert.That(capabilities[0].BorrowedReviewSupported).IsFalse();
+            .IsEqualTo(DaemonRunner.CursorLauncherPolicyVersion);
+        await Assert.That(capabilities[0].BorrowedReviewSupported).IsTrue();
     }
 
     [Test]

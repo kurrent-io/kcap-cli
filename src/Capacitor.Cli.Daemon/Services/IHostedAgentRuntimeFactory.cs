@@ -29,6 +29,14 @@ internal interface IHostedAgentRuntimeFactory {
     /// </summary>
     bool SupportsUnattended { get; }
 
+    /// <summary>Whether this runtime has a certified containment strategy for review flows that
+    /// request the caller's current checkout contents.</summary>
+    bool SupportsBorrowedReviewFlow => false;
+
+    /// <summary>Whether a borrowed request must be materialized into a daemon-owned snapshot
+    /// before this runtime is started.</summary>
+    bool BorrowedReviewRequiresOwnedSnapshot => false;
+
     /// <summary>
     /// Prepares and starts the hosted runtime for this launch. Throws
     /// <see cref="CodexHooksNotInstalledException"/> for the orchestrator to map to a

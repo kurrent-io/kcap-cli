@@ -35,6 +35,9 @@ internal interface IHostedAgentLauncher {
     /// </summary>
     bool SupportsUnattended { get; }
 
+    /// <summary>Whether the launcher has a certified read-only borrowed-checkout review mode.</summary>
+    bool SupportsBorrowedReviewFlow => false;
+
     /// <summary>
     /// Per-vendor preparation BEFORE the PTY is spawned. Implementations:
     ///   • Overlay vendor-specific settings dir from source repo into worktree

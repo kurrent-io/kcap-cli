@@ -24,6 +24,14 @@ internal enum AcpUnattendedInteractionPolicy {
     Fail
 }
 
+/// <summary>The security boundary used to serve borrowed-checkout context without exposing the
+/// caller's live checkout to an unattended reviewer.</summary>
+internal enum AcpBorrowedReviewContainment {
+    None,
+    NativeToolClamp,
+    OwnedSnapshot
+}
+
 /// <summary>
 /// Per-vendor wiring for AcpHostedAgentRuntimeFactory: which binary to spawn, what argv an
 /// interactive vs. an unattended (review-flow) launch gets, and how (or whether) this vendor's ACP
@@ -79,6 +87,7 @@ internal sealed record AcpVendorDescriptor {
     public bool                        SupportsMcpServers     { get; }
     public AcpReviewFlowMcpTransport   ReviewFlowMcpTransport { get; }
     public bool                        SupportsBorrowedReviewFlow { get; }
+    public AcpBorrowedReviewContainment BorrowedReviewContainment { get; }
 
     public AcpVendorDescriptor(
             string                      Vendor,
@@ -91,7 +100,8 @@ internal sealed record AcpVendorDescriptor {
             bool                        SupportsMcpServers,
             AcpReviewFlowMcpTransport   ReviewFlowMcpTransport = AcpReviewFlowMcpTransport.Default,
             bool                        SupportsBorrowedReviewFlow = false,
-            AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled
+            AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled,
+            AcpBorrowedReviewContainment BorrowedReviewContainment = AcpBorrowedReviewContainment.None
         ) {
         var normalizedUnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
 
@@ -104,6 +114,11 @@ internal sealed record AcpVendorDescriptor {
             throw new ArgumentException(
                 $"{nameof(SupportsBorrowedReviewFlow)} requires {nameof(SupportsUnattended)} (vendor: {Vendor}).",
                 nameof(SupportsBorrowedReviewFlow));
+
+        if (SupportsBorrowedReviewFlow && BorrowedReviewContainment == AcpBorrowedReviewContainment.None)
+            throw new ArgumentException(
+                $"{nameof(SupportsBorrowedReviewFlow)} requires an explicit borrowed-checkout containment boundary (vendor: {Vendor}).",
+                nameof(BorrowedReviewContainment));
 
         if (!SupportsUnattended && UnattendedInteractionPolicy != AcpUnattendedInteractionPolicy.Disabled)
             throw new ArgumentException(
@@ -125,6 +140,7 @@ internal sealed record AcpVendorDescriptor {
         this.ModelSelector       = ModelSelector;
         this.SupportsMcpServers  = SupportsMcpServers;
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
+        this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.ReviewFlowMcpTransport = ReviewFlowMcpTransport switch {
             AcpReviewFlowMcpTransport.Default when SupportsMcpServers => AcpReviewFlowMcpTransport.SessionNew,
             AcpReviewFlowMcpTransport.Default                         => AcpReviewFlowMcpTransport.Unsupported,
@@ -153,6 +169,8 @@ internal static class AcpVendorDescriptors {
         SupportsUnattended:  true,
         ModelSelector:       ConfigOptionModelSelector.Instance,
         SupportsMcpServers:  true,
+        SupportsBorrowedReviewFlow: true,
+        BorrowedReviewContainment: AcpBorrowedReviewContainment.OwnedSnapshot,
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail
     );
 
@@ -171,6 +189,7 @@ internal static class AcpVendorDescriptors {
         SupportsMcpServers:  false,
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.CopilotAdditionalConfig,
         SupportsBorrowedReviewFlow: true,
+        BorrowedReviewContainment: AcpBorrowedReviewContainment.NativeToolClamp,
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AutoApprove
     );
 }

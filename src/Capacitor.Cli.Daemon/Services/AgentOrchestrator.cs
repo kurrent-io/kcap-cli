@@ -109,6 +109,10 @@ internal record AgentInstance(
     /// (the user's own checkout — never removed).</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
 
+    /// <summary>Authorized live checkout mirrored into this owned worktree for a runtime that
+    /// cannot safely execute in-place. Refreshed before each later review round.</summary>
+    public string? BorrowedSnapshotSource { get; init; }
+
     /// <summary>Current PTY dimensions — the single source of truth for every dims send
     /// (registration, reconnect). Updated by every resize path (local clamp + web resize).
     /// Hosted agents initialise these to the fixed HostedPtyCols/Rows; ushort read/write is
@@ -827,6 +831,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (isReviewFlow && cmd.Borrowed && !runtimeFactory.SupportsBorrowedReviewFlow) {
+            await _server.LaunchFailedAsync(cmd.AgentId,
+                $"Borrowed review flows are not certified for '{cmd.Vendor}'; retry with an owned review worktree.");
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
             var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
                 ? DaemonRunner.ProbeCliVersion(_config.ClaudePath)
@@ -857,7 +868,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
-        var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
+        var snapshotBorrow = cmd.Borrowed && runtimeFactory.BorrowedReviewRequiresOwnedSnapshot;
+        var work = cmd.Borrowed && !snapshotBorrow
+            ? WorkLocation.BorrowedCwd
+            : WorkLocation.OwnedWorktree;
+        string? borrowedSnapshotSource = null;
 
         // The per-reviewer bridge token URL (if this is an unattended review-flow launch), hoisted to
         // method scope so the failure catch can revoke it when no AgentInstance was created to carry it.
@@ -940,13 +955,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
                 }
 
-                // Run IN the user's real (canonicalized) checkout. Deliberately SKIP CreateAsync, any
-                // base fetch / `git worktree add`, the launch-time mirror, and the attachment
-                // download-into-cwd — every one of those would mutate the user's own tree.
-                worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
+                if (snapshotBorrow) {
+                    borrowedSnapshotSource = auth.CanonicalGitRoot
+                        ?? throw new InvalidOperationException("borrow_auth_failed: not_a_git_repository");
+                    worktree = await _worktreeManager.CreateAsync(borrowedSnapshotSource, baseRef: baseRef);
+                    await _worktreeManager.SyncFromSourceAsync(
+                        borrowedSnapshotSource, worktree.Path, [], _shutdownCts.Token);
+                } else {
+                    // Direct borrowed runtimes have their own certified read-only boundary.
+                    worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
+                }
             } else {
                 worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
+            }
 
+            if (work == WorkLocation.OwnedWorktree) {
                 // Download attachments into worktree (best-effort)
                 if (attachmentIds is { Length: > 0 }) {
                     try {
@@ -1055,6 +1078,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CurrentRows         = HostedPtyRows,
                 Work                = work,
                 ReviewerBridgeToken = reviewerToken,
+                BorrowedSnapshotSource = borrowedSnapshotSource,
                 Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
                 FlowRunId           = cmd.FlowRunId,
                 FlowRole            = cmd.FlowRole
@@ -1643,6 +1667,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin input ignored for private agents
 
+        await TryRefreshBorrowedSnapshotAsync(agent);
+
         var message = text;
 
         if (attachmentIds is { Length: > 0 }) {
@@ -1659,6 +1685,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
         // this call is the single vendor-agnostic entry point for both.
         await agent.Runtime.SendUserInputAsync(message);
+    }
+
+    static readonly string[] BorrowedSnapshotExcludes = [".attached", ".claude", ".codex", ".mcp.json"];
+    static readonly TimeSpan BorrowedSnapshotRefreshTimeout = TimeSpan.FromSeconds(30);
+
+    async Task TryRefreshBorrowedSnapshotAsync(AgentInstance agent) {
+        if (agent.BorrowedSnapshotSource is not { } source || agent.Work != WorkLocation.OwnedWorktree)
+            return;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+        timeout.CancelAfter(BorrowedSnapshotRefreshTimeout);
+        try {
+            await _worktreeManager.SyncFromSourceAsync(
+                source, agent.Worktree.Path, BorrowedSnapshotExcludes, timeout.Token);
+        } catch (Exception ex) when (ex is not OperationCanceledException || !_shutdownCts.IsCancellationRequested) {
+            LogBorrowedSnapshotRefreshFailed(ex, agent.Id);
+        }
     }
 
     async Task HandleSendSpecialKey(string agentId, string key) {
@@ -2389,6 +2432,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download launch attachments for agent {AgentId} (continuing)")]
     partial void LogAttachmentDownloadFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh borrowed-checkout snapshot for agent {AgentId}; delivering the round against the previous snapshot")]
+    partial void LogBorrowedSnapshotRefreshFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error reading output for agent {AgentId}")]
     partial void LogOutputReadError(Exception ex, string agentId);

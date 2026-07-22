@@ -40,9 +40,56 @@ public partial class AgentOrchestratorVendorTests {
 
             await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
             await Assert.That(server.LaunchFailedCalls[0].Reason)
-                .Contains("borrowed review flows are not certified");
+                .Contains("not certified for 'claude'");
             await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
             await Assert.That(Directory.Exists(cwd)).IsTrue();
+        } finally {
+            cleanup();
+        }
+    }
+
+    [Test]
+    public async Task Borrowed_Cursor_review_flow_runs_in_owned_dirty_snapshot_and_refreshes_between_rounds() {
+        var (cwd, cleanup) = CreateGitRepo();
+        try {
+            File.WriteAllText(Path.Combine(cwd, "README.md"), "dirty-one");
+            File.WriteAllText(Path.Combine(cwd, "untracked.txt"), "untracked-one");
+            var server = new CaptureServerConnection();
+            var factory = new SpyHostedAgentRuntimeFactory("cursor") {
+                SupportsUnattended = true,
+                SupportsBorrowedReviewFlow = true,
+                BorrowedReviewRequiresOwnedSnapshot = true
+            };
+            await using var orch = BuildOrchestrator(
+                server, new SpyPtyProcessFactory(),
+                new Dictionary<string, IHostedAgentLauncher>(),
+                extraRuntimeFactories: [factory]);
+            var cmd = new LaunchAgentCommand(
+                "agent-cursor-snapshot", "review", "default", null, cwd, null, null,
+                Vendor: "cursor", Kind: LaunchKind.ReviewFlow, Borrowed: true, BorrowCwd: cwd);
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            var ctx = factory.LastContext!;
+            await Assert.That(ctx.Work).IsEqualTo(WorkLocation.OwnedWorktree);
+            await Assert.That(ctx.Worktree.Path).IsNotEqualTo(cwd);
+            await Assert.That(File.ReadAllText(Path.Combine(ctx.Worktree.Path, "README.md")))
+                .IsEqualTo("dirty-one");
+            await Assert.That(File.ReadAllText(Path.Combine(ctx.Worktree.Path, "untracked.txt")))
+                .IsEqualTo("untracked-one");
+            await Assert.That(orch.GetAgentForTest(cmd.AgentId)!.BorrowedSnapshotSource)
+                .IsEqualTo(BorrowAuthorizer.Canonicalize(cwd));
+
+            File.WriteAllText(Path.Combine(cwd, "README.md"), "dirty-two");
+            await orch.HandleSendInputForTest(new SendInputCommand(cmd.AgentId, "next", null));
+            await Assert.That(File.ReadAllText(Path.Combine(ctx.Worktree.Path, "README.md")))
+                .IsEqualTo("dirty-two");
+
+            await orch.HandleStopAgentForTest(cmd.AgentId);
+            for (var i = 0; i < 100 && Directory.Exists(ctx.Worktree.Path); i++)
+                await Task.Delay(20);
+            await Assert.That(Directory.Exists(cwd)).IsTrue();
+            await Assert.That(Directory.Exists(ctx.Worktree.Path)).IsFalse();
         } finally {
             cleanup();
         }

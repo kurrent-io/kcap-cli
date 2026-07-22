@@ -1047,6 +1047,19 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await Assert.That(psi.ArgumentList.Any(a => a.StartsWith("--available-tools=kcap-review-", StringComparison.Ordinal))).IsTrue();
     }
 
+    /// <summary>Cursor cannot safely run directly in the borrowed checkout. The orchestrator must
+    /// first materialize its authorized contents into an owned snapshot.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Cursor_RawBorrowedReviewRequiresSnapshotMaterialization() {
+        var ctx = ReviewContext() with { Work = WorkLocation.BorrowedCwd };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+                AcpVendorDescriptors.Cursor, new DaemonConfig(), ctx));
+
+        await Assert.That(ex.Message).Contains("snapshot materialization");
+    }
+
     /// <summary>A full StartAsync for the Copilot descriptor: handshake completes, the started
     /// runtime's Vendor is `copilot`, and an interactive launch sends `mcpServers: []`.</summary>
     [Test]
