@@ -249,12 +249,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 
     /// <summary>Copilot's availability filter uses flattened runtime ids (<c>server-tool</c>),
-    /// not its permission-pattern syntax (<c>server(tool)</c>). Keep the result tool plus only the
+    /// not its permission-pattern syntax (<c>server(tool)</c>). Keep both flow-channel tools plus only the
     /// reviewed-safe tools belonging to the already-validated server list.</summary>
     static IEnumerable<string> CopilotAvailableToolIds(IReadOnlyList<AcpMcpServerSpec> servers) {
         foreach (var server in servers) {
             if (string.Equals(server.Name, KcapMcpRegistry.ReservedResultChannelId, StringComparison.Ordinal)) {
                 yield return $"{server.Name}-submit_review_result";
+                yield return $"{server.Name}-send_flow_message";
                 continue;
             }
 

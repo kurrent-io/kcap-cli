@@ -915,7 +915,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     }
 
     /// <summary>An unattended Copilot reviewer starts trusted, disables ambient/custom tools,
-    /// preloads only its validated stdio MCP servers, and exposes only the result submission plus
+    /// preloads only its validated stdio MCP servers, and exposes only the two flow-channel tools plus
     /// the reviewed-safe tools from the requested server. Copilot's allowlist consumes flattened
     /// runtime ids (<c>server-tool</c>), not permission-pattern syntax.</summary>
     [Test]
@@ -936,6 +936,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
             "--additional-mcp-config",
             """{"mcpServers":{"kcap-flow-result":{"type":"stdio","command":"/usr/local/bin/kcap","args":["mcp","flow-result"],"env":{"KCAP_URL":"http://kcap.test","KCAP_FLOW_AGENT_ID":"agent-1"}},"kcap-review":{"type":"stdio","command":"/usr/local/bin/kcap","args":["mcp","review"],"env":{"KCAP_URL":"http://kcap.test"}}}}""",
             "--available-tools=kcap-flow-result-submit_review_result",
+            "--available-tools=kcap-flow-result-send_flow_message",
             "--available-tools=kcap-review-get_file_context",
             "--available-tools=kcap-review-get_pr_summary",
             "--available-tools=kcap-review-get_transcript",
@@ -982,6 +983,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
         await Assert.That(psi.ArgumentList).Contains("--allow-all-tools");
         await Assert.That(psi.ArgumentList).Contains("--available-tools=kcap-flow-result-submit_review_result");
+        await Assert.That(psi.ArgumentList).Contains("--available-tools=kcap-flow-result-send_flow_message");
         await Assert.That(psi.ArgumentList.Any(a => a.StartsWith("--available-tools=kcap-review-", StringComparison.Ordinal))).IsTrue();
     }
 
