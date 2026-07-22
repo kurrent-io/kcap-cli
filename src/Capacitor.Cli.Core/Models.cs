@@ -959,6 +959,14 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(LiveAgentInfo))]
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
+// Phase B2-b (sequenced-settlement design): report / connect side wire DTOs.
+[JsonSerializable(typeof(ResolvedStartupCandidate))]
+[JsonSerializable(typeof(ResolvedStartupCandidate[]))]
+[JsonSerializable(typeof(UnresolvedStartupCandidate))]
+[JsonSerializable(typeof(UnresolvedStartupCandidate[]))]
+[JsonSerializable(typeof(StartupCandidateUnresolvedReason))]
+[JsonSerializable(typeof(StartupDiscovery))]
+[JsonSerializable(typeof(MarkerScanState))]
 [JsonSerializable(typeof(AgentPidRecord))]
 [JsonSerializable(typeof(PidIdentityKind))]
 [JsonSerializable(typeof(AgentRegistered))]
@@ -1294,7 +1302,67 @@ public readonly record struct QuarantinedAgentInfo(
 public readonly record struct DaemonStatusReport(
         int                  ActiveCount,
         LiveAgentInfo[]      LiveAgents,
-        QuarantinedAgentInfo[] Quarantined
+        QuarantinedAgentInfo[] Quarantined,
+        // Phase B2-b (sequenced-settlement design): additive heal-barrier / startup-completeness
+        // fields. All trailing/optional — an old server ignores them, an old daemon never sets them.
+        // Epoch is the shipped per-boot _daemonEpoch (reused, never a second epoch concept).
+        string?                       Epoch                         = null,
+        long?                         LastProcessedSeq              = null,
+        long?                         HighestAcceptedSeq            = null,
+        bool?                         StartupReapComplete           = null,
+        ResolvedStartupCandidate[]?   ResolvedStartupCandidates     = null,
+        UnresolvedStartupCandidate[]? UnresolvedStartupCandidates   = null,
+        StartupDiscovery?             StartupDiscovery              = null
+    );
+
+// ── Phase B2-b (sequenced-settlement design): startup-completeness / heal-barrier report DTOs ──
+
+/// <summary>Phase B2-b (sequenced-settlement design): positive per-id death evidence for a
+/// prior-incarnation startup candidate. <see cref="Generation"/> is a daemon-lifetime monotonic
+/// ack/ordering id; <c>(AgentId, OldEpoch)</c> is the crash-reconciliation + server-upsert identity.
+/// Flow fields come ONLY from a trusted record-tracked resolved entry — never from a recordless
+/// marker kill (mutable env).</summary>
+public readonly record struct ResolvedStartupCandidate(
+        long    Generation,
+        string  AgentId,
+        string  OldEpoch,
+        string? FlowRunId = null,
+        string? FlowRole  = null
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): why a known-id prior-incarnation candidate is
+/// still blocked (keeps <c>StartupReapComplete</c> false). The zero value <see cref="PendingMarker"/>
+/// is the conservative default.</summary>
+public enum StartupCandidateUnresolvedReason {
+    [JsonStringEnumMemberName("pending_marker")]        PendingMarker        = 0,
+    [JsonStringEnumMemberName("legacy_unresolvable")]   LegacyUnresolvable   = 1,
+    [JsonStringEnumMemberName("identity_unresolvable")] IdentityUnresolvable = 2,
+}
+
+/// <summary>Phase B2-b (sequenced-settlement design): a known-id prior-incarnation candidate that is
+/// blocked (keeps <c>StartupReapComplete</c> false).</summary>
+public readonly record struct UnresolvedStartupCandidate(
+        string                           AgentId,
+        StartupCandidateUnresolvedReason Reason,
+        string?                          FlowRunId = null,
+        string?                          FlowRole  = null
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): recordless-survivor marker-scan status. The
+/// zero value <see cref="Pending"/> is the conservative default — a missing field or an intermediate
+/// daemon reads as <see cref="Pending"/> (never <see cref="Complete"/>).</summary>
+public enum MarkerScanState {
+    [JsonStringEnumMemberName("pending")]        Pending       = 0, // conservative default (missing field / intermediate daemon)
+    [JsonStringEnumMemberName("complete")]       Complete      = 1,
+    [JsonStringEnumMemberName("failed")]         Failed        = 2,
+    [JsonStringEnumMemberName("not_applicable")] NotApplicable = 3, // Windows (no scan) / macOS (env redacted)
+}
+
+/// <summary>Phase B2-b (sequenced-settlement design): recordless-survivor discovery status; lets the
+/// server render WHY <c>StartupReapComplete</c> is false.</summary>
+public readonly record struct StartupDiscovery(
+        MarkerScanState MarkerScanState,
+        DateTimeOffset? LastSuccessfulScanAt = null
     );
 
 /// <summary>M1-A (spec §4.3): distinguishes a record with a comparable start-identity
@@ -1415,7 +1483,21 @@ public readonly record struct DaemonConnect(
         // subset of SupportedVendors — every entry here MUST also appear there). Null from a daemon
         // build that predates this field — that daemon is simply not an override-eligible target for
         // ANY vendor. There is deliberately no fallback that widens a null to anything non-null.
-        string[]? UnattendedVendors = null
+        string[]? UnattendedVendors = null,
+        // Phase B2-b (sequenced-settlement design): additive startup-completeness / heal-barrier
+        // capability payload. All trailing/optional — old servers ignore it, old daemons never set
+        // it. Advertised-but-inert until the paired server PR consumes it (gated on
+        // SupportsSequencedCommands). Epoch is the shipped per-boot _daemonEpoch (reused).
+        QuarantinedAgentInfo[]?       Quarantined                   = null,
+        string?                       Epoch                         = null,
+        long?                         HighestAcceptedSeq            = null,
+        long?                         LastProcessedSeq              = null,
+        bool?                         StartupReapComplete           = null,
+        ResolvedStartupCandidate[]?   ResolvedStartupCandidates     = null,
+        UnresolvedStartupCandidate[]? UnresolvedStartupCandidates   = null,
+        StartupDiscovery?             StartupDiscovery              = null,
+        bool?                         RecordlessSurvivorsImpossible = null, // absent/false ⇒ has a recordless class
+        bool                          SupportsSequencedCommands     = false // THE capability gate
     );
 
 public readonly record struct AgentRegistered(
