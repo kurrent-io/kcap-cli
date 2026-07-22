@@ -49,8 +49,19 @@ internal sealed class DaemonLock : IDisposable {
     /// </summary>
     public int? PriorHolderPid { get; }
 
+    /// <summary>
+    /// The previous holder's <see cref="InstanceId"/>, read from the lock-file content
+    /// under the held flock BEFORE we overwrote it — or null on a genuinely fresh lock
+    /// (empty file) or unreadable content. Unlike the PID file (deleted on clean
+    /// shutdown), the lock file's InstanceId is the persistent per-boot nonce every
+    /// shipped version rewrites at boot and never deletes, so it witnesses the
+    /// immediately-preceding boot even one by an unaware binary. Phase B2-b
+    /// (sequenced-settlement design) uses it as the coverage boot-chain's chain-check.
+    /// </summary>
+    public string? PriorInstanceId { get; }
+
     DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId,
-               bool priorExitWasUnclean, int? priorHolderPid) {
+               bool priorExitWasUnclean, int? priorHolderPid, string? priorInstanceId) {
         _stream             = stream;
         _lockPath           = lockPath;
         _pidPath            = pidPath;
@@ -58,6 +69,7 @@ internal sealed class DaemonLock : IDisposable {
         InstanceId          = instanceId;
         PriorExitWasUnclean = priorExitWasUnclean;
         PriorHolderPid      = priorHolderPid;
+        PriorInstanceId     = priorInstanceId;
     }
 
     /// <summary>
@@ -80,11 +92,12 @@ internal sealed class DaemonLock : IDisposable {
 
         try {
             // FileShare.None maps to flock(LOCK_EX) on POSIX. Open with
-            // FileAccess.Write so we can rewrite the instance id into the
-            // file content below. FileMode.OpenOrCreate keeps a stale
+            // FileAccess.ReadWrite so we can both read the previous holder's
+            // instance id (captured below, before truncation) and rewrite our
+            // own into the file content. FileMode.OpenOrCreate keeps a stale
             // lockfile on disk from blocking acquisition — flock semantics
             // mean kernel-managed liveness, not file presence.
-            stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+            stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         } catch (IOException) {
             return null;
         }
@@ -97,6 +110,21 @@ internal sealed class DaemonLock : IDisposable {
         // deletes it) — i.e. it died via an uncatchable SIGKILL / crash. Capture
         // that for the successor's startup breadcrumb.
         var (priorUnclean, priorPid) = InspectPriorHolder(pidPath);
+
+        // Capture the previous holder's InstanceId from the lock-file content BEFORE we overwrite it —
+        // the persistent per-boot nonce the coverage boot-chain uses to detect an intervening
+        // (possibly unaware) boot. Read failures degrade to null (fail-closed downstream).
+        string? priorInstanceId = null;
+        try {
+            if (stream.Length > 0) {
+                stream.Position = 0;
+                var buf = new byte[stream.Length];
+                var n = stream.Read(buf, 0, buf.Length);
+                priorInstanceId = System.Text.Encoding.UTF8.GetString(buf, 0, n)
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .FirstOrDefault();
+            }
+        } catch { priorInstanceId = null; }
 
         try {
             // Rewrite the file content with the fresh instance id. Truncate
@@ -122,7 +150,7 @@ internal sealed class DaemonLock : IDisposable {
             try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
         }
 
-        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid);
+        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid, priorInstanceId);
     }
 
     /// <summary>
