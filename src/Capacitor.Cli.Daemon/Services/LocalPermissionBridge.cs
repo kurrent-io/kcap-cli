@@ -30,6 +30,9 @@ internal sealed partial class LocalPermissionBridge(
     const int    MaxBindAttempts = 15;
     const string PathSuffix      = "/permission-request";
 
+    static readonly object       PortClaimsLock = new();
+    static readonly HashSet<int>  ClaimedPorts   = [];
+
     HttpListener?            _listener;
     Task?                    _acceptLoop;
     CancellationTokenSource? _cts;
@@ -52,13 +55,21 @@ internal sealed partial class LocalPermissionBridge(
     /// </summary>
     public string? BaseUrl { get; private set; }
 
-    public Task StartAsync(CancellationToken cancellationToken) {
+    public async Task StartAsync(CancellationToken cancellationToken) {
         // The TcpListener-based port probe has a TOCTOU window before HttpListener.Start
         // binds the same port. Retry up to MaxBindAttempts on TRANSIENT bind failures so a
         // single rare race doesn't crash daemon startup. Non-transient errors (URLACL on
         // Windows, permission issues) bubble up immediately so they aren't masked.
         for (var attempt = 1; attempt <= MaxBindAttempts; attempt++) {
-            var port  = ReserveFreeLoopbackPort();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var port = ReserveFreeLoopbackPort();
+            if (!TryClaimPort(port)) {
+                if (attempt < MaxBindAttempts)
+                    await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
+                continue;
+            }
+
             var token = NewToken();
 
             var listener = new HttpListener();
@@ -73,14 +84,18 @@ internal sealed partial class LocalPermissionBridge(
                 BaseUrl      = $"http://127.0.0.1:{port}/{token}";
 
                 break;
-            } catch (HttpListenerException ex) when (attempt < MaxBindAttempts && IsAddressInUse(ex)) {
+            } catch (HttpListenerException ex) when (IsAddressInUse(ex)) {
+                CloseSilently(listener);
+                ReleasePortClaim(port);
+
+                if (attempt == MaxBindAttempts) throw;
+
                 LogBindRetry(logger, attempt, port, ex.Message);
-                listener.Close();
-                // Jittered backoff: concurrent binders (e.g. parallel tests each starting a bridge)
-                // that lose the TOCTOU race would otherwise re-probe and re-bind the same contended
-                // ephemeral port in lockstep and exhaust every attempt. A short random delay
-                // desynchronizes them so each next attempt reserves a fresh, uncontended port.
-                Thread.Sleep(Random.Shared.Next(10, 60));
+                await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
+            } catch {
+                CloseSilently(listener);
+                ReleasePortClaim(port);
+                throw;
             }
         }
 
@@ -90,8 +105,6 @@ internal sealed partial class LocalPermissionBridge(
         _cts        = new();
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token), _cts.Token);
         LogBridgeStarted(logger, BaseUrl!);
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -101,8 +114,21 @@ internal sealed partial class LocalPermissionBridge(
     /// (macOS), 98 = EADDRINUSE (Linux). Anything else (URLACL denial code 5, etc.) is not transient
     /// and shouldn't be retried.
     /// </summary>
-    static bool IsAddressInUse(HttpListenerException ex) =>
+    internal static bool IsAddressInUse(HttpListenerException ex) =>
         ex.ErrorCode is 10048 or 32 or 48 or 98;
+
+    static bool TryClaimPort(int port) {
+        lock (PortClaimsLock) return ClaimedPorts.Add(port);
+    }
+
+    static void ReleasePortClaim(int port) {
+        if (port == 0) return;
+        lock (PortClaimsLock) ClaimedPorts.Remove(port);
+    }
+
+    static void CloseSilently(HttpListener listener) {
+        try { listener.Close(); } catch { /* best-effort cleanup after a failed bind */ }
+    }
 
     public async Task StopAsync(CancellationToken cancellationToken) {
         if (_cts is not null) await _cts.CancelAsync();
@@ -125,8 +151,13 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     public async ValueTask DisposeAsync() {
-        await StopAsync(CancellationToken.None);
-        _cts?.Dispose();
+        try {
+            await StopAsync(CancellationToken.None);
+        } finally {
+            ReleasePortClaim(_port);
+            _port = 0;
+            _cts?.Dispose();
+        }
     }
 
     /// <summary>
@@ -181,12 +212,10 @@ internal sealed partial class LocalPermissionBridge(
             : urlOrToken.Trim('/');
     }
 
-    /// <summary>Test seam: when set, overrides the ephemeral-port reservation so a test can force a
-    /// first-attempt "address already in use" collision and assert the retry recovers. Null in
-    /// production (no effect on the real probe). Set/reset it inside a non-parallel test.</summary>
-    internal static Func<int>? ReserveLoopbackPortOverrideForTest;
+    /// <summary>Instance-scoped test seam for deterministic port-collision coverage.</summary>
+    internal Func<int>? ReserveLoopbackPortOverrideForTest;
 
-    static int ReserveFreeLoopbackPort() {
+    int ReserveFreeLoopbackPort() {
         if (ReserveLoopbackPortOverrideForTest is { } overridePort) return overridePort();
 
         // HttpListener doesn't accept port 0 in its prefix; reserve a free ephemeral

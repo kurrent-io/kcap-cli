@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+[NotInParallel]
 public class LocalPermissionBridgeTests {
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
             Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null,
@@ -799,42 +800,67 @@ public class LocalPermissionBridgeTests {
         } finally { await bridge.DisposeAsync(); }
     }
 
-    /// <summary>Deterministic regression for the parallel-bind flake: force the FIRST bind attempt
-    /// onto an already-occupied loopback port (via the test seam) so <c>HttpListener.Start</c> throws
-    /// "address already in use" — exactly the collision concurrent starts hit — then assert the retry
-    /// recovers on a fresh port. Pre-fix behavior (no retry / retry exhausted) would leave the bridge
-    /// unbound and throw; the widened, jittered retry recovers. Serialized because it mutates a shared
-    /// static seam.</summary>
+    /// <summary>A second bridge retries when its first probed port is already claimed in-process.</summary>
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
-    public async Task StartAsync_FirstAttemptAddressInUse_RetriesAndRecovers() {
-        // Hold a real loopback port open so the first HttpListener.Start on it collides.
-        var occupied     = new TcpListener(IPAddress.Loopback, 0);
-        occupied.Start();
-        var occupiedPort = ((IPEndPoint)occupied.LocalEndpoint).Port;
+    public async Task StartAsync_FirstPortAlreadyClaimed_RetriesAndRecovers() {
+        var (first, _)  = CreateBridge();
+        var (second, _) = CreateBridge();
 
-        var reservations = 0;
-        LocalPermissionBridge.ReserveLoopbackPortOverrideForTest = () => {
-            // Attempt 1 → the occupied port (forces the address-in-use throw); later attempts → a
-            // genuinely free port so the retry can succeed.
-            if (Interlocked.Increment(ref reservations) == 1) return occupiedPort;
-
-            var probe = new TcpListener(IPAddress.Loopback, 0);
-            probe.Start();
-            try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
-        };
-
-        var (bridge, _) = CreateBridge();
         try {
-            await bridge.StartAsync(CancellationToken.None);
+            await first.StartAsync(CancellationToken.None);
+            var firstPort    = new Uri(first.BaseUrl!).Port;
+            var reservations = 0;
 
-            await Assert.That(bridge.BaseUrl).IsNotNull();                    // recovered despite the first collision
-            await Assert.That(reservations).IsGreaterThanOrEqualTo(2);        // it actually retried past the collision
-            await Assert.That(new Uri(bridge.BaseUrl!).Port).IsNotEqualTo(occupiedPort);
+            second.ReserveLoopbackPortOverrideForTest = () => {
+                if (Interlocked.Increment(ref reservations) == 1) return firstPort;
+
+                var probe = new TcpListener(IPAddress.Loopback, 0);
+                probe.Start();
+                try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
+            };
+
+            await second.StartAsync(CancellationToken.None);
+
+            await Assert.That(reservations).IsGreaterThanOrEqualTo(2);
+            await Assert.That(new Uri(second.BaseUrl!).Port).IsNotEqualTo(firstPort);
         } finally {
-            LocalPermissionBridge.ReserveLoopbackPortOverrideForTest = null;
-            occupied.Stop();
-            await bridge.DisposeAsync();
+            await second.DisposeAsync();
+            await first.DisposeAsync();
         }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task StartAsync_CancellationInterruptsClaimRetry() {
+        var (first, _)  = CreateBridge();
+        var (second, _) = CreateBridge();
+        using var cts = new CancellationTokenSource();
+
+        try {
+            await first.StartAsync(CancellationToken.None);
+            var firstPort = new Uri(first.BaseUrl!).Port;
+
+            second.ReserveLoopbackPortOverrideForTest = () => {
+                cts.Cancel();
+                return firstPort;
+            };
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() => second.StartAsync(cts.Token));
+            await Assert.That(second.BaseUrl).IsNull();
+        } finally {
+            await second.DisposeAsync();
+            await first.DisposeAsync();
+        }
+    }
+
+    [Test]
+    [Arguments(10048, true)]
+    [Arguments(32, true)]
+    [Arguments(48, true)]
+    [Arguments(98, true)]
+    [Arguments(5, false)]
+    public async Task IsAddressInUse_ClassifiesPlatformErrors(int errorCode, bool expected) {
+        await Assert.That(LocalPermissionBridge.IsAddressInUse(new HttpListenerException(errorCode)))
+            .IsEqualTo(expected);
     }
 }
 

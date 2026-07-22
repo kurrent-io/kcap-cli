@@ -9,11 +9,10 @@ namespace Capacitor.Cli.Tests.Unit.Cursor;
 /// <see cref="CursorHookCommand.ShouldSpawnWatcher"/> is pure (no I/O); the
 /// <see cref="CursorHookCommand.MaybeSpawnWatcherAsync"/> tests use
 /// <see cref="WatcherManager.SpawnOverrideForTesting"/> so no real OS process is ever spawned.
-/// [NotInParallel] because the override is a shared static — a racing test elsewhere that also
-/// sets it (there are none today, but WatcherManagerSpawnArgsTests reads BuildSpawnArgs only)
-/// must never interleave with this class's use of the seam.
+/// [NotInParallel] because the override and KCAP_CONFIG_DIR are process-wide. Tests in other
+/// classes also mutate those values, so a class-specific constraint key is not sufficient.
 /// </summary>
-[NotInParallel(nameof(CursorWatcherSpawnTests))]
+[NotInParallel]
 public class CursorWatcherSpawnTests {
     static string NewSessionId() => Guid.NewGuid().ToString("N");
 
