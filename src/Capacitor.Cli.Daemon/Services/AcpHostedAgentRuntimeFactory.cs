@@ -55,7 +55,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // a non-review launch; the built MCP list for a valid review flow.
         var reviewMcp = ValidateAndBuildReviewFlowMcp(ctx, descriptor);
 
-        var autoApproveUnattended = ctx.IsReviewFlow && descriptor.SupportsUnattended;
+        var unattendedInteractionPolicy = ctx.IsReviewFlow
+            ? descriptor.UnattendedInteractionPolicy
+            : AcpUnattendedInteractionPolicy.Disabled;
 
         var runtimeLogger = loggerFactory.CreateLogger<AcpHostedAgentRuntime>();
         var connLogger    = loggerFactory.CreateLogger<AcpConnection>();
@@ -74,7 +76,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             debugFrames: config.DebugFrames,
             vendor: descriptor.Vendor,
             modelSelector: descriptor.ModelSelector,
-            autoApproveUnattended: autoApproveUnattended
+            unattendedInteractionPolicy: unattendedInteractionPolicy
         );
 
         // Review flow: the injected result channel + allowlist. Otherwise unchanged (null today).
@@ -135,8 +137,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw new InvalidOperationException(
                 "Review-flow launch cannot inject the kcap-flow-result channel (missing server url / kcap path / agent id).");
 
-        // The reviewer runs under the auto-approve bridge, so the injected MCP set IS its capability
-        // boundary: resolve the allowlist through the SAME authoritative read-only reviewer policy the
+        // The injected MCP set is the reviewer's integration boundary: resolve the allowlist through
+        // the SAME authoritative read-only reviewer policy the
         // orchestrator applies to Codex (TryResolveReviewFlowAllowlist — reserved result channel is a
         // no-op, unknown/flow-starting/non-auto-approvable write servers fail the launch fast).
         if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(ctx.McpAllowlist, out var allowlistServerIds, out var rejected))

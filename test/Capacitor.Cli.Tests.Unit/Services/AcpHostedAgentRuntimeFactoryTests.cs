@@ -342,12 +342,23 @@ public class AcpHostedAgentRuntimeFactoryTests {
         UnattendedTrustArgv: ["--trust"],
         SupportsUnattended:  true,
         ModelSelector:       NoOpModelSelector.Instance,
-        SupportsMcpServers:  supportsMcpServers
+        SupportsMcpServers:  supportsMcpServers,
+        UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AutoApprove
     );
 
+    static AcpVendorDescriptor NonUnattendedDescriptor() => new(
+        Vendor:              "interactive-only",
+        ResolveBinaryPath:   _ => "interactive-only",
+        ResolveDefaultModel: _ => null,
+        Argv:                ["acp"],
+        UnattendedTrustArgv: [],
+        SupportsUnattended:  false,
+        ModelSelector:       NoOpModelSelector.Instance,
+        SupportsMcpServers:  true);
+
     /// <summary>
-    /// Exercises the generic trust-argv seam independently of any production vendor. Cursor stays
-    /// non-unattended while Copilot uses its own concrete trust flags and alternate MCP transport.
+    /// Exercises the generic trust-argv seam independently of production vendors. Cursor has no
+    /// trust-at-spawn argv, while Copilot uses concrete trust flags and an alternate MCP transport.
     /// </summary>
     [Test]
     public async Task BuildProcessStartInfo_DescriptorDriven_AppendsTrustArgvOnlyForReviewFlow() {
@@ -363,6 +374,18 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await Assert.That(reviewFlowPsi.ArgumentList.SequenceEqual(["acp", "--flag-a", "--trust"])).IsTrue();
     }
 
+    [Test]
+    public async Task BuildProcessStartInfo_CursorReviewFlow_UsesCursorZeroPromptFlags() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor,
+            new DaemonConfig { CursorPath = "/opt/cursor/cursor-agent" },
+            ReviewContext());
+
+        await Assert.That(psi.ArgumentList.SequenceEqual([
+            "acp", "--force", "--approve-mcps", "--trust"
+        ])).IsTrue();
+    }
+
     /// <summary>Qodo finding 3: defense-in-depth — even though the orchestrator's
     /// <c>UnattendedLaunchPolicy</c> is expected to reject a review-flow launch for a vendor that
     /// doesn't support it before the factory ever runs, <c>BuildProcessStartInfo</c> refuses to
@@ -370,7 +393,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// trusting that gate alone.</summary>
     [Test]
     public async Task BuildProcessStartInfo_Throws_ForReviewFlow_WhenDescriptorDoesNotSupportUnattended() {
-        var descriptor = AcpVendorDescriptors.Cursor; // SupportsUnattended: false
+        var descriptor = NonUnattendedDescriptor();
         var config     = new DaemonConfig();
 
         await Assert.That(() => AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
@@ -810,8 +833,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task ReviewFlow_NotUnattended_ThrowsBeforeSpawn() {
-        // Cursor's SupportsUnattended is false.
-        var (factory, spawns) = CountingSpawnFactory(AcpVendorDescriptors.Cursor);
+        var (factory, spawns) = CountingSpawnFactory(NonUnattendedDescriptor());
 
         await Assert.That(async () => await factory.StartAsync(ReviewContext(), CancellationToken.None))
             .Throws<InvalidOperationException>();
@@ -820,7 +842,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task BuildProcessStartInfo_Throws_ForReviewFlow_WhenBorrowedCwd_NoTrustArgvBuilt() {
-        var descriptor = SyntheticDescriptor(supportsMcpServers: true); // SupportsUnattended: true
+        var descriptor = SyntheticDescriptor(supportsMcpServers: true);
         var config     = new DaemonConfig();
 
         await Assert.That(() => AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
@@ -845,7 +867,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// autoApprove=true and threads it to the bridge — an inbound permission request is auto-approved
     /// (least-privilege allow) WITHOUT ever routing to the injected server connection (no human).</summary>
     [Test]
-    public Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
+    public Task ReviewFlow_SyntheticOwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
         AssertReviewFlowAutoApprovesPermissionAsync(
             SyntheticDescriptor(supportsMcpServers: true),
             ReviewContext());
@@ -858,6 +880,44 @@ public class AcpHostedAgentRuntimeFactoryTests {
         AssertReviewFlowAutoApprovesPermissionAsync(
             AcpVendorDescriptors.Copilot,
             ReviewContext(["kcap-review"]) with { Work = WorkLocation.BorrowedCwd });
+
+    /// <summary>Cursor's launch flags are responsible for producing zero interaction frames. If a
+    /// future Cursor build regresses and emits one anyway, kcap must not auto-approve it or route it
+    /// to a human: the reviewer is immediately reaped.</summary>
+    [Test]
+    public async Task ReviewFlow_Cursor_PermissionFrame_ReapsReviewer_WithoutRoutingOrApproval() {
+        var fake       = new FakeAcpAgent();
+        var connection = new CaptureServerConnection();
+        var process    = new FakeAcpProcess();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Cursor,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+        var started = await factory.StartAsync(ReviewContext(), cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Read file"}""",
+            optionsJson: """[{"optionId":"ao","name":"Allow once","kind":"allow_once"}]""");
+        await started.Runtime.SendUserInputAsync("review").WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!process.HasExited && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        await Assert.That(process.HasExited).IsTrue();
+        await Assert.That(connection.RequestAcpInteractionAsyncCalled).IsFalse();
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
 
     static async Task AssertReviewFlowAutoApprovesPermissionAsync(
             AcpVendorDescriptor descriptor,

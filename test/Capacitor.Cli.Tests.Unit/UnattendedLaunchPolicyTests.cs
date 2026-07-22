@@ -38,19 +38,12 @@ public class UnattendedLaunchPolicyTests {
         await Assert.That(reason).IsNull();
     }
 
-    /// <summary>
-    /// Test plan item 5b: pins that the REAL Cursor descriptor can never reach
-    /// <c>AcpHostedAgentRuntimeFactory.BuildProcessStartInfo</c>/<c>StartRealProcess</c> with
-    /// <c>ctx.IsReviewFlow == true</c> in production — so test item 5's synthetic-descriptor
-    /// coverage of the trust-argv seam is exactly what it claims to be: proof the MECHANISM works,
-    /// not a claim that any shipped descriptor uses it yet.
-    /// </summary>
     [Test]
-    public async Task Cursor_descriptor_unattended_launch_is_rejected() {
+    public async Task Cursor_descriptor_unattended_launch_is_allowed_with_zero_prompt_policy() {
         var reason = UnattendedLaunchPolicy.RejectionReason(
             "cursor", supportsUnattended: AcpVendorDescriptors.Cursor.SupportsUnattended, isReviewFlow: true);
 
-        await Assert.That(reason).IsNotNull();
+        await Assert.That(reason).IsNull();
     }
 
     [Test]

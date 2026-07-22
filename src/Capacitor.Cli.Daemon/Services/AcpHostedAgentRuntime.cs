@@ -141,6 +141,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     string? _cwd;
     string? _resolvedModel;
     int     _disposed;
+    int     _unexpectedUnattendedInteractionSeen;
 
     /// <summary>Agent capabilities negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call; null before that.</summary>
     AgentCapabilities? _negotiatedCapabilities;
@@ -200,7 +201,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             bool                                                                           debugFrames = false,
             string                                                                         vendor = "cursor",
             IAcpModelSelector?                                                             modelSelector = null,
-            bool                                                                           autoApproveUnattended = false
+            AcpUnattendedInteractionPolicy                                                  unattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled
         ) {
         _connection    = connection;
         _process       = process;
@@ -232,8 +233,32 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _connection.OnNotification += HandleNotification;
 
         if (requestInteraction is not null) {
-            _interactionBridge = new AcpInteractionBridge(requestInteraction, agentId, logger, autoApproveUnattended);
+            _interactionBridge = new AcpInteractionBridge(
+                requestInteraction,
+                agentId,
+                logger,
+                unattendedInteractionPolicy,
+                HandleUnexpectedUnattendedInteraction);
             _connection.OnServerRequest = (request, ct) => _interactionBridge.HandleAsync(request, ct);
+        }
+    }
+
+    void HandleUnexpectedUnattendedInteraction(string method) {
+        if (Interlocked.Exchange(ref _unexpectedUnattendedInteractionSeen, 1) != 0)
+            return;
+
+        // Do not await process termination on AcpConnection's read loop: that loop is currently
+        // handling the offending request, and the child may wait for its response before exiting.
+        // Reap out-of-band and cancel both runtime workers immediately.
+        _cts.Cancel();
+        _ = ReapUnexpectedInteractionAsync(method);
+    }
+
+    async Task ReapUnexpectedInteractionAsync(string method) {
+        try {
+            await _process.TerminateAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: failed to reap unattended reviewer after forbidden {Method} interaction.", method);
         }
     }
 

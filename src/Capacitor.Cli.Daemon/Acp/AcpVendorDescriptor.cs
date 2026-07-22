@@ -14,6 +14,16 @@ internal enum AcpReviewFlowMcpTransport {
     CopilotAdditionalConfig
 }
 
+/// <summary>How an ACP vendor handles a server→client interaction frame during an unattended
+/// review. <see cref="AutoApprove"/> preserves the existing Copilot behavior. <see cref="Fail"/>
+/// is the stronger Cursor contract: Cursor's own launch flags must suppress interaction frames,
+/// so receiving even one means that contract has regressed and the reviewer is reaped.</summary>
+internal enum AcpUnattendedInteractionPolicy {
+    Disabled,
+    AutoApprove,
+    Fail
+}
+
 /// <summary>
 /// Per-vendor wiring for AcpHostedAgentRuntimeFactory: which binary to spawn, what argv an
 /// interactive vs. an unattended (review-flow) launch gets, and how (or whether) this vendor's ACP
@@ -64,6 +74,7 @@ internal sealed record AcpVendorDescriptor {
     public ImmutableArray<string>      Argv                   { get; }
     public ImmutableArray<string>      UnattendedTrustArgv    { get; }
     public bool                        SupportsUnattended     { get; }
+    public AcpUnattendedInteractionPolicy UnattendedInteractionPolicy { get; }
     public IAcpModelSelector           ModelSelector          { get; }
     public bool                        SupportsMcpServers     { get; }
     public AcpReviewFlowMcpTransport   ReviewFlowMcpTransport { get; }
@@ -79,7 +90,8 @@ internal sealed record AcpVendorDescriptor {
             IAcpModelSelector           ModelSelector,
             bool                        SupportsMcpServers,
             AcpReviewFlowMcpTransport   ReviewFlowMcpTransport = AcpReviewFlowMcpTransport.Default,
-            bool                        SupportsBorrowedReviewFlow = false
+            bool                        SupportsBorrowedReviewFlow = false,
+            AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled
         ) {
         var normalizedUnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
 
@@ -93,12 +105,23 @@ internal sealed record AcpVendorDescriptor {
                 $"{nameof(SupportsBorrowedReviewFlow)} requires {nameof(SupportsUnattended)} (vendor: {Vendor}).",
                 nameof(SupportsBorrowedReviewFlow));
 
+        if (!SupportsUnattended && UnattendedInteractionPolicy != AcpUnattendedInteractionPolicy.Disabled)
+            throw new ArgumentException(
+                $"{nameof(UnattendedInteractionPolicy)} must be Disabled when {nameof(SupportsUnattended)} is false (vendor: {Vendor}).",
+                nameof(UnattendedInteractionPolicy));
+
+        if (SupportsUnattended && UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.Disabled)
+            throw new ArgumentException(
+                $"{nameof(UnattendedInteractionPolicy)} must be explicit when {nameof(SupportsUnattended)} is true (vendor: {Vendor}).",
+                nameof(UnattendedInteractionPolicy));
+
         this.Vendor              = Vendor;
         this.ResolveBinaryPath   = ResolveBinaryPath;
         this.ResolveDefaultModel = ResolveDefaultModel;
         this.Argv                = Argv.IsDefault ? ImmutableArray<string>.Empty : Argv;
         this.UnattendedTrustArgv = normalizedUnattendedTrustArgv;
         this.SupportsUnattended  = SupportsUnattended;
+        this.UnattendedInteractionPolicy = UnattendedInteractionPolicy;
         this.ModelSelector       = ModelSelector;
         this.SupportsMcpServers  = SupportsMcpServers;
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
@@ -116,20 +139,21 @@ internal sealed record AcpVendorDescriptor {
 }
 
 internal static class AcpVendorDescriptors {
-    /// <summary>Reproduces AcpHostedAgentRuntimeFactory's original Cursor-only behavior
-    /// byte-for-byte: argv ["acp"], no trust flags (SupportsUnattended stays false so
-    /// UnattendedTrustArgv is unreachable), model selection via the shared
-    /// ConfigOptionModelSelector, mcpServers accepted (always sent as an array on the wire; every
-    /// caller today still populates it with an empty list).</summary>
+    /// <summary>Cursor CLI's ACP hosted-agent surface. Review flows use Cursor's own unattended
+    /// controls: <c>--force</c> suppresses command approval unless explicitly denied,
+    /// <c>--approve-mcps</c> suppresses MCP-server approval, and <c>--trust</c> suppresses workspace
+    /// trust. kcap does not auto-approve a fallback frame: any permission, elicitation, or unknown
+    /// interaction request is a contract violation and reaps the reviewer.</summary>
     public static readonly AcpVendorDescriptor Cursor = new(
         Vendor:              "cursor",
         ResolveBinaryPath:   cfg => cfg.CursorPath,
         ResolveDefaultModel: cfg => cfg.CursorModel,
         Argv:                ["acp"],
-        UnattendedTrustArgv: [],
-        SupportsUnattended:  false,
+        UnattendedTrustArgv: ["--force", "--approve-mcps", "--trust"],
+        SupportsUnattended:  true,
         ModelSelector:       ConfigOptionModelSelector.Instance,
-        SupportsMcpServers:  true
+        SupportsMcpServers:  true,
+        UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail
     );
 
     /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
@@ -146,6 +170,7 @@ internal static class AcpVendorDescriptors {
         ModelSelector:       ConfigOptionModelSelector.Instance,
         SupportsMcpServers:  false,
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.CopilotAdditionalConfig,
-        SupportsBorrowedReviewFlow: true
+        SupportsBorrowedReviewFlow: true,
+        UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AutoApprove
     );
 }
