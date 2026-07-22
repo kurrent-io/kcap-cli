@@ -58,6 +58,15 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// </summary>
     Task SendUserInputAsync(string text);
 
+    /// <summary>Queue input and complete only after the runtime has written the prompt to its
+    /// protocol transport. Borrowed snapshot rounds use this acknowledgement to close the race
+    /// between prompt delivery and a subsequent refresh. PTY runtimes use the normal send.</summary>
+    Task SendUserInputAndWaitForWriteAsync(string text) => SendUserInputAsync(text);
+
+    /// <summary>Wait until any prior structured prompt turn has received its terminal response.
+    /// PTY runtimes have no structured turn boundary and use the completed default.</summary>
+    Task WaitForTurnIdleAsync(CancellationToken ct) => Task.CompletedTask;
+
     /// <summary>
     /// Hosted-UI special key (server <c>SendSpecialKey</c>). PTY runtimes translate via
     /// <see cref="SpecialKeyMap"/> and write the bytes; the ACP runtime maps or ignores.

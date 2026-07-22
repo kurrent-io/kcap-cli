@@ -106,7 +106,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// stuck on a stalled turn drops the NEW input rather than evicting an earlier, still-pending one
     /// (either is a pathological case; this queue realistically never gets anywhere near the cap).
     /// </summary>
-    readonly Channel<string> _pendingTurns;
+    readonly Channel<PendingTurn> _pendingTurns;
+    readonly SemaphoreSlim _turnExecutionGate = new(1, 1);
 
     /// <summary>
     /// Guards the open aggregation run (<see cref="_openRunKind"/>/<see cref="_openRunText"/>) AND
@@ -227,7 +228,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _transcript = Channel.CreateBounded<AcpEventEnvelope>(
             new BoundedChannelOptions(_transcriptCapacity) { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropOldest });
 
-        _pendingTurns = Channel.CreateBounded<string>(
+        _pendingTurns = Channel.CreateBounded<PendingTurn>(
             new BoundedChannelOptions(_pendingTurnsCapacity) { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropWrite });
 
         _connection.OnNotification += HandleNotification;
@@ -445,7 +446,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt))
-            EnqueueTurn(initialPrompt);
+            _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false);
     }
 
     /// <summary>
@@ -461,18 +462,25 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// dropped-count) rather than silently discarding the input via the channel's own drop-write
     /// behavior.
     /// </summary>
-    void EnqueueTurn(string text) {
+    Task EnqueueTurn(string text, bool acknowledgeWrite) {
+        var written = acknowledgeWrite
+            ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+            : null;
         if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
             var dropped = Interlocked.Increment(ref _droppedPendingTurns);
             _logger.LogWarning(
                 "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
                 _pendingTurnsCapacity, dropped);
 
-            return;
+            written?.TrySetException(new InvalidOperationException("ACP pending-turns queue is full."));
+            return written?.Task ?? Task.CompletedTask;
         }
 
-        if (!_pendingTurns.Writer.TryWrite(text))
+        if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
             _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
+            written?.TrySetException(new ObjectDisposedException(nameof(AcpHostedAgentRuntime)));
+        }
+        return written?.Task ?? Task.CompletedTask;
     }
 
     /// <summary>
@@ -486,8 +494,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// </summary>
     async Task RunTurnWorkerAsync(CancellationToken ct) {
         try {
-            await foreach (var text in _pendingTurns.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-                await ProcessTurnAsync(text, ct).ConfigureAwait(false);
+            await foreach (var turn in _pendingTurns.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+                await ProcessTurnAsync(turn, ct).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             // normal shutdown — see this method's remarks.
         } catch (Exception ex) {
@@ -508,15 +516,21 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// I/O). A cancellation still propagates out of this method (the <c>when</c> filter below only
     /// catches non-cancellation faults) so <see cref="RunTurnWorkerAsync"/>'s loop stops promptly.
     /// </summary>
-    async Task ProcessTurnAsync(string text, CancellationToken ct) {
-        EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text));
-
+    async Task ProcessTurnAsync(PendingTurn turn, CancellationToken ct) {
+        await _turnExecutionGate.WaitAsync(ct).ConfigureAwait(false);
         try {
-            await SendPromptAsync(text, ct).ConfigureAwait(false);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
-            _logger.LogDebug(ex, "ACP: session/prompt turn faulted; flushing this turn's partial buffer.");
+            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text));
+
+            try {
+                await SendPromptAsync(turn.Text, turn.Written, ct).ConfigureAwait(false);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                turn.Written?.TrySetException(ex);
+                _logger.LogDebug(ex, "ACP: session/prompt turn faulted; flushing this turn's partial buffer.");
+            } finally {
+                FlushOpenRun();
+            }
         } finally {
-            FlushOpenRun();
+            _turnExecutionGate.Release();
         }
     }
 
@@ -568,20 +582,31 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// </summary>
     public Task SendUserInputAsync(string text) {
         RequireSessionId();
-        EnqueueTurn(text);
-
-        return Task.CompletedTask;
+        return EnqueueTurn(text, acknowledgeWrite: false);
     }
 
-    async Task SendPromptAsync(string text, CancellationToken ct) {
+    public Task SendUserInputAndWaitForWriteAsync(string text) {
+        RequireSessionId();
+        return EnqueueTurn(text, acknowledgeWrite: true);
+    }
+
+    public async Task WaitForTurnIdleAsync(CancellationToken ct) {
+        await _turnExecutionGate.WaitAsync(ct).ConfigureAwait(false);
+        _turnExecutionGate.Release();
+    }
+
+    async Task SendPromptAsync(string text, TaskCompletionSource? written, CancellationToken ct) {
         var promptParams = JsonSerializer.SerializeToElement(
             new SessionPromptParams(
                 SessionId: _sessionId!,
                 Prompt: [new PromptContentBlock(Type: "text", Text: text)]),
             CapacitorJsonContext.Default.SessionPromptParams);
 
-        await _connection.RequestAsync("session/prompt", promptParams, ct).ConfigureAwait(false);
+        await _connection.RequestAsync(
+            "session/prompt", promptParams, ct, () => written?.TrySetResult()).ConfigureAwait(false);
     }
+
+    sealed record PendingTurn(string Text, TaskCompletionSource? Written);
 
     public Task SendSpecialKeyAsync(string key) {
         // ACP has no special-key channel — best-effort no-op.

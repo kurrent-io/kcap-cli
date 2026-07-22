@@ -1048,7 +1048,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
     }
 
     /// <summary>Cursor cannot safely run directly in the borrowed checkout. The orchestrator must
-    /// first materialize its authorized contents into an owned snapshot.</summary>
+    /// first materialize its authorized contents into an independent snapshot.</summary>
     [Test]
     public async Task BuildProcessStartInfo_Cursor_RawBorrowedReviewRequiresSnapshotMaterialization() {
         var ctx = ReviewContext() with { Work = WorkLocation.BorrowedCwd };

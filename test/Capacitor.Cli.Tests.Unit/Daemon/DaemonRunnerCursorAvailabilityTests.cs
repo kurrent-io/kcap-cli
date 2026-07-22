@@ -128,7 +128,7 @@ public class DaemonRunnerCursorAvailabilityTests {
     }
 
     [Test]
-    public async Task ComputeUnattendedVendorCapabilities_AdvertisesBorrowedSupportPerFactory() {
+    public async Task ComputeUnattendedVendorCapabilities_WithMissingCursorArtifact_FailsClosed() {
         IHostedAgentRuntimeFactory[] factories = [
             new FakeRuntimeFactory("cursor", isAvailable: true, supportsUnattended: true,
                 supportsBorrowedReviewFlow: true),
@@ -142,7 +142,8 @@ public class DaemonRunnerCursorAvailabilityTests {
         await Assert.That(capabilities[0].CliVersion).IsNull();
         await Assert.That(capabilities[0].LauncherPolicyVersion)
             .IsEqualTo(DaemonRunner.CursorLauncherPolicyVersion);
-        await Assert.That(capabilities[0].BorrowedReviewSupported).IsTrue();
+        await Assert.That(capabilities[0].BorrowedReviewSupported).IsFalse();
+        await Assert.That(capabilities[0].BorrowedReviewContainment).IsNull();
     }
 
     [Test]

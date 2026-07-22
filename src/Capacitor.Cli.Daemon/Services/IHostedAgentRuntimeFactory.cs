@@ -33,9 +33,12 @@ internal interface IHostedAgentRuntimeFactory {
     /// request the caller's current checkout contents.</summary>
     bool SupportsBorrowedReviewFlow => false;
 
-    /// <summary>Whether a borrowed request must be materialized into a daemon-owned snapshot
+    /// <summary>Stable protocol token naming the certified containment boundary.</summary>
+    string? BorrowedReviewContainment => null;
+
+    /// <summary>Whether a borrowed request must be materialized into an independent daemon-owned snapshot
     /// before this runtime is started.</summary>
-    bool BorrowedReviewRequiresOwnedSnapshot => false;
+    bool BorrowedReviewRequiresIndependentSnapshot => false;
 
     /// <summary>
     /// Prepares and starts the hosted runtime for this launch. Throws
@@ -114,5 +117,8 @@ internal sealed record RuntimeStartContext(
         // materialization concern (an allowlist of names the launcher writes into a temp
         // mcp-config file) — this is the literal ACP session/new payload for descriptors that
         // support it.
-        IReadOnlyList<AcpMcpServerSpec>? McpServers = null
+        IReadOnlyList<AcpMcpServerSpec>? McpServers = null,
+        // True only when a borrowed request has been materialized into a fully independent,
+        // daemon-owned repository snapshot. Factories use this to revalidate exact artifacts.
+        bool               IsBorrowedSnapshot = false
     );

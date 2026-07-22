@@ -58,7 +58,7 @@ public partial class AgentOrchestratorVendorTests {
             var factory = new SpyHostedAgentRuntimeFactory("cursor") {
                 SupportsUnattended = true,
                 SupportsBorrowedReviewFlow = true,
-                BorrowedReviewRequiresOwnedSnapshot = true
+                BorrowedReviewRequiresIndependentSnapshot = true
             };
             await using var orch = BuildOrchestrator(
                 server, new SpyPtyProcessFactory(),

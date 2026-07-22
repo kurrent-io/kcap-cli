@@ -587,7 +587,7 @@ public static partial class DaemonRunner {
             .ToArray();
 
     internal const string ClaudeLauncherPolicyVersion = "claude-unattended-v1";
-    internal const string CursorLauncherPolicyVersion = "cursor-unattended-v3";
+    internal const string CursorLauncherPolicyVersion = "cursor-unattended-v4";
     internal const string CodexLauncherPolicyVersion = "codex-unattended-v1";
     internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
 
@@ -604,11 +604,18 @@ public static partial class DaemonRunner {
                 "copilot" => (config.CopilotPath, CopilotLauncherPolicyVersion),
                 _         => ("", $"{vendor}-unattended-v1")
             };
+            var cursorArtifact = vendor == "cursor"
+                ? CursorBorrowedReviewCertification.TryCertify(cliPath)
+                : null;
+            var borrowedSupported = vendor == "cursor"
+                ? factory.SupportsBorrowedReviewFlow && cursorArtifact is not null
+                : factory.SupportsBorrowedReviewFlow;
             capabilities.Add(new(
                 vendor,
                 string.IsNullOrEmpty(cliPath) ? null : ProbeCliVersion(cliPath),
                 policyVersion,
-                factory.SupportsBorrowedReviewFlow));
+                borrowedSupported,
+                borrowedSupported ? factory.BorrowedReviewContainment : null));
         }
         return capabilities;
     }

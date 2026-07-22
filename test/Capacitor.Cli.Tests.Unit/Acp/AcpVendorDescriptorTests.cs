@@ -30,7 +30,7 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.SessionNew);
         await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsTrue();
         await Assert.That(descriptor.BorrowedReviewContainment)
-            .IsEqualTo(AcpBorrowedReviewContainment.OwnedSnapshot);
+            .IsEqualTo(AcpBorrowedReviewContainment.IndependentSnapshot);
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
     }
 

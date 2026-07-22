@@ -29,7 +29,7 @@ internal enum AcpUnattendedInteractionPolicy {
 internal enum AcpBorrowedReviewContainment {
     None,
     NativeToolClamp,
-    OwnedSnapshot
+    IndependentSnapshot
 }
 
 /// <summary>
@@ -170,7 +170,7 @@ internal static class AcpVendorDescriptors {
         ModelSelector:       ConfigOptionModelSelector.Instance,
         SupportsMcpServers:  true,
         SupportsBorrowedReviewFlow: true,
-        BorrowedReviewContainment: AcpBorrowedReviewContainment.OwnedSnapshot,
+        BorrowedReviewContainment: AcpBorrowedReviewContainment.IndependentSnapshot,
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail
     );
 

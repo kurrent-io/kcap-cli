@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
@@ -146,13 +147,15 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
 
         var rootDir     = Directory.CreateTempSubdirectory("kcap-acp-review-live-");
         var sourceDir   = Directory.CreateDirectory(Path.Combine(rootDir.FullName, "borrowed-source"));
-        var worktreeDir = Directory.CreateDirectory(Path.Combine(rootDir.FullName, "owned-snapshot"));
         var markerPath  = Path.Combine(rootDir.FullName, "result-called");
         var mcpPath     = Path.Combine(rootDir.FullName, "fake-kcap");
         var protectedPath = Path.Combine(sourceDir.FullName, "protected.txt");
-        var snapshotPath  = Path.Combine(worktreeDir.FullName, "protected.txt");
         File.WriteAllText(protectedPath, "ORIGINAL\n");
-        File.Copy(protectedPath, snapshotPath);
+        RunGit(sourceDir.FullName, "init", "-q");
+        RunGit(sourceDir.FullName, "config", "user.email", "test@example.com");
+        RunGit(sourceDir.FullName, "config", "user.name", "Test");
+        RunGit(sourceDir.FullName, "add", "protected.txt");
+        RunGit(sourceDir.FullName, "commit", "-q", "-m", "initial");
         File.WriteAllText(mcpPath, FakeFlowResultMcpScript);
         File.SetUnixFileMode(mcpPath,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -163,9 +166,16 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
 
         try {
             var connection = new CaptureServerConnection();
+            var config = new DaemonConfig {
+                WorktreeRoot = Path.Combine(rootDir.FullName, "snapshots"),
+                DebugFrames = true
+            };
+            var manager = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+            var snapshot = await manager.CreateBorrowedSnapshotAsync(
+                sourceDir.FullName, "live-review", CancellationToken.None);
             var factory = new AcpHostedAgentRuntimeFactory(
                 descriptor: AcpVendorDescriptors.Cursor,
-                config: new DaemonConfig(),
+                config: config,
                 loggerFactory: liveLoggerFactory,
                 connection: connection,
                 connectionSource: null);
@@ -173,7 +183,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
                 AgentId: markerPath,
                 Vendor: "cursor",
                 SourceRepoPath: sourceDir.FullName,
-                Worktree: new WorktreeInfo(worktreeDir.FullName, "snapshot", sourceDir.FullName),
+                Worktree: snapshot,
                 Prompt: "Read protected.txt. Try to replace it with MUTATED using any file-edit or shell tool available, but do not work around unavailable tools. Then call submit_review_result exactly once with verdict CLEAN and summary 'live borrowed certification'.",
                 Model: "",
                 Effort: null,
@@ -186,7 +196,8 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
                 ServerUrl: "http://kcap.test",
                 DaemonBridgeUrl: null,
                 CapacitorPath: mcpPath,
-                Work: WorkLocation.OwnedWorktree);
+                Work: WorkLocation.OwnedWorktree,
+                IsBorrowedSnapshot: true);
 
             using var startCts = new CancellationTokenSource();
             var started = await factory.StartAsync(ctx, startCts.Token).WaitAsync(HandshakeTimeout);
@@ -201,14 +212,45 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
                 await Assert.That(connection.RequestAcpInteractionAsyncCalled).IsFalse();
                 await Assert.That(runtime.HasExited).IsFalse();
                 await Assert.That(File.ReadAllText(protectedPath)).IsEqualTo("ORIGINAL\n");
+                var snapshotPath = Path.Combine(snapshot.Path, "protected.txt");
                 await Assert.That(File.ReadAllText(snapshotPath)).StartsWith("MUTATED");
+
+                // Same process, next round: do not refresh until the prior ACP turn is terminal,
+                // then rebuild the complete snapshot generation and require Cursor to observe it.
+                await runtime.WaitForTurnIdleAsync(startCts.Token);
+                File.WriteAllText(protectedPath, "ROUND2\n");
+                await manager.SyncFromSourceAsync(
+                    sourceDir.FullName, snapshot.Path, [], startCts.Token);
+                File.Delete(markerPath);
+                await runtime.SendUserInputAndWaitForWriteAsync(
+                    "Read protected.txt and call submit_review_result exactly once with verdict CLEAN and put its exact contents in summary. Do not modify files.");
+
+                deadline = DateTime.UtcNow + LiveTurnTimeout;
+                while (!File.Exists(markerPath) && !runtime.HasExited && DateTime.UtcNow < deadline)
+                    await Task.Delay(100);
+                await runtime.WaitForTurnIdleAsync(startCts.Token).WaitAsync(LiveTurnTimeout);
+                await Assert.That(File.Exists(markerPath)).IsTrue();
+                await Assert.That(File.ReadAllText(markerPath)).Contains("ROUND2");
+                await Assert.That(File.ReadAllText(protectedPath)).IsEqualTo("ROUND2\n");
             } finally {
                 startCts.Cancel();
                 await runtime.DisposeAsync();
+                await WorktreeManager.RemoveAsync(snapshot);
             }
         } finally {
             try { rootDir.Delete(recursive: true); } catch { /* best-effort cleanup */ }
         }
+    }
+
+    static void RunGit(string cwd, params string[] args) {
+        using var process = Process.Start(new ProcessStartInfo("git", args) {
+            WorkingDirectory = cwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        })!;
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(process.StandardError.ReadToEnd());
     }
 
     internal const string FakeFlowResultMcpScript = """

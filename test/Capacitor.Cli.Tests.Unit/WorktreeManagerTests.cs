@@ -235,4 +235,86 @@ public class WorktreeManagerTests {
             }
         }
     }
+
+    [Test]
+    public async Task BorrowedSnapshot_IsIndependent_CopiesDirtyContext_AndRefreshesPristinely() {
+        var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/88/head", out _);
+        var root = Path.Combine(Path.GetTempPath(), "kcap-borrowed-root-" + Guid.NewGuid().ToString("N")[..8]);
+        try {
+            File.WriteAllText(Path.Combine(clone, "main.txt"), "dirty");
+            File.WriteAllText(Path.Combine(clone, "untracked.txt"), "one");
+            var manager = new WorktreeManager(
+                new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            var snapshot = await manager.CreateBorrowedSnapshotAsync(clone, "review", CancellationToken.None);
+            try {
+                await Assert.That(snapshot.IsStandalone).IsTrue();
+                await Assert.That(snapshot.Path.StartsWith(clone + Path.DirectorySeparatorChar, StringComparison.Ordinal)).IsFalse();
+                await Assert.That(Directory.Exists(Path.Combine(snapshot.Path, ".git"))).IsTrue();
+                await Assert.That(File.Exists(Path.Combine(snapshot.Path, ".git"))).IsFalse();
+                await Assert.That(File.ReadAllText(Path.Combine(snapshot.Path, "main.txt"))).IsEqualTo("dirty");
+                await Assert.That(File.ReadAllText(Path.Combine(snapshot.Path, "untracked.txt"))).IsEqualTo("one");
+                await Assert.That(GitCapture(clone, "worktree", "list", "--porcelain")).DoesNotContain(snapshot.Path);
+
+                File.WriteAllText(Path.Combine(snapshot.Path, "reviewer-created.txt"), "must disappear");
+                File.WriteAllText(Path.Combine(snapshot.Path, ".git", "reviewer-metadata"), "must disappear");
+                File.WriteAllText(Path.Combine(clone, "untracked.txt"), "two");
+                await manager.SyncFromSourceAsync(clone, snapshot.Path, [], CancellationToken.None);
+
+                await Assert.That(File.Exists(Path.Combine(snapshot.Path, "reviewer-created.txt"))).IsFalse();
+                await Assert.That(File.Exists(Path.Combine(snapshot.Path, ".git", "reviewer-metadata"))).IsFalse();
+                await Assert.That(File.ReadAllText(Path.Combine(snapshot.Path, "untracked.txt"))).IsEqualTo("two");
+                await Assert.That(File.ReadAllText(Path.Combine(clone, "main.txt"))).IsEqualTo("dirty");
+            } finally {
+                await WorktreeManager.RemoveAsync(snapshot);
+            }
+        } finally {
+            try { Directory.Delete(upstream, true); } catch { }
+            try { Directory.Delete(clone, true); } catch { }
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task BorrowedSnapshot_RejectsSymlinkWithoutFollowingIt() {
+        Skip.When(OperatingSystem.IsWindows(), "Symlink semantics in this certification are POSIX-only.");
+        var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/89/head", out _);
+        var root = Path.Combine(Path.GetTempPath(), "kcap-borrowed-root-" + Guid.NewGuid().ToString("N")[..8]);
+        try {
+            File.CreateSymbolicLink(Path.Combine(clone, "escape"), Path.Combine(upstream, "main.txt"));
+            var manager = new WorktreeManager(
+                new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await manager.CreateBorrowedSnapshotAsync(clone, "review", CancellationToken.None));
+            await Assert.That(ex!.Message).Contains("symlink_unsupported");
+        } finally {
+            try { Directory.Delete(upstream, true); } catch { }
+            try { Directory.Delete(clone, true); } catch { }
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task CleanupOrphaned_PreservesActiveBorrowedSnapshotContainerAndRemovesOnlyOrphans() {
+        var root = Path.Combine(Path.GetTempPath(), "kcap-cleanup-root-" + Guid.NewGuid().ToString("N")[..8]);
+        var activeRoot = Path.Combine(root, "borrowed-snapshots", "active");
+        var activeCwd = Path.Combine(activeRoot, "src");
+        var orphan = Path.Combine(root, "borrowed-snapshots", "orphan");
+        var legacy = Path.Combine(root, "legacy-orphan");
+        try {
+            Directory.CreateDirectory(activeCwd);
+            Directory.CreateDirectory(orphan);
+            Directory.CreateDirectory(legacy);
+            var manager = new WorktreeManager(
+                new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+
+            await manager.CleanupOrphanedAsync([activeCwd]);
+
+            await Assert.That(Directory.Exists(activeRoot)).IsTrue();
+            await Assert.That(Directory.Exists(orphan)).IsFalse();
+            await Assert.That(Directory.Exists(legacy)).IsFalse();
+        } finally {
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
 }

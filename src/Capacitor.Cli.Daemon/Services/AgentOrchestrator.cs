@@ -112,6 +112,7 @@ internal record AgentInstance(
     /// <summary>Authorized live checkout mirrored into this owned worktree for a runtime that
     /// cannot safely execute in-place. Refreshed before each later review round.</summary>
     public string? BorrowedSnapshotSource { get; init; }
+    public SemaphoreSlim BorrowedSnapshotGate { get; } = new(1, 1);
 
     /// <summary>Current PTY dimensions — the single source of truth for every dims send
     /// (registration, reconnect). Updated by every resize path (local clamp + web resize).
@@ -868,7 +869,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
-        var snapshotBorrow = cmd.Borrowed && runtimeFactory.BorrowedReviewRequiresOwnedSnapshot;
+        var snapshotBorrow = cmd.Borrowed && runtimeFactory.BorrowedReviewRequiresIndependentSnapshot;
         var work = cmd.Borrowed && !snapshotBorrow
             ? WorkLocation.BorrowedCwd
             : WorkLocation.OwnedWorktree;
@@ -956,11 +957,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
 
                 if (snapshotBorrow) {
-                    borrowedSnapshotSource = auth.CanonicalGitRoot
+                    borrowedSnapshotSource = auth.CanonicalCwd
+                        ?? throw new InvalidOperationException("borrow_auth_failed: canonical_cwd_missing");
+                    var snapshotGitRoot = auth.CanonicalGitRoot
                         ?? throw new InvalidOperationException("borrow_auth_failed: not_a_git_repository");
-                    worktree = await _worktreeManager.CreateAsync(borrowedSnapshotSource, baseRef: baseRef);
-                    await _worktreeManager.SyncFromSourceAsync(
-                        borrowedSnapshotSource, worktree.Path, [], _shutdownCts.Token);
+                    worktree = await _worktreeManager.CreateBorrowedSnapshotAsync(
+                        snapshotGitRoot, borrowedSnapshotSource, $"borrowed-{agentId}", _shutdownCts.Token);
                 } else {
                     // Direct borrowed runtimes have their own certified read-only boundary.
                     worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
@@ -1034,7 +1036,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 McpAllowlist: effectiveAllowlist,
                 Work: work,
                 DaemonId: _daemonId,       // Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
-                DaemonEpoch: _daemonEpoch
+                DaemonEpoch: _daemonEpoch,
+                IsBorrowedSnapshot: snapshotBorrow
             );
 
             HostedRuntimeStart start;
@@ -1667,40 +1670,57 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin input ignored for private agents
 
-        await TryRefreshBorrowedSnapshotAsync(agent);
+        await agent.BorrowedSnapshotGate.WaitAsync(_shutdownCts.Token);
+        try {
+            if (!await TryRefreshBorrowedSnapshotAsync(agent)) return;
 
-        var message = text;
+            var message = text;
 
-        if (attachmentIds is { Length: > 0 }) {
-            var paths = await DownloadAttachmentsAsync(agent.Worktree.Path, attachmentIds);
+            if (attachmentIds is { Length: > 0 }) {
+                var paths = await DownloadAttachmentsAsync(agent.Worktree.Path, attachmentIds);
 
-            if (paths.Count > 0) {
-                message = $"{text}\n\n[Attached files: {string.Join(", ", paths)}]";
+                if (paths.Count > 0) {
+                    message = $"{text}\n\n[Attached files: {string.Join(", ", paths)}]";
+                }
             }
-        }
 
-        // PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
-        // the CLI's TUI treats it as one pasted block and the following Enter is an unambiguous
-        // submit keypress (see its doc comment for why a naive text-then-CR write mishandles
-        // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
-        // this call is the single vendor-agnostic entry point for both.
-        await agent.Runtime.SendUserInputAsync(message);
+            // PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
+            // the CLI's TUI treats it as one pasted block and the following Enter is an unambiguous
+            // submit keypress (see its doc comment for why a naive text-then-CR write mishandles
+            // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
+            // this call is the single vendor-agnostic entry point for both.
+            if (agent.BorrowedSnapshotSource is not null)
+                await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
+            else
+                await agent.Runtime.SendUserInputAsync(message);
+        } finally {
+            agent.BorrowedSnapshotGate.Release();
+        }
     }
 
-    static readonly string[] BorrowedSnapshotExcludes = [".attached", ".claude", ".codex", ".mcp.json"];
     static readonly TimeSpan BorrowedSnapshotRefreshTimeout = TimeSpan.FromSeconds(30);
 
-    async Task TryRefreshBorrowedSnapshotAsync(AgentInstance agent) {
+    async Task<bool> TryRefreshBorrowedSnapshotAsync(AgentInstance agent) {
         if (agent.BorrowedSnapshotSource is not { } source || agent.Work != WorkLocation.OwnedWorktree)
-            return;
+            return true;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
         timeout.CancelAfter(BorrowedSnapshotRefreshTimeout);
         try {
+            await agent.Runtime.WaitForTurnIdleAsync(timeout.Token);
+            var auth = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(source);
+            if (!auth.Allowed ||
+                !string.Equals(auth.CanonicalCwd, source, StringComparison.Ordinal) ||
+                !string.Equals(auth.CanonicalGitRoot, agent.Worktree.SourceRepo, StringComparison.Ordinal))
+                throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason ?? "source_identity_changed"}");
             await _worktreeManager.SyncFromSourceAsync(
-                source, agent.Worktree.Path, BorrowedSnapshotExcludes, timeout.Token);
+                agent.Worktree.SourceRepo, agent.Worktree.SnapshotRoot ?? agent.Worktree.Path, [], timeout.Token);
+            return true;
         } catch (Exception ex) when (ex is not OperationCanceledException || !_shutdownCts.IsCancellationRequested) {
             LogBorrowedSnapshotRefreshFailed(ex, agent.Id);
+            agent.PendingEndReason = "borrowed_snapshot_refresh_failed";
+            try { await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(10)); } catch { /* cleanup owns final reap */ }
+            return false;
         }
     }
 

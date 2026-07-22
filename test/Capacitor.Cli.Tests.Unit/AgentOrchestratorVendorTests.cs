@@ -848,7 +848,7 @@ public partial class AgentOrchestratorVendorTests {
         public string Vendor             { get; } = vendor;
         public bool   SupportsUnattended { get; init; }
         public bool   SupportsBorrowedReviewFlow { get; init; }
-        public bool   BorrowedReviewRequiresOwnedSnapshot { get; init; }
+        public bool   BorrowedReviewRequiresIndependentSnapshot { get; init; }
 
         /// <summary>Threaded onto the <see cref="FakeHostedAgentRuntime"/> this factory returns —
         /// defaults to <c>false</c> (ACP-shaped) matching this factory's original "cursor" use, but
