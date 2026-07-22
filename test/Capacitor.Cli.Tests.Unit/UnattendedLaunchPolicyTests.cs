@@ -39,11 +39,11 @@ public class UnattendedLaunchPolicyTests {
     }
 
     [Test]
-    public async Task Cursor_descriptor_unattended_launch_is_rejected_until_certified() {
+    public async Task Cursor_descriptor_unattended_launch_is_allowed_with_zero_prompt_policy() {
         var reason = UnattendedLaunchPolicy.RejectionReason(
             "cursor", supportsUnattended: AcpVendorDescriptors.Cursor.SupportsUnattended, isReviewFlow: true);
 
-        await Assert.That(reason).IsNotNull();
+        await Assert.That(reason).IsNull();
     }
 
     [Test]

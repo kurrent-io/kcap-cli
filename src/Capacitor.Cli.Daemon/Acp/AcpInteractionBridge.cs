@@ -30,7 +30,8 @@ internal sealed partial class AcpInteractionBridge(
         Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
         string                                                                       agentId,
         ILogger                                                                      logger,
-        bool                                                                         autoApproveUnattended = false
+        AcpUnattendedInteractionPolicy                                                unattendedPolicy = AcpUnattendedInteractionPolicy.Disabled,
+        Action<string>?                                                               unexpectedUnattendedInteraction = null
     ) {
     /// <summary>
     /// Handles one inbound <see cref="AcpRequest"/>. Returns <see langword="null"/> for any method
@@ -51,6 +52,18 @@ internal sealed partial class AcpInteractionBridge(
     /// session id is authoritative and available at the exact moment the request itself exists.
     /// </summary>
     public async Task<JsonElement?> HandleAsync(AcpRequest request, CancellationToken ct) {
+        // Cursor review flows launch with Cursor's own no-prompt flags. Any server→client request
+        // therefore proves that the zero-interaction contract has regressed. Never turn it into a
+        // local approval and never forward it to a human; signal the runtime to reap the reviewer.
+        if (unattendedPolicy == AcpUnattendedInteractionPolicy.Fail) {
+            LogUnexpectedUnattendedInteraction(agentId, request.Method);
+            unexpectedUnattendedInteraction?.Invoke(request.Method);
+
+            return request.Method is "session/request_permission" or "elicitation/create"
+                ? CancelledResult()
+                : null;
+        }
+
         return request.Method switch {
             "session/request_permission" => await HandlePermissionAsync(request, ct).ConfigureAwait(false),
             "elicitation/create"         => await HandleElicitationAsync(request, ct).ConfigureAwait(false),
@@ -98,7 +111,7 @@ internal sealed partial class AcpInteractionBridge(
 
         // Unattended reviewer: auto-approve a least-privilege allow option without a human, fail
         // closed when there's no unambiguous one. A trust decision — it does not inspect the tool.
-        if (autoApproveUnattended) {
+        if (unattendedPolicy == AcpUnattendedInteractionPolicy.AutoApprove) {
             var chosen = TrySelectLeastPrivilegeAllow(options);
 
             if (chosen is not null) {
@@ -175,7 +188,7 @@ internal sealed partial class AcpInteractionBridge(
         // Unattended review-flow reviewer: there is no human to answer an elicitation, and a reviewer
         // should proceed on its own assumptions (and state them in its findings) rather than block.
         // Decline deterministically without routing anywhere.
-        if (autoApproveUnattended) {
+        if (unattendedPolicy == AcpUnattendedInteractionPolicy.AutoApprove) {
             LogUnattendedElicitationDeclined(agentId);
 
             return CancelledResult();
@@ -257,6 +270,9 @@ internal sealed partial class AcpInteractionBridge(
 
         return mapped;
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "ACP: unattended reviewer {AgentId} emitted forbidden interaction request {Method}; terminating reviewer")]
+    partial void LogUnexpectedUnattendedInteraction(string agentId, string method);
 
     /// <summary>
     /// Maps a resolved <see cref="AcpInteractionDecision"/> to the ACP outcome result shape.

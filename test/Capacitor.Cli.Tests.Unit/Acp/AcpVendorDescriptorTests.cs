@@ -21,8 +21,11 @@ public class AcpVendorDescriptorTests {
 
         await Assert.That(descriptor.Vendor).IsEqualTo("cursor");
         await Assert.That(descriptor.Argv.SequenceEqual(["acp"])).IsTrue();
-        await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([])).IsTrue();
-        await Assert.That(descriptor.SupportsUnattended).IsFalse();
+        await Assert.That(descriptor.UnattendedTrustArgv.SequenceEqual([
+            "--force", "--approve-mcps", "--trust"
+        ])).IsTrue();
+        await Assert.That(descriptor.SupportsUnattended).IsTrue();
+        await Assert.That(descriptor.UnattendedInteractionPolicy).IsEqualTo(AcpUnattendedInteractionPolicy.Fail);
         await Assert.That(descriptor.SupportsMcpServers).IsTrue();
         await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.SessionNew);
         await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
@@ -39,6 +42,7 @@ public class AcpVendorDescriptorTests {
             "--allow-all-tools", "--no-ask-user", "--no-custom-instructions", "--disable-builtin-mcps"
         ])).IsTrue();
         await Assert.That(descriptor.SupportsUnattended).IsTrue();
+        await Assert.That(descriptor.UnattendedInteractionPolicy).IsEqualTo(AcpUnattendedInteractionPolicy.AutoApprove);
         // ACP still advertises only HTTP/SSE, so session/new stdio forwarding stays disabled.
         await Assert.That(descriptor.SupportsMcpServers).IsFalse();
         await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.CopilotAdditionalConfig);
@@ -116,7 +120,8 @@ public class AcpVendorDescriptorTests {
             SupportsUnattended:     true,
             ModelSelector:          NoOpModelSelector.Instance,
             SupportsMcpServers:     false,
-            ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew
+            ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
+            UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AutoApprove
         )).Throws<ArgumentException>();
     }
 

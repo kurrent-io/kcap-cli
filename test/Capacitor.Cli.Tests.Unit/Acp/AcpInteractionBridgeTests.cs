@@ -620,9 +620,9 @@ public class AcpInteractionBridgeTests {
         await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("Proceed?")); // never the prompt text
     }
 
-    // ── Unattended review-flow auto-approve (AcpInteractionBridge autoApproveUnattended) ─────────
+    // ── Unattended review-flow interaction policies ─────────────────────────────────────────────
     //
-    // A bridge built with autoApproveUnattended:true selects the least-privilege ALLOW option by
+    // A bridge built with AutoApprove selects the least-privilege ALLOW option by
     // exact Kind WITHOUT ever routing to a human, and fails closed (cancelled) when there is no
     // unambiguous allow option. Every case below uses a delegate that INCREMENTS a counter (never
     // throws — the bridge would swallow a throw and return cancelled, masking the assertion) so each
@@ -633,13 +633,38 @@ public class AcpInteractionBridgeTests {
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
+    [Test]
+    [Arguments("session/request_permission")]
+    [Arguments("elicitation/create")]
+    [Arguments("vendor/unknown_interaction")]
+    public async Task FailPolicy_AnyInteraction_SignalsReap_WithoutRoutingToHuman(string method) {
+        var routed = 0;
+        var reaped = new List<string>();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => { Interlocked.Increment(ref routed); return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)); },
+            agentId: AgentId,
+            logger: NullLogger.Instance,
+            unattendedPolicy: AcpUnattendedInteractionPolicy.Fail,
+            unexpectedUnattendedInteraction: reaped.Add);
+        var request = new AcpRequest(1, method, PermissionParamsWithOptions("[]"));
+
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(routed).IsEqualTo(0);
+        await Assert.That(reaped).IsEquivalentTo([method]);
+        if (method == "vendor/unknown_interaction")
+            await Assert.That(result).IsNull();
+        else
+            await Assert.That(result!.Value.GetProperty("outcome").GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
     static (AcpInteractionBridge Bridge, Func<int> Calls) AutoApproveBridge(ILogger? logger = null) {
         var calls = 0;
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, ct) => { Interlocked.Increment(ref calls); return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)); },
             agentId: AgentId,
             logger: logger ?? NullLogger.Instance,
-            autoApproveUnattended: true);
+            unattendedPolicy: AcpUnattendedInteractionPolicy.AutoApprove);
 
         return (bridge, () => Volatile.Read(ref calls));
     }
@@ -757,7 +782,7 @@ public class AcpInteractionBridgeTests {
             requestInteraction: (req, ct) => { throw new InvalidOperationException("must not be called"); },
             agentId: AgentId,
             logger: logger,
-            autoApproveUnattended: true);
+            unattendedPolicy: AcpUnattendedInteractionPolicy.AutoApprove);
 
         var request = new AcpRequest(1, "session/request_permission", PermissionParamsWithOptions(
             """[{"optionId":"ao","name":"Allow once","kind":"allow_once"}]"""));

@@ -132,6 +132,108 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
         }
     }
 
+    /// <summary>AI-1408 certification probe: drives the production review-flow launch shape against
+    /// a real Cursor ACP process and a tiny local stdio MCP server. Success proves the exact
+    /// <c>--force --approve-mcps --trust</c> launch can invoke the required result channel without
+    /// producing an ACP permission/elicitation request. The runtime's Fail interaction policy makes
+    /// this stronger than merely asserting that no request reached the server: any such frame reaps
+    /// the child before the marker can be written.</summary>
+    [Test]
+    public async Task ReviewFlow_AgainstRealCursorAgentAcp_CallsResultMcp_WithZeroInteractionRequests() {
+        Skip.Unless(
+            Environment.GetEnvironmentVariable(LiveGateEnvVar) == "1",
+            $"Gated live E2E against a real 'cursor-agent acp' process — set {LiveGateEnvVar}=1 to run " +
+            "(spends a real Cursor turn; requires an authenticated Cursor subscription).");
+        Skip.When(OperatingSystem.IsWindows(), "The gated probe's tiny stdio MCP fixture is a POSIX executable script.");
+
+        var worktreeDir = Directory.CreateTempSubdirectory("kcap-acp-review-live-");
+        var markerPath  = Path.Combine(worktreeDir.FullName, "result-called");
+        var mcpPath     = Path.Combine(worktreeDir.FullName, "fake-kcap");
+        File.WriteAllText(mcpPath, FakeFlowResultMcpScript);
+        File.SetUnixFileMode(mcpPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var liveLoggerFactory = LoggerFactory.Create(b => b
+            .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; })
+            .SetMinimumLevel(LogLevel.Debug));
+
+        try {
+            var connection = new CaptureServerConnection();
+            var factory = new AcpHostedAgentRuntimeFactory(
+                descriptor: AcpVendorDescriptors.Cursor,
+                config: new DaemonConfig(),
+                loggerFactory: liveLoggerFactory,
+                connection: connection,
+                connectionSource: null);
+            var ctx = new RuntimeStartContext(
+                AgentId: markerPath,
+                Vendor: "cursor",
+                SourceRepoPath: worktreeDir.FullName,
+                Worktree: new WorktreeInfo(worktreeDir.FullName, "live-review", worktreeDir.FullName),
+                Prompt: "Call the submit_review_result MCP tool exactly once with verdict CLEAN and summary 'live certification'. Do not use any other tool.",
+                Model: "",
+                Effort: null,
+                Tools: null,
+                IsReview: false,
+                IsReviewFlow: true,
+                Review: null,
+                Cols: 80,
+                Rows: 24,
+                ServerUrl: "http://kcap.test",
+                DaemonBridgeUrl: null,
+                CapacitorPath: mcpPath);
+
+            using var startCts = new CancellationTokenSource();
+            var started = await factory.StartAsync(ctx, startCts.Token).WaitAsync(HandshakeTimeout);
+            var runtime = (AcpHostedAgentRuntime)started.Runtime;
+
+            try {
+                var deadline = DateTime.UtcNow + LiveTurnTimeout;
+                while (!File.Exists(markerPath) && !runtime.HasExited && DateTime.UtcNow < deadline)
+                    await Task.Delay(100);
+
+                await Assert.That(File.Exists(markerPath)).IsTrue();
+                await Assert.That(connection.RequestAcpInteractionAsyncCalled).IsFalse();
+                await Assert.That(runtime.HasExited).IsFalse();
+            } finally {
+                startCts.Cancel();
+                await runtime.DisposeAsync();
+            }
+        } finally {
+            try { worktreeDir.Delete(recursive: true); } catch { /* best-effort cleanup */ }
+        }
+    }
+
+    const string FakeFlowResultMcpScript = """
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+def send(message):
+    print(json.dumps(message, separators=(",", ":")), flush=True)
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if request_id is None:
+            continue
+        if method == "initialize":
+            send({"jsonrpc":"2.0","id":request_id,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"live-flow-result","version":"1"}}})
+        elif method == "tools/list":
+            send({"jsonrpc":"2.0","id":request_id,"result":{"tools":[{"name":"submit_review_result","description":"Submit the final review result","inputSchema":{"type":"object","properties":{"verdict":{"type":"string","enum":["CLEAN","FINDINGS"]},"summary":{"type":"string"},"findings":{"type":"array"}},"required":["verdict","summary"]}}]}})
+        elif method == "tools/call":
+            with open(os.environ["KCAP_FLOW_AGENT_ID"], "w", encoding="utf-8") as marker:
+                marker.write(json.dumps(request.get("params", {})))
+            send({"jsonrpc":"2.0","id":request_id,"result":{"content":[{"type":"text","text":"review result accepted"}]}})
+        else:
+            send({"jsonrpc":"2.0","id":request_id,"error":{"code":-32601,"message":"Method not found"}})
+    except Exception as error:
+        print(str(error), file=sys.stderr, flush=True)
+""";
+
     sealed record HelloCollectionResult(bool SawHello, string ConcatenatedText, List<AcpSessionUpdate> Updates);
 
     /// <summary>
