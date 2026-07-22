@@ -17,4 +17,22 @@ public partial class AgentOrchestratorVendorTests {
 
         await Assert.That(orch.RecordlessSurvivorsImpossibleForTest).IsTrue();
     }
+
+    // Phase B2-b (sequenced-settlement design §4.2.4): the ledger's un-acked snapshot is re-reported on
+    // every status report until the server prunes it per-entry via AckResolvedCandidates. The seam and
+    // the underlying ledger Ack are SYNCHRONOUS (void) — no await (would be CS4008).
+    [Test]
+    public async Task Status_report_carries_resolved_candidates_and_ack_prunes_them() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+            new Dictionary<string, IHostedAgentLauncher>());
+
+        var g = orch.SeedResolvedCandidateForTest("a1", "old-epoch");   // test seam over the ledger
+        await Assert.That(orch.BuildStatusReport().ResolvedStartupCandidates!.Single().AgentId).IsEqualTo("a1");
+
+        // The seam + the underlying ledger Ack are SYNCHRONOUS (void) — no await (would be CS4008).
+        orch.HandleAckResolvedCandidatesForTest(
+            new AckResolvedCandidates([new ResolvedCandidateAck(g.Generation, "a1", "old-epoch")]));
+        await Assert.That(orch.BuildStatusReport().ResolvedStartupCandidates).IsEmpty();
+    }
 }

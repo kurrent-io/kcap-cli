@@ -85,6 +85,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
+    /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
+    /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
+    public event Action<AckResolvedCandidates>? OnAckResolvedCandidates;
+
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): snapshot of the un-acked resolved-
+    /// candidates ledger, re-advertised on <c>DaemonConnect</c> (mirrors <see cref="GetLiveAgents"/>).
+    /// Optional — null when not wired (tests / early startup) ⇒ no candidates advertised.</summary>
+    public Func<ResolvedStartupCandidate[]>? GetResolvedStartupCandidates { get; set; }
+
     /// <summary>Phase B (D2): send the periodic daemon self-report ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
     /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
@@ -143,6 +153,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // instead of resizing the PTY to 0×0 — graceful degradation during a non-atomic CLI/server
         // rollout.
         _hub.On<ResizeTerminalCommand>("ResizeTerminalAggregate", cmd => SafeInvoke("ResizeTerminalAggregate", () => OnResizeTerminal?.Invoke(cmd)));
+
+        // Phase B2-b (sequenced-settlement design §4.2.4): one-way server→daemon receive that prunes the
+        // resolved-candidates ledger per-entry. The handler is SYNCHRONOUS (the ledger Ack is void), so
+        // invoke it inline and return a completed task — no work is awaited.
+        _hub.On<AckResolvedCandidates>("AckResolvedCandidates", ack => { OnAckResolvedCandidates?.Invoke(ack); return Task.CompletedTask; });
 
         // Client-result invocations for per-phase eval dispatch.
         _hub.On<PrepareEvalCommand, PrepareResult>("PrepareEval",
@@ -392,10 +407,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
                     _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get(), liveAgents,
                     _config.UnattendedVendors,
-                    // Phase B2-b (sequenced-settlement design §4.2.3): advertise the durable coverage
-                    // boot-chain verdict. The full enriched sequenced-settlement payload lands in a
-                    // later task; for now this single additive field is wire-compatible with old servers.
-                    RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible
+                    // Phase B2-b (sequenced-settlement design §4.2.3/§4.2.4): advertise the durable
+                    // coverage boot-chain verdict plus the un-acked resolved-candidates ledger snapshot,
+                    // re-reported on every connect until the server prunes it via AckResolvedCandidates.
+                    // The full enriched sequenced-settlement payload lands in a later task; these
+                    // additive fields are wire-compatible with old servers (ignored) and inert until the
+                    // paired server PR consumes them.
+                    RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
+                    ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke()
                 ),
                 cancellationToken: _ct
             );

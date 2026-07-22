@@ -355,6 +355,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
         _server.ProbeBorrowSourceHandler      =  HandleProbeBorrowSource;
 
+        // Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the resolved-candidates
+        // ledger per-entry via AckResolvedCandidates (synchronous void handler); the connect payload
+        // re-advertises the un-acked snapshot alongside the periodic DaemonStatusReport.
+        _server.OnAckResolvedCandidates       += HandleAckResolvedCandidates;
+        _server.GetResolvedStartupCandidates  =  () => [.. _resolvedLedger?.Snapshot() ?? []];
+
         _server.GetLiveAgentIds = () => [
             .. _agents
                 .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsPrivate)
@@ -403,7 +409,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
     internal DaemonStatusReport BuildStatusReport() =>
-        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()]);
+        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
+            // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
+            // candidates ledger on every self-report until the server prunes it per-entry via
+            // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch (Epoch/counters
+            // finalized in a later task); the field is additive/inert until the paired server PR reads it.
+            Epoch: _daemonEpoch,
+            ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []]);
 
     /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
@@ -505,6 +517,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// un-acked snapshot, so a test can assert the confirmed-gone hooks (quarantine drain / StopAgent
     /// fallback / record pass) emitted positive per-id death evidence. Never used in production.</summary>
     internal IReadOnlyList<ResolvedStartupCandidate> ResolvedLedgerSnapshotForTest => _resolvedLedger?.Snapshot() ?? [];
+
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): honor the server's per-entry
+    /// AckResolvedCandidates prune (sparse, deliver-once). SYNCHRONOUS — the ledger's <c>Ack</c> is a
+    /// synchronous void, so this stays void (a <c>void</c> event/receive seam is never awaited).</summary>
+    internal void HandleAckResolvedCandidates(AckResolvedCandidates ack) => _resolvedLedger?.Ack(ack.Entries ?? []);
+
+    /// <summary>Test seam: seed a resolved-candidate ledger entry so a test can drive the advertise/ack
+    /// prune path without a real confirmed-death hook. Never used in production.</summary>
+    internal ResolvedStartupCandidate SeedResolvedCandidateForTest(string agentId, string oldEpoch)
+        => _resolvedLedger!.Upsert(agentId, oldEpoch, null, null);
+
+    /// <summary>Test seam: route an ack through the SYNCHRONOUS <see cref="HandleAckResolvedCandidates"/>
+    /// handler (no await — the ledger Ack is void). Never used in production.</summary>
+    internal void HandleAckResolvedCandidatesForTest(AckResolvedCandidates ack) => HandleAckResolvedCandidates(ack);
 
     /// <summary>Test seam: seed a kill-quarantine entry so a test can drive the drain hook without a
     /// real launch+teardown. Mirrors <see cref="WritePidRecordForTest"/>; never used in production.</summary>
