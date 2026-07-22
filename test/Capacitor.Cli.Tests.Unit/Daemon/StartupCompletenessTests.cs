@@ -25,8 +25,6 @@ public partial class AgentOrchestratorVendorTests {
     public async Task Startup_discovery_is_not_applicable_off_linux_and_pending_before_a_scan() {
         await using var orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher>());
-        var report = orch.BuildStatusReport();
-        var expected = OperatingSystem.IsLinux() ? MarkerScanState.Complete : MarkerScanState.NotApplicable;
         // A clean boot with no candidates: after ReapOrphansOnceAsync the Linux scan is complete.
         await orch.ReapOrphansOnceAsync();
         await Assert.That(orch.BuildStatusReport().StartupDiscovery!.Value.MarkerScanState)

@@ -201,13 +201,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // a crash between the two re-derives from the leftover source and Upsert (idempotent on the
     // source-stable (AgentId, OldEpoch) key) collapses onto the committed entry. Lives in the same
     // state dir as _pidRecords, under the same atomic temp+rename discipline.
-    ResolvedCandidatesLedger? _resolvedLedger;
+    readonly ResolvedCandidatesLedger? _resolvedLedger;
 
     // Phase B2-b (sequenced-settlement design §4.2.4): the durable marker-candidate source store for a
     // RECORDLESS prior-epoch survivor (Hook D). The env-marker scan persists a source BEFORE the kill and
     // resolves it through the (a)/(b)/(c) matrix; on confirmed death it emits into _resolvedLedger with a
     // NULL flow (the env is untrusted) unless a co-existing durable RECORD supplies a trusted flow.
-    MarkerCandidateStore? _markerCandidates;
+    readonly MarkerCandidateStore? _markerCandidates;
 
     // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
     // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
@@ -219,7 +219,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // ReadLiveness / the server's CommandAck+CommandRejected sends so it stays unit-testable without a
     // live hub. Only Seq'd LaunchAgentCommand + StopAgentV2 route through it; un-Seq'd commands stay on
     // the legacy unsequenced lane (old-server compat) and never advance the watermark.
-    SequencedCommandProcessor? _processor;
+    readonly SequencedCommandProcessor? _processor;
 
     // Phase B (D4 §6.4(2a)/(3)): single-flight latches so a slow sweep (each survivor consumes a
     // ~5s TERM grace sequentially) can't overlap itself when the next heartbeat tick fires — otherwise
@@ -392,6 +392,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.GetHighestAcceptedSeq  =  () => _processor?.HighestAcceptedSeq;
         _server.GetLastProcessedSeq    =  () => _processor?.LastProcessedSeq;
         _server.GetQuarantined         =  () => [.. QuarantineSnapshot()];
+        // Phase B2-b (sequenced-settlement design): the DaemonConnect epoch reads THIS orchestrator's
+        // per-boot _daemonEpoch (the same source the processor is scoped to), so the advertised epoch
+        // can't diverge from it even if config.DaemonEpoch were left unpinned (tests).
+        _server.GetDaemonEpoch         =  () => _daemonEpoch;
 
         _server.GetLiveAgentIds = () => [
             .. _agents

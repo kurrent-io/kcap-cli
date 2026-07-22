@@ -28,14 +28,25 @@ internal sealed class OrphanReaper(
         Action<string, string, string?, string?>? onRecordResolved = null,
         MarkerCandidateStore? markerStore = null,
         Action<string, string>? onMarkerResolved = null) {
+    // Phase B2-b (sequenced-settlement design): CurrentDiscovery is a multi-field struct
+    // ({enum, DateTimeOffset?}) written on the reap thread and read on the report/connect thread, so an
+    // unguarded read could tear. A dedicated gate around just the field's get/set makes each access
+    // atomic; the sweep is single-flight (only the reap thread ever writes), so the read-modify-write at
+    // the enumeration-failure seam needs no wider critical section.
+    readonly object _discoveryGate = new();
+    StartupDiscovery _currentDiscovery =
+        new(OperatingSystem.IsLinux() ? MarkerScanState.Pending : MarkerScanState.NotApplicable);
+
     /// <summary>Phase B2-b (sequenced-settlement design): the recordless-survivor env-marker-scan
     /// status, advertised on the daemon's startup-completeness signals. Seeded per-platform:
     /// <c>Pending</c> on Linux (a scan runs and must complete one clean pass), <c>NotApplicable</c> on
     /// Windows (no scan — layer-1 containment) and macOS (env redaction makes the scan find nothing).
     /// The Linux scan flips it to <c>Complete</c> after one clean enumeration pass or <c>Failed</c> on an
     /// enumeration error (retried next heartbeat); off Linux it stays <c>NotApplicable</c> forever.</summary>
-    public StartupDiscovery CurrentDiscovery { get; private set; } =
-        new(OperatingSystem.IsLinux() ? MarkerScanState.Pending : MarkerScanState.NotApplicable);
+    public StartupDiscovery CurrentDiscovery {
+        get { lock (_discoveryGate) { return _currentDiscovery; } }
+        private set { lock (_discoveryGate) { _currentDiscovery = value; } }
+    }
 
     /// <summary>Phase B2-b (sequenced-settlement design): the known-id prior-incarnation candidates
     /// that are BLOCKED — each keeps <c>StartupReapComplete</c> false until resolved. Three sources,

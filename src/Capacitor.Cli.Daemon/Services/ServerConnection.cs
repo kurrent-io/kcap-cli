@@ -121,6 +121,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<long?>?                  GetLastProcessedSeq   { get; set; }
     public Func<QuarantinedAgentInfo[]>? GetQuarantined        { get; set; }
 
+    /// <summary>Phase B2-b (sequenced-settlement design): the daemon's per-boot epoch, advertised on
+    /// <c>DaemonConnect</c>. Set by <see cref="AgentOrchestrator"/> to return its own <c>_daemonEpoch</c>
+    /// so the connect epoch and the orchestrator/processor epoch read ONE source (no test-divergence
+    /// footgun). Null when unwired (tests / early startup) ⇒ falls back to <c>_config.DaemonEpoch</c>,
+    /// which <c>DaemonRunner</c> pins before services build, so prod behaviour is unchanged.</summary>
+    public Func<string?>?                GetDaemonEpoch        { get; set; }
+
     /// <summary>Phase B (D2): send the periodic daemon self-report ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
     /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
@@ -202,12 +209,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<AckResolvedCandidates>("AckResolvedCandidates", ack => { OnAckResolvedCandidates?.Invoke(ack); return Task.CompletedTask; });
 
         // Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-command receive seams. StopAgentV2
-        // routes through SafeInvoke like every other command handler; AckProcessedPrefix + RequestStatusReport
-        // are synchronous/no-arg (the prefix ack is a void state mutation; the status-report nudge is answered
-        // out-of-band), so they invoke inline and return a completed task.
+        // and RequestStatusReport route through SafeInvoke like every other command handler (so a throwing
+        // handler is logged, not surfaced to the hub); AckProcessedPrefix is a synchronous void state
+        // mutation, so it invokes inline and returns a completed task.
         _hub.On<StopAgentV2>("StopAgentV2", cmd => SafeInvoke("StopAgentV2", () => OnStopAgentV2?.Invoke(cmd)));
         _hub.On<AckProcessedPrefix>("AckProcessedPrefix", ack => { OnAckProcessedPrefix?.Invoke(ack); return Task.CompletedTask; });
-        _hub.On("RequestStatusReport", () => OnRequestStatusReport?.Invoke() ?? Task.CompletedTask);
+        _hub.On("RequestStatusReport", () => SafeInvoke("RequestStatusReport", () => OnRequestStatusReport?.Invoke()));
 
         // Client-result invocations for per-phase eval dispatch.
         _hub.On<PrepareEvalCommand, PrepareResult>("PrepareEval",
@@ -474,10 +481,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // Phase B2-b (sequenced-settlement design §4.2.2): the sequenced-settlement capability
                     // + its epoch/watermark counters + the kill-quarantine snapshot. SupportsSequencedCommands
                     // is THE gate: advertised true here but inert until the paired server PR consumes it. Epoch
-                    // is the shipped per-boot _daemonEpoch (set by DaemonRunner before services build, so the
-                    // connect epoch and the orchestrator's _daemonEpoch agree).
+                    // is read from the orchestrator's own per-boot _daemonEpoch via GetDaemonEpoch — the SINGLE
+                    // source the orchestrator + processor use — so the connect epoch can't diverge from it.
+                    // Unwired (tests / early startup) falls back to _config.DaemonEpoch, which DaemonRunner
+                    // pins before services build, so prod behaviour is unchanged.
                     Quarantined: GetQuarantined?.Invoke(),
-                    Epoch: _config.DaemonEpoch,
+                    Epoch: GetDaemonEpoch?.Invoke() ?? _config.DaemonEpoch,
                     HighestAcceptedSeq: GetHighestAcceptedSeq?.Invoke(),
                     LastProcessedSeq: GetLastProcessedSeq?.Invoke(),
                     SupportsSequencedCommands: true
