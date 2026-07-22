@@ -101,8 +101,10 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
         return Task.CompletedTask;
     }
 
-    // Task 12 stub (replaced in a later task):
-    Task HandleNonNextLocked(SequencedItem item) => Task.CompletedTask;
+    /// <summary>Phase B2-b (sequenced-settlement design): a non-next Seq (a gap — Seq &gt; HighestAcceptedSeq+1,
+    /// or a too-low already-retired Seq below the frontier) is NEVER accepted out of order. Emit wrong_next so
+    /// the server's transport sequencer resyncs (nudge → observe → retransmit); accept path + watermark untouched.</summary>
+    Task HandleNonNextLocked(SequencedItem item) => RejectLocked(item, CommandRejectedReason.WrongNext);
 
     Task RejectLocked(SequencedItem item, CommandRejectedReason reason) {
         _ = _sendRejected(new CommandRejected(item.Epoch, item.Seq, item.CommandId, reason, item.AgentId));

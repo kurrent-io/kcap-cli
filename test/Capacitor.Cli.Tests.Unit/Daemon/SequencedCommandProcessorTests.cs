@@ -114,4 +114,20 @@ public class SequencedCommandProcessorTests {
         await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
         await Assert.That(h.Acks.Count).IsEqualTo(1);
     }
+
+    [Test] public async Task Non_next_future_seq_is_rejected_wrong_next_without_accepting() {
+        var h = new Harness(); await using var p = h.P();
+        await p.SubmitAsync(h.Launch(1), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
+        await p.SubmitAsync(h.Launch(3), () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted))); // gap
+        await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.WrongNext);
+        await Assert.That(p.HighestAcceptedSeq).IsEqualTo(1L);
+    }
+
+    [Test] public async Task Execution_time_daemon_capacity_rejection_advances_watermark_and_emits_reject() {
+        var h = new Harness(); await using var p = h.P();
+        await p.SubmitAsync(h.Launch(1), () => Task.FromResult(
+            new CommandOutcome(CommandOutcomeKind.LaunchRejected, "a", RejectReason: CommandRejectedReason.DaemonCapacity)));
+        await Assert.That(p.LastProcessedSeq).IsEqualTo(1L);        // rejected-as-item is terminal
+        await Assert.That(h.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.DaemonCapacity);
+    }
 }
