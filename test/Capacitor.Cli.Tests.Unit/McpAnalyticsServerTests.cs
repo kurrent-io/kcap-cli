@@ -66,7 +66,8 @@ public class McpAnalyticsServerTests {
         var truncated = McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.OK,
             """{"columns":["n"],"rows":[{"n":1}],"row_count":1,"truncated":true,"max_rows":300}""", out var isError1);
         await Assert.That(isError1).IsFalse();
-        await Assert.That(truncated).Contains("(truncated to 300 rows — add filters or aggregate)");
+        await Assert.That(truncated).Contains("WARNING: result truncated to 300 rows");
+        await Assert.That(truncated).Contains("Aggregate in SQL");
 
         var full = McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.OK,
             """{"columns":["n"],"rows":[{"n":1}],"row_count":1,"truncated":false,"max_rows":300}""", out var isError2);

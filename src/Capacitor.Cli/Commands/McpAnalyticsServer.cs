@@ -191,7 +191,9 @@ static class McpAnalyticsServer {
 
             if (obj?["truncated"]?.GetValue<bool>() == true) {
                 var maxRows = obj["max_rows"]?.GetValue<int>();
-                return $"{body}\n(truncated to {maxRows?.ToString() ?? "the server's"} rows — add filters or aggregate)";
+                return $"{body}\nWARNING: result truncated to {maxRows?.ToString() ?? "the server's max"} rows — " +
+                       "any statistic computed from these rows is unreliable. Aggregate in SQL (GROUP BY/COUNT/AVG " +
+                       "run over ALL rows server-side), add filters, or raise max_rows.";
             }
         } catch {
             // fall through to the raw body
