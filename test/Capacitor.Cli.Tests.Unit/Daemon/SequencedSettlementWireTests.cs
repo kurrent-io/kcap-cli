@@ -45,4 +45,37 @@ public class SequencedSettlementWireTests {
         await Assert.That(rt.StartupReapComplete).IsTrue();
         await Assert.That(rt.StartupDiscovery!.Value.MarkerScanState).IsEqualTo(MarkerScanState.Complete);
     }
+
+    [Test]
+    public async Task Command_dtos_pin_wire_tokens_and_round_trip() {
+        var stop = new StopAgentV2("a1", "e1", 9, "cmd-guid");
+        var rt = JsonSerializer.Deserialize<StopAgentV2>(JsonSerializer.Serialize(stop, Opts), Opts);
+        await Assert.That(rt).IsEqualTo(stop);
+
+        var ackJson = JsonSerializer.Serialize(
+            new CommandAck("e1", 9, "cmd", CommandAckState.Processed,
+                CommandOutcomeKind.LaunchExecuted, AgentLiveness.Live, "a1", "sess"), Opts);
+        await Assert.That(ackJson).Contains("\"state\":\"processed\"");
+        await Assert.That(ackJson).Contains("\"outcome_kind\":\"launch_executed\"");
+        await Assert.That(ackJson).Contains("\"current_state\":\"live\"");
+
+        var rejJson = JsonSerializer.Serialize(
+            new CommandRejected("e1", 9, "cmd", CommandRejectedReason.StaleEpoch, "a1"), Opts);
+        await Assert.That(rejJson).Contains("\"reason\":\"stale_epoch\"");
+
+        var pruneJson = JsonSerializer.Serialize(
+            new AckResolvedCandidates([new ResolvedCandidateAck(3, "a1", "old")]), Opts);
+        await Assert.That(pruneJson).Contains("\"generation\":3");
+    }
+
+    [Test]
+    public async Task LaunchAgentCommand_gains_optional_sequencing_fields() {
+        var legacy = new LaunchAgentCommand("a1", "hi", "opus", null, "/repo", null, null, "claude");
+        await Assert.That(legacy.Seq).IsNull(); // absent ⇒ legacy lane
+
+        var seqd = legacy with { Epoch = "e1", Seq = 4, CommandId = "cmd" };
+        var rt = JsonSerializer.Deserialize<LaunchAgentCommand>(JsonSerializer.Serialize(seqd, Opts), Opts);
+        await Assert.That(rt.Seq).IsEqualTo(4L);
+        await Assert.That(rt.CommandId).IsEqualTo("cmd");
+    }
 }

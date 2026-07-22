@@ -967,6 +967,17 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(StartupCandidateUnresolvedReason))]
 [JsonSerializable(typeof(StartupDiscovery))]
 [JsonSerializable(typeof(MarkerScanState))]
+// Phase B2-b (sequenced-settlement design): command / ack side wire DTOs.
+[JsonSerializable(typeof(StopAgentV2))]
+[JsonSerializable(typeof(CommandAck))]
+[JsonSerializable(typeof(CommandAckState))]
+[JsonSerializable(typeof(CommandOutcomeKind))]
+[JsonSerializable(typeof(AgentLiveness))]
+[JsonSerializable(typeof(CommandRejected))]
+[JsonSerializable(typeof(CommandRejectedReason))]
+[JsonSerializable(typeof(AckProcessedPrefix))]
+[JsonSerializable(typeof(ResolvedCandidateAck))]
+[JsonSerializable(typeof(AckResolvedCandidates))]
 [JsonSerializable(typeof(AgentPidRecord))]
 [JsonSerializable(typeof(PidIdentityKind))]
 [JsonSerializable(typeof(AgentRegistered))]
@@ -1250,7 +1261,15 @@ public readonly record struct LaunchAgentCommand(
         // associate a surviving unassigned reviewer with its role). Appended last, same wire-compat
         // rule as the fields above — old daemons ignore them, old servers never set them.
         string?            FlowRunId = null,
-        string?            FlowRole  = null
+        string?            FlowRole  = null,
+        // Phase B2-b (sequenced-settlement design): additive per-command sequencing fields. Present
+        // Epoch ⇒ the sequenced lane (the daemon serializes + watermarks against the shipped per-boot
+        // _daemonEpoch); absent ⇒ the legacy unsequenced lane (never advances LastProcessedSeq).
+        // CommandId is a GUID string. Appended last, same wire-compat rule as the fields above —
+        // old daemons ignore them, old servers never set them.
+        string?            Epoch     = null,
+        long?              Seq       = null,
+        string?            CommandId = null
     );
 
 /// <summary>
@@ -1363,6 +1382,107 @@ public enum MarkerScanState {
 public readonly record struct StartupDiscovery(
         MarkerScanState MarkerScanState,
         DateTimeOffset? LastSuccessfulScanAt = null
+    );
+
+// ── Phase B2-b (sequenced-settlement design): command / ack side wire DTOs ──
+
+/// <summary>Phase B2-b (sequenced-settlement design): the sequenced stop primitive. A capability
+/// daemon receives this instead of the legacy <c>StopAgent</c>; <see cref="Epoch"/> is the shipped
+/// per-boot <c>_daemonEpoch</c>, <see cref="Seq"/> the lane sequence number, <see cref="CommandId"/>
+/// a GUID string.</summary>
+public readonly record struct StopAgentV2(
+        string AgentId,
+        string Epoch,
+        long   Seq,
+        string CommandId
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): ack lifecycle state. The zero value
+/// <see cref="Accepted"/> is the conservative default (accepted, not yet terminally processed);
+/// <see cref="Processed"/> is terminal and carries <c>OutcomeKind</c> + <c>CurrentState</c>.</summary>
+public enum CommandAckState {
+    [JsonStringEnumMemberName("accepted")]  Accepted  = 0, // accepted, not yet terminally processed
+    [JsonStringEnumMemberName("processed")] Processed = 1, // terminal; OutcomeKind + CurrentState set
+}
+
+/// <summary>Phase B2-b (sequenced-settlement design): terminal outcome of a processed sequenced
+/// command. The zero value <see cref="LaunchExecuted"/> is the conservative default.</summary>
+public enum CommandOutcomeKind {
+    [JsonStringEnumMemberName("launch_executed")]       LaunchExecuted      = 0,
+    [JsonStringEnumMemberName("launch_rejected")]       LaunchRejected      = 1,
+    [JsonStringEnumMemberName("launch_failed_cleaned")] LaunchFailedCleaned = 2,
+    [JsonStringEnumMemberName("stop_executed")]         StopExecuted        = 3,
+    [JsonStringEnumMemberName("internal_error")]        InternalError       = 4,
+}
+
+/// <summary>Phase B2-b (sequenced-settlement design): current liveness read live at ack time
+/// (confirmed-death precedence Live &gt; Quarantined &gt; Dead). The zero value <see cref="Live"/> is
+/// the conservative default. <see cref="NotFound"/> is a defined wire value the daemon's liveness read
+/// collapses to <see cref="Dead"/>, but a future path may still emit distinctly.</summary>
+public enum AgentLiveness {
+    [JsonStringEnumMemberName("live")]        Live        = 0,
+    [JsonStringEnumMemberName("quarantined")] Quarantined = 1,
+    [JsonStringEnumMemberName("dead")]        Dead        = 2,
+    [JsonStringEnumMemberName("not_found")]   NotFound    = 3,
+}
+
+/// <summary>Phase B2-b (sequenced-settlement design): the daemon's answer to a sequenced command
+/// (including an exact-duplicate — NO re-execution). <c>OutcomeKind</c>/<c>CurrentState</c> are set
+/// iff <see cref="State"/> == <see cref="CommandAckState.Processed"/>.</summary>
+public readonly record struct CommandAck(
+        string              Epoch,
+        long                Seq,
+        string              CommandId,
+        CommandAckState     State,
+        CommandOutcomeKind? OutcomeKind     = null, // set iff State == Processed
+        AgentLiveness?      CurrentState    = null, // set iff State == Processed
+        string?             AgentId         = null,
+        string?             SessionId       = null,
+        string?             RejectionReason = null
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): why a sequenced command was terminally
+/// rejected (never advances the old epoch's watermark). The zero value <see cref="WrongNext"/> is
+/// the conservative default.</summary>
+public enum CommandRejectedReason {
+    [JsonStringEnumMemberName("wrong_next")]           WrongNext          = 0,
+    [JsonStringEnumMemberName("duplicate_collision")]  DuplicateCollision = 1,
+    [JsonStringEnumMemberName("stale_epoch")]          StaleEpoch         = 2,
+    [JsonStringEnumMemberName("daemon_capacity")]      DaemonCapacity     = 3,
+    [JsonStringEnumMemberName("backpressure")]         Backpressure       = 4,
+    [JsonStringEnumMemberName("internal_error")]       InternalError      = 5,
+    [JsonStringEnumMemberName("semantic")]             Semantic           = 6,
+}
+
+/// <summary>Phase B2-b (sequenced-settlement design): terminal rejection of a sequenced command
+/// (never advances the old epoch's watermark).</summary>
+public readonly record struct CommandRejected(
+        string                Epoch,
+        long                  Seq,
+        string                CommandId,
+        CommandRejectedReason Reason,
+        string?               AgentId = null
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): server→daemon retirement proof — the daemon
+/// may retire identity-cache entries &lt;= <see cref="UpToSeq"/> for <see cref="Epoch"/>.</summary>
+public readonly record struct AckProcessedPrefix(
+        string Epoch,
+        long   UpToSeq
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): one resolved-candidate ack entry (sparse,
+/// per-entry prune — no head-of-line retention).</summary>
+public readonly record struct ResolvedCandidateAck(
+        long   Generation,
+        string AgentId,
+        string OldEpoch
+    );
+
+/// <summary>Phase B2-b (sequenced-settlement design): server→daemon prune of individual
+/// resolved-candidate ledger entries.</summary>
+public readonly record struct AckResolvedCandidates(
+        ResolvedCandidateAck[] Entries
     );
 
 /// <summary>M1-A (spec §4.3): distinguishes a record with a comparable start-identity
