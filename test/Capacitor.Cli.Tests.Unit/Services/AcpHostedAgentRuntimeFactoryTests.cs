@@ -346,10 +346,8 @@ public class AcpHostedAgentRuntimeFactoryTests {
     );
 
     /// <summary>
-    /// Exercises the trust-argv seam against the REAL production builder — no REAL descriptor sets
-    /// <c>SupportsUnattended: true</c> yet (Cursor's stays <c>false</c> — see
-    /// <c>UnattendedLaunchPolicyTests.Cursor_descriptor_unattended_launch_is_rejected</c>), so this
-    /// proves the MECHANISM works ahead of the vendor that will eventually use it.
+    /// Exercises the generic trust-argv seam independently of any production vendor. Cursor stays
+    /// non-unattended while Copilot uses its own concrete trust flags and alternate MCP transport.
     /// </summary>
     [Test]
     public async Task BuildProcessStartInfo_DescriptorDriven_AppendsTrustArgvOnlyForReviewFlow() {
@@ -847,8 +845,23 @@ public class AcpHostedAgentRuntimeFactoryTests {
     /// autoApprove=true and threads it to the bridge — an inbound permission request is auto-approved
     /// (least-privilege allow) WITHOUT ever routing to the injected server connection (no human).</summary>
     [Test]
-    public async Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() {
-        var descriptor = SyntheticDescriptor(supportsMcpServers: true); // SupportsUnattended: true
+    public Task ReviewFlow_OwnedWorktree_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
+        AssertReviewFlowAutoApprovesPermissionAsync(
+            SyntheticDescriptor(supportsMcpServers: true),
+            ReviewContext());
+
+    /// <summary>A borrowed Copilot reviewer passed the descriptor's capability-clamp gate and is
+    /// just as unattended as an owned-worktree reviewer. Its ACP permission request must therefore
+    /// resolve locally rather than waiting forever on a human interaction decision.</summary>
+    [Test]
+    public Task ReviewFlow_CopilotBorrowedCwd_Unattended_AutoApprovesPermission_WithoutRoutingToHuman() =>
+        AssertReviewFlowAutoApprovesPermissionAsync(
+            AcpVendorDescriptors.Copilot,
+            ReviewContext(["kcap-review"]) with { Work = WorkLocation.BorrowedCwd });
+
+    static async Task AssertReviewFlowAutoApprovesPermissionAsync(
+            AcpVendorDescriptor descriptor,
+            RuntimeStartContext context) {
         var fake        = new FakeAcpAgent();
         var connection  = new CaptureServerConnection();
 
@@ -862,7 +875,7 @@ public class AcpHostedAgentRuntimeFactoryTests {
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
 
-        var started = await factory.StartAsync(ReviewContext(), cts.Token).WaitAsync(HangGuard);
+        var started = await factory.StartAsync(context, cts.Token).WaitAsync(HangGuard);
 
         fake.EnqueuePermissionRequestDuringNextPrompt(
             toolCallJson: """{"toolCallId":"call-1","title":"Read file"}""",
@@ -901,6 +914,79 @@ public class AcpHostedAgentRuntimeFactoryTests {
         await Assert.That(psi.WorkingDirectory).IsEqualTo(ctx.Worktree.Path);
     }
 
+    /// <summary>An unattended Copilot reviewer starts trusted, disables ambient/custom tools,
+    /// preloads only its validated stdio MCP servers, and exposes only the two flow-channel tools plus
+    /// the reviewed-safe tools from the requested server. Copilot's allowlist consumes flattened
+    /// runtime ids (<c>server-tool</c>), not permission-pattern syntax.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_ReviewFlow_PreloadsMcpAndClampsTools() {
+        var config = new DaemonConfig { CopilotPath = "/opt/homebrew/bin/copilot" };
+        var ctx    = ReviewContext(["kcap-review"]);
+
+        var psi  = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(AcpVendorDescriptors.Copilot, config, ctx);
+        var argv = psi.ArgumentList.ToArray();
+
+        await Assert.That(argv.SequenceEqual([
+            "--acp",
+            "--stdio",
+            "--allow-all-tools",
+            "--no-ask-user",
+            "--no-custom-instructions",
+            "--disable-builtin-mcps",
+            "--additional-mcp-config",
+            """{"mcpServers":{"kcap-flow-result":{"type":"stdio","command":"/usr/local/bin/kcap","args":["mcp","flow-result"],"env":{"KCAP_URL":"http://kcap.test","KCAP_FLOW_AGENT_ID":"agent-1"}},"kcap-review":{"type":"stdio","command":"/usr/local/bin/kcap","args":["mcp","review"],"env":{"KCAP_URL":"http://kcap.test"}}}}""",
+            "--available-tools=kcap-flow-result-submit_review_result",
+            "--available-tools=kcap-flow-result-send_flow_message",
+            "--available-tools=kcap-review-get_file_context",
+            "--available-tools=kcap-review-get_pr_summary",
+            "--available-tools=kcap-review-get_transcript",
+            "--available-tools=kcap-review-list_pr_files",
+            "--available-tools=kcap-review-list_sessions",
+            "--available-tools=kcap-review-search_context"
+        ])).IsTrue();
+    }
+
+    /// <summary>The Copilot config builder must use the NativeAOT-safe JsonNode.Parse string path,
+    /// while still escaping every server-controlled string correctly. Values chosen here cover
+    /// quotes, backslashes, and newlines in the command and environment values.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_McpConfig_AotSafeStringsRemainValidJson() {
+        var ctx = ReviewContext() with {
+            AgentId      = "agent-\"quoted\"\\line\nnext",
+            ServerUrl    = "https://kcap.test/\"quoted\"\\line\nnext",
+            CapacitorPath = "/path/with \"quote\"/kcap"
+        };
+
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx);
+        var argv = psi.ArgumentList.ToArray();
+        var configIndex = Array.IndexOf(argv, "--additional-mcp-config");
+        var root = System.Text.Json.Nodes.JsonNode.Parse(argv[configIndex + 1])!.AsObject();
+        var server = root["mcpServers"]!["kcap-flow-result"]!.AsObject();
+
+        await Assert.That(server["command"]!.GetValue<string>()).IsEqualTo("/path/with \"quote\"/kcap");
+        await Assert.That(server["env"]!["KCAP_URL"]!.GetValue<string>())
+            .IsEqualTo("https://kcap.test/\"quoted\"\\line\nnext");
+        await Assert.That(server["env"]!["KCAP_FLOW_AGENT_ID"]!.GetValue<string>())
+            .IsEqualTo("agent-\"quoted\"\\line\nnext");
+    }
+
+    /// <summary>Copilot's process-level available-tools clamp removes every ambient shell/file
+    /// tool, so its unattended reviewer can safely use the server's default same-machine borrowed
+    /// checkout. Other ACP descriptors remain owned-worktree-only.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_Copilot_BorrowedReviewFlow_IsAllowedAndStillClamped() {
+        var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.BorrowedCwd };
+
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, new DaemonConfig(), ctx);
+
+        await Assert.That(psi.ArgumentList).Contains("--allow-all-tools");
+        await Assert.That(psi.ArgumentList).Contains("--available-tools=kcap-flow-result-submit_review_result");
+        await Assert.That(psi.ArgumentList).Contains("--available-tools=kcap-flow-result-send_flow_message");
+        await Assert.That(psi.ArgumentList.Any(a => a.StartsWith("--available-tools=kcap-review-", StringComparison.Ordinal))).IsTrue();
+    }
+
     /// <summary>A full StartAsync for the Copilot descriptor: handshake completes, the started
     /// runtime's Vendor is `copilot`, and an interactive launch sends `mcpServers: []`.</summary>
     [Test]
@@ -915,6 +1001,56 @@ public class AcpHostedAgentRuntimeFactoryTests {
 
         await Assert.That(started.Runtime.Vendor).IsEqualTo("copilot");
         await Assert.That(mcpServersJson).IsEqualTo("[]");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Copilot's review MCP arrives through process arguments, so ACP session/new remains
+    /// empty while pre-spawn validation still accepts the alternate transport.</summary>
+    [Test]
+    public async Task StartAsync_Copilot_ReviewFlow_UsesProcessTransport_AndSessionNewMcpEmpty() {
+        var fake = new FakeAcpAgent();
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started        = await RunSyntheticStartAsync(AcpVendorDescriptors.Copilot, fake, ReviewContext(["kcap-review"]), cts.Token);
+        var mcpServersJson = await WaitForSessionNewMcpServersJsonAsync(fake);
+
+        await Assert.That(mcpServersJson).IsEqualTo("[]");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Copilot uses the shared config-option selector, so a requested model is resolved
+    /// against session/new's advertised models and applied before the initial prompt.</summary>
+    [Test]
+    public async Task StartAsync_Copilot_ModelOverride_SendsSetConfigOption() {
+        var fake = new FakeAcpAgent();
+        fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(
+            FakeAcpAgent.FixedSessionId,
+            currentModelId: "auto",
+            availableModels: [("auto", "Auto"), ("gpt-5-mini", "GPT-5 mini")]));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var started = await RunSyntheticStartAsync(
+            AcpVendorDescriptors.Copilot,
+            fake,
+            ReviewContext() with { Model = "gpt-5-mini" },
+            cts.Token);
+
+        var calls = await WaitForCallCountAsync(fake, minCount: 3);
+        var setConfigCall = calls.Single(c => c.Method == "session/set_config_option");
+        await Assert.That(setConfigCall.Params!.Value.GetProperty("configId").GetString()).IsEqualTo("model");
+        await Assert.That(setConfigCall.Params!.Value.GetProperty("value").GetString()).IsEqualTo("gpt-5-mini");
 
         cts.Cancel();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
