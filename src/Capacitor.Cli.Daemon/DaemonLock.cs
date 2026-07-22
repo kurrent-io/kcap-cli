@@ -49,15 +49,35 @@ internal sealed class DaemonLock : IDisposable {
     /// </summary>
     public int? PriorHolderPid { get; }
 
+    /// <summary>
+    /// The previous holder's <see cref="InstanceId"/>, read from the lock-file content
+    /// under the held flock BEFORE we overwrote it — or null on a genuinely fresh lock
+    /// (empty file) or unreadable content. Unlike the PID file (deleted on clean
+    /// shutdown), the lock file's InstanceId is the persistent per-boot nonce every
+    /// shipped version rewrites at boot and never deletes, so it witnesses the
+    /// immediately-preceding boot even one by an unaware binary. Phase B2-b
+    /// (sequenced-settlement design) uses it as the coverage boot-chain's chain-check.
+    /// </summary>
+    public string? PriorInstanceId { get; }
+
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.3): true iff the lock file was NON-EMPTY
+    /// but its content could not be read into a prior InstanceId (a read fault, or blank/garbage
+    /// content). Distinguishes an unreadable prior lock from a genuinely empty first-ever/genesis slot
+    /// (where this is false and <see cref="PriorInstanceId"/> is null): the coverage boot-chain treats
+    /// an indeterminate prior as fail-closed, NEVER as genesis.</summary>
+    public bool PriorLockIndeterminate { get; }
+
     DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId,
-               bool priorExitWasUnclean, int? priorHolderPid) {
-        _stream             = stream;
-        _lockPath           = lockPath;
-        _pidPath            = pidPath;
-        _versionPath        = versionPath;
-        InstanceId          = instanceId;
-        PriorExitWasUnclean = priorExitWasUnclean;
-        PriorHolderPid      = priorHolderPid;
+               bool priorExitWasUnclean, int? priorHolderPid, string? priorInstanceId, bool priorLockIndeterminate) {
+        _stream                = stream;
+        _lockPath              = lockPath;
+        _pidPath               = pidPath;
+        _versionPath           = versionPath;
+        InstanceId             = instanceId;
+        PriorExitWasUnclean    = priorExitWasUnclean;
+        PriorHolderPid         = priorHolderPid;
+        PriorInstanceId        = priorInstanceId;
+        PriorLockIndeterminate = priorLockIndeterminate;
     }
 
     /// <summary>
@@ -80,11 +100,12 @@ internal sealed class DaemonLock : IDisposable {
 
         try {
             // FileShare.None maps to flock(LOCK_EX) on POSIX. Open with
-            // FileAccess.Write so we can rewrite the instance id into the
-            // file content below. FileMode.OpenOrCreate keeps a stale
+            // FileAccess.ReadWrite so we can both read the previous holder's
+            // instance id (captured below, before truncation) and rewrite our
+            // own into the file content. FileMode.OpenOrCreate keeps a stale
             // lockfile on disk from blocking acquisition — flock semantics
             // mean kernel-managed liveness, not file presence.
-            stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+            stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         } catch (IOException) {
             return null;
         }
@@ -97,6 +118,31 @@ internal sealed class DaemonLock : IDisposable {
         // deletes it) — i.e. it died via an uncatchable SIGKILL / crash. Capture
         // that for the successor's startup breadcrumb.
         var (priorUnclean, priorPid) = InspectPriorHolder(pidPath);
+
+        // Capture the previous holder's InstanceId from the lock-file content BEFORE we overwrite it —
+        // the persistent per-boot nonce the coverage boot-chain uses to detect an intervening
+        // (possibly unaware) boot. A genuinely EMPTY file is a first-ever/genesis slot (priorInstanceId
+        // stays null, NOT indeterminate). A non-empty file we cannot read into an id — a read fault OR
+        // blank/garbage content — is INDETERMINATE: the coverage boot-chain must fail-closed there and
+        // never conflate it with genesis. The read is bounded (the content is a 32-char GUID + newline),
+        // so a corrupt/oversized lock file can't drive an unbounded allocation.
+        string? priorInstanceId = null;
+        var priorLockIndeterminate = false;
+        try {
+            if (stream.Length > 0) {
+                stream.Position = 0;
+                var len = (int)Math.Min(stream.Length, 4096);
+                var buf = new byte[len];
+                var n = stream.Read(buf, 0, buf.Length);
+                priorInstanceId = System.Text.Encoding.UTF8.GetString(buf, 0, n)
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .FirstOrDefault();
+                priorLockIndeterminate = string.IsNullOrEmpty(priorInstanceId); // non-empty file, no id ⇒ indeterminate
+            }
+        } catch {
+            priorInstanceId = null;
+            priorLockIndeterminate = true; // non-empty-but-unreadable ⇒ fail-closed, never genesis
+        }
 
         try {
             // Rewrite the file content with the fresh instance id. Truncate
@@ -122,7 +168,7 @@ internal sealed class DaemonLock : IDisposable {
             try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
         }
 
-        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid);
+        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid, priorInstanceId, priorLockIndeterminate);
     }
 
     /// <summary>
