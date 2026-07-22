@@ -195,6 +195,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     string               _daemonId    = "";
     string               _daemonEpoch = "";
 
+    // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
+    // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
+    // DaemonConnect payload; a Linux/macOS value is inert (the server consumes it only on Windows).
+    readonly bool        _recordlessSurvivorsImpossible;
+
     // Phase B (D4 §6.4(2a)/(3)): single-flight latches so a slow sweep (each survivor consumes a
     // ~5s TERM grace sequentially) can't overlap itself when the next heartbeat tick fires — otherwise
     // sweeps accumulate, double-signal, and re-scan /proc concurrently. A tick whose prior sweep is still
@@ -310,6 +315,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _quarantine  = new AgentKillQuarantine(logger);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
+        _recordlessSurvivorsImpossible = config.RecordlessSurvivorsImpossible;
         _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger);
 
         // Wire up server commands
@@ -466,6 +472,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
     internal string DaemonIdForTest                                 => _daemonId;
     internal string DaemonEpochForTest                             => _daemonEpoch;
+    internal bool   RecordlessSurvivorsImpossibleForTest           => _recordlessSurvivorsImpossible;
 
     /// <summary>Phase B (D4 §6.4(3) StopAgent fallback): the caller had no in-memory agent for
     /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,

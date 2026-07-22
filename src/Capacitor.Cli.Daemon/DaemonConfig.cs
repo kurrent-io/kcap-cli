@@ -29,8 +29,20 @@ public class DaemonConfig {
     /// <summary>Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
     /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children
     /// whose epoch differs from the current one (i.e. survivors of a prior incarnation). Null → the
-    /// orchestrator generates one at construction.</summary>
+    /// orchestrator generates one at construction. <c>DaemonRunner</c> pins this before building
+    /// services (Phase B2-b) so the advertised connect epoch and the orchestrator's own boot epoch
+    /// agree.</summary>
     public string? DaemonEpoch { get; set; }
+
+    /// <summary>
+    /// Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
+    /// folded by <c>CoverageJournal.RecordBoot</c> in <c>DaemonRunner</c> BEFORE any Connect/spawn and
+    /// advertised on <c>DaemonConnect</c>. True only where OS containment leaves genuinely no recordless
+    /// survivor class (the Windows Job Object); absent/false ⇒ "has a recordless class" (the server
+    /// requires per-id death proof). The server consumes it only on Windows, so a Linux/macOS value is
+    /// inert. Fail-closed to false when the fold/persist fails.
+    /// </summary>
+    public bool RecordlessSurvivorsImpossible { get; set; }
 
     /// <summary>
     /// Per-process GUID generated at startup, also written to the daemon's

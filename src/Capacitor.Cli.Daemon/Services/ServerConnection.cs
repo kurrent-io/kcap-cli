@@ -391,7 +391,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 new DaemonConnect(
                     _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
                     _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get(), liveAgents,
-                    _config.UnattendedVendors
+                    _config.UnattendedVendors,
+                    // Phase B2-b (sequenced-settlement design §4.2.3): advertise the durable coverage
+                    // boot-chain verdict. The full enriched sequenced-settlement payload lands in a
+                    // later task; for now this single additive field is wire-compatible with old servers.
+                    RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible
                 ),
                 cancellationToken: _ct
             );

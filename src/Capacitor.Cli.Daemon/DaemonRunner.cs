@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -196,6 +197,20 @@ public static partial class DaemonRunner {
         }
 
         config.InstanceId = daemonLock.InstanceId;
+
+        // Phase B2-b (sequenced-settlement design): pin the per-boot epoch here, before any service is
+        // built, so the epoch advertised on DaemonConnect and the orchestrator's own _daemonEpoch (which
+        // falls back to config.DaemonEpoch) are provably the same value.
+        config.DaemonEpoch ??= Guid.NewGuid().ToString("N");
+
+        // Phase B2-b (sequenced-settlement design §4.2.3): fold the durable coverage boot-chain BEFORE any
+        // Connect/spawn. this_epoch_contained is true only where OS containment leaves NO recordless
+        // survivor class (the Windows Job Object). Fail-closed inside RecordBoot. NullLogger is acceptable
+        // this early — the host's logging pipeline isn't built yet.
+        var coverageStateDir = Path.Combine(
+            config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+        config.RecordlessSurvivorsImpossible = new CoverageJournal(coverageStateDir, NullLogger.Instance)
+            .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId, thisEpochContained: OperatingSystem.IsWindows());
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(daemonLock);
