@@ -121,6 +121,34 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(orch.BuildStatusReport().HighestAcceptedSeq).IsEqualTo(0L);
     }
 
+    // Phase B2-b (sequenced-settlement design §5.5): a PARTIAL sequencing tuple (some but not all of
+    // Epoch/Seq/CommandId present) is a malformed sequenced command and must FAIL CLOSED (LaunchFailed) —
+    // never fall through to the unwatermarked legacy lane, whose retry could be re-accepted on the
+    // sequenced lane and double-create the generation (at-most-once-per-generation). It must not spawn and
+    // must not advance the watermark.
+    [Test]
+    public async Task Partial_sequencing_tuple_fails_closed_without_spawning_or_advancing_the_watermark() {
+        var server = new SeqCaptureServerConnection();
+        // A VALID vendor so the fail-closed reason can ONLY be the malformed-tuple route, not the legacy
+        // lane's unknown-vendor rejection (which would mask a missing fix).
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(),
+            new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") });
+
+        // Epoch + Seq present, CommandId ABSENT -> malformed.
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "partial", Prompt: "hi", Model: "opus", Effort: null,
+            RepoPath: "/tmp/does-not-matter", Tools: null, AttachmentIds: null, Vendor: "claude",
+            Epoch: orch.DaemonEpochForTest, Seq: 1, CommandId: null));
+
+        await Assert.That(server.LaunchFaileds.Count).IsEqualTo(1);
+        await Assert.That(server.LaunchFaileds[0].AgentId).IsEqualTo("partial");
+        await Assert.That(server.LaunchFaileds[0].Reason).Contains("Malformed sequenced launch"); // the fix's route
+        await Assert.That(orch.GetAgentForTest("partial")).IsNull();                    // never spawned
+        var report = orch.BuildStatusReport();
+        await Assert.That(report.HighestAcceptedSeq).IsEqualTo(0L);                     // watermark untouched
+        await Assert.That(report.LastProcessedSeq).IsEqualTo(0L);
+    }
+
     /// <summary>A live-pid-backed pty double whose TerminateAsync deliberately does NOT kill (so teardown
     /// quarantines the "surviving" child). Mirrors LaunchCleanupTests' private LiveNoKillPtyProcess.</summary>
     sealed class LivePtyDouble(int pid) : IPtyProcess {
@@ -148,10 +176,11 @@ public partial class AgentOrchestratorVendorTests {
         NullLogger<ServerConnection>.Instance
     ) {
         internal override bool IsReady => true;
-        public List<CommandRejected> Rejects { get; } = [];
-        public List<CommandAck>      Acks    { get; } = [];
+        public List<CommandRejected> Rejects       { get; } = [];
+        public List<CommandAck>      Acks          { get; } = [];
+        public List<(string AgentId, string Reason)> LaunchFaileds { get; } = [];
 
-        public override Task LaunchFailedAsync(string agentId, string reason) => Task.CompletedTask;
+        public override Task LaunchFailedAsync(string agentId, string reason) { lock (LaunchFaileds) LaunchFaileds.Add((agentId, reason)); return Task.CompletedTask; }
         public override Task CommandRejectedAsync(CommandRejected rej) { lock (Rejects) Rejects.Add(rej); return Task.CompletedTask; }
         public override Task CommandAckAsync(CommandAck ack)           { lock (Acks)    Acks.Add(ack);    return Task.CompletedTask; }
     }

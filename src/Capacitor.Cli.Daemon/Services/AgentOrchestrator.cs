@@ -756,13 +756,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return agent;
     }
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): route a launch. A fully-Seq'd command
-    /// (Epoch + Seq + CommandId present) goes through the processor's serial lane — accepted exactly-in-order,
+    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2/§5.5): route a launch. A fully-Seq'd command
+    /// (Epoch + Seq + CommandId ALL present) goes through the processor's serial lane — accepted exactly-in-order,
     /// executed once, and turned into a terminal CommandAck/CommandRejected from the <see cref="CommandOutcome"/>
-    /// the core returns. An un-Seq'd command (old server) runs the legacy unsequenced lane directly and never
-    /// advances the watermark. The processor being null (never happens in production — always constructed in
-    /// the ctor) also falls back to the legacy lane.</summary>
+    /// the core returns. An un-Seq'd command (NONE of the three — old server) runs the legacy unsequenced lane
+    /// directly and never advances the watermark. Anything in between (a PARTIAL tuple, or the processor somehow
+    /// missing) is a malformed sequenced command and FAILS CLOSED with a LaunchFailed — never the legacy lane,
+    /// whose retry could be re-accepted on the sequenced lane and double-create the generation.</summary>
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
+        var anySeq = cmd.Epoch is not null || cmd.Seq is not null || cmd.CommandId is not null;
+        if (!anySeq) { await HandleLaunchAgentCore(cmd); return; } // old server — legacy unsequenced lane
+
+        // Phase B2-b (sequenced-settlement design §5.5): a capable server sends ALL of
+        // Epoch/Seq/CommandId. Anything less (a partial tuple, or the processor somehow missing) is a
+        // malformed sequenced command and must FAIL CLOSED — never the unwatermarked legacy lane, whose
+        // retry could be re-accepted on the sequenced lane and double-create the generation
+        // (at-most-once-per-generation).
         if (_processor is { } proc && cmd.Epoch is { } epoch && cmd.Seq is { } seq && cmd.CommandId is { } cmdId) {
             await proc.SubmitAsync(
                 new SequencedItem(SequencedKind.Launch, epoch, seq, cmdId, cmd.AgentId),
@@ -770,7 +779,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        await HandleLaunchAgentCore(cmd); // legacy unsequenced lane (old server) — never advances the watermark
+        await _server.LaunchFailedAsync(cmd.AgentId, "Malformed sequenced launch: partial Epoch/Seq/CommandId");
     }
 
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the shipped launch body, now returning the
