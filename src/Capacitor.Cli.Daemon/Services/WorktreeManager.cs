@@ -24,6 +24,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     ];
     const int MaxSnapshotFiles = 50_000;
     const long MaxSnapshotBytes = 2L * 1024 * 1024 * 1024;
+    static StringComparison FileSystemPathComparison =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     public async Task<WorktreeInfo> CreateAsync(string repoPath, string? name = null, string? baseRef = null) {
         name ??= $"agent-{Guid.NewGuid():N}"[..20];
@@ -305,8 +309,8 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
     static void EnsureSeparateRoots(string source, string snapshotRoot) {
         var prefix = source.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (snapshotRoot.Equals(source, StringComparison.OrdinalIgnoreCase) ||
-            snapshotRoot.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (snapshotRoot.Equals(source, FileSystemPathComparison) ||
+            snapshotRoot.StartsWith(prefix, FileSystemPathComparison))
             throw new InvalidOperationException("borrowed_snapshot_root_inside_source");
     }
 
@@ -321,15 +325,21 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     static string ContainedPath(string root, string rel) {
         var path = Path.GetFullPath(Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)));
         var prefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (!path.StartsWith(prefix, FileSystemPathComparison))
             throw new InvalidOperationException($"borrowed_snapshot_path_escape: {rel}");
         return path;
     }
 
     static void EnsureParentDirectories(string root, string path) {
-        var parent = Path.GetDirectoryName(path)!;
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException($"borrowed_snapshot_parent_missing: {path}");
         var stack = new Stack<string>();
-        while (!parent.Equals(root, StringComparison.OrdinalIgnoreCase)) { stack.Push(parent); parent = Path.GetDirectoryName(parent)!; }
+        while (!parent.Equals(normalizedRoot, FileSystemPathComparison)) {
+            stack.Push(parent);
+            parent = Path.GetDirectoryName(parent)
+                ?? throw new InvalidOperationException($"borrowed_snapshot_parent_outside_root: {path}");
+        }
         while (stack.TryPop(out var dir)) {
             if (File.Exists(dir)) File.Delete(dir);
             Directory.CreateDirectory(dir);
@@ -454,37 +464,16 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         RunGit(cwd, timeout, sourceReadOnly: false, args);
 
     static async Task RunGit(string cwd, TimeSpan timeout, bool sourceReadOnly, params string[] args) {
-        var       psi  = NewGitPsi(cwd, args, sourceReadOnly);
-        using var proc = Process.Start(psi)!;
-        using var cts  = new CancellationTokenSource(timeout);
-
-        try {
-            await proc.WaitForExitAsync(cts.Token);
-        } catch (OperationCanceledException) {
-            try { proc.Kill(true); } catch {
-                /* best-effort */
-            }
-
-            throw new InvalidOperationException(
-                $"git {string.Join(' ', args)} timed out after {timeout.TotalSeconds:F0}s"
-            );
-        }
-
-        if (proc.ExitCode != 0) {
-            var stderr = await proc.StandardError.ReadToEndAsync();
-
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr}");
-        }
+        var result = await RunGitCaptureResult(cwd, timeout, sourceReadOnly, args);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
     }
 
     static async Task<string> RunGitCapture(string cwd, TimeSpan timeout, bool sourceReadOnly, params string[] args) {
-        var psi = NewGitPsi(cwd, args, sourceReadOnly);
-        using var proc = Process.Start(psi)!;
-        using var cts = new CancellationTokenSource(timeout);
-        var stdout = await proc.StandardOutput.ReadToEndAsync(cts.Token);
-        await proc.WaitForExitAsync(cts.Token);
-        if (proc.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {await proc.StandardError.ReadToEndAsync()}");
-        return stdout;
+        var result = await RunGitCaptureResult(cwd, timeout, sourceReadOnly, args);
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
+        return result.Stdout;
     }
 
     static async Task<bool> GitConfigBoolAsync(string cwd, string key) {

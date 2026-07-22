@@ -120,13 +120,13 @@ internal sealed partial class ClaudeLauncher(
                 // Bash etc.; it just can't fan out subagents.
                 //
                 // For a borrowed reviewer, additionally deny the write/execute surface — Edit/
-                // Write/NotebookEdit/Bash — composed into the SAME --disallowedTools
+                // MultiEdit/Write/NotebookEdit/Bash — composed into the SAME --disallowedTools
                 // value: the Claude CLI takes one comma-or-space-separated list per flag, not
                 // repeated flags, so both denials must be merged into a single argument
                 // Read/Grep/Glob and the flow-result MCP tool stay available.
                 args.Add("--disallowedTools");
                 args.Add(ctx.Work == WorkLocation.BorrowedCwd
-                    ? "Agent,Edit,Write,NotebookEdit,Bash"
+                    ? "Agent,Edit,MultiEdit,Write,NotebookEdit,Bash"
                     : "Agent");
             }
 
