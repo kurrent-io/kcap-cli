@@ -1272,7 +1272,7 @@ public readonly record struct LaunchAgentCommand(
         string?            Epoch     = null,
         long?              Seq       = null,
         string?            CommandId = null,
-        // AI-1488: the server's vendor-specific unattended-review certification expectation.
+        // The server's vendor-specific unattended-review certification expectation.
         // Kept additive and optional so older servers and non-review launches remain compatible.
         ReviewerCertificationRequirement? ReviewerCertification = null
     );
@@ -1639,7 +1639,7 @@ public readonly record struct DaemonConnect(
         // resolved-candidates ledger, advertised alongside ResolvedStartupCandidates so that once sparse
         // acks prune entries the server still knows the generation frontier. Additive/optional.
         long?                         HighestResolutionGeneration   = null,
-        // AI-1488: structured per-vendor unattended-review certification facts. The legacy string
+        // Structured per-vendor unattended-review certification facts. The legacy string
         // list above remains the compatibility surface; this trailing field adds versioned proof.
         IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities = null
     );
