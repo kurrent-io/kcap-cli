@@ -203,6 +203,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // state dir as _pidRecords, under the same atomic temp+rename discipline.
     ResolvedCandidatesLedger? _resolvedLedger;
 
+    // Phase B2-b (sequenced-settlement design §4.2.4): the durable marker-candidate source store for a
+    // RECORDLESS prior-epoch survivor (Hook D). The env-marker scan persists a source BEFORE the kill and
+    // resolves it through the (a)/(b)/(c) matrix; on confirmed death it emits into _resolvedLedger with a
+    // NULL flow (the env is untrusted) unless a co-existing durable RECORD supplies a trusted flow.
+    MarkerCandidateStore? _markerCandidates;
+
     // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
     // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
     // DaemonConnect payload; a Linux/macOS value is inert (the server consumes it only on Windows).
@@ -330,8 +336,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // callback (Hook A) emits into it before the source delete; the drain (Hook B) and StopAgent
         // fallback (Hook C) below emit directly. All three are append-before-delete + idempotent.
         _resolvedLedger = new ResolvedCandidatesLedger(recordRoot, logger);
+        // Phase B2-b (sequenced-settlement design §4.2.4): the marker-candidate source store (Hook D)
+        // shares the same record root. A recordless survivor resolves with a NULL flow (env untrusted);
+        // a co-existing durable record's TRUSTED flow is routed through onRecordResolved by EmitAndClear.
+        _markerCandidates = new MarkerCandidateStore(recordRoot, logger);
         _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger,
-            onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role));
+            onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role),
+            markerStore: _markerCandidates,
+            onMarkerResolved: (a, e) => _resolvedLedger?.Upsert(a, e, null, null));
 
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;

@@ -25,11 +25,33 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal sealed class OrphanReaper(
         AgentPidRecordStore store, string daemonId, string currentEpoch, ILogger logger,
-        Action<string, string, string?, string?>? onRecordResolved = null) {
-    /// <summary>Run both passes once. Best-effort throughout — a failure on one process never aborts the
+        Action<string, string, string?, string?>? onRecordResolved = null,
+        MarkerCandidateStore? markerStore = null,
+        Action<string, string>? onMarkerResolved = null) {
+    /// <summary>Run all passes once. Best-effort throughout — a failure on one process never aborts the
     /// sweep of the others.</summary>
     public async Task ReapOnceAsync(CancellationToken ct = default) {
         var handledPids = new HashSet<int>();
+
+        // ── (0) marker-candidate reconciliation (crash recovery) ───────────────────────────────────
+        // Phase B2-b (sequenced-settlement design §4.2.4): re-derive any persisted marker-candidate
+        // source BEFORE the record pass. A source outlives one pass, so this covers the crash-before-kill
+        // window: re-read the LIVE triple so a pid reused since the source was written is spared, never
+        // mis-killed. It runs FIRST so a source co-existing with an identity_unavailable RECORD is
+        // resolved by EmitAndClear (which routes the TRUSTED record flow via onRecordResolved) before the
+        // record pass could independently resolve+delete that record — no double emit.
+        if (markerStore is not null) {
+            foreach (var c in markerStore.ReadAll()) {
+                if (ct.IsCancellationRequested) return;
+                try {
+                    await ResolveMarkerCandidateAsync(c, ct);
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
+                    // Per-source fault (e.g. a sink throwing before the append): the source is left on
+                    // disk (append-before-delete), so the next boot re-derives it. Never abort the sweep.
+                    logger.LogWarning(ex, "OrphanReaper: marker-candidate reconciliation faulted for {AgentId} (pid {Pid}) — retained for next boot", c.AgentId, c.Pid);
+                }
+            }
+        }
 
         // ── (1) record pass ──────────────────────────────────────────────────────────────────────
         foreach (var record in store.ReadAll()) {
@@ -126,27 +148,66 @@ internal sealed class OrphanReaper(
             // markers we just read belong to a different incarnation — the token no longer matches, so spare.
             if (ProcessIdentity.MatchesTri(pid, token) != true) continue;
 
-            // Recordless survivor of a PRIOR incarnation of THIS daemon → reap by the captured identity.
+            // Recordless survivor of a PRIOR incarnation of THIS daemon. Persist a durable
+            // marker-candidate source BEFORE the kill (crash-consistency: a crash before the kill
+            // re-runs the resolution next boot; never a source-less window, never a retroactive mint),
+            // then resolve it through the same matrix as the reconciliation pass.
             try {
-                var gone = await ProcessReaper.ReapByMarkerAsync(pid, token, agentId, logger, ct);
-                if (gone) {
-                    // Positive, PID-independent resolution: delete any record for THIS agent id (a
-                    // no-op if none exists — the ordinary recordless-survivor case). This is what
-                    // makes the "identity_unavailable record + live-env-triple confirms it" case
-                    // self-heal WITHOUT ever keying off the numeric pid alone (a reused pid between
-                    // this kill and any later record pass can't act on the wrong occupant, because the
-                    // record is already gone by then).
-                    store.Delete(agentId);
-                    logger.LogInformation(
-                        "OrphanReaper: reaped recordless survivor {AgentId} (pid {Pid}) of a prior daemon incarnation", agentId, pid);
-                } else {
-                    logger.LogWarning(
-                        "OrphanReaper: env-marker kill of {AgentId} (pid {Pid}) not confirmed — retrying next tick", agentId, pid);
-                }
+                var candidate = new MarkerCandidate(agentId, daemonId, epoch, pid);
+                markerStore?.Write(candidate);
+                await ResolveMarkerCandidateAsync(candidate, ct);
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 logger.LogWarning(ex, "OrphanReaper: env-marker reap failed for pid {Pid}", pid);
             }
         }
+    }
+
+    /// <summary>Resolve a marker-candidate source through the asymmetric matrix. Because a recordless
+    /// survivor has NO spawn-bound start-identity, a triple mismatch is spare-only — never positive death
+    /// evidence — since a mismatch can't distinguish PID-reuse from the original mutating its own env.
+    /// <list type="bullet">
+    /// <item><b>(a)</b> pid dead per the shipped zombie-aware <see cref="ProcessIdentity.IsAlive"/> (ESRCH
+    /// or Linux 'Z') ⇒ conclusively resolved → emit + delete the source.</item>
+    /// <item><b>(b)</b> alive (non-zombie) + the LIVE triple still matches ⇒ kill; on CONFIRMED death,
+    /// resolve as (a).</item>
+    /// <item><b>(c)</b> alive (non-zombie) + triple mismatch/unreadable ⇒ SPARE, the source stays PENDING,
+    /// NO emit — a reused pid no longer carrying our triple is left untouched (PID-reuse safe).</item>
+    /// </list></summary>
+    async Task ResolveMarkerCandidateAsync(MarkerCandidate c, CancellationToken ct) {
+        // (a) dead per the shipped zombie-aware IsAlive (ESRCH or Linux 'Z') -> conclusively resolved.
+        if (!ProcessIdentity.IsAlive(c.Pid)) { EmitAndClear(c); return; }
+
+        // Re-read the LIVE triple: (c) mismatch/unreadable -> SPARE, stay pending, NO emit (a triple
+        // mismatch cannot distinguish PID-reuse from the process mutating its own env).
+        var agentId = ProcessIdentity.ReadAgentEnv(c.Pid, "KCAP_AGENT_ID");
+        var did     = ProcessIdentity.ReadAgentEnv(c.Pid, "KCAP_DAEMON_ID");
+        var epoch   = ProcessIdentity.ReadAgentEnv(c.Pid, "KCAP_DAEMON_EPOCH");
+        var token   = ProcessIdentity.Capture(c.Pid);
+        var tripleMatches = agentId == c.AgentId && did == c.DaemonId && epoch == c.OldEpoch && token is not null;
+        if (!tripleMatches) return; // (c) pending
+
+        // (b) alive + triple still matches -> kill; on CONFIRMED death, resolve.
+        if (await ProcessReaper.ReapByMarkerAsync(c.Pid, token!, c.AgentId, logger, ct)) EmitAndClear(c);
+        else logger.LogWarning("OrphanReaper: marker kill of {AgentId} (pid {Pid}) not confirmed — retry next tick", c.AgentId, c.Pid);
+    }
+
+    /// <summary>Ledger-append BEFORE source-deletion (crash reconciled next boot; idempotent). Trust
+    /// boundary: a fully RECORDLESS survivor's env is untrusted, so it maps to NO role
+    /// (<paramref name="onMarkerResolved"/>, null flow). But a Linux identity_unavailable RECORD resolved
+    /// via the marker scan carries TRUSTED flow identity — written from the daemon's own AgentInstance
+    /// into the durable record at spawn — so pull FlowRunId/FlowRole (and the trusted DaemonEpoch) FROM
+    /// THAT RECORD via the record-resolved sink, so its role can be individually healed. Never trust flow
+    /// from the mutable env.</summary>
+    void EmitAndClear(MarkerCandidate c) {
+        var record = store.ReadAll().FirstOrDefault(r => string.Equals(r.AgentId, c.AgentId, StringComparison.Ordinal));
+        if (!string.IsNullOrEmpty(record.AgentId))
+            onRecordResolved?.Invoke(record.AgentId, record.DaemonEpoch, record.FlowRunId, record.FlowRole);
+        else
+            onMarkerResolved?.Invoke(c.AgentId, c.OldEpoch);
+        store.Delete(c.AgentId);   // clears the identity_unavailable record (no-op for a pure recordless survivor)
+        markerStore?.Delete(c.AgentId);
+        logger.LogInformation(
+            "OrphanReaper: resolved marker-candidate {AgentId} (pid {Pid}) of a prior daemon incarnation", c.AgentId, c.Pid);
     }
 
     /// <summary>Enumerate candidate pids for the env-marker scan. Linux lists <c>/proc/[0-9]+</c>;
