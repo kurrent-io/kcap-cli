@@ -35,8 +35,7 @@ public static class KcapMcpServers {
         All.Where(s => s.Name != "kcap-workitems").ToArray();
 
     /// <summary>The shared set for every non-Claude JSON harness (Cursor, Copilot, OpenCode,
-    /// Kiro, Gemini, Antigravity) — omits only `kcap-workitems` (Claude Code plugin only;
-    /// its session-id default rides the Claude hook env).</summary>
+    /// Kiro, Gemini, Antigravity) — omits only `kcap-workitems` (Claude Code plugin only).</summary>
     public static IReadOnlyList<KcapMcpServer> ForCursor =>
         All.Where(s => s.Name != "kcap-workitems").ToArray();
 }
