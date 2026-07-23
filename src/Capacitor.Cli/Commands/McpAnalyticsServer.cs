@@ -178,7 +178,11 @@ static class McpAnalyticsServer {
             case HttpStatusCode.BadRequest:
                 return $"REJECTED: {ExtractProblemDetail(body)}";
             default:
-                return $"Error: HTTP {(int)status} — {body}";
+                // Unlisted statuses (e.g. a 403/429 from the app or an intermediary) still speak
+                // RFC-7807 — surface the clean `detail` so the agent gets an actionable reason,
+                // not a raw JSON envelope. ExtractProblemDetail falls back to the body when it
+                // isn't a problem document (e.g. an HTML 502 from a proxy).
+                return $"Error: HTTP {(int)status} — {ExtractProblemDetail(body)}";
         }
     }
 

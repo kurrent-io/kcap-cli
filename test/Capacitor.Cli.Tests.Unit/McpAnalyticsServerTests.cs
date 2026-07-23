@@ -127,6 +127,23 @@ public class McpAnalyticsServerTests {
     }
 
     [Test]
+    public async Task Map_response_extracts_problem_detail_for_unlisted_statuses() {
+        // An off-contract status (e.g. 429 from a rate limiter) that still speaks RFC-7807 should
+        // surface the clean `detail`, not the raw JSON envelope.
+        var rateLimited = McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.TooManyRequests,
+            """{"title":"rate_limited","status":429,"detail":"too many analytics queries — retry in 60s"}""", out var isError);
+        await Assert.That(isError).IsTrue();
+        await Assert.That(rateLimited).Contains("HTTP 429");
+        await Assert.That(rateLimited).Contains("retry in 60s");
+        await Assert.That(rateLimited).DoesNotContain("\"title\"");
+
+        // Non-problem-document bodies (e.g. an HTML 502 from a proxy) fall back to the raw body.
+        var proxyHtml = McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.BadGateway,
+            "<html>502 Bad Gateway</html>", out _);
+        await Assert.That(proxyHtml).Contains("502 Bad Gateway");
+    }
+
+    [Test]
     public async Task Tools_list_exposes_the_two_read_only_tools() {
         var tools = McpAnalyticsServer.BuildToolsList();
 
