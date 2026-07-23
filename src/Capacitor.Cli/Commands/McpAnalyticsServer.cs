@@ -22,6 +22,13 @@ static class McpAnalyticsServer {
 
     internal const string TimedOutMessage = "Query timed out — narrow the date range or aggregate.";
 
+    internal const string SchemaTimedOutMessage = "Schema fetch timed out — retry.";
+
+    // The query hint ("narrow the date range") is nonsense for the schema fetch, which has no
+    // query to narrow — pick the message that matches the timed-out tool.
+    static string TimeoutHintFor(string toolName) =>
+        toolName == "get_analytics_schema" ? SchemaTimedOutMessage : TimedOutMessage;
+
     public static async Task<int> RunAsync(string baseUrl) {
         var cwdRepoHash = await ResolveCwdRepoHashAsync();
         var tools       = BuildToolsList();
@@ -158,7 +165,7 @@ static class McpAnalyticsServer {
             // Client-side HttpClient timeout (TaskCanceledException : OperationCanceledException):
             // the request never got a server 408, so give the same actionable hint the 408 path
             // does rather than letting it fall through to the generic outer "internal error".
-            return BuildToolResult(id, TimedOutMessage, isError: true);
+            return BuildToolResult(id, TimeoutHintFor(toolName), isError: true);
         } catch (Exception ex) when (ex is InvalidOperationException or FormatException or JsonException) {
             // A wrong-typed argument that slipped past the tolerant readers still becomes a tool
             // error the agent can react to — never the generic outer "internal error".
@@ -181,7 +188,7 @@ static class McpAnalyticsServer {
             case HttpStatusCode.NotFound:
                 return NotSupportedMessage; // server predating the /api/analytics endpoints
             case HttpStatusCode.RequestTimeout:
-                return TimedOutMessage;
+                return TimeoutHintFor(toolName);
             case HttpStatusCode.BadRequest:
                 return $"REJECTED: {ExtractProblemDetail(body)}";
             default:

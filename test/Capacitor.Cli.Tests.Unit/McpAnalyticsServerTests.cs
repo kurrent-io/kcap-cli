@@ -100,6 +100,21 @@ public class McpAnalyticsServerTests {
     }
 
     [Test]
+    public async Task Schema_client_side_timeout_uses_generic_hint_not_query_hint() {
+        // A get_analytics_schema timeout must NOT tell the agent to "narrow the date range" —
+        // there is no query to narrow.
+        using var client = new HttpClient(new TimingOutHandler());
+        var request = Args("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_analytics_schema","arguments":{}}}""");
+
+        var response = await McpAnalyticsServer.HandleToolCallAsync(
+            JsonValue.Create(1), request, client, "https://example.test", "abc123");
+
+        await Assert.That(response).Contains("Schema fetch timed out");
+        await Assert.That(response).DoesNotContain("narrow the date range");
+        await Assert.That(response).DoesNotContain("internal error");
+    }
+
+    [Test]
     public async Task Map_response_unwraps_schema_text_envelope() {
         var text = McpAnalyticsServer.MapResponse("get_analytics_schema", HttpStatusCode.OK,
             """{"text":"Views and columns:\n  v_an_sessions(...)","max_rows":300}""", out var isError);
@@ -139,7 +154,10 @@ public class McpAnalyticsServerTests {
         await Assert.That(McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.NotFound, "", out _))
             .IsEqualTo(McpAnalyticsServer.NotSupportedMessage);
         await Assert.That(McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.RequestTimeout, "", out _))
-            .Contains("timed out");
+            .IsEqualTo(McpAnalyticsServer.TimedOutMessage);
+        // The query-specific "narrow the date range" hint is wrong for a schema fetch.
+        await Assert.That(McpAnalyticsServer.MapResponse("get_analytics_schema", HttpStatusCode.RequestTimeout, "", out _))
+            .IsEqualTo(McpAnalyticsServer.SchemaTimedOutMessage);
         await Assert.That(McpAnalyticsServer.MapResponse("query_analytics", HttpStatusCode.InternalServerError, "boom", out _))
             .Contains("HTTP 500");
     }
