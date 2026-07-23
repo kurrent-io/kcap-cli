@@ -10,10 +10,9 @@ using Capacitor.Cli.Core.Auth;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// `kcap mcp analytics` — governed SQL analytics over the server's read-model views.
-/// Two read-only tools wrapping the bearer-authed /api/analytics endpoints: the agent
-/// fetches the governed schema document, writes SQL itself, and self-repairs from the
-/// server's machine-consumable rejection reasons. Structure cloned from McpMemoryServer.
+/// `kcap mcp analytics` — two read-only tools over the bearer-authed /api/analytics views:
+/// the agent fetches the schema document, writes SQL, and self-repairs from the server's
+/// rejection reasons. Structure cloned from McpMemoryServer.
 /// </summary>
 static class McpAnalyticsServer {
     internal const string NotLoggedInMessage = "Not logged in. Run 'kcap login' on the host shell.";
@@ -27,9 +26,9 @@ static class McpAnalyticsServer {
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Deferred authenticated client — kcap-analytics auto-registers, so it is spawned for
-        // every session; startup must stay local-only for sessions that never invoke a tool.
-        // See McpMemoryServer for the nullable-field-not-Lazy rationale.
+        // Deferred authenticated client: auto-registered and spawned every session, so startup
+        // stays local-only until a tool is invoked. See McpMemoryServer for the
+        // nullable-field-not-Lazy rationale.
         HttpClient? client = null;
 
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
@@ -157,9 +156,9 @@ static class McpAnalyticsServer {
         }
     }
 
-    /// <summary>Maps an /api/analytics response to the tool result text. Success bodies pass
-    /// through as raw JSON (plus an explicit truncation trailer — a boolean field alone is easy
-    /// for a model to miss); error statuses become actionable, self-repair-friendly messages.</summary>
+    /// <summary>Maps an /api/analytics response to tool-result text. Success passes the raw JSON
+    /// through (plus a truncation trailer — a boolean flag alone is easy for a model to miss);
+    /// error statuses become actionable, self-repair-friendly messages.</summary>
     internal static string MapResponse(string toolName, HttpStatusCode status, string body, out bool isError) {
         isError = true;
 
