@@ -50,9 +50,10 @@ static class MemoryIndexEmitter {
         var prefix = "<!-- kcap-memory-index:v1 -->\n## Team memory\n" +
             "Durable memories for this repo/context. Call `get_memory <slug>` for the full content of any entry, or `search_memories` to find more.";
         var sb = new StringBuilder(prefix);
-        if (!AppendBoundedGroup(sb, "Org", org)) return sb.ToString();
-        if (!AppendBoundedGroup(sb, "Team", team)) return sb.ToString();
-        AppendBoundedGroup(sb, "Yours", user);
+        var currentBytes = Encoding.UTF8.GetByteCount(prefix);
+        if (!AppendBoundedGroup(sb, "Org", org, ref currentBytes)) return sb.ToString();
+        if (!AppendBoundedGroup(sb, "Team", team, ref currentBytes)) return sb.ToString();
+        AppendBoundedGroup(sb, "Yours", user, ref currentBytes);
         return sb.ToString();
     }
 
@@ -78,26 +79,16 @@ static class MemoryIndexEmitter {
         return BuildFragment(typed);
     }
 
-    static void AppendGroup(StringBuilder sb, string heading, List<string> lines) {
-        if (lines.Count == 0) return;
-
-        sb.AppendLine();
-        sb.AppendLine($"### {heading}");
-        foreach (var l in lines) sb.AppendLine(l);
-    }
-
-    // Collapse all whitespace runs (spaces, tabs, CR/LF) to single spaces and trim, so any
-    // value renders as one line. Splitting on null splits on Unicode whitespace.
-    static string OneLine(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-
-    static bool AppendBoundedGroup(StringBuilder sb, string heading, List<string> lines) {
+    static bool AppendBoundedGroup(StringBuilder sb, string heading, List<string> lines, ref int currentBytes) {
         if (lines.Count == 0) return true;
         var headerWritten = false;
         foreach (var line in lines) {
             var addition = (headerWritten ? "\n" : $"\n\n### {heading}\n") + line;
-            if (Encoding.UTF8.GetByteCount(sb.ToString()) + Encoding.UTF8.GetByteCount(addition) > SessionStartMemoryConstants.MaxFragmentBytes)
+            var additionBytes = Encoding.UTF8.GetByteCount(addition);
+            if (currentBytes + additionBytes > SessionStartMemoryConstants.MaxFragmentBytes)
                 return false;
             sb.Append(addition);
+            currentBytes += additionBytes;
             headerWritten = true;
         }
         return true;

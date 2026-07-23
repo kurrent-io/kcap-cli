@@ -7,6 +7,8 @@ internal sealed class SessionStartMemoryOrchestrator(
 
     public async Task<string?> GetFragmentAsync(SessionMemoryLifecycle lifecycle,
         SessionStartMemoryContextRequest request) {
+        if (request.Disabled) return null;
+
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         TimeSpan Remaining() {
             var value = request.Budget - System.Diagnostics.Stopwatch.GetElapsedTime(started);

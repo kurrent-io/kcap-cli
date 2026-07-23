@@ -803,7 +803,7 @@ public static class ClaudeHookCommand {
         TimeSpan budget,
         Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory,
         Func<SessionStartMemoryLeaseStore>? memoryStoreFactory) {
-        if (string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
+        if (disabled || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
             return Task.FromResult<string?>(null);
 
         // The memory subsystem is optional. Keep construction itself inside the fail-open

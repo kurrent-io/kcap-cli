@@ -43,7 +43,7 @@ internal sealed class SessionStartMemoryContextProvider(
                 if (entries.Length == 0) return SessionStartMemoryContextResult.Empty;
                 var fragment = MemoryIndexEmitter.BuildFragment(entries);
                 return fragment is null
-                    ? SessionStartMemoryContextResult.Retry
+                    ? SessionStartMemoryContextResult.Empty
                     : new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, fragment);
                 }
             } finally {

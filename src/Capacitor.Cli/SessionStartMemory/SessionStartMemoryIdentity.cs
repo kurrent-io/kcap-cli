@@ -21,6 +21,8 @@ internal static class SessionStartMemoryIdentity {
         if (string.IsNullOrEmpty(value)) return null;
         if (harness is SessionStartHarness.Cursor or SessionStartHarness.Copilot or SessionStartHarness.Antigravity)
             return Guid.TryParse(value, out var guid) ? guid.ToString("N") : null;
+        if (harness == SessionStartHarness.Claude)
+            return Guid.TryParse(value, out var guid) ? guid.ToString("N") : value;
         if (harness == SessionStartHarness.Pi)
             return PiSessionPathCanonicalizer.TryHash(value, out var hash) ? hash : null;
         return value;

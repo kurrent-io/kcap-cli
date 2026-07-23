@@ -33,6 +33,16 @@ public class SessionStartMemoryFoundationTests {
     }
 
     [Test]
+    public async Task Claude_uuid_identity_is_canonical_across_dashed_and_compact_forms() {
+        var dashed = SessionStartMemoryIdentity.Create(
+            SessionStartHarness.Claude, "A0D44A4A-5059-4D1F-9C93-2A1ADCE89C2E", null);
+        var compact = SessionStartMemoryIdentity.Create(
+            SessionStartHarness.Claude, "a0d44a4a50594d1f9c932a1adce89c2e", null);
+
+        await Assert.That(dashed).IsEqualTo(compact);
+    }
+
+    [Test]
     public async Task Lifecycle_policy_does_not_poison_unknown_or_subagent_callbacks() {
         var unknown = SessionStartMemoryLifecyclePolicy.Decide(new(
             SessionStartHarness.Kiro, "s", null, true, false,
@@ -225,7 +235,7 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That((await empty.GetAsync(request)).Disposition)
             .IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
         await Assert.That((await malformed.GetAsync(request)).Disposition)
-            .IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+            .IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
         var result = await ready.GetAsync(request);
         await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
         await Assert.That(result.Fragment).Contains("- s: d");
@@ -285,6 +295,29 @@ public class SessionStartMemoryFoundationTests {
 
             await Assert.That(first).Contains("- s: d");
             await Assert.That(repeated).IsNull();
+        } finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Test]
+    public async Task Disabled_request_does_not_fetch_or_write_a_lease_record() {
+        var root = TempDir();
+        try {
+            var clientCalls = 0;
+            var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null), (_, _) => {
+                clientCalls++;
+                return Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.NoContent, "")));
+            });
+            var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root), provider);
+            var lifecycle = new SessionMemoryLifecycle(SessionStartHarness.Claude, "session", null,
+                true, true, SessionLifecycleReason.New, false);
+
+            var fragment = await orchestrator.GetFragmentAsync(lifecycle,
+                new SessionStartMemoryContextRequest(
+                    "https://example.test", null, true, TimeSpan.FromSeconds(1), CancellationToken.None));
+
+            await Assert.That(fragment).IsNull();
+            await Assert.That(clientCalls).IsEqualTo(0);
+            await Assert.That(Directory.EnumerateFiles(root)).IsEmpty();
         } finally { Directory.Delete(root, recursive: true); }
     }
 
