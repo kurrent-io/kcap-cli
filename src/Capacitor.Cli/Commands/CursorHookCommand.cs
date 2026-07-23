@@ -513,6 +513,26 @@ public static class CursorHookCommand {
                 // ClassificationAuthoritative is hardcoded true (not merely `!isSubagentChild`):
                 // this method is only ever reached from the top-level, non-child success path —
                 // a linked child returns {} before any orchestrator work, per §4/§5.
+                //
+                // AI-1461 review finding 2 (investigated, no behavior change): `!isSubagentChild`
+                // is NOT the same fact as "definitively no parent" — CursorLiveSubagentLinker.
+                // ResolveParent's own doc records that it can return null for a session that IS
+                // actually a subagent, merely because the parent's Task/Agent tool_use hasn't
+                // flushed to the parent's transcript yet at the child's first (and only)
+                // sessionStart hook. The linker has no signal to distinguish that "uncertain"
+                // case from a genuinely standalone top-level session: DiscoverSiblingTranscripts
+                // returns every session EVER recorded under the workspace's agent-transcripts/
+                // dir (no recency/mtime filter), so "candidates exist" is true for nearly every
+                // session after the very first one in a workspace and cannot be used as an
+                // uncertainty signal without suppressing memory injection for the common case.
+                // Threading `authoritative = !isSubagentChild` through so a suspected-uncertain
+                // classification maps to RetryLaterNoCommit would also be a functional dead end
+                // for Cursor specifically: unlike Claude (which can re-decide on a later resume
+                // sessionStart), Cursor's sessionStart fires exactly once per conversation with
+                // no persisted "retry" trigger, so RetryLaterNoCommit here means "this session
+                // never gets memory," not "deferred." Given no cheap signal exists and any
+                // conservative fix regresses the majority (genuine top-level) case, this was
+                // escalated rather than changed — see the fix-report for the full writeup.
                 new SessionMemoryLifecycle(SessionStartHarness.Cursor, sessionId, LifecycleInstanceId: null,
                     IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
                     CallbackMayRepeat: false),
