@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Commands;
 
@@ -32,11 +33,14 @@ public static class ClaudeHookCommand {
 
     static Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask)
         => HandleWithDeps(spool, processStart, baseUrl, stdin, updateCheckTask,
-            () => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl));
+            () => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl),
+            async (forceRefresh, ct) => (await HttpClientExtensions.CreateClientWithAuthStatusAsync(
+                baseUrl, ct, allowAutoRedirect: false, forceRefresh: forceRefresh)).Client);
 
     internal static async Task<int> HandleWithDeps(
             HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask,
-            Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory) {
+            Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory,
+            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null) {
         string body;
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
@@ -82,7 +86,8 @@ public static class ClaudeHookCommand {
 
         var (client, authStatus) = created.Value;
         try {
-            return await HandleCore(client, authStatus, spool, processStart, baseUrl, new StringReader(body), updateCheckTask);
+            return await HandleCore(client, authStatus, spool, processStart, baseUrl, new StringReader(body),
+                updateCheckTask, memoryClientFactory);
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"[kcap] claude hook failed (fail-open): {ex.Message}");
             return 0;
@@ -170,10 +175,15 @@ public static class ClaudeHookCommand {
         return false;
     }
 
-    internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
+    internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool,
+        long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null,
+        Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
+        Func<SessionStartMemoryLeaseStore>? memoryStoreFactory = null) {
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
+        string? nativeSessionId = null;
+        try { nativeSessionId = JsonNode.Parse(body)?["session_id"]?.GetValue<string>(); } catch { }
 
         if (eventName is null) {
             Console.Error.WriteLine("kcap hook --claude: missing hook_event_name in payload");
@@ -496,10 +506,17 @@ public static class ClaudeHookCommand {
             // a 401, or a budget overrun yields a null fragment and nothing is injected. Started
             // after the ordering-guard / backlog returns above so a spooled session-start doesn't
             // pay for a fetch it won't use.
-            var memoryDisabled  = AppConfig.ResolvedProfile?.Profile?.DisableMemoryIndex is true;
-            var memoryIndexTask = memoryDisabled
-                ? Task.FromResult<JsonNode?>(null)
-                : TryFetchMemoryIndexAsync(client, baseUrl, sessionCwd, processStart);
+            var memoryDisabled = AppConfig.ResolvedProfile?.Profile?.DisableMemoryIndex is true;
+            var lifecycleReason = source?.ToLowerInvariant() switch {
+                "resume" => SessionLifecycleReason.Resume,
+                "reopen" => SessionLifecycleReason.Reopen,
+                "fork" => SessionLifecycleReason.Fork,
+                "compact" => SessionLifecycleReason.Compact,
+                _ => SessionLifecycleReason.New
+            };
+            var memoryIndexTask = StartMemoryIndexTask(
+                client, baseUrl, nativeSessionId, sessionCwd, memoryDisabled, lifecycleReason,
+                HookBudget.Remaining(processStart, "session-start"), memoryClientFactory, memoryStoreFactory);
 
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
@@ -553,8 +570,7 @@ public static class ClaudeHookCommand {
                     var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
                     // join the parallel memory-index fetch, bounded by the remaining
                     // hook budget so a slow fetch can't delay the hook (fail-open → null).
-                    var memoryFragment  = MemoryIndexEmitter.BuildFragment(
-                        await AwaitMemoryIndexAsync(memoryIndexTask, processStart), memoryDisabled);
+                    var memoryFragment = await AwaitMemoryFragmentAsync(memoryIndexTask, processStart);
 
                     var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment, memoryFragment);
 
@@ -777,73 +793,47 @@ public static class ClaudeHookCommand {
         }
     }
 
-    // ── SessionStart team-memory index injection ────────────────────────
-    //
-    // Best-effort fetch of GET /api/memories/index for the current repo + machine.
-    // Fail-open on a failure / non-2xx / timeout → null, and
-    // MemoryIndexEmitter.BuildFragment(null, …) emits nothing.
-    //
-    // Unresolved repo/machine is NOT an error: the query params are simply omitted, which the
-    // server's scope predicate (`repo_hash IS NULL OR repo_hash = @repo`, likewise machine_tag)
-    // narrows to the caller's GLOBAL, machine-agnostic memories — exactly the repo-independent
-    // subset that should surface everywhere (e.g. a session outside any git repo). It never
-    // returns another repo's repo-scoped memories, so the result stays correctly scoped.
+    static Task<string?> StartMemoryIndexTask(
+        HttpClient sharedClient,
+        string baseUrl,
+        string? nativeSessionId,
+        string? cwd,
+        bool disabled,
+        SessionLifecycleReason reason,
+        TimeSpan budget,
+        Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+        Func<SessionStartMemoryLeaseStore>? memoryStoreFactory) {
+        if (disabled || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
+            return Task.FromResult<string?>(null);
 
-    static async Task<JsonNode?> TryFetchMemoryIndexAsync(HttpClient client, string baseUrl, string? sessionCwd, long processStart) {
+        // The memory subsystem is optional. Keep construction itself inside the fail-open
+        // boundary: store-root validation and injected factories can throw synchronously.
         try {
-            var budget = HookBudget.Remaining(processStart, "session-start");
-            if (budget <= TimeSpan.Zero) return null;
-
-            var repoHash  = await TryResolveRepoHashAsync(sessionCwd);
-            var machineId = await TryResolveMachineIdAsync();
-
-            using var cts  = new CancellationTokenSource(HookBudget.Remaining(processStart, "session-start"));
-            using var resp = await client.GetAsync(BuildMemoryIndexUrl(baseUrl, repoHash, machineId), cts.Token);
-            if (!resp.IsSuccessStatusCode) return null;
-
-            return JsonNode.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
-        } catch {
-            return null; // fail-open — memory injection never breaks the hook
+            var store = memoryStoreFactory?.Invoke() ?? new SessionStartMemoryLeaseStore();
+            var provider = new SessionStartMemoryContextProvider(
+                new SessionStartMemoryScopeResolver(),
+                memoryClientFactory ?? ((_, _) => Task.FromResult(sharedClient)),
+                disposeClients: memoryClientFactory is not null);
+            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+                new SessionMemoryLifecycle(SessionStartHarness.Claude, nativeSessionId, null,
+                    IsTopLevel: true, ClassificationAuthoritative: true, reason,
+                    CallbackMayRepeat: false),
+                new SessionStartMemoryContextRequest(baseUrl, cwd, disabled, budget, CancellationToken.None));
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+            return Task.FromResult<string?>(null);
         }
     }
 
-    // Bound the join on the parallel fetch by the remaining hook budget so a slow index
-    // fetch can never delay session capture. Timeout or fault → null (nothing injected).
-    static async Task<JsonNode?> AwaitMemoryIndexAsync(Task<JsonNode?> task, long processStart) {
+    static async Task<string?> AwaitMemoryFragmentAsync(Task<string?> task, long processStart) {
         try {
             var budget = HookBudget.Remaining(processStart, "session-start");
             if (budget <= TimeSpan.Zero) return task.IsCompletedSuccessfully ? task.Result : null;
-
             return await task.WaitAsync(budget);
-        } catch {
-            return null;
-        }
+        } catch { return null; }
     }
 
-    internal static string BuildMemoryIndexUrl(string baseUrl, string? repoHash, string? machineId) {
-        var qs = new List<string>();
-        if (repoHash is not null)  qs.Add($"repo={Uri.EscapeDataString(repoHash)}");
-        if (machineId is not null) qs.Add($"machine={Uri.EscapeDataString(machineId)}");
-
-        return qs.Count > 0 ? $"{baseUrl}/api/memories/index?{string.Join('&', qs)}" : $"{baseUrl}/api/memories/index";
-    }
-
-    static async Task<string?> TryResolveRepoHashAsync(string? sessionCwd) {
-        try {
-            var cwd      = string.IsNullOrWhiteSpace(sessionCwd) ? Directory.GetCurrentDirectory() : sessionCwd;
-            // Memory-index scoping needs only owner/repo → skip the PR round-trip.
-            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
-            if (repoInfo?.Owner is null || repoInfo.RepoName is null) return null;
-
-            return RepoHashHelper.ComputeRepoHash(repoInfo.Owner, repoInfo.RepoName);
-        } catch {
-            return null;
-        }
-    }
-
-    static async Task<string?> TryResolveMachineIdAsync() {
-        try { return await MachineIdProvider.GetOrCreateAsync(); } catch { return null; }
-    }
+    internal static string BuildMemoryIndexUrl(string baseUrl, string? repoHash, string? machineId) =>
+        SessionStartMemoryContextProvider.BuildUrl(baseUrl, new SessionStartMemoryScope(repoHash, machineId));
 
     static string? ReadPlanFile(string slug) {
         var planPath = Path.Combine(ClaudePaths.Plans, $"{slug}.md");

@@ -2,6 +2,8 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -14,6 +16,43 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture();
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}""");
         await Assert.That(fx.RouteOrder).Contains("session-start");
+    }
+
+    [Test]
+    public async Task memory_store_initialization_failure_does_not_suppress_session_start_capture() {
+        using var fx = new Fixture();
+
+        var exit = await ClaudeHookCommand.HandleCore(
+            fx.Client, AuthStatus.Ok, fx.Spool, System.Diagnostics.Stopwatch.GetTimestamp(),
+            "http://localhost", new StringReader(
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+            memoryStoreFactory: () => throw new UnauthorizedAccessException("read-only store"));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.RouteOrder).Contains("session-start");
+    }
+
+    [Test]
+    public async Task disabled_memory_index_does_not_construct_the_lease_store() {
+        using var fx = new Fixture();
+        var storeConstructed = false;
+        AppConfig.SetResolvedState("http://localhost", "default", new Profile { DisableMemoryIndex = true });
+        try {
+            var exit = await ClaudeHookCommand.HandleCore(
+                fx.Client, AuthStatus.Ok, fx.Spool, System.Diagnostics.Stopwatch.GetTimestamp(),
+                "http://localhost", new StringReader(
+                    $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+                memoryStoreFactory: () => {
+                    storeConstructed = true;
+                    return new SessionStartMemoryLeaseStore(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+                });
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(storeConstructed).IsFalse();
+            await Assert.That(fx.RouteOrder).Contains("session-start");
+        } finally {
+            AppConfig.SetResolvedState("http://localhost", "default", new Profile());
+        }
     }
 
     // the session-start payload gains a best-effort workspace_root (the git repo root
@@ -357,7 +396,8 @@ public class ClaudeHookCommandTests {
 
         public Task<int> HandleAsync(string stdin, long processStart = 0) =>
             ClaudeHookCommand.HandleCore(Client, AuthStatus.Ok, Spool, processStart == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : processStart,
-                "http://localhost", new StringReader(stdin));
+                "http://localhost", new StringReader(stdin),
+                memoryStoreFactory: () => new SessionStartMemoryLeaseStore(Path.Combine(_tmpHome, "memory")));
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath) : [];
