@@ -66,7 +66,7 @@ static class McpAnalyticsServer {
                 if (request is null) continue;
 
                 var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
+                var method = (request["method"] as JsonValue)?.TryGetValue<string>(out var m) == true ? m : null;
 
                 if (id is null) continue; // notification — no response
 
@@ -128,11 +128,12 @@ static class McpAnalyticsServer {
             string?    cwdRepoHash
         ) {
         var paramsNode = request["params"]?.AsObject();
-        var toolName   = paramsNode?["name"]?.GetValue<string>();
         var arguments  = paramsNode?["arguments"]?.AsObject();
 
-        if (toolName is null) {
-            return BuildErrorResponse(id, -32602, "Missing params.name");
+        // Read params.name tolerantly: a wrong-typed value (LLM clients send them) must yield a
+        // clean protocol error, not a throw that the outer catch masks as an internal error.
+        if (!TryGetStringArg(paramsNode, "name", out var toolName)) {
+            return BuildErrorResponse(id, -32602, "Missing or invalid params.name");
         }
 
         try {
@@ -149,6 +150,10 @@ static class McpAnalyticsServer {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (Exception ex) when (ex is InvalidOperationException or FormatException or JsonException) {
+            // A wrong-typed argument that slipped past the tolerant readers still becomes a tool
+            // error the agent can react to — never the generic outer "internal error".
+            return BuildToolResult(id, $"Error: malformed arguments — {ex.Message}", isError: true);
         }
     }
 
@@ -231,10 +236,17 @@ static class McpAnalyticsServer {
 
     // NOTE: request-body keys are snake_case — the server's global JSON policy.
     internal static JsonObject BuildQueryBody(JsonObject? args, string? cwdRepoHash) {
-        var sql = args?["sql"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(sql)) throw new ArgumentException("sql is required");
+        if (!TryGetStringArg(args, "sql", out var sql))
+            throw new ArgumentException("sql is required and must be a non-empty string.");
 
-        var scope = args?["scope"]?.GetValue<string>() ?? "repo";
+        // scope is optional (defaults to repo), but a present-yet-wrong-typed value is a mistake
+        // the agent should hear about precisely rather than as an opaque failure.
+        var scope = "repo";
+        if (args?["scope"] is JsonNode scopeNode) {
+            if (scopeNode is not JsonValue sv || !sv.TryGetValue<string>(out var scopeStr))
+                throw new ArgumentException("scope must be a string — 'repo' (default) or 'global'.");
+            scope = scopeStr;
+        }
 
         // Fail closed rather than silently widening scope: an unresolvable cwd repo must never
         // default to the tenant-wide route (mirrors McpMemoryServer.BuildSaveBody).
@@ -251,9 +263,65 @@ static class McpAnalyticsServer {
             ["repos"] = repos
         };
 
-        if (McpMemoryServer.TryReadInt(args, "max_rows", out var maxRows)) body["max_rows"] = maxRows;
+        if (TryReadInt(args, "max_rows", out var maxRows)) body["max_rows"] = maxRows;
 
         return body;
+    }
+
+    /// <summary>Reads a required string argument tolerantly: returns false (rather than throwing)
+    /// when the key is absent, the wrong JSON type, or blank. Mirrors McpReviewServer.</summary>
+    static bool TryGetStringArg(JsonObject? args, string name, out string value) {
+        value = "";
+
+        if (args?[name] is not JsonValue node) return false;
+        if (!node.TryGetValue<string>(out var s) || string.IsNullOrWhiteSpace(s)) return false;
+
+        value = s;
+
+        return true;
+    }
+
+    /// <summary>Reads an optional integer argument, tolerant of JSON number shapes (int/long/double)
+    /// and rejecting out-of-range or non-integer values with a precise message. A private copy per
+    /// the established per-server convention (kcap-sessions/-memory/-workitems each carry their own),
+    /// so this server takes no compile-time dependency on another MCP server.</summary>
+    static bool TryReadInt(JsonObject? args, string key, out int value) {
+        value = 0;
+        var node = args?[key];
+
+        if (node is null) return false;
+
+        JsonValue v;
+
+        try {
+            v = node.AsValue();
+        } catch {
+            return false; // wrong shape (object/array)
+        }
+
+        if (v.TryGetValue(out value)) return true;
+
+        if (v.TryGetValue<long>(out var lv)) {
+            if (lv is < int.MinValue or > int.MaxValue)
+                throw new ArgumentException($"'{key}' value {lv} is out of range for int.");
+
+            value = (int)lv;
+
+            return true;
+        }
+
+        if (v.TryGetValue<double>(out var dv)) {
+            var rounded = (long)dv;
+
+            if (rounded < int.MinValue || rounded > int.MaxValue || rounded != dv)
+                throw new ArgumentException($"'{key}' value {dv} is out of range or non-integer for int.");
+
+            value = (int)rounded;
+
+            return true;
+        }
+
+        return false;
     }
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>

@@ -45,6 +45,19 @@ public class McpAnalyticsServerTests {
     }
 
     [Test]
+    public async Task Query_body_rejects_wrong_typed_sql_and_scope_with_ArgumentException() {
+        // Wrong-typed values (common from LLM clients) must surface as ArgumentException — which the
+        // dispatcher turns into a field-specific tool error — never a raw InvalidOperationException
+        // that would be masked as a generic "internal error".
+        await Assert.That(() => McpAnalyticsServer.BuildQueryBody(Args("""{"sql":123}"""), "abc123"))
+            .Throws<ArgumentException>();
+        await Assert.That(() => McpAnalyticsServer.BuildQueryBody(Args("""{"sql":["SELECT 1"]}"""), "abc123"))
+            .Throws<ArgumentException>();
+        await Assert.That(() => McpAnalyticsServer.BuildQueryBody(Args("""{"sql":"SELECT 1","scope":42}"""), "abc123"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task Query_body_passes_max_rows_through() {
         var body = McpAnalyticsServer.BuildQueryBody(Args("""{"sql":"SELECT vendor FROM v_an_sessions","max_rows":50}"""), "abc123");
 
