@@ -20,6 +20,8 @@ static class McpAnalyticsServer {
     internal const string NotSupportedMessage =
         "This server does not support analytics queries — upgrade kcap-server.";
 
+    internal const string TimedOutMessage = "Query timed out — narrow the date range or aggregate.";
+
     public static async Task<int> RunAsync(string baseUrl) {
         var cwdRepoHash = await ResolveCwdRepoHashAsync();
         var tools       = BuildToolsList();
@@ -152,6 +154,11 @@ static class McpAnalyticsServer {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (OperationCanceledException) {
+            // Client-side HttpClient timeout (TaskCanceledException : OperationCanceledException):
+            // the request never got a server 408, so give the same actionable hint the 408 path
+            // does rather than letting it fall through to the generic outer "internal error".
+            return BuildToolResult(id, TimedOutMessage, isError: true);
         } catch (Exception ex) when (ex is InvalidOperationException or FormatException or JsonException) {
             // A wrong-typed argument that slipped past the tolerant readers still becomes a tool
             // error the agent can react to — never the generic outer "internal error".
@@ -174,7 +181,7 @@ static class McpAnalyticsServer {
             case HttpStatusCode.NotFound:
                 return NotSupportedMessage; // server predating the /api/analytics endpoints
             case HttpStatusCode.RequestTimeout:
-                return "Query timed out — narrow the date range or aggregate.";
+                return TimedOutMessage;
             case HttpStatusCode.BadRequest:
                 return $"REJECTED: {ExtractProblemDetail(body)}";
             default:

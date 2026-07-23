@@ -82,6 +82,24 @@ public class McpAnalyticsServerTests {
     }
 
     [Test]
+    public async Task Tool_call_maps_client_side_timeout_to_actionable_hint() {
+        // A client-side HttpClient timeout throws TaskCanceledException (: OperationCanceledException)
+        // before any server 408 — it must yield the same "narrow the query" hint, not "internal error".
+        using var client = new HttpClient(new TimingOutHandler());
+        var request = Args("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_analytics","arguments":{"sql":"SELECT vendor FROM v_an_sessions"}}}""");
+
+        var response = await McpAnalyticsServer.HandleToolCallAsync(
+            JsonValue.Create(1), request, client, "https://example.test", "abc123");
+
+        // The tool result is JSON-serialized (the em-dash escapes to —), so match on the
+        // ASCII head of the message rather than the literal constant.
+        await Assert.That(response).Contains("Query timed out");
+        await Assert.That(response).Contains("narrow the date range");
+        await Assert.That(response).Contains("\"isError\":true");
+        await Assert.That(response).DoesNotContain("internal error");
+    }
+
+    [Test]
     public async Task Map_response_unwraps_schema_text_envelope() {
         var text = McpAnalyticsServer.MapResponse("get_analytics_schema", HttpStatusCode.OK,
             """{"text":"Views and columns:\n  v_an_sessions(...)","max_rows":300}""", out var isError);
@@ -154,5 +172,10 @@ public class McpAnalyticsServerTests {
         await Assert.That(query.InputSchema.Required).IsEquivalentTo(new[] { "sql" });
         await Assert.That(query.InputSchema.Properties.Keys.ToArray())
             .IsEquivalentTo(new[] { "sql", "scope", "max_rows" });
+    }
+
+    sealed class TimingOutHandler : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout.");
     }
 }
