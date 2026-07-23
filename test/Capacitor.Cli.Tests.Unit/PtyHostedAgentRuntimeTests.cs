@@ -39,11 +39,13 @@ public class PtyHostedAgentRuntimeTests {
         await runtime.SendUserInputAsync("hello world");
 
         // the text is delivered as one bracketed-paste block (ESC[200~ … ESC[201~) so the
-        // CLI's TUI treats it as a single paste and the following Enter is an unambiguous submit
-        // keypress, rather than racing the still-ingesting text.
-        await Assert.That(pty.StringWrites.Count).IsEqualTo(2);
+        // CLI's TUI treats it as a single paste, then submitted with the escalating
+        // carriage-return schedule (one CR per SubmitCarriageReturnSchedule step) so at least
+        // one CR lands as a distinct keypress after the paste is ingested (GitHub #349).
+        var expectedCrs = PtyHostedAgentRuntime.SubmitCarriageReturnSchedule.Length;
+        await Assert.That(pty.StringWrites.Count).IsEqualTo(1 + expectedCrs);
         await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello world\x1b[201~");
-        await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
+        await Assert.That(pty.StringWrites.Skip(1)).IsEquivalentTo(Enumerable.Repeat("\r", expectedCrs));
     }
 
     [Test]
@@ -53,9 +55,12 @@ public class PtyHostedAgentRuntimeTests {
 
         await runtime.RequestGracefulStopAsync();
 
-        await Assert.That(pty.StringWrites.Count).IsEqualTo(2);
+        // "/exit" is submitted with the same escalating carriage-return schedule as user input
+        // (a single CR failed to submit it — the SIGTERM-fallback half of GitHub #349).
+        var expectedCrs = PtyHostedAgentRuntime.SubmitCarriageReturnSchedule.Length;
+        await Assert.That(pty.StringWrites.Count).IsEqualTo(1 + expectedCrs);
         await Assert.That(pty.StringWrites[0]).IsEqualTo("/exit");
-        await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
+        await Assert.That(pty.StringWrites.Skip(1)).IsEquivalentTo(Enumerable.Repeat("\r", expectedCrs));
     }
 
     [Test]
