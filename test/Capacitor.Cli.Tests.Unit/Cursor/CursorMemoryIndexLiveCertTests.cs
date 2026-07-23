@@ -38,7 +38,13 @@ public class CursorMemoryIndexLiveCertTests {
 
     static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(60);
 
-    [Test]
+    // Both gated live tests are [NotInParallel]: they read/mutate the SAME process-global
+    // `disable_memory_index` profile config (a real `kcap config set` subprocess writing the
+    // actual config file this machine's `kcap` resolves), so — mirroring
+    // CursorHookCommandTests' own bare-NotInParallel-for-a-shared-resource precedent — they
+    // must never interleave with each other (a concurrent negative-control run could leave
+    // disable_memory_index=true set while the positive test is trying to observe an injection).
+    [Test, NotInParallel]
     public async Task Nonce_saved_as_a_memory_is_reproduced_by_a_real_cursor_agent_sessionStart() {
         SkipUnlessLiveGateReady();
 
@@ -73,7 +79,7 @@ public class CursorMemoryIndexLiveCertTests {
     /// reach the model — proving a false positive (e.g. the nonce leaking via some other channel,
     /// or the assertion being trivially satisfiable) isn't what the positive test is actually
     /// observing.</summary>
-    [Test]
+    [Test, NotInParallel]
     public async Task Disabled_memory_index_does_not_leak_the_nonce_to_a_real_cursor_agent_sessionStart() {
         SkipUnlessLiveGateReady();
 
@@ -83,10 +89,16 @@ public class CursorMemoryIndexLiveCertTests {
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
         var memoryId = await SaveNonceMemoryAsync(client, baseUrl, nonce);
 
-        var configResult = await RunKcapConfigAsync("disable_memory_index", "true");
-        await Assert.That(configResult.ExitCode).IsEqualTo(0);
+        // Capture the ORIGINAL disable_memory_index value BEFORE the first mutation, and put
+        // the mutate/run/restore sequence in a try/finally that begins right here — so a failed
+        // assertion (or the config-set call itself throwing) still restores the setting and
+        // archives the memory instead of leaking a "disabled" profile on this machine.
+        var originalDisableMemoryIndex = await ReadDisableMemoryIndexAsync();
 
         try {
+            var configResult = await RunKcapConfigAsync("disable_memory_index", "true");
+            await Assert.That(configResult.ExitCode).IsEqualTo(0);
+
             var worktree = Directory.CreateTempSubdirectory("kcap-cursor-memory-live-negctrl-");
             try {
                 var answer = await RunCursorAgentAskAsync(
@@ -99,8 +111,33 @@ public class CursorMemoryIndexLiveCertTests {
                 try { worktree.Delete(recursive: true); } catch { /* best-effort */ }
             }
         } finally {
-            await RunKcapConfigAsync("disable_memory_index", "false");
+            // Restore the ORIGINAL value, not an unconditional "false" — `kcap config` has no
+            // "unset" primitive, so an originally-absent (null) flag is restored as "false",
+            // which is observably identical (both read as "not disabled" via `is true`).
+            await RunKcapConfigAsync("disable_memory_index", (originalDisableMemoryIndex ?? false) ? "true" : "false");
             await ArchiveMemoryAsync(client, baseUrl, memoryId);
+        }
+    }
+
+    /// <summary>
+    /// Reads the active profile's current <c>disable_memory_index</c> value via
+    /// <c>kcap config show</c> (JSON printed followed by a blank line and a "Path:" line — see
+    /// <c>ConfigCommand.Show</c> — so the JSON is the text before the first blank line). Returns
+    /// null if the value is unset (absent/JSON null) or the command failed.
+    /// </summary>
+    static async Task<bool?> ReadDisableMemoryIndexAsync() {
+        var (exitCode, stdout, _) = await RunProcessAsync("kcap", ["config", "show"], workingDirectory: null);
+        if (exitCode != 0) return null;
+
+        try {
+            var jsonPart      = stdout.Split("\n\n", 2)[0];
+            var root          = JsonNode.Parse(jsonPart);
+            var activeProfile = root?["active_profile"]?.GetValue<string>();
+            if (activeProfile is null) return null;
+
+            return root?["profiles"]?[activeProfile]?["disable_memory_index"]?.GetValue<bool>();
+        } catch {
+            return null;
         }
     }
 
@@ -160,8 +197,10 @@ public class CursorMemoryIndexLiveCertTests {
         }
     }
 
+    // ConfigCommand.HandleAsync routes on args[1] as the subcommand ("show"/"set") — the
+    // "set" segment is required, `kcap config <key> <value>` is not a valid invocation shape.
     static async Task<(int ExitCode, string Stdout, string Stderr)> RunKcapConfigAsync(string key, string value) =>
-        await RunProcessAsync("kcap", ["config", key, value], workingDirectory: null);
+        await RunProcessAsync("kcap", ["config", "set", key, value], workingDirectory: null);
 
     /// <summary>
     /// Runs <c>cursor-agent --print --mode ask &lt;prompt&gt;</c> in <paramref name="cwd"/> (a
