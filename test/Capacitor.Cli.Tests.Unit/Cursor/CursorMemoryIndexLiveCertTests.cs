@@ -208,8 +208,11 @@ public class CursorMemoryIndexLiveCertTests {
     /// under test actually fires) and returns the parsed assistant answer.
     /// </summary>
     static async Task<string> RunCursorAgentAskAsync(string cwd, string prompt) {
+        // -f (force/trust) is required: the throwaway worktree is an untrusted directory, and
+        // without it cursor-agent halts on a "Workspace Trust Required" prompt instead of running
+        // the turn (verified against the installed CLI). --mode ask keeps the turn read-only.
         var (exitCode, stdout, stderr) = await RunProcessAsync(
-            "cursor-agent", ["--print", "--mode", "ask", prompt], cwd);
+            "cursor-agent", ["--print", "-f", "--mode", "ask", prompt], cwd);
         await Console.Out.WriteLineAsync($"[cursor-memory-live] cursor-agent exit={exitCode} stderr={stderr}");
         await Assert.That(exitCode).IsEqualTo(0);
         return ExtractAssistantAnswer(stdout);
