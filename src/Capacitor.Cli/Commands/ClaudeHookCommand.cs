@@ -34,13 +34,13 @@ public static class ClaudeHookCommand {
     static Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask)
         => HandleWithDeps(spool, processStart, baseUrl, stdin, updateCheckTask,
             () => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl),
-            async ct => (await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-                baseUrl, ct, allowAutoRedirect: false)).Client);
+            async (forceRefresh, ct) => (await HttpClientExtensions.CreateClientWithAuthStatusAsync(
+                baseUrl, ct, allowAutoRedirect: false, forceRefresh: forceRefresh)).Client);
 
     internal static async Task<int> HandleWithDeps(
             HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask,
             Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory,
-            Func<CancellationToken, Task<HttpClient>>? memoryClientFactory = null) {
+            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null) {
         string body;
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
@@ -177,7 +177,7 @@ public static class ClaudeHookCommand {
 
     internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool,
         long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null,
-        Func<CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
+        Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
         Func<SessionStartMemoryLeaseStore>? memoryStoreFactory = null) {
         var body = await stdin.ReadToEndAsync();
 
@@ -514,20 +514,9 @@ public static class ClaudeHookCommand {
                 "compact" => SessionLifecycleReason.Compact,
                 _ => SessionLifecycleReason.New
             };
-            Task<string?> memoryIndexTask = string.IsNullOrEmpty(nativeSessionId)
-                ? Task.FromResult<string?>(null)
-                : new SessionStartMemoryOrchestrator(
-                        memoryStoreFactory?.Invoke() ?? new SessionStartMemoryLeaseStore(),
-                        new SessionStartMemoryContextProvider(
-                            new SessionStartMemoryScopeResolver(),
-                            memoryClientFactory ?? (_ => Task.FromResult(client)),
-                            disposeClients: memoryClientFactory is not null))
-                    .GetFragmentAsync(
-                        new SessionMemoryLifecycle(SessionStartHarness.Claude, nativeSessionId, null,
-                            IsTopLevel: true, ClassificationAuthoritative: true, lifecycleReason,
-                            CallbackMayRepeat: false),
-                        new SessionStartMemoryContextRequest(baseUrl, sessionCwd, memoryDisabled,
-                            HookBudget.Remaining(processStart, "session-start"), CancellationToken.None));
+            var memoryIndexTask = StartMemoryIndexTask(
+                client, baseUrl, nativeSessionId, sessionCwd, memoryDisabled, lifecycleReason,
+                HookBudget.Remaining(processStart, "session-start"), memoryClientFactory, memoryStoreFactory);
 
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
@@ -801,6 +790,37 @@ public static class ClaudeHookCommand {
 
         if (value is not null && value.Contains('-')) {
             node[fieldName] = value.Replace("-", "");
+        }
+    }
+
+    static Task<string?> StartMemoryIndexTask(
+        HttpClient sharedClient,
+        string baseUrl,
+        string? nativeSessionId,
+        string? cwd,
+        bool disabled,
+        SessionLifecycleReason reason,
+        TimeSpan budget,
+        Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+        Func<SessionStartMemoryLeaseStore>? memoryStoreFactory) {
+        if (string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
+            return Task.FromResult<string?>(null);
+
+        // The memory subsystem is optional. Keep construction itself inside the fail-open
+        // boundary: store-root validation and injected factories can throw synchronously.
+        try {
+            var store = memoryStoreFactory?.Invoke() ?? new SessionStartMemoryLeaseStore();
+            var provider = new SessionStartMemoryContextProvider(
+                new SessionStartMemoryScopeResolver(),
+                memoryClientFactory ?? ((_, _) => Task.FromResult(sharedClient)),
+                disposeClients: memoryClientFactory is not null);
+            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+                new SessionMemoryLifecycle(SessionStartHarness.Claude, nativeSessionId, null,
+                    IsTopLevel: true, ClassificationAuthoritative: true, reason,
+                    CallbackMayRepeat: false),
+                new SessionStartMemoryContextRequest(baseUrl, cwd, disabled, budget, CancellationToken.None));
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+            return Task.FromResult<string?>(null);
         }
     }
 

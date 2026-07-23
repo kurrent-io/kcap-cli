@@ -6,7 +6,7 @@ internal static class SessionStartMemoryLifecyclePolicy {
             SessionStartMemoryIdentity.NormalizeSessionId(lifecycle.Harness, lifecycle.SessionId) is null ||
             lifecycle.Reason == SessionLifecycleReason.Unknown)
             return SessionMemoryLifecycleDecision.RetryLaterNoCommit;
-        if (!lifecycle.IsTopLevel || lifecycle.Reason is SessionLifecycleReason.Compact or SessionLifecycleReason.RepeatedTurnCallback)
+        if (!lifecycle.IsTopLevel || lifecycle.Reason == SessionLifecycleReason.Compact)
             return SessionMemoryLifecycleDecision.IneligibleNoCommit;
         return lifecycle.CallbackMayRepeat
             ? SessionMemoryLifecycleDecision.EligibleWithLease

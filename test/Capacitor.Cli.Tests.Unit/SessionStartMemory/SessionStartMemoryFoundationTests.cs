@@ -59,6 +59,15 @@ public class SessionStartMemoryFoundationTests {
     }
 
     [Test]
+    public async Task Authoritative_top_level_repeated_callback_uses_the_lease_store() {
+        var decision = SessionStartMemoryLifecyclePolicy.Decide(new(
+            SessionStartHarness.Kiro, "session", null, true, true,
+            SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true));
+
+        await Assert.That(decision).IsEqualTo(SessionMemoryLifecycleDecision.EligibleWithLease);
+    }
+
+    [Test]
     public async Task Typed_emitter_adds_marker_groups_and_never_accepts_bodies() {
         var entries = new[] {
             new SessionStartMemoryEntry("1", "org-rule", "org", "fact", "feedback"),
@@ -125,8 +134,8 @@ public class SessionStartMemoryFoundationTests {
             time.Advance(TimeSpan.FromSeconds(31));
             var replacement = await store.TryBeginAsync(new string('a', 64), TimeSpan.FromSeconds(1));
             await Assert.That(replacement).IsNotNull();
-            await Assert.That(await store.CompleteAsync(first!, SessionStartMemoryDisposition.Ready)).IsFalse();
-            await Assert.That(await store.CompleteAsync(replacement!, SessionStartMemoryDisposition.Ready)).IsTrue();
+            await Assert.That(await store.CompleteAsync(first!, SessionStartMemoryDisposition.Ready, TimeSpan.FromSeconds(1))).IsFalse();
+            await Assert.That(await store.CompleteAsync(replacement!, SessionStartMemoryDisposition.Ready, TimeSpan.FromSeconds(1))).IsTrue();
             await Assert.That(await store.TryBeginAsync(new string('a', 64), TimeSpan.FromSeconds(1))).IsNull();
         } finally { Directory.Delete(root, recursive: true); }
     }
@@ -152,7 +161,7 @@ public class SessionStartMemoryFoundationTests {
             var store = new SessionStartMemoryLeaseStore(root, time);
             var key = new string('e', 64);
             var lease = await store.TryBeginAsync(key, TimeSpan.FromSeconds(1));
-            await store.CompleteAsync(lease!, SessionStartMemoryDisposition.Ready);
+            await store.CompleteAsync(lease!, SessionStartMemoryDisposition.Ready, TimeSpan.FromSeconds(1));
 
             time.Advance(TimeSpan.FromDays(30) - TimeSpan.FromTicks(1));
             await Assert.That(await store.TryBeginAsync(key, TimeSpan.FromSeconds(1))).IsNull();
@@ -170,7 +179,7 @@ public class SessionStartMemoryFoundationTests {
             var store = new SessionStartMemoryLeaseStore(root, time);
             foreach (var key in new[] { new string('a', 64), new string('c', 64) }) {
                 var lease = await store.TryBeginAsync(key, TimeSpan.FromSeconds(1));
-                await store.CompleteAsync(lease!, SessionStartMemoryDisposition.Ready);
+                await store.CompleteAsync(lease!, SessionStartMemoryDisposition.Ready, TimeSpan.FromSeconds(1));
             }
             var poison = Path.Combine(root, new string('b', 64) + ".json");
             await File.WriteAllTextAsync(poison, "not-json");
@@ -192,7 +201,7 @@ public class SessionStartMemoryFoundationTests {
             var store = new SessionStartMemoryLeaseStore(root, time);
             var key = new string('b', 64);
             var lease = await store.TryBeginAsync(key, TimeSpan.FromSeconds(1));
-            await Assert.That(await store.RetryAsync(lease!, null)).IsTrue();
+            await Assert.That(await store.RetryAsync(lease!, null, TimeSpan.FromSeconds(1))).IsTrue();
             await Assert.That(await store.TryBeginAsync(key, TimeSpan.FromSeconds(1))).IsNull();
 
             time.Advance(TimeSpan.FromSeconds(5));
@@ -204,11 +213,11 @@ public class SessionStartMemoryFoundationTests {
     public async Task Provider_maps_empty_malformed_and_ready_responses() {
         var scope = new FixedScopeResolver("repo", "machine");
         var empty = new SessionStartMemoryContextProvider(scope,
-            _ => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, "[]"))));
+            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, "[]"))));
         var malformed = new SessionStartMemoryContextProvider(scope,
-            _ => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, "[{}]"))));
+            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, "[{}]"))));
         var ready = new SessionStartMemoryContextProvider(scope,
-            _ => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
+            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
                 "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
         var request = new SessionStartMemoryContextRequest("https://example", "/repo", false,
             TimeSpan.FromSeconds(1), CancellationToken.None);
@@ -226,7 +235,7 @@ public class SessionStartMemoryFoundationTests {
     public async Task Provider_omits_only_unresolved_scope_axes() {
         var handler = new CapturingHandler(HttpStatusCode.NoContent, "");
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, "machine tag"),
-            _ => Task.FromResult(new HttpClient(handler)));
+            (_, _) => Task.FromResult(new HttpClient(handler)));
 
         await provider.GetAsync(new SessionStartMemoryContextRequest(
             "https://example.test/", null, false, TimeSpan.FromSeconds(1), CancellationToken.None));
@@ -237,7 +246,9 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Provider_refreshes_once_after_401_and_refuses_redirect_status() {
         var calls = 0;
-        var refreshing = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null), _ => {
+        var forceRefreshValues = new List<bool>();
+        var refreshing = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null), (forceRefresh, _) => {
+            forceRefreshValues.Add(forceRefresh);
             calls++;
             var status = calls == 1 ? HttpStatusCode.Unauthorized : HttpStatusCode.NoContent;
             return Task.FromResult(new HttpClient(new StaticHandler(status, "")));
@@ -247,10 +258,11 @@ public class SessionStartMemoryFoundationTests {
 
         var healed = await refreshing.GetAsync(request);
         var redirected = await new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            _ => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.Redirect, ""))))
+            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.Redirect, ""))))
             .GetAsync(request);
 
         await Assert.That(calls).IsEqualTo(2);
+        await Assert.That(forceRefreshValues).IsEquivalentTo([false, true]);
         await Assert.That(healed.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
         await Assert.That(redirected.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
     }
@@ -260,7 +272,7 @@ public class SessionStartMemoryFoundationTests {
         var root = TempDir();
         try {
             var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-                _ => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
+                (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
                     "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
             var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root), provider);
             var lifecycle = new SessionMemoryLifecycle(SessionStartHarness.Claude, "session", null,
@@ -289,7 +301,7 @@ public class SessionStartMemoryFoundationTests {
     }
 
     sealed class FixedScopeResolver(string? repo, string? machine) : ISessionStartMemoryScopeResolver {
-        public Task<SessionStartMemoryScope> ResolveAsync(string? cwd, CancellationToken ct) =>
+        public Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct) =>
             Task.FromResult(new SessionStartMemoryScope(repo, machine));
     }
 

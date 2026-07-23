@@ -52,7 +52,7 @@ internal sealed record SessionStartMemoryContextResult(
 internal sealed record SessionStartMemoryScope(string? RepoHash, string? MachineTag);
 
 internal interface ISessionStartMemoryScopeResolver {
-    Task<SessionStartMemoryScope> ResolveAsync(string? cwd, CancellationToken ct);
+    Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct);
 }
 
 internal sealed record SessionStartMemoryLeaseHandle(string Key, long Generation, string Token);

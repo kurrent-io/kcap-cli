@@ -35,7 +35,8 @@ public static class HttpClientExtensions {
     /// so they can stay quiet on high-frequency events and exit cleanly instead of erroring per-turn.
     /// </summary>
     public static async Task<(HttpClient Client, AuthStatus Status)> CreateClientWithAuthStatusAsync(
-        string? baseUrl = null, CancellationToken ct = default, bool allowAutoRedirect = true) {
+        string? baseUrl = null, CancellationToken ct = default, bool allowAutoRedirect = true,
+        bool forceRefresh = false) {
         var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = allowAutoRedirect });
 
         baseUrl ??= AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
@@ -45,7 +46,9 @@ public static class HttpClientExtensions {
             return (client, AuthStatus.NoAuthRequired); // No auth needed
         }
 
-        var tokens = await TokenStore.GetValidTokensAsync();
+        var tokens = forceRefresh
+            ? await TokenStore.ForceRefreshAsync(ct)
+            : await TokenStore.GetValidTokensAsync();
 
         if (tokens is not null) {
             client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);

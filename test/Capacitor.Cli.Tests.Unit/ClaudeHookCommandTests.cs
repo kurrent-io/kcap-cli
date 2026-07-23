@@ -17,6 +17,20 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.RouteOrder).Contains("session-start");
     }
 
+    [Test]
+    public async Task memory_store_initialization_failure_does_not_suppress_session_start_capture() {
+        using var fx = new Fixture();
+
+        var exit = await ClaudeHookCommand.HandleCore(
+            fx.Client, AuthStatus.Ok, fx.Spool, System.Diagnostics.Stopwatch.GetTimestamp(),
+            "http://localhost", new StringReader(
+                $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
+            memoryStoreFactory: () => throw new UnauthorizedAccessException("read-only store"));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.RouteOrder).Contains("session-start");
+    }
+
     // the session-start payload gains a best-effort workspace_root (the git repo root
     // for cwd), used server-side by plan-artifact discovery. Fail-open: a cwd with no
     // discoverable .git entry (e.g. "/tmp") must omit the field entirely rather than send null.

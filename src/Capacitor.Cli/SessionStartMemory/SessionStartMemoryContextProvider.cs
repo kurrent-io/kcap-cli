@@ -5,7 +5,7 @@ namespace Capacitor.Cli.SessionStartMemory;
 
 internal sealed class SessionStartMemoryContextProvider(
     ISessionStartMemoryScopeResolver scopeResolver,
-    Func<CancellationToken, Task<HttpClient>> clientFactory,
+    Func<bool, CancellationToken, Task<HttpClient>> clientFactory,
     Action<string>? diagnostic = null,
     bool disposeClients = false) {
 
@@ -15,15 +15,15 @@ internal sealed class SessionStartMemoryContextProvider(
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken);
         cts.CancelAfter(request.Budget);
         try {
-            var scope = await scopeResolver.ResolveAsync(request.Cwd, cts.Token);
+            var scope = await scopeResolver.ResolveAsync(request.Cwd, request.Budget, cts.Token);
             HttpClient? firstClient = null;
             HttpClient? refreshClient = null;
             try {
-                firstClient = await clientFactory(cts.Token);
+                firstClient = await clientFactory(false, cts.Token);
                 var response = await SendAsync(firstClient, request.BaseUrl, scope, cts.Token);
                 if (response.StatusCode == HttpStatusCode.Unauthorized) {
                     response.Dispose();
-                    refreshClient = await clientFactory(cts.Token);
+                    refreshClient = await clientFactory(true, cts.Token);
                     response = await SendAsync(refreshClient, request.BaseUrl, scope, cts.Token);
                 }
                 using (response) {
