@@ -621,10 +621,22 @@ public class CursorHookCommandTests {
         }
     }
 
-    [Test]
+    // Qodo #1: mutates both process-global Console.Out AND AppConfig's resolved state
+    // (ResolvedServerUrl/ResolvedProfile) — [NotInParallel] here matches this file's own
+    // precedent for every other Console.Out-capturing test above (a bare, suite-wide
+    // exclusion, not merely a named group, since other files elsewhere in the process also
+    // mutate the same statics). The resolved state is captured up front and restored in the
+    // finally below rather than being unconditionally reset to a fresh `new Profile()` —
+    // AppConfig.SetResolvedState has no "clear"/"unset" primitive (see
+    // AppConfigResolvedStateTests), so restoring means re-invoking it with the captured
+    // original values, putting back exactly what was there rather than clobbering it.
+    [Test, NotInParallel]
     public async Task DisableMemoryIndex_emits_empty_and_skips_provider() {
         using var fx = new Fixture();
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+
+        var originalServerUrl = AppConfig.ResolvedServerUrl;
+        var originalResolved  = AppConfig.ResolvedProfile;
         AppConfig.SetResolvedState("http://localhost", "default", new Profile { DisableMemoryIndex = true });
 
         var originalOut = Console.Out;
@@ -639,7 +651,13 @@ public class CursorHookCommandTests {
             await Assert.That(fx.MemoryIndexRequested).IsFalse();
         } finally {
             Console.SetOut(originalOut);
-            AppConfig.SetResolvedState("http://localhost", "default", new Profile());
+            // Restore exactly what was resolved before this test ran. A null original
+            // (AppConfig never touched yet in this process) has no public "unset" to restore
+            // to, so it falls back to the same fresh default this test always used pre-fix.
+            AppConfig.SetResolvedState(
+                originalServerUrl ?? "http://localhost",
+                originalResolved?.ProfileName ?? "default",
+                originalResolved?.Profile ?? new Profile());
         }
     }
 
