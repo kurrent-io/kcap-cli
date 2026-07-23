@@ -158,9 +158,21 @@ public static class CursorHookCommand {
         var deadline = Task.Delay(budgetTotal);
         var winner   = await Task.WhenAny(inner, deadline);
 
-        // On the deadline branch the inner is ABANDONED (not cancelled/awaited) — it holds
-        // no stdout handle, so it can never produce a late/second write, however long it
-        // eventually takes to unwind in the background.
+        // On the deadline branch the inner is ABANDONED — never cancelled/awaited BY this
+        // method — so it holds no stdout handle and can never produce a late/second write,
+        // however long it eventually takes to unwind in the background. It IS, however,
+        // explicitly cancelled here: `cts` was constructed with its own `budgetTotal` timer
+        // (line above), so its token would likely transition to cancelled around the same
+        // wall-clock moment regardless — but that internal timer racing this method's own
+        // `using`-disposal at the very next statement is exactly that, a race, not a
+        // guarantee. Calling Cancel() deterministically (rather than trusting the timer to
+        // have already fired) is what makes the inner's cancellation-aware stdin read /
+        // HTTP calls (both bound to cts.Token) actually observe cancellation promptly. This
+        // also cancels the linked memory CTS in RunMemoryOrchestrationAsync — a cancelled
+        // fetch there leaves the lease uncommitted, which is already the intended, tested
+        // behavior (see CancelledFetch_leaves_lease_uncommitted).
+        if (winner != inner) cts.Cancel();
+
         var response = winner == inner
             ? await inner
             : (kindSignal.Kind == "sessionStart" ? SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Cursor, null) : null);

@@ -478,6 +478,43 @@ public class CursorHookCommandTests {
         }
     }
 
+    // Qodo #2: on the deadline branch, HandleCore must deterministically Cancel() its own
+    // `cts` rather than merely disposing it and trusting the CTS's own internal budgetTotal
+    // timer to have already fired by coincidence — that internal timer and the Task.Delay
+    // deadline task are two independent timers racing the same wall-clock target, so a
+    // dispose-without-cancel could leave the abandoned inner's cancellation-aware stdin
+    // read/HTTP calls (both bound to cts.Token) never actually observing cancellation. Uses
+    // a reader that only ever completes VIA cancellation (never on its own) — mirroring the
+    // CancelAwareHandler pattern already used for the memory-fetch cancellation test below —
+    // so a prompt, observed cancellation is the only way this test can pass.
+    [Test, NotInParallel]
+    public async Task HandleCore_deadline_win_cancels_the_abandoned_inners_token() {
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            using var fx = new Fixture();
+            var reader = new CancelObservingReader();
+
+            var exit = await CursorHookCommand.HandleCore(
+                fx.Client, "http://localhost", reader, fx.Spool, TimeSpan.FromMilliseconds(30));
+
+            await Assert.That(exit).IsEqualTo(0);
+            // The read never resolved (no hook_event_name was ever parsed), so there is
+            // nothing to emit.
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("");
+
+            // The abandoned reader's ReadToEndAsync only ever completes by observing its
+            // CancellationToken fire. Give it a generous window relative to the 30ms budget —
+            // this asserts the cancellation was actually delivered promptly by HandleCore's
+            // explicit Cancel(), not "eventually, whenever the internal timer happens to tick".
+            var won = await Task.WhenAny(reader.Cancelled.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+            await Assert.That(won).IsEqualTo(reader.Cancelled.Task);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
     [Test, NotInParallel]
     public async Task HardCap_after_resolve_sessionStart_emits_empty_once() {
         var originalOut = Console.Out;
@@ -904,6 +941,23 @@ public class CursorHookCommandTests {
     sealed class NeverCompletingReader : TextReader {
         public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) =>
             Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => "", TaskScheduler.Default);
+    }
+
+    // Honours the passed CancellationToken properly (unlike NeverCompletingReader above) —
+    // it only ever completes by observing the token fire, then signals `Cancelled` before
+    // throwing. Proves HandleCore's deadline branch deterministically cancels the abandoned
+    // inner rather than merely disposing its CTS.
+    sealed class CancelObservingReader : TextReader {
+        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async Task<string> ReadToEndAsync(CancellationToken cancellationToken) {
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using (cancellationToken.Register(() => tcs.TrySetResult())) {
+                await tcs.Task;
+            }
+            Cancelled.TrySetResult();
+            throw new OperationCanceledException(cancellationToken);
+        }
     }
 
     // Settable clock for SessionStartMemoryLeaseStore tests — lets a test fast-forward past
