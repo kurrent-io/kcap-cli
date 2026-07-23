@@ -81,7 +81,13 @@ public static class CursorHookCommand {
 
     /// <summary>
     /// Test-friendly core. Caller owns the <see cref="HttpClient"/> and
-    /// <see cref="HookSpool"/>.
+    /// <see cref="HookSpool"/>. Races the entire inner phase against one absolute
+    /// <paramref name="budgetTotal"/> deadline (AI-1461 §2) and is the SOLE writer of
+    /// Cursor's stdout — the inner phase (<see cref="HandleCoreInner"/>) never touches
+    /// <see cref="Console.Out"/>, it only computes and returns the response. Exactly one
+    /// write happens per resolved <c>sessionStart</c>; every other resolved event, and any
+    /// unresolved/malformed input, writes nothing — byte-for-byte unchanged from before
+    /// AI-1461.
     /// </summary>
     internal static async Task<int> HandleCore(
             HttpClient client,
@@ -92,21 +98,77 @@ public static class CursorHookCommand {
             Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
             Func<SessionStartMemoryLeaseStore>?               memoryStoreFactory = null
         ) {
-        var sw = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource(budgetTotal);
-        var ct = cts.Token;
+        var kindSignal = new ResolvedEventKindSignal();
+
+        var inner    = HandleCoreInner(client, baseUrl, stdin, spool, budgetTotal, cts.Token, kindSignal,
+                           memoryClientFactory, memoryStoreFactory);
+        var deadline = Task.Delay(budgetTotal);
+        var winner   = await Task.WhenAny(inner, deadline);
+
+        // On the deadline branch the inner is ABANDONED (not cancelled/awaited) — it holds
+        // no stdout handle, so it can never produce a late/second write, however long it
+        // eventually takes to unwind in the background.
+        var response = winner == inner
+            ? await inner
+            : (kindSignal.Kind == "sessionStart" ? SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Cursor, null) : null);
+
+        if (response is not null) Console.Write(response);
+        return 0;
+    }
+
+    /// <summary>
+    /// A write-once, thread-safe signal for the resolved <c>hook_event_name</c>, published
+    /// the instant <see cref="CursorHookEventMap.TryResolve"/> succeeds — before any
+    /// recording/memory work runs. Lets the OUTER deadline branch in <see cref="HandleCore"/>
+    /// (and <see cref="HandleCoreInner"/>'s own catch-all, where try-scoped locals are out of
+    /// scope) decide whether an abandoned/faulted invocation still owes a <c>sessionStart</c>
+    /// its single <c>{}</c> response.
+    /// </summary>
+    sealed class ResolvedEventKindSignal {
+        volatile string? _kind;
+        public void Publish(string kind) => _kind = kind;
+        public string? Kind => _kind;
+    }
+
+    /// <summary>
+    /// The actual dispatcher body (formerly the whole of <see cref="HandleCore"/>). NEVER
+    /// writes to <see cref="Console.Out"/> — every return path yields the response
+    /// <see cref="HandleCore"/> should emit for a resolved <c>sessionStart</c> (the rendered
+    /// memory envelope, or <c>{}</c> for every other fail-open path) or <c>null</c> for a
+    /// resolved non-<c>sessionStart</c> event / unresolved or malformed input.
+    /// </summary>
+    static async Task<string?> HandleCoreInner(
+            HttpClient client,
+            string     baseUrl,
+            TextReader stdin,
+            HookSpool  spool,
+            TimeSpan   budgetTotal,
+            CancellationToken ct,
+            ResolvedEventKindSignal kindSignal,
+            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+            Func<SessionStartMemoryLeaseStore>?               memoryStoreFactory
+        ) {
+        var sw = Stopwatch.StartNew();
         bool BudgetExpired() => sw.Elapsed >= budgetTotal;
 
         try {
             var body = await stdin.ReadToEndAsync(ct);
             JsonNode? node;
             try { node = JsonNode.Parse(body); }
-            catch { return 0; }
-            if (node is null) return 0;
+            catch { return null; }
+            if (node is null) return null;
 
             var eventName = TryGetString(node, "hook_event_name");
-            if (string.IsNullOrWhiteSpace(eventName)) return 0;
-            if (!CursorHookEventMap.TryResolve(eventName, out var mapping)) return 0;
+            if (string.IsNullOrWhiteSpace(eventName)) return null;
+            if (!CursorHookEventMap.TryResolve(eventName, out var mapping)) return null;
+            kindSignal.Publish(eventName);
+
+            // Every resolved sessionStart converges on this single response — {} unless
+            // Task 3's orchestrator (wired at the very end of this method for the top-level,
+            // non-child success path) supplies a Ready fragment instead.
+            string? EmptyOrNull() =>
+                eventName == "sessionStart" ? SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Cursor, null) : null;
 
             NormalizeGuidField(node, "session_id");
             node["home_dir"] = PathHelpers.HomeDirectory;
@@ -136,7 +198,7 @@ public static class CursorHookCommand {
                 if (eventName == "beforeSubmitPrompt") CursorMarkers.CreateBarrier(sessionId, DateTimeOffset.UtcNow);
             }
 
-            if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
+            if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return EmptyOrNull();
 
             // bring CursorSubagentCorrelator into the live hook/backfill
             // path. Cursor is NOT watcher-backed, so the correlation must run right here in
@@ -245,16 +307,19 @@ public static class CursorHookCommand {
             // SendSubagentLifecycleAsync, which never gives a correlated child its own top-level
             // lifecycle either). See HandleSubagentChildEventAsync for the divert.
             if (isSubagentChild) {
-                return await HandleSubagentChildEventAsync(
+                // AI-1461 §4/§5: a linked child short-circuits to {} (sessionStart) / nothing
+                // (everything else) before any orchestrator work — never entered for a child.
+                await HandleSubagentChildEventAsync(
                     client, baseUrl, spool, sessionId!, eventName, transcriptPath,
                     subagentParentId!, subagentAgentType!, BudgetExpired, ct);
+                return EmptyOrNull();
             }
 
             // Ordering guard: if a transient drain failure left this session's backlog in place,
             // spool the fresh event so an earlier queued event (e.g. sessionStart) is not overtaken.
             if (sessionId is not null && mapping.SpoolOnFailure && spool.HasBacklog(sessionId)) {
                 spool.Append(sessionId, mapping.RouteSegment, normalized);
-                return 0;
+                return EmptyOrNull();
             }
 
             if (BudgetExpired()) {
@@ -265,7 +330,7 @@ public static class CursorHookCommand {
                 if (mapping.SpoolOnFailure && sessionId is not null) {
                     spool.Append(sessionId, mapping.RouteSegment, normalized);
                 }
-                return 0;
+                return EmptyOrNull();
             }
 
             // For sessionEnd the server's HandleSessionEnd clears the per-session
@@ -294,7 +359,7 @@ public static class CursorHookCommand {
                 if (mapping.SpoolOnFailure && sessionId is not null) {
                     spool.Append(sessionId, mapping.RouteSegment, normalized);
                 }
-                return 0;
+                return EmptyOrNull();
             }
 
             var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
@@ -326,12 +391,17 @@ public static class CursorHookCommand {
                     budget: BudgetExpired, ct);
             }
 
-            return 0;
+            // AI-1461 Task 3 wires the real memory orchestrator in here for a top-level
+            // (isSubagentChild already diverted above) sessionStart; every other event still
+            // returns null (write nothing), unchanged.
+            return EmptyOrNull();
         } catch {
             // Fail-open per design: any exception (budget cancellation,
-            // transcript-file IO race, JSON quirk we missed) must never
-            // crash Cursor's agent loop.
-            return 0;
+            // transcript-file IO race, JSON quirk we missed) must never crash Cursor's agent
+            // loop. eventName may be out of scope here (the exception could predate its
+            // parse), so fall back to the published kind — the same signal the outer deadline
+            // branch reads.
+            return kindSignal.Kind == "sessionStart" ? SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Cursor, null) : null;
         }
     }
 

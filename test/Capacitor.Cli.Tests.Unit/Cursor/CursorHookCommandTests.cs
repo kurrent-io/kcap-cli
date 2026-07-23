@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;
@@ -346,6 +347,13 @@ public class CursorHookCommandTests {
         // 30 ms budget — first drained POST eats most of it, BudgetExpired flips
         // before the fresh event can post. The fresh sessionEnd must land back
         // in the spool, replacing the just-delivered sessionStart line.
+        //
+        // AI-1461 Task 2: HandleCore's outer deadline race (§2) can now return to the
+        // caller at the 30ms mark WITHOUT waiting for the still-in-flight drain (holding
+        // the fresh sessionEnd's own append until the delayed POST resolves at ~50ms) —
+        // mirroring the pre-existing top-level WithHardCap's own "abandon, don't cancel"
+        // contract. The append still happens on the abandoned background continuation;
+        // poll briefly for it instead of asserting immediately.
         var exit = await CursorHookCommand.HandleCore(
             fx.Client,
             "http://localhost",
@@ -356,10 +364,135 @@ public class CursorHookCommandTests {
 
         await Assert.That(exit).IsEqualTo(0);
 
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (!fx.SpoolFiles.Any() && DateTime.UtcNow < deadline) {
+            await Task.Delay(20);
+        }
+
         var spoolPath = fx.SpoolFiles.SingleOrDefault();
         await Assert.That(spoolPath).IsNotNull();
         var spoolContent = await File.ReadAllTextAsync(spoolPath!);
         await Assert.That(spoolContent).Contains("sessionEnd");
+    }
+
+    // AI-1461 Task 2: single-writer, deadline-safe stdout emission for Cursor's
+    // sessionStart. Cursor writes zero stdout for every OTHER event, and (until Task 3
+    // wires the real memory fragment) exactly "{}\n" for every resolved sessionStart —
+    // whether at the very end of a normal invocation, at an early fail-open return, at the
+    // dispatcher deadline (kind published but the inner work hasn't finished), or never
+    // (unresolved event / deadline before the event kind is known).
+
+    // Every test below that mutates Console.Out is [NotInParallel] with NO group — i.e.
+    // runs strictly alone against the WHOLE suite, not just this class — matching
+    // Codex/CodexHookCommandTests' own precedent: a named group only serializes within
+    // that group, but other files elsewhere in the suite ALSO mutate the same
+    // process-global Console.Out under different (or no) groups, and that cross-group
+    // race is what corrupts captures.
+
+    [Test, NotInParallel]
+    public async Task SessionStart_emits_empty_object() {
+        using var fx = new Fixture();
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"abc"}""");
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task NonSessionStart_emits_nothing() {
+        using var fx = new Fixture();
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await fx.HandleAsync("""{"hook_event_name":"postToolUse","session_id":"abc","tool_name":"Bash"}""");
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("");
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task LinkedChild_sessionStart_emits_empty_object() {
+        using var fx = new Fixture();
+        var parentId = Guid.NewGuid().ToString("N");
+        var childId  = Guid.NewGuid().ToString("N");
+        // Force the already-linked-child path directly (as an earlier hook would have
+        // persisted it) without needing a real sibling transcript to correlate against.
+        CursorLiveSubagentLinker.SaveLink(childId, parentId, "task");
+
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{childId}}"}""");
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+            // A linked child must short-circuit to {} before any orchestrator work.
+            await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task HardCap_before_resolve_emits_nothing() {
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            Console.SetOut(stdoutWriter);
+            using var fx = new Fixture();
+            // Never resolves within the cap regardless of cancellation — proves the outer
+            // deadline genuinely abandons the inner work rather than relying on it noticing.
+            var exit = await CursorHookCommand.HandleCore(
+                fx.Client, "http://localhost", new NeverCompletingReader(), fx.Spool,
+                TimeSpan.FromMilliseconds(50));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("");
+            await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(2));
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task HardCap_after_resolve_sessionStart_emits_empty_once() {
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            using var fx = new Fixture();
+            // sessionStart resolves instantly (fast JSON parse) but the live POST hangs well
+            // past the 50ms dispatcher deadline.
+            fx.HoldOnPost = TimeSpan.FromMilliseconds(300);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var exit = await CursorHookCommand.HandleCore(
+                fx.Client, "http://localhost",
+                new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
+                fx.Spool, TimeSpan.FromMilliseconds(50));
+            sw.Stop();
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+            await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+
+            // Let the orphaned inner work actually finish in the background, then re-assert
+            // stdout is unchanged — the abandoned inner must never get a second/late write.
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+        } finally {
+            Console.SetOut(originalOut);
+        }
     }
 
     // AI-1461 Task 1: the fixture must be able to serve GET /api/memories/index
@@ -506,5 +639,13 @@ public class CursorHookCommandTests {
     sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> impl) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             impl(request);
+    }
+
+    // Ignores the passed CancellationToken entirely — simulates a stdin read that would
+    // hang regardless of the dispatcher deadline, so only the OUTER Task.WhenAny race
+    // (not the inner read noticing cancellation) can possibly account for a prompt return.
+    sealed class NeverCompletingReader : TextReader {
+        public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) =>
+            Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => "", TaskScheduler.Default);
     }
 }
