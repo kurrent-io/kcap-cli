@@ -190,6 +190,23 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **SessionStart team-memory index** — at every session start (Claude Code) `kcap` also fetches a compact index of durable [team memories](#memory-mcp-server-for-agents) visible for the current repo/machine and appends a `## Team memory` block to `additionalContext`: one `slug: description` line per memory, grouped **Org / Team / Yours**, with a nudge to call `get_memory` / `search_memories` for full content. Only the index is injected — never the bodies — so the cost stays roughly flat as the pool grows (mirrors a local `MEMORY.md`). Best-effort and fail-open (a slow or failed fetch injects nothing, never blocking the hook). Opt out with `disable_memory_index: true` in `~/.config/kcap/config.json` or `kcap config set disable_memory_index true`.
 - **Crash resilience** — if a `kcap` command hits an unexpected error it records the exception (with stack trace) to `~/.config/kcap/crash.log` (honours `KCAP_CONFIG_DIR`; size-capped) and exits cleanly instead of aborting. Hook and detached-generator commands the coding agent spawns **fail open** (exit 0, nothing surfaced to the agent); other commands exit non-zero with a one-line stderr message pointing at the log.
 
+The SessionStart memory foundation is deliberately separate from harness activation. Every row uses
+the same typed fetch/render, lifecycle, fenced lease, and golden output contracts; only Claude is
+wired in this foundation release. Each remaining adapter is activated and live-certified by its own
+AI-1456 child issue.
+
+| Harness | Shared foundation | Hook/extension wired | Live receipt | Upstream status |
+|---------|-------------------|----------------------|--------------|-----------------|
+| Claude Code | yes | yes | existing baseline | available |
+| Codex CLI | yes | no | pending | available |
+| Cursor CLI / IDE | yes | no | pending | CLI available; IDE context delivery degraded upstream |
+| GitHub Copilot CLI | yes | no | pending | available |
+| Gemini CLI | yes | no | pending | available |
+| Kiro CLI | yes | no | pending | available |
+| Pi | yes | no | pending | extension bridge required |
+| OpenCode | yes | no | pending | extension bridge required |
+| Antigravity | yes | no | pending | `PreInvocation` adapter required |
+
 ## CLI commands
 
 At a glance — each links to its section below:
