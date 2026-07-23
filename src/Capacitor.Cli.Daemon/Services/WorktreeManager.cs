@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
@@ -133,6 +134,13 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     public async Task SyncFromSourceAsync(
             string sourceRepoRoot, string targetWorktreePath,
             string[] excludePaths, CancellationToken ct) {
+        await SyncFromSourceAsync(
+            sourceRepoRoot, targetWorktreePath, targetWorktreePath, excludePaths, ct);
+    }
+
+    public async Task SyncFromSourceAsync(
+            string sourceRepoRoot, string targetWorktreePath, string executionPath,
+            string[] excludePaths, CancellationToken ct) {
         if (string.IsNullOrEmpty(sourceRepoRoot))
             throw new ArgumentException("Source repo root must not be empty.", nameof(sourceRepoRoot));
         if (string.IsNullOrEmpty(targetWorktreePath))
@@ -140,10 +148,15 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
         var source = Path.GetFullPath(sourceRepoRoot);
         var target = Path.GetFullPath(targetWorktreePath);
+        var execution = Path.GetFullPath(executionPath);
         if (string.Equals(source, target, StringComparison.Ordinal))
             throw new InvalidOperationException($"Source and target paths are the same: {source}");
         if (!Directory.Exists(source))
             throw new InvalidOperationException($"Source repo root does not exist: {source}");
+        if (execution != target &&
+            !execution.StartsWith(target.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                FileSystemPathComparison))
+            throw new InvalidOperationException("borrowed_snapshot_execution_path_outside_target");
         if (!File.Exists(Path.Combine(source, ".git")) && !Directory.Exists(Path.Combine(source, ".git")))
             throw new InvalidOperationException($"Source path does not appear to be a git repo (no .git entry): {source}");
 
@@ -153,7 +166,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         try {
             var exclusions = SnapshotExcludedPaths.Concat(excludePaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             await BuildIndependentSnapshotAsync(source, staging, exclusions, ct);
-            ReplaceTreeContentsNoFollow(target, staging);
+            ReplaceTreeContentsNoFollow(target, staging, execution);
         } finally {
             DeleteTreeNoFollow(staging);
         }
@@ -203,10 +216,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
             var manifest = await ReadSourceManifestAsync(source, exclusions, ct);
             await ApplyReservedIndexPolicyAsync(destination);
-            CopyManifest(destination, manifest, ct);
+            await CopyManifestAsync(source, destination, manifest, ct);
             RemoveFilesOutsideManifest(destination, manifest.Keys, ct);
             VerifyIndependentGit(destination, source);
-            VerifyDestinationManifest(destination, manifest);
+            await VerifyDestinationManifestAsync(destination, manifest, ct);
 
             var finalHead = (await RunGitCapture(source, GitTimeout, true, "rev-parse", "HEAD")).Trim();
             var finalManifest = await ReadSourceManifestAsync(source, exclusions, ct);
@@ -243,23 +256,35 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             total = checked(total + info.Length);
             if (result.Count >= MaxSnapshotFiles || total > MaxSnapshotBytes)
                 throw new InvalidOperationException("borrowed_snapshot_capacity_exceeded");
-            var bytes = await File.ReadAllBytesAsync(path, ct);
-            if (bytes.AsSpan().StartsWith("version https://git-lfs.github.com/spec/v1\n"u8))
+            await using var input = OpenSequentialRead(path);
+            var prefix = new byte["version https://git-lfs.github.com/spec/v1\n"u8.Length];
+            var prefixLength = await input.ReadAsync(prefix, ct);
+            if (prefix.AsSpan(0, prefixLength).StartsWith("version https://git-lfs.github.com/spec/v1\n"u8))
                 throw new InvalidOperationException($"borrowed_snapshot_lfs_pointer_unsupported: {rel}");
+            input.Position = 0;
+            var hash = await SHA256.HashDataAsync(input, ct);
             UnixFileMode? mode = OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(path);
-            if (!result.TryAdd(rel, new SnapshotFile(bytes, mode)))
+            if (!result.TryAdd(rel, new SnapshotFile(info.Length, hash, mode)))
                 throw new InvalidOperationException($"borrowed_snapshot_path_collision: {rel}");
         }
         return result;
     }
 
-    static void CopyManifest(string destination, Dictionary<string, SnapshotFile> manifest, CancellationToken ct) {
+    static async Task CopyManifestAsync(
+            string source, string destination, Dictionary<string, SnapshotFile> manifest,
+            CancellationToken ct) {
         foreach (var (rel, file) in manifest) {
             ct.ThrowIfCancellationRequested();
+            var sourcePath = ContainedPath(source, rel);
             var path = ContainedPath(destination, rel);
             EnsureParentDirectories(destination, path);
             if (Directory.Exists(path)) DeleteTreeNoFollow(path);
-            File.WriteAllBytes(path, file.Bytes);
+            await using (var input = OpenSequentialRead(sourcePath))
+            await using (var output = new FileStream(path, new FileStreamOptions {
+                Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+            }))
+                await input.CopyToAsync(output, ct);
             if (file.Mode is { } mode && !OperatingSystem.IsWindows()) File.SetUnixFileMode(path, mode);
         }
     }
@@ -287,23 +312,54 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         return !Directory.Exists(path);
     }
 
-    static void ReplaceTreeContentsNoFollow(string target, string staging) {
-        foreach (var entry in Directory.EnumerateFileSystemEntries(target)) DeleteTreeNoFollow(entry);
-        foreach (var entry in Directory.EnumerateFileSystemEntries(staging)) {
+    static void ReplaceTreeContentsNoFollow(string target, string staging, string executionPath) {
+        var relative = Path.GetRelativePath(target, executionPath);
+        var protectedSegments = relative == "."
+            ? []
+            : relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        ReplaceDirectoryContentsNoFollow(target, staging, protectedSegments, 0);
+    }
+
+    static void ReplaceDirectoryContentsNoFollow(
+            string target, string? staging, string[] protectedSegments, int protectedIndex) {
+        var protectedName = protectedIndex < protectedSegments.Length
+            ? protectedSegments[protectedIndex]
+            : null;
+        foreach (var entry in Directory.EnumerateFileSystemEntries(target))
+            if (protectedName is null ||
+                !Path.GetFileName(entry).Equals(protectedName, FileSystemPathComparison))
+                DeleteTreeNoFollow(entry);
+        if (staging is not null) foreach (var entry in Directory.EnumerateFileSystemEntries(staging)) {
+            if (protectedName is not null &&
+                Path.GetFileName(entry).Equals(protectedName, FileSystemPathComparison))
+                continue;
             var destination = Path.Combine(target, Path.GetFileName(entry));
             if (File.GetAttributes(entry).HasFlag(FileAttributes.Directory)) Directory.Move(entry, destination);
             else File.Move(entry, destination);
         }
+        if (protectedName is null) return;
+
+        var protectedTarget = Path.Combine(target, protectedName);
+        if (File.Exists(protectedTarget)) File.Delete(protectedTarget);
+        Directory.CreateDirectory(protectedTarget);
+        var protectedStaging = staging is null ? null : Path.Combine(staging, protectedName);
+        if (protectedStaging is not null && !Directory.Exists(protectedStaging)) protectedStaging = null;
+        ReplaceDirectoryContentsNoFollow(
+            protectedTarget, protectedStaging, protectedSegments, protectedIndex + 1);
     }
 
     static void DeleteTreeNoFollow(string path) {
         if (!File.Exists(path) && !Directory.Exists(path)) return;
         var attrs = File.GetAttributes(path);
         if (attrs.HasFlag(FileAttributes.ReparsePoint) || !attrs.HasFlag(FileAttributes.Directory)) {
+            if (OperatingSystem.IsWindows() && attrs.HasFlag(FileAttributes.ReadOnly))
+                File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
             File.Delete(path);
             return;
         }
         foreach (var child in Directory.EnumerateFileSystemEntries(path)) DeleteTreeNoFollow(child);
+        if (OperatingSystem.IsWindows() && attrs.HasFlag(FileAttributes.ReadOnly))
+            File.SetAttributes(path, attrs & ~FileAttributes.ReadOnly);
         Directory.Delete(path);
     }
 
@@ -346,10 +402,15 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         }
     }
 
-    static void VerifyDestinationManifest(string destination, Dictionary<string, SnapshotFile> manifest) {
+    static async Task VerifyDestinationManifestAsync(
+            string destination, Dictionary<string, SnapshotFile> manifest, CancellationToken ct) {
         foreach (var (rel, expected) in manifest) {
             var path = ContainedPath(destination, rel);
-            if (!File.Exists(path) || !File.ReadAllBytes(path).AsSpan().SequenceEqual(expected.Bytes))
+            if (!File.Exists(path) || new FileInfo(path).Length != expected.Length)
+                throw new InvalidOperationException($"borrowed_snapshot_destination_mismatch: {rel}");
+            await using var input = OpenSequentialRead(path);
+            var hash = await SHA256.HashDataAsync(input, ct);
+            if (!hash.AsSpan().SequenceEqual(expected.Hash))
                 throw new InvalidOperationException($"borrowed_snapshot_destination_mismatch: {rel}");
         }
     }
@@ -371,7 +432,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             Dictionary<string, SnapshotFile> left, Dictionary<string, SnapshotFile> right) =>
         left.Count == right.Count && left.All(pair =>
             right.TryGetValue(pair.Key, out var other) && pair.Value.Mode == other.Mode &&
-            pair.Value.Bytes.AsSpan().SequenceEqual(other.Bytes));
+            pair.Value.Length == other.Length && pair.Value.Hash.AsSpan().SequenceEqual(other.Hash));
 
     static async Task ApplyReservedIndexPolicyAsync(string destination) {
         foreach (var path in new[] { ".mcp.json", ".cursor/mcp.json" })
@@ -381,7 +442,12 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         File.AppendAllText(Path.Combine(destination, ".git", "info", "exclude"), "\n.attached/\n");
     }
 
-    sealed record SnapshotFile(byte[] Bytes, UnixFileMode? Mode);
+    static FileStream OpenSequentialRead(string path) => new(path, new FileStreamOptions {
+        Mode = FileMode.Open, Access = FileAccess.Read, Share = FileShare.Read,
+        Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+    });
+
+    sealed record SnapshotFile(long Length, byte[] Hash, UnixFileMode? Mode);
     sealed class SourceChangedException : Exception;
 
     static bool IsUnderExcluded(string rel, string[] prefixes) {

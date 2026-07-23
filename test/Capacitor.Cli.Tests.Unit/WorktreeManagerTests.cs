@@ -275,6 +275,58 @@ public class WorktreeManagerTests {
     }
 
     [Test]
+    public async Task BorrowedSnapshot_RefreshPreservesRunningExecutionDirectory() {
+        var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/90/head", out _);
+        var root = Path.Combine(Path.GetTempPath(), "kcap-borrowed-root-" + Guid.NewGuid().ToString("N")[..8]);
+        Process? holder = null;
+        try {
+            var sourceCwd = Path.Combine(clone, "src");
+            Directory.CreateDirectory(sourceCwd);
+            File.WriteAllText(Path.Combine(sourceCwd, "round.txt"), "one");
+            var manager = new WorktreeManager(
+                new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            var snapshot = await manager.CreateBorrowedSnapshotAsync(
+                clone, sourceCwd, "review-subdir", CancellationToken.None);
+            try {
+                var psi = new ProcessStartInfo {
+                    FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                    WorkingDirectory = snapshot.Path,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                if (OperatingSystem.IsWindows()) {
+                    psi.ArgumentList.Add("/d");
+                    psi.ArgumentList.Add("/c");
+                    psi.ArgumentList.Add("ping -n 30 127.0.0.1 >nul");
+                } else {
+                    psi.ArgumentList.Add("-c");
+                    psi.ArgumentList.Add("sleep 30");
+                }
+                holder = Process.Start(psi);
+                await Task.Delay(200);
+
+                File.WriteAllText(Path.Combine(sourceCwd, "round.txt"), "two");
+                File.WriteAllText(Path.Combine(snapshot.Path, "reviewer-created.txt"), "remove");
+                await manager.SyncFromSourceAsync(
+                    clone, snapshot.SnapshotRoot!, snapshot.Path, [], CancellationToken.None);
+
+                await Assert.That(holder!.HasExited).IsFalse();
+                await Assert.That(Directory.Exists(snapshot.Path)).IsTrue();
+                await Assert.That(File.ReadAllText(Path.Combine(snapshot.Path, "round.txt"))).IsEqualTo("two");
+                await Assert.That(File.Exists(Path.Combine(snapshot.Path, "reviewer-created.txt"))).IsFalse();
+            } finally {
+                if (holder is { HasExited: false }) holder.Kill(entireProcessTree: true);
+                holder?.Dispose();
+                await WorktreeManager.RemoveAsync(snapshot);
+            }
+        } finally {
+            try { Directory.Delete(upstream, true); } catch { }
+            try { Directory.Delete(clone, true); } catch { }
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    [Test]
     public async Task BorrowedSnapshot_RejectsSymlinkWithoutFollowingIt() {
         Skip.When(OperatingSystem.IsWindows(), "Symlink semantics in this certification are POSIX-only.");
         var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/89/head", out _);

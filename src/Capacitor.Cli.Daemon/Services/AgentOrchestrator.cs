@@ -1684,11 +1684,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
-            // the CLI's TUI treats it as one pasted block and the following Enter is an unambiguous
-            // submit keypress (see its doc comment for why a naive text-then-CR write mishandles
-            // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
-            // this call is the single vendor-agnostic entry point for both.
+            // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
             if (agent.BorrowedSnapshotSource is not null)
                 await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
             else
@@ -1710,11 +1706,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await agent.Runtime.WaitForTurnIdleAsync(timeout.Token);
             var auth = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(source);
             if (!auth.Allowed ||
-                !string.Equals(auth.CanonicalCwd, source, StringComparison.Ordinal) ||
-                !string.Equals(auth.CanonicalGitRoot, agent.Worktree.SourceRepo, StringComparison.Ordinal))
+                !SameFileSystemPath(auth.CanonicalCwd, source) ||
+                !SameFileSystemPath(auth.CanonicalGitRoot, agent.Worktree.SourceRepo))
                 throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason ?? "source_identity_changed"}");
             await _worktreeManager.SyncFromSourceAsync(
-                agent.Worktree.SourceRepo, agent.Worktree.SnapshotRoot ?? agent.Worktree.Path, [], timeout.Token);
+                agent.Worktree.SourceRepo, agent.Worktree.SnapshotRoot ?? agent.Worktree.Path,
+                agent.Worktree.Path, [], timeout.Token);
             return true;
         } catch (Exception ex) when (ex is not OperationCanceledException || !_shutdownCts.IsCancellationRequested) {
             LogBorrowedSnapshotRefreshFailed(ex, agent.Id);
@@ -1723,6 +1720,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return false;
         }
     }
+
+    static bool SameFileSystemPath(string? left, string? right) =>
+        left is not null && right is not null && string.Equals(
+            Path.GetFullPath(left), Path.GetFullPath(right),
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
 
     async Task HandleSendSpecialKey(string agentId, string key) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
@@ -2453,7 +2457,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download launch attachments for agent {AgentId} (continuing)")]
     partial void LogAttachmentDownloadFailed(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh borrowed-checkout snapshot for agent {AgentId}; delivering the round against the previous snapshot")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh borrowed-checkout snapshot for agent {AgentId}; rejecting the round and terminating the reviewer")]
     partial void LogBorrowedSnapshotRefreshFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error reading output for agent {AgentId}")]
