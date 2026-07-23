@@ -27,6 +27,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     ) : IHostedAgentRuntimeFactory {
     public string Vendor             => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
+    public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
+    public string? BorrowedReviewContainment => launcher.BorrowedReviewContainment;
 
     public bool IsAvailable() => launcher.IsAvailable();
 

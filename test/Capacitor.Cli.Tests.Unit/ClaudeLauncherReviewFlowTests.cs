@@ -288,7 +288,7 @@ public class ClaudeLauncherReviewFlowTests {
         var i      = Array.IndexOf(args, "--disallowedTools");
         var denied = args[i + 1];
 
-        foreach (var tool in new[] { "Agent", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash" }) {
+        foreach (var tool in new[] { "Agent", "Edit", "MultiEdit", "Write", "NotebookEdit", "Bash" }) {
             await Assert.That(denied).Contains(tool);
         }
 

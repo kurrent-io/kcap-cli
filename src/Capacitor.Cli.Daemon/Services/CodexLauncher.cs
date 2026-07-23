@@ -14,6 +14,8 @@ internal sealed partial class CodexLauncher(
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
     public bool   SupportsUnattended => true;
+    public bool   SupportsBorrowedReviewFlow => true;
+    public string BorrowedReviewContainment => "native-tool-clamp";
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
 

@@ -111,7 +111,8 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
     /// per-request cancel frame (see class remarks); session-level cancellation is a separate
     /// explicit <c>session/cancel</c> notification via <see cref="NotifyAsync"/>.
     /// </summary>
-    public async Task<JsonElement> RequestAsync(string method, JsonElement? @params, CancellationToken ct) {
+    public async Task<JsonElement> RequestAsync(
+            string method, JsonElement? @params, CancellationToken ct, Action? onWritten = null) {
         var id  = Interlocked.Increment(ref _nextId);
         var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -128,6 +129,7 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
 
         try {
             await WriteLineAsync(json, ct).ConfigureAwait(false);
+            onWritten?.Invoke();
         } catch {
             _pending.TryRemove(id, out _);
             tcs.TrySetCanceled(CancellationToken.None);

@@ -21,24 +21,29 @@ internal static class CliResolver {
     /// <c>PATH</c> lookup (bare command).
     /// </summary>
     public static bool Exists(string cliPath) {
-        if (string.IsNullOrWhiteSpace(cliPath)) return false;
+        return ResolveExecutable(cliPath) is not null;
+    }
+
+    public static string? ResolveExecutable(string cliPath) {
+        if (string.IsNullOrWhiteSpace(cliPath)) return null;
 
         if (Path.IsPathFullyQualified(cliPath))
-            return IsExecutable(cliPath);
+            return IsExecutable(cliPath) ? Path.GetFullPath(cliPath) : null;
 
         // Bare command — walk PATH. Splitting on the platform separator is
         // sufficient; we don't need to handle quoted PATH entries because
         // POSIX disallows them and Windows tolerates raw paths in PATH.
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
 
-        if (string.IsNullOrEmpty(pathEnv)) return false;
+        if (string.IsNullOrEmpty(pathEnv)) return null;
 
         var extensions = OperatingSystem.IsWindows()
             ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM").Split(';', StringSplitOptions.RemoveEmptyEntries)
             : [""];
 
         return pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Any(dir => extensions.Select(ext => Path.Combine(dir, cliPath + ext)).Any(IsExecutable));
+            .SelectMany(dir => extensions.Select(ext => Path.Combine(dir, cliPath + ext)))
+            .FirstOrDefault(IsExecutable);
     }
 
     /// <summary>

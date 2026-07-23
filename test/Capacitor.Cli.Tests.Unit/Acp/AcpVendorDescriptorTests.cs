@@ -28,7 +28,9 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.UnattendedInteractionPolicy).IsEqualTo(AcpUnattendedInteractionPolicy.Fail);
         await Assert.That(descriptor.SupportsMcpServers).IsTrue();
         await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.SessionNew);
-        await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
+        await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsTrue();
+        await Assert.That(descriptor.BorrowedReviewContainment)
+            .IsEqualTo(AcpBorrowedReviewContainment.IndependentSnapshot);
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
     }
 
@@ -47,6 +49,8 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.SupportsMcpServers).IsFalse();
         await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.CopilotAdditionalConfig);
         await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsTrue();
+        await Assert.That(descriptor.BorrowedReviewContainment)
+            .IsEqualTo(AcpBorrowedReviewContainment.NativeToolClamp);
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
     }
 

@@ -29,6 +29,17 @@ internal interface IHostedAgentRuntimeFactory {
     /// </summary>
     bool SupportsUnattended { get; }
 
+    /// <summary>Whether this runtime has a certified containment strategy for review flows that
+    /// request the caller's current checkout contents.</summary>
+    bool SupportsBorrowedReviewFlow => false;
+
+    /// <summary>Stable protocol token naming the certified containment boundary.</summary>
+    string? BorrowedReviewContainment => null;
+
+    /// <summary>Whether a borrowed request must be materialized into an independent daemon-owned snapshot
+    /// before this runtime is started.</summary>
+    bool BorrowedReviewRequiresIndependentSnapshot => false;
+
     /// <summary>
     /// Prepares and starts the hosted runtime for this launch. Throws
     /// <see cref="CodexHooksNotInstalledException"/> for the orchestrator to map to a
@@ -106,5 +117,8 @@ internal sealed record RuntimeStartContext(
         // materialization concern (an allowlist of names the launcher writes into a temp
         // mcp-config file) — this is the literal ACP session/new payload for descriptors that
         // support it.
-        IReadOnlyList<AcpMcpServerSpec>? McpServers = null
+        IReadOnlyList<AcpMcpServerSpec>? McpServers = null,
+        // True only when a borrowed request has been materialized into a fully independent,
+        // daemon-owned repository snapshot. Factories use this to revalidate exact artifacts.
+        bool               IsBorrowedSnapshot = false
     );

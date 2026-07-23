@@ -1648,7 +1648,8 @@ public sealed record UnattendedVendorCapability(
     string Vendor,
     string? CliVersion,
     string LauncherPolicyVersion,
-    bool BorrowedReviewSupported
+    bool BorrowedReviewSupported,
+    string? BorrowedReviewContainment = null
 );
 
 public readonly record struct AgentRegistered(

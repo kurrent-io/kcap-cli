@@ -44,12 +44,22 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
     public string Vendor             => descriptor.Vendor;
     public bool   SupportsUnattended => descriptor.SupportsUnattended;
+    public bool   SupportsBorrowedReviewFlow => descriptor.SupportsBorrowedReviewFlow;
+    public bool   BorrowedReviewRequiresIndependentSnapshot =>
+        descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.IndependentSnapshot;
+    public string? BorrowedReviewContainment => descriptor.BorrowedReviewContainment switch {
+        AcpBorrowedReviewContainment.NativeToolClamp => "native-tool-clamp",
+        AcpBorrowedReviewContainment.IndependentSnapshot => CursorBorrowedReviewCertification.Containment,
+        _ => null
+    };
 
     public bool IsAvailable() => CliResolver.Exists(descriptor.ResolveBinaryPath(config));
 
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
         AcpMetrics.Launches.Add(1);
+
+        ValidateBorrowedArtifact(ctx, descriptor, config);
 
         // Fail closed BEFORE _connectionSource spawns a child (a later gate would leak one). Null for
         // a non-review launch; the built MCP list for a valid review flow.
@@ -126,6 +136,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
+        if (ctx.Work != WorkLocation.OwnedWorktree &&
+            descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.IndependentSnapshot)
+            throw new InvalidOperationException(
+                $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
         if (descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.Unsupported)
             throw new InvalidOperationException(
@@ -188,6 +202,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree && !descriptor.SupportsBorrowedReviewFlow)
             throw new InvalidOperationException(
                 $"Unattended review-flow launch for '{descriptor.Vendor}' requires an owned worktree, not a borrowed cwd.");
+        if (ctx.IsReviewFlow && ctx.Work != WorkLocation.OwnedWorktree &&
+            descriptor.BorrowedReviewContainment == AcpBorrowedReviewContainment.IndependentSnapshot)
+            throw new InvalidOperationException(
+                $"Unattended review-flow launch for '{descriptor.Vendor}' requires daemon snapshot materialization before spawn.");
 
         var argv = new List<string>(descriptor.Argv);
 
@@ -204,7 +222,11 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             }
         }
 
-        var psi = new ProcessStartInfo(descriptor.ResolveBinaryPath(config), argv) {
+        var binaryPath = descriptor.Vendor == "cursor" && ctx.IsBorrowedSnapshot
+            ? CursorBorrowedReviewCertification.TryCertify(descriptor.ResolveBinaryPath(config))?.LauncherPath
+                ?? throw new InvalidOperationException("cursor_borrowed_artifact_not_certified")
+            : descriptor.ResolveBinaryPath(config);
+        var psi = new ProcessStartInfo(binaryPath, argv) {
             WorkingDirectory       = ctx.Worktree.Path,
             RedirectStandardInput  = true,
             RedirectStandardOutput = true,
@@ -217,6 +239,16 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             psi.Environment["KCAP_URL"] = ctx.ServerUrl;
 
         return psi;
+    }
+
+    static void ValidateBorrowedArtifact(
+            RuntimeStartContext ctx, AcpVendorDescriptor descriptor, DaemonConfig config) {
+        if (!ctx.IsReviewFlow || !ctx.IsBorrowedSnapshot) return;
+        if (descriptor.BorrowedReviewContainment != AcpBorrowedReviewContainment.IndependentSnapshot)
+            throw new InvalidOperationException("borrowed_snapshot_containment_mismatch");
+        if (descriptor.Vendor == "cursor" &&
+            CursorBorrowedReviewCertification.TryCertify(descriptor.ResolveBinaryPath(config)) is null)
+            throw new InvalidOperationException("cursor_borrowed_artifact_not_certified");
     }
 
     /// <summary>Builds Copilot CLI's process-level stdio MCP config. Copilot's ACP capability

@@ -847,6 +847,8 @@ public partial class AgentOrchestratorVendorTests {
     sealed class SpyHostedAgentRuntimeFactory(string vendor) : IHostedAgentRuntimeFactory {
         public string Vendor             { get; } = vendor;
         public bool   SupportsUnattended { get; init; }
+        public bool   SupportsBorrowedReviewFlow { get; init; }
+        public bool   BorrowedReviewRequiresIndependentSnapshot { get; init; }
 
         /// <summary>Threaded onto the <see cref="FakeHostedAgentRuntime"/> this factory returns —
         /// defaults to <c>false</c> (ACP-shaped) matching this factory's original "cursor" use, but
@@ -855,6 +857,7 @@ public partial class AgentOrchestratorVendorTests {
 
         public int     StartCalls  { get; private set; }
         public string? LastAgentId { get; private set; }
+        public RuntimeStartContext? LastContext { get; private set; }
 
         public FakeHostedAgentRuntime? LastRuntime { get; private set; }
 
@@ -863,6 +866,7 @@ public partial class AgentOrchestratorVendorTests {
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             StartCalls++;
             LastAgentId = ctx.AgentId;
+            LastContext = ctx;
 
             var runtime = new FakeHostedAgentRuntime(vendor, EmitsTerminalOutput);
             LastRuntime = runtime;
@@ -952,9 +956,10 @@ public partial class AgentOrchestratorVendorTests {
         public void SendInterrupt() { }
     }
 
-    sealed class SpyPtyProcessFactory : IPtyProcessFactory {
+    sealed class SpyPtyProcessFactory(IPtyProcess? process = null) : IPtyProcessFactory {
         public int                         SpawnCalls  { get; private set; }
         public string?                     LastCommand { get; private set; }
+        public string[]?                   LastArgs    { get; private set; }
         public Dictionary<string, string>? LastEnv     { get; private set; }
 
         public IPtyProcess Spawn(
@@ -967,9 +972,10 @@ public partial class AgentOrchestratorVendorTests {
             ) {
             SpawnCalls++;
             LastCommand = command;
+            LastArgs    = args;
             LastEnv     = extraEnv;
 
-            return new StubPtyProcess();
+            return process ?? new StubPtyProcess();
         }
     }
 
