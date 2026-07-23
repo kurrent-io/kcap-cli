@@ -7,7 +7,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 /// <summary>
-/// AI-1461 §7 — the manual, recorded release-gate certification that the shared SessionStart
+/// §7 — the manual, recorded release-gate certification that the shared SessionStart
 /// memory index actually reaches the model for Cursor's <c>cursor-agent</c> CLI. Everything else
 /// in this feature (routing, budget math, lifecycle, output bytes) is proven by the unit suite in
 /// <see cref="CursorHookCommandTests"/> against fakes; THIS file is the one place that asserts the
@@ -163,8 +163,8 @@ public class CursorMemoryIndexLiveCertTests {
         var body = McpMemoryServer.BuildSaveBody(new JsonObject {
             ["audience"]    = "user",
             ["slug"]        = $"live-cert-{nonce}",
-            ["description"] = $"AI-1461 live-cert nonce: {nonce}",
-            ["content"]     = $"AI-1461 live-cert nonce: {nonce}. Safe to archive after the run.",
+            ["description"] = $"kcap cursor memory live-cert nonce: {nonce}",
+            ["content"]     = $"kcap cursor memory live-cert nonce: {nonce}. Safe to archive after the run.",
             ["kind"]        = "reference",
             ["global"]      = true
         }, cwdRepoHash: null, machineId: null);

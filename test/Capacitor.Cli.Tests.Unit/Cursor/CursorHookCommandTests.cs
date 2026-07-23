@@ -349,7 +349,7 @@ public class CursorHookCommandTests {
         // before the fresh event can post. The fresh sessionEnd must land back
         // in the spool, replacing the just-delivered sessionStart line.
         //
-        // AI-1461 Task 2: HandleCore's outer deadline race (§2) can now return to the
+        // Task 2: HandleCore's outer deadline race (§2) can now return to the
         // caller at the 30ms mark WITHOUT waiting for the still-in-flight drain (holding
         // the fresh sessionEnd's own append until the delayed POST resolves at ~50ms) —
         // mirroring the pre-existing top-level WithHardCap's own "abandon, don't cancel"
@@ -376,7 +376,7 @@ public class CursorHookCommandTests {
         await Assert.That(spoolContent).Contains("sessionEnd");
     }
 
-    // AI-1461 Task 2: single-writer, deadline-safe stdout emission for Cursor's
+    // Task 2: single-writer, deadline-safe stdout emission for Cursor's
     // sessionStart. Cursor writes zero stdout for every OTHER event, and (until Task 3
     // wires the real memory fragment) exactly "{}\n" for every resolved sessionStart —
     // whether at the very end of a normal invocation, at an early fail-open return, at the
@@ -443,7 +443,7 @@ public class CursorHookCommandTests {
         }
     }
 
-    // AI-1461 review finding 1: these two guarantees must hold at the level the SINGLE
+    // Review finding 1: these two guarantees must hold at the level the SINGLE
     // cap+emitter actually lives — CursorHookCommand.HandleInternal, the whole-dispatch entry
     // Handle() itself delegates to (client/auth setup THROUGH the recording+memory dispatch,
     // under exactly one hard-cap deadline). Calling HandleCore directly (as these two tests
@@ -511,7 +511,7 @@ public class CursorHookCommandTests {
         }
     }
 
-    // AI-1461 review finding 1: the single cap must ALSO cover client/auth setup itself — the
+    // Review finding 1: the single cap must ALSO cover client/auth setup itself — the
     // one piece that sat OUTSIDE HandleCore's own race pre-fix. A client factory that never
     // completes simulates the documented TokenStore-hang risk (see Handle's doc comment); the
     // single deadline must still fire, return 0, and never let the abandoned auth attempt
@@ -547,7 +547,7 @@ public class CursorHookCommandTests {
         }
     }
 
-    // AI-1461 Task 3: the shared memory orchestrator wired in for a top-level (non-child)
+    // Task 3: the shared memory orchestrator wired in for a top-level (non-child)
     // sessionStart — fragment, lifecycle, budget, opt-out, and workspace-root behavior.
 
     [Test, NotInParallel]
@@ -745,7 +745,7 @@ public class CursorHookCommandTests {
         await Assert.That(fx.MemoryIndexRequested).IsTrue();
     }
 
-    // AI-1461 Task 1: the fixture must be able to serve GET /api/memories/index
+    // Task 1: the fixture must be able to serve GET /api/memories/index
     // distinctly from the generic transcript-watermark GET (which stays 404) — the
     // seam later tasks rely on to fake the memory-index endpoint. No production
     // wiring exists yet (HandleCore doesn't call this route on its own); this only
@@ -803,7 +803,7 @@ public class CursorHookCommandTests {
         public HookSpool    Spool      { get; }
         public TimeSpan     HoldOnPost { get; set; } = TimeSpan.Zero;
 
-        // AI-1461: lets a test fake the shared SessionStart memory-index endpoint
+        // Lets a test fake the shared SessionStart memory-index endpoint
         // distinctly from the generic transcript-watermark GET (which stays 404).
         public string         MemoryIndexBody      { get; set; } = "[]";
         public HttpStatusCode MemoryIndexStatus    { get; set; } = HttpStatusCode.OK;
@@ -838,7 +838,7 @@ public class CursorHookCommandTests {
                         RouteOrder.Add(path.Replace("/hooks/", ""));
                     }
 
-                    // AI-1461: the shared SessionStart memory-index GET is routed distinctly
+                    // The shared SessionStart memory-index GET is routed distinctly
                     // from the generic transcript-watermark GET below (which stays 404).
                     if (path == "/api/memories/index") {
                         MemoryIndexRequested  = true;

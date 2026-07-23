@@ -24,7 +24,7 @@ public static class CursorHookCommand {
     /// <summary>
     /// Production entry point. Delegates straight to <see cref="HandleInternal"/> with
     /// production factories — see that method's doc for how the single hard-cap deadline
-    /// (AI-1461 review finding 1) covers client/auth setup through dispatch.
+    /// (review finding 1) covers client/auth setup through dispatch.
     /// </summary>
     public static Task<int> Handle(string baseUrl, TextReader stdin) => HandleInternal(baseUrl, stdin);
 
@@ -33,7 +33,7 @@ public static class CursorHookCommand {
     /// as a generic, independently-tested utility (mirrors <c>ClaudeHookCommand.WithHardCap</c>,
     /// itself unused in that class's production path) — NOT used by <see cref="Handle"/>/
     /// <see cref="HandleInternal"/>, which own their own single deadline race end-to-end (see
-    /// AI-1461 review finding 1: wrapping <em>another</em>, independent cap around an
+    /// review finding 1: wrapping <em>another</em>, independent cap around an
     /// already-self-capping inner phase created two competing timers aimed at the same
     /// deadline, and the outer one — started earlier, before client/auth setup — could win
     /// without knowing whether a {} was owed, while the abandoned inner still held the sole
@@ -47,7 +47,7 @@ public static class CursorHookCommand {
 
     /// <summary>
     /// The single hard-cap deadline for the ENTIRE dispatch — client/auth setup through the
-    /// bounded async stdin read, recording-critical work, and memory (AI-1461 review finding 1).
+    /// bounded async stdin read, recording-critical work, and memory (review finding 1).
     /// There is exactly one race here: client/auth creation is bounded by its own
     /// <see cref="Task.WhenAny"/> against the full <see cref="DispatcherBudget"/> (some
     /// <c>TokenStore</c> paths don't honour a <see cref="CancellationToken"/> and would
@@ -134,12 +134,12 @@ public static class CursorHookCommand {
     /// <summary>
     /// Test-friendly core. Caller owns the <see cref="HttpClient"/> and
     /// <see cref="HookSpool"/>. Races the entire inner phase against one absolute
-    /// <paramref name="budgetTotal"/> deadline (AI-1461 §2) and is the SOLE writer of
+    /// <paramref name="budgetTotal"/> deadline (§2) and is the SOLE writer of
     /// Cursor's stdout — the inner phase (<see cref="HandleCoreInner"/>) never touches
     /// <see cref="Console.Out"/>, it only computes and returns the response. Exactly one
     /// write happens per resolved <c>sessionStart</c>; every other resolved event, and any
     /// unresolved/malformed input, writes nothing — byte-for-byte unchanged from before
-    /// AI-1461.
+    /// this feature landed.
     /// </summary>
     internal static async Task<int> HandleCore(
             HttpClient client,
@@ -286,7 +286,7 @@ public static class CursorHookCommand {
             }
             var isSubagentChild = subagentParentId is not null;
 
-            // Hoisted (rather than block-local) so the AI-1461 memory orchestration wired in
+            // Hoisted (rather than block-local) so the memory orchestration wired in
             // at the end of this method — reached only for the same top-level, non-child
             // sessionStart this block guards — can reuse the RAW workspace_roots[0] value as
             // Cwd without re-deriving it.
@@ -364,7 +364,7 @@ public static class CursorHookCommand {
             // SendSubagentLifecycleAsync, which never gives a correlated child its own top-level
             // lifecycle either). See HandleSubagentChildEventAsync for the divert.
             if (isSubagentChild) {
-                // AI-1461 §4/§5: a linked child short-circuits to {} (sessionStart) / nothing
+                // §4/§5: a linked child short-circuits to {} (sessionStart) / nothing
                 // (everything else) before any orchestrator work — never entered for a child.
                 await HandleSubagentChildEventAsync(
                     client, baseUrl, spool, sessionId!, eventName, transcriptPath,
@@ -448,7 +448,7 @@ public static class CursorHookCommand {
                     budget: BudgetExpired, ct);
             }
 
-            // AI-1461 §3–§6: the memory index runs strictly AFTER all of the above
+            // §3–§6: the memory index runs strictly AFTER all of the above
             // recording-critical work, on whatever budget is left over, and only for a
             // top-level (isSubagentChild already diverted above at line ~309) sessionStart.
             if (eventName != "sessionStart") return null;
@@ -467,7 +467,7 @@ public static class CursorHookCommand {
     }
 
     /// <summary>
-    /// AI-1461 §3–§6: fetches the shared SessionStart memory index for a top-level
+    /// §3–§6: fetches the shared SessionStart memory index for a top-level
     /// (non-child — <paramref name="sw"/>'s caller only reaches this once
     /// <c>isSubagentChild</c> has already diverted) Cursor <c>sessionStart</c>, mirroring
     /// <c>ClaudeHookCommand.StartMemoryIndexTask</c>: same shared store/provider/orchestrator,
@@ -514,7 +514,7 @@ public static class CursorHookCommand {
                 // this method is only ever reached from the top-level, non-child success path —
                 // a linked child returns {} before any orchestrator work, per §4/§5.
                 //
-                // AI-1461 review finding 2 (investigated, no behavior change): `!isSubagentChild`
+                // Subagent-classification note (investigated, no behavior change): `!isSubagentChild`
                 // is NOT the same fact as "definitively no parent" — CursorLiveSubagentLinker.
                 // ResolveParent's own doc records that it can return null for a session that IS
                 // actually a subagent, merely because the parent's Task/Agent tool_use hasn't
