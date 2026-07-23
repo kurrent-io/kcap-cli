@@ -48,7 +48,7 @@ Repo- and machine-aware: it resolves the cwd to a repo hash and the local persis
 
 ### `kcap-analytics`
 
-Governed read-only SQL over the org's curated coding-agent analytics views (sessions, tool/skill/token usage, cost, commits, PRs, evals). Auto-registered for Claude Code and Codex CLI; other harnesses aren't offered it yet.
+Governed read-only SQL over the org's curated coding-agent analytics views (sessions, tool/skill/token usage, cost, commits, PRs, evals). Auto-registered for every supported harness — it resolves its repo scope from the working directory, so it rides the same registration path as `kcap-sessions`.
 
 | Tool | Description |
 |------|-------------|
