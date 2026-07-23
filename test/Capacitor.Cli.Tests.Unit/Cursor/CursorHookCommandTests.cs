@@ -1,7 +1,9 @@
 using System.Net;
+using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
@@ -360,6 +362,30 @@ public class CursorHookCommandTests {
         await Assert.That(spoolContent).Contains("sessionEnd");
     }
 
+    // AI-1461 Task 1: the fixture must be able to serve GET /api/memories/index
+    // distinctly from the generic transcript-watermark GET (which stays 404) — the
+    // seam later tasks rely on to fake the memory-index endpoint. No production
+    // wiring exists yet (HandleCore doesn't call this route on its own); this only
+    // proves the test double is capable of it.
+    [Test]
+    public async Task memory_index_endpoint_is_routed_distinctly_from_the_watermark_GET() {
+        using var fx = new Fixture();
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"fact"}]""";
+
+        // Drive a sessionStart through the normal fixture path — no behavior change yet.
+        var exit = await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"abc"}""");
+        await Assert.That(exit).IsEqualTo(0);
+
+        using var resp = await fx.Client.GetAsync("http://localhost/api/memories/index");
+        await Assert.That(fx.MemoryIndexRequested).IsTrue();
+        await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await resp.Content.ReadAsStringAsync()).IsEqualTo(fx.MemoryIndexBody);
+
+        // The generic watermark GET path is untouched — still 404.
+        using var watermarkResp = await fx.Client.GetAsync("http://localhost/api/sessions/abc/transcript-watermark");
+        await Assert.That(watermarkResp.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
     [Test]
     public async Task legacy_cursor_spool_is_transformed_and_merged() {
         var dir       = Path.Combine(Path.GetTempPath(), $"kcap-mig-{Guid.NewGuid():N}");
@@ -394,6 +420,12 @@ public class CursorHookCommandTests {
         public HookSpool    Spool      { get; }
         public TimeSpan     HoldOnPost { get; set; } = TimeSpan.Zero;
 
+        // AI-1461: lets a test fake the shared SessionStart memory-index endpoint
+        // distinctly from the generic transcript-watermark GET (which stays 404).
+        public string         MemoryIndexBody      { get; set; } = "[]";
+        public HttpStatusCode MemoryIndexStatus    { get; set; } = HttpStatusCode.OK;
+        public bool           MemoryIndexRequested { get; private set; }
+
         public HttpClient Client                { get; }
         public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
 
@@ -422,6 +454,15 @@ public class CursorHookCommandTests {
                         RouteOrder.Add(path.Replace("/hooks/", ""));
                     }
 
+                    // AI-1461: the shared SessionStart memory-index GET is routed distinctly
+                    // from the generic transcript-watermark GET below (which stays 404).
+                    if (path == "/api/memories/index") {
+                        MemoryIndexRequested = true;
+                        return new HttpResponseMessage(MemoryIndexStatus) {
+                            Content = new StringContent(MemoryIndexBody, Encoding.UTF8, "application/json")
+                        };
+                    }
+
                     // GET watermark — return 404 so transcript backfill is a no-op without
                     // tripping the fail-open path.
                     if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -442,7 +483,12 @@ public class CursorHookCommandTests {
                 baseUrl: "http://localhost",
                 stdin: new StringReader(stdin),
                 spool: Spool,
-                budgetTotal: TimeSpan.FromSeconds(2)
+                budgetTotal: TimeSpan.FromSeconds(2),
+                // Isolate every fixture-routed test's SessionStart memory lease store to its
+                // own temp dir (mirrors ClaudeHookCommandTests.Fixture) — otherwise a
+                // successful sessionStart with a GUID session_id would touch the real
+                // per-machine default store root.
+                memoryStoreFactory: () => new SessionStartMemoryLeaseStore(Path.Combine(_tmpHome, "memory"))
             );
 
         public string SentToHook(string segment) =>

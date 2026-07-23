@@ -3,7 +3,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Commands;
 
@@ -81,12 +83,14 @@ public static class CursorHookCommand {
     /// Test-friendly core. Caller owns the <see cref="HttpClient"/> and
     /// <see cref="HookSpool"/>.
     /// </summary>
-    public static async Task<int> HandleCore(
+    internal static async Task<int> HandleCore(
             HttpClient client,
             string     baseUrl,
             TextReader stdin,
             HookSpool  spool,
-            TimeSpan   budgetTotal
+            TimeSpan   budgetTotal,
+            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
+            Func<SessionStartMemoryLeaseStore>?               memoryStoreFactory = null
         ) {
         var sw = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource(budgetTotal);
