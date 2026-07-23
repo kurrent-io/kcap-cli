@@ -443,6 +443,16 @@ public class CursorHookCommandTests {
         }
     }
 
+    // AI-1461 review finding 1: these two guarantees must hold at the level the SINGLE
+    // cap+emitter actually lives — CursorHookCommand.HandleInternal, the whole-dispatch entry
+    // Handle() itself delegates to (client/auth setup THROUGH the recording+memory dispatch,
+    // under exactly one hard-cap deadline). Calling HandleCore directly (as these two tests
+    // used to) only proves the dispatch-body race is internally consistent; it can't catch a
+    // second, independent cap racing ABOVE it — which is exactly the bug this finding fixed
+    // (Handle used to wrap HandleInternal in its own separate WithHardCap(DispatcherBudget),
+    // so that outer timer — started before client/auth setup — could win the race against
+    // HandleCore's own internal deadline and return with no {} for a resolved sessionStart,
+    // while the abandoned HandleCore kept running and could still write late).
     [Test, NotInParallel]
     public async Task HardCap_before_resolve_emits_nothing() {
         var originalOut = Console.Out;
@@ -451,11 +461,14 @@ public class CursorHookCommandTests {
         try {
             Console.SetOut(stdoutWriter);
             using var fx = new Fixture();
-            // Never resolves within the cap regardless of cancellation — proves the outer
-            // deadline genuinely abandons the inner work rather than relying on it noticing.
-            var exit = await CursorHookCommand.HandleCore(
-                fx.Client, "http://localhost", new NeverCompletingReader(), fx.Spool,
-                TimeSpan.FromMilliseconds(50));
+            // Never resolves within the cap regardless of cancellation — proves the single
+            // deadline race genuinely abandons the inner work rather than relying on it
+            // noticing. clientFactory/spoolFactory stand in for real auth/spool setup so the
+            // test stays hermetic while still exercising the REAL entry point's cap+emit logic.
+            var exit = await CursorHookCommand.HandleInternal(
+                "http://localhost", new NeverCompletingReader(), TimeSpan.FromMilliseconds(50),
+                clientFactory: _ => Task.FromResult((fx.Client, AuthStatus.Ok)),
+                spoolFactory: () => fx.Spool);
             sw.Stop();
             await Assert.That(exit).IsEqualTo(0);
             await Assert.That(stdoutWriter.ToString()).IsEqualTo("");
@@ -477,10 +490,12 @@ public class CursorHookCommandTests {
             fx.HoldOnPost = TimeSpan.FromMilliseconds(300);
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var exit = await CursorHookCommand.HandleCore(
-                fx.Client, "http://localhost",
+            var exit = await CursorHookCommand.HandleInternal(
+                "http://localhost",
                 new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
-                fx.Spool, TimeSpan.FromMilliseconds(50));
+                TimeSpan.FromMilliseconds(50),
+                clientFactory: _ => Task.FromResult((fx.Client, AuthStatus.Ok)),
+                spoolFactory: () => fx.Spool);
             sw.Stop();
 
             await Assert.That(exit).IsEqualTo(0);
@@ -491,6 +506,42 @@ public class CursorHookCommandTests {
             // stdout is unchanged — the abandoned inner must never get a second/late write.
             await Task.Delay(TimeSpan.FromMilliseconds(500));
             await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    // AI-1461 review finding 1: the single cap must ALSO cover client/auth setup itself — the
+    // one piece that sat OUTSIDE HandleCore's own race pre-fix. A client factory that never
+    // completes simulates the documented TokenStore-hang risk (see Handle's doc comment); the
+    // single deadline must still fire, return 0, and never let the abandoned auth attempt
+    // produce a late write even once it eventually "completes" in the background.
+    [Test, NotInParallel]
+    public async Task HardCap_during_client_setup_emits_nothing_and_no_late_write() {
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            using var fx = new Fixture();
+            var neverAuths = new TaskCompletionSource<(HttpClient, AuthStatus)>();
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var exit = await CursorHookCommand.HandleInternal(
+                "http://localhost",
+                new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
+                TimeSpan.FromMilliseconds(50),
+                clientFactory: _ => neverAuths.Task,
+                spoolFactory: () => fx.Spool);
+            sw.Stop();
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("");
+            await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+
+            // Even if the abandoned auth call eventually resolves in the background, HandleCore
+            // is never invoked for this attempt — there must be no late write.
+            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("");
         } finally {
             Console.SetOut(originalOut);
         }

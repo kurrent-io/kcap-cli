@@ -22,26 +22,22 @@ public static class CursorHookCommand {
     static readonly TimeSpan HookPostTimeout  = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Production entry point. Two layers of budget enforcement:
-    ///   1. A linked <see cref="CancellationTokenSource"/> threaded into every
-    ///      call that honours it (auth-config discovery, HTTP POSTs in
-    ///      <see cref="HandleCore"/>, transcript backfill).
-    ///   2. A hard <see cref="Task.WhenAny"/> ceiling around the whole pipeline
-    ///      because some paths inside <c>TokenStore</c> (refresh against
-    ///      <c>/auth/refresh</c> or WorkOS's token endpoint) don't honour a
-    ///      <see cref="CancellationToken"/> and would otherwise sit on the
-    ///      default 100 s <see cref="HttpClient"/> timeout. If the hard
-    ///      ceiling fires we abandon the inner task — the process exits 0
-    ///      and the OS reclaims the socket. Cursor's agent loop is
-    ///      unblocked even when the auth path hangs.
+    /// Production entry point. Delegates straight to <see cref="HandleInternal"/> with
+    /// production factories — see that method's doc for how the single hard-cap deadline
+    /// (AI-1461 review finding 1) covers client/auth setup through dispatch.
     /// </summary>
-    public static Task<int> Handle(string baseUrl, TextReader stdin) =>
-        WithHardCap(HandleInternal(baseUrl, stdin), DispatcherBudget);
+    public static Task<int> Handle(string baseUrl, TextReader stdin) => HandleInternal(baseUrl, stdin);
 
     /// <summary>
-    /// Test seam for the hard-cap race. Returns 0 if the budget fires
-    /// before <paramref name="inner"/> completes; otherwise returns
-    /// <paramref name="inner"/>'s result.
+    /// Test seam for a bare hard-cap race over an arbitrary <see cref="Task{TResult}"/>. Kept
+    /// as a generic, independently-tested utility (mirrors <c>ClaudeHookCommand.WithHardCap</c>,
+    /// itself unused in that class's production path) — NOT used by <see cref="Handle"/>/
+    /// <see cref="HandleInternal"/>, which own their own single deadline race end-to-end (see
+    /// AI-1461 review finding 1: wrapping <em>another</em>, independent cap around an
+    /// already-self-capping inner phase created two competing timers aimed at the same
+    /// deadline, and the outer one — started earlier, before client/auth setup — could win
+    /// without knowing whether a {} was owed, while the abandoned inner still held the sole
+    /// stdout handle and could write late).
     /// </summary>
     internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
         var winner = await Task.WhenAny(inner, Task.Delay(budget));
@@ -49,9 +45,45 @@ public static class CursorHookCommand {
         return await inner;
     }
 
-    static async Task<int> HandleInternal(string baseUrl, TextReader stdin) {
+    /// <summary>
+    /// The single hard-cap deadline for the ENTIRE dispatch — client/auth setup through the
+    /// bounded async stdin read, recording-critical work, and memory (AI-1461 review finding 1).
+    /// There is exactly one race here: client/auth creation is bounded by its own
+    /// <see cref="Task.WhenAny"/> against the full <see cref="DispatcherBudget"/> (some
+    /// <c>TokenStore</c> paths don't honour a <see cref="CancellationToken"/> and would
+    /// otherwise sit on the default 100 s <see cref="HttpClient"/> timeout — this is the ONE
+    /// place that step can be abandoned), and — ONLY once that step has resolved within
+    /// budget — <see cref="HandleCore"/> is invoked with whatever's left, where its OWN
+    /// (unchanged, already-correct) internal race becomes the sole remaining decision-maker and
+    /// sole stdout writer for the rest of the dispatch. The two races are sequential, never
+    /// concurrent: HandleCore is never invoked until the auth race has already resolved, so
+    /// there is never a second, independent timer still live once HandleCore's own begins —
+    /// eliminating the pre-fix "two nested 2s caps that don't order" bug. On EITHER branch
+    /// timing out, the abandoned task never gets a chance to write (this method never invokes
+    /// HandleCore for a still-pending auth attempt, and disposes/observes it in the background).
+    /// <paramref name="clientFactory"/>/<paramref name="spoolFactory"/> default to real
+    /// construction; tests inject fakes so the guarantee can be exercised hermetically without a
+    /// real network call (mirrors <c>ClaudeHookCommand.HandleWithDeps</c>'s injectable
+    /// <c>clientFactory</c>).
+    /// </summary>
+    internal static async Task<int> HandleInternal(
+            string     baseUrl,
+            TextReader stdin,
+            TimeSpan?  budget = null,
+            Func<CancellationToken, Task<(HttpClient Client, AuthStatus Status)>>? clientFactory = null,
+            Func<HookSpool>? spoolFactory = null
+        ) {
+        var dispatcherBudget = budget ?? DispatcherBudget;
+        clientFactory ??= ct => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, ct);
+        spoolFactory  ??= () => {
+            var s = new HookSpool(PathHelpers.ConfigPath("spool"));
+            MigrateLegacyCursorSpool(s, CursorPaths.SpoolDir());
+            s.ReapOlderThan(TimeSpan.FromDays(30));
+            return s;
+        };
+
         var sw = Stopwatch.StartNew();
-        using var cts = new CancellationTokenSource(DispatcherBudget);
+        using var cts = new CancellationTokenSource(dispatcherBudget);
         HttpClient? client = null;
         try {
             // Status-returning variant so a lapse doesn't write the per-turn "expired" stderr
@@ -60,14 +92,34 @@ public static class CursorHookCommand {
             // discard the backlog — so leave it intact for replay after the user re-runs
             // `kcap login`, and exit cleanly. Mirrors the Claude hook (#183); kcap status
             // surfaces the expired state. Cursor has no user-facing notice channel.
-            var (c, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+            //
+            // Bounded by its OWN Task.WhenAny against the full budget (not merely the linked
+            // CancellationToken passed into it) — the one place client creation can be
+            // abandoned if some TokenStore path ignores cancellation. HandleCore is only ever
+            // reached once this resolves, so its own internal race never has a stale competing
+            // timer left over from this step.
+            var authBudget = dispatcherBudget - sw.Elapsed;
+            if (authBudget < TimeSpan.Zero) authBudget = TimeSpan.Zero;
+            var authTask   = clientFactory(cts.Token);
+            var authWinner = await Task.WhenAny(authTask, Task.Delay(authBudget));
+            if (authWinner != authTask) {
+                // Abandoned: observe the eventual terminal state so a late fault/dispose
+                // doesn't leak a client or surface as an UnobservedTaskException. No output is
+                // written — the event kind isn't even known yet at this point — and HandleCore
+                // is never invoked for this attempt, so a late write is structurally impossible.
+                _ = authTask.ContinueWith(static t => {
+                    if (t.IsFaulted) _ = t.Exception;
+                    else if (t.Status == TaskStatus.RanToCompletion) t.Result.Client.Dispose();
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                return 0;
+            }
+
+            var (c, status) = await authTask;
             client = c;
             if (AgentHookPoster.IsAuthLapsed(status)) return 0;
 
-            var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
-            MigrateLegacyCursorSpool(spool, CursorPaths.SpoolDir());
-            spool.ReapOlderThan(TimeSpan.FromDays(30));
-            var remaining = DispatcherBudget - sw.Elapsed;
+            var spool = spoolFactory();
+            var remaining = dispatcherBudget - sw.Elapsed;
             if (remaining <= TimeSpan.Zero) return 0;
             return await HandleCore(client, baseUrl, stdin, spool, remaining);
         } catch {
