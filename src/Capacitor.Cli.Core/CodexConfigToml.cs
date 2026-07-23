@@ -86,8 +86,7 @@ public static class CodexConfigToml {
         Update(configPath ?? DefaultConfigPath, root => MutateTrust(root, worktreePath), out error);
 
     /// <summary>
-    /// Registers the kcap MCP servers (<c>kcap-review</c>, <c>kcap-sessions</c>,
-    /// <c>kcap-memory</c>) under the
+    /// Registers the kcap MCP servers (<see cref="KcapMcpServers.ForCodex"/>) under the
     /// top-level <c>[mcp_servers]</c> table of <c>~/.codex/config.toml</c> (or
     /// <paramref name="configPath"/>) so Codex CLI picks them up with no manual TOML edit.
     /// Idempotent, and non-destructive: an entry that already exists (a prior registration
@@ -98,8 +97,7 @@ public static class CodexConfigToml {
         UpdateMcpRegistration(configPath ?? DefaultConfigPath, remove: false);
 
     /// <summary>
-    /// Removes the kcap-owned MCP server entries (<c>kcap-review</c>, <c>kcap-sessions</c>,
-    /// <c>kcap-memory</c>)
+    /// Removes the kcap-owned MCP server entries (<see cref="KcapMcpServers.ForCodex"/>)
     /// from <c>~/.codex/config.toml</c> (or <paramref name="configPath"/>). Only those names
     /// are touched; user-defined servers are preserved. Drops the <c>[mcp_servers]</c> table
     /// entirely when removing them empties it, so uninstall leaves no bare table behind.
