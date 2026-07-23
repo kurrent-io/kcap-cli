@@ -509,7 +509,17 @@ public class CursorHookCommandTests {
         var stdoutWriter = new StringWriter();
         try {
             Console.SetOut(stdoutWriter);
-            var exit = await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+            // A generous budget (well beyond the production 2s) — recording-critical work here
+            // is a handful of in-memory/fake-HTTP steps that normally finish in well under a
+            // millisecond, but memBudget = budgetTotal - elapsed - HookBudget.Safety(1.5s) leaves
+            // only ~0.5s of margin at the production 2s default; under heavy CI/full-suite CPU
+            // contention that margin can occasionally be exhausted by scheduling delays alone,
+            // which would make this assert on the WRONG thing (a legitimate no-budget skip, not
+            // a bug). This test is about the fragment/lifecycle wiring, not the budget math
+            // (NoBudget_skips_provider owns that), so give it comfortable headroom.
+            var exit = await fx.HandleAsync(
+                $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""",
+                budgetTotal: TimeSpan.FromSeconds(5));
             await Assert.That(exit).IsEqualTo(0);
 
             var stdout = stdoutWriter.ToString();
@@ -582,12 +592,14 @@ public class CursorHookCommandTests {
         var second = new StringWriter();
         try {
             Console.SetOut(first);
-            var exit1 = await fx.HandleAsync(payload);
+            // Generous budget — see Ready_fragment_emitted's comment on the tight ~0.5s margin
+            // at the production 2s default under heavy CI/full-suite CPU contention.
+            var exit1 = await fx.HandleAsync(payload, budgetTotal: TimeSpan.FromSeconds(5));
             await Assert.That(exit1).IsEqualTo(0);
             await Assert.That(first.ToString()).Contains("additional_context");
 
             Console.SetOut(second);
-            var exit2 = await fx.HandleAsync(payload);
+            var exit2 = await fx.HandleAsync(payload, budgetTotal: TimeSpan.FromSeconds(5));
             await Assert.That(exit2).IsEqualTo(0);
             await Assert.That(second.ToString()).IsEqualTo("{}\n");
         } finally {
@@ -605,8 +617,13 @@ public class CursorHookCommandTests {
             fx.MemoryIndexBody = "[]";
             var sid = Guid.NewGuid().ToString("N");
 
-            // No workspace_roots field at all.
-            var exit = await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+            // No workspace_roots field at all. Generous budget — see Ready_fragment_emitted's
+            // comment on the tight ~0.5s margin at the production 2s default under heavy
+            // CI/full-suite CPU contention (this test also does real git-remote/machine-id
+            // I/O via the scope resolver, which is slower than the fully-faked-HTTP tests).
+            var exit = await fx.HandleAsync(
+                $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""",
+                budgetTotal: TimeSpan.FromSeconds(5));
 
             await Assert.That(exit).IsEqualTo(0);
             // Absent workspace_roots must still reach the provider (non-repo user/team/org
@@ -649,11 +666,15 @@ public class CursorHookCommandTests {
 
         // A memory-index client whose GET never completes on its own — it only ever
         // resolves via the caller's cancellation, letting the provider's own
-        // linked/budget-bound CancellationTokenSource be what ends the fetch.
+        // linked/budget-bound CancellationTokenSource be what ends the fetch. A generous total
+        // budget (see Ready_fragment_emitted's comment) keeps memBudget comfortably positive
+        // under CI load, so the first attempt reliably reaches — and is cancelled by — the
+        // provider fetch rather than being skipped outright by the no-budget guard, which would
+        // let this test pass without ever exercising the cancellation path it's meant to prove.
         using var neverRespondingClient = new HttpClient(new CancelAwareHandler());
 
         var exit1 = await CursorHookCommand.HandleCore(
-            fx.Client, "http://localhost", new StringReader(payload), fx.Spool, TimeSpan.FromSeconds(2),
+            fx.Client, "http://localhost", new StringReader(payload), fx.Spool, TimeSpan.FromSeconds(4),
             memoryClientFactory: (_, _) => Task.FromResult(neverRespondingClient),
             memoryStoreFactory: storeFactory);
         await Assert.That(exit1).IsEqualTo(0);
@@ -665,7 +686,7 @@ public class CursorHookCommandTests {
         fx.MemoryIndexBody = "[]";
 
         var exit2 = await CursorHookCommand.HandleCore(
-            fx.Client, "http://localhost", new StringReader(payload), fx.Spool, TimeSpan.FromSeconds(2),
+            fx.Client, "http://localhost", new StringReader(payload), fx.Spool, TimeSpan.FromSeconds(4),
             memoryStoreFactory: storeFactory);
         await Assert.That(exit2).IsEqualTo(0);
         // The index GET fires again on fx.Client — proving the first, cancelled attempt's
