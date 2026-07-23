@@ -175,13 +175,39 @@ jobs:
           # a JIT run instead of the AOT one; acceptable here since this is a load/call smoke,
           # not a perf or AOT-compatibility check (AOT publish itself is already exercised by
           # "Publish daemon AOT binary" above).
-          dotnet run --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- spawn-dummy > smoke-output.txt 2>&1 &
+          #
+          # A musl RID's build output (musl-linked apphost and shim) cannot execute on a glibc
+          # runner at all, so the load-and-call smoke only runs where the host libc matches the
+          # RID: linux-musl-x64 runs it inside its Alpine container; linux-musl-arm64 (glibc
+          # arm64 runner, no container) gets the machine-type check above only.
+          if [[ "${{ matrix.rid }}" == *musl* && ! -f /etc/alpine-release ]]; then
+            echo "Skipping load-and-call smoke: musl build output cannot execute on a glibc host"
+            exit 0
+          fi
+
+          # Build synchronously first: a cold `dotnet run` (restore + build) takes far longer
+          # than any fixed grace period, so the backgrounded run below must only have to start
+          # the already-built host.
+          dotnet build test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
+          dotnet run --no-build --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- spawn-dummy > smoke-output.txt 2>&1 &
           HOST_PID=$!
-          sleep 3
+
+          # spawn-dummy blocks forever by design (it's the PDEATHSIG test host), so poll for
+          # the PID= line rather than sleeping a fixed interval, then tear the host down with a
+          # SIGKILL fallback — this step must never hang on a host that ignores SIGTERM.
+          ok=0
+          for _ in $(seq 1 60); do
+            if grep -q '^PID=' smoke-output.txt 2>/dev/null; then ok=1; break; fi
+            if ! kill -0 "$HOST_PID" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          pkill -TERM -P "$HOST_PID" 2>/dev/null || true
           kill "$HOST_PID" 2>/dev/null || true
+          sleep 1
+          kill -9 "$HOST_PID" 2>/dev/null || true
           wait "$HOST_PID" 2>/dev/null || true
           cat smoke-output.txt
-          if ! grep -q '^PID=' smoke-output.txt; then
+          if [[ "$ok" -ne 1 ]]; then
             echo "::error::load-and-call smoke did not see a PID= line from spawn-dummy on ${{ matrix.rid }}"
             exit 1
           fi
