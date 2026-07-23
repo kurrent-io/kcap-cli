@@ -16,10 +16,9 @@ public class KcapMcpServersTests {
     }
 
     [Test]
-    public async Task ForCursor_excludes_workitems_and_analytics() {
-        // kcap-analytics v1 rolls out to Claude Code + Codex only.
+    public async Task ForCursor_excludes_only_workitems() {
         var names = KcapMcpServers.ForCursor.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-analytics" });
     }
 
     [Test]

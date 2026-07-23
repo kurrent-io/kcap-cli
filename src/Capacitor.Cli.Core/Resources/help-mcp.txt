@@ -102,9 +102,10 @@ mcp analytics:
   scope 'global' for org-wide. Requires `kcap login` and a kcap-server with
   the /api/analytics endpoints.
 
-  `kcap setup` auto-registers `kcap-analytics` for Claude Code (plugin
-  `.mcp.json`) and Codex; other harnesses are not offered it yet. To add it
-  by hand instead:
+  `kcap setup` auto-registers `kcap-analytics` for every supported harness
+  (Claude Code, Codex, Cursor, Copilot, Gemini, OpenCode, Antigravity, Kiro),
+  same as `kcap-sessions` — it resolves its repo scope from cwd, not a
+  harness-passed arg. To add it by hand instead:
 
     Claude Code:
       claude mcp add kcap-analytics -- kcap mcp analytics

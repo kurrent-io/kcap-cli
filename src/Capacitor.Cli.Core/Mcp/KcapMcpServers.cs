@@ -35,10 +35,11 @@ public static class KcapMcpServers {
         All.Where(s => s.Name != "kcap-workitems").ToArray();
 
     /// <summary>The shared set for every non-Claude JSON harness (Cursor, Copilot, OpenCode,
-    /// Kiro, Gemini, Antigravity) — omits `kcap-workitems` (Claude Code plugin only;
-    /// its session-id default rides the Claude hook env) and, for now, `kcap-analytics`
-    /// (v1 rollout is Claude Code + Codex only — widening to these harnesses is planned separately).
-    /// Unlike Codex, these still get `kcap-flows`.</summary>
+    /// Kiro, Gemini, Antigravity) — omits only `kcap-workitems` (Claude Code plugin only;
+    /// its session-id default rides the Claude hook env). `kcap-analytics` is included: it
+    /// resolves its repo context from the process CWD, not a harness-passed arg, so it rides
+    /// the same `cwd: null` writer path as `kcap-sessions`. Unlike Codex, these still get
+    /// `kcap-flows`.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCursor =>
-        All.Where(s => s.Name is not ("kcap-workitems" or "kcap-analytics")).ToArray();
+        All.Where(s => s.Name != "kcap-workitems").ToArray();
 }
