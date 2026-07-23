@@ -170,9 +170,11 @@ The `kcap mcp memory` stdio server lets agents search, save, and update durable 
 
 Beyond registering the servers, `kcap setup` / `kcap plugin install` also installs a small kcap-owned **agent-instructions block** for harnesses that read a user-level instructions file (GitHub Copilot CLI's `~/.copilot/copilot-instructions.md`, and Gemini CLI's + Google Antigravity's shared `~/.gemini/GEMINI.md` today; more rolling out per harness). It's a marker-delimited, non-destructive note (preserves any instructions you've written) that steers the agent to prefer the kcap tools for "why / history / prior-work" questions over native `git`/GitHub/grep — registration alone doesn't make agents route to the tools. Opt out with `--skip-<harness>-instructions`.
 
-Where a harness exposes a per-server trust knob, registration also marks the **read-only** kcap servers (`kcap-review`, `kcap-sessions`) auto-approved so the agent doesn't stop to ask before every read: **Gemini** via `"trust": true` on those entries in `~/.gemini/settings.json`, and **Codex** via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The write-capable `kcap-memory` (saves memories) and the work-launching `kcap-flows` (starts a *paid* hosted reviewer) are deliberately left prompting. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
+Where a harness exposes a per-server trust knob, registration also marks the **read-only** kcap servers auto-approved so the agent doesn't stop to ask before every read: **Gemini** marks `kcap-review`, `kcap-sessions`, and `kcap-analytics` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same three via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The write-capable `kcap-memory` (saves memories) and the work-launching `kcap-flows` (starts a *paid* hosted reviewer) are deliberately left prompting. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
 
 The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — or list what a session is already attached to. The plugin **auto-registers it for Claude Code only**; it isn't offered for Cursor or Codex. See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
+
+The `kcap mcp analytics` stdio server lets agents answer analytics questions about the org's recorded coding sessions — spend, token/tool/model usage, outcomes, commits, PRs, evals — with governed read-only SQL over the server's curated analytics views. `kcap setup` **auto-registers it for Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, Gemini CLI, SST OpenCode, Google Antigravity, and AWS Kiro CLI** — alongside the other repo-aware servers. It's repo-aware: it resolves its scope from the working directory, so `cd` into a project before spawning your agent. See the [Analytics MCP server](#analytics-mcp-server-for-agents) section for details.
 
 ## What it records
 
@@ -461,6 +463,21 @@ It provides two tools:
 - **`get_session_work_items`** — list the work items the current session is attached to.
 
 Both tools default `session_id` to the current kcap-hooked session (`KCAP_SESSION_ID`) when omitted. This is the manual-declare path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to.
+
+### Analytics MCP server (for agents)
+
+```bash
+kcap mcp analytics
+```
+
+Stdio MCP server that lets coding agents answer analytics questions about the org's recorded AI coding sessions — spend, token/tool/model usage, session outcomes, commits, PRs, evals — by writing **governed read-only SQL** against the server's curated analytics views. Every statement is validated server-side (allowlisted views/columns, SELECT-only, row-capped, repo-scope enforced), so the agent gets the same governed data surface as the web UI's Analytics tab. It's repo-aware: it resolves its scope from the process working directory, so it rides the same registration path as `kcap-sessions` and is offered to every harness. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it in `~/.codex/config.toml`; enabling the plugin through Codex's native `codex plugin add` also provides it via the `.codex-mcp.json` descriptor. **Cursor:** in `~/.cursor/mcp.json` (opt out with `--skip-cursor-mcp`). **GitHub Copilot CLI:** in `~/.copilot/mcp-config.json` (`--skip-copilot-mcp`). **Gemini CLI:** in the shared `~/.gemini/settings.json`, marked `"trust": true` (`--skip-gemini-mcp`). **SST OpenCode:** in `~/.config/opencode/opencode.json` (`--skip-opencode-mcp`). **Google Antigravity:** in `~/.gemini/config/mcp_config.json` (`--skip-antigravity-mcp`). **AWS Kiro CLI:** in `~/.kiro/settings/mcp.json` (`--skip-kiro-mcp`).
+
+It provides two tools:
+
+- **`get_analytics_schema`** — the governed schema document: the queryable views and columns, a terminology glossary, SQL rules, and worked examples. Agents are told to call this once before writing SQL.
+- **`query_analytics`** — run one governed Postgres SELECT. Defaults to the current repository (resolved from the working directory); pass `scope: "global"` for org-wide questions, and `max_rows` to adjust the row cap. A rejected query returns the validator's reason so the agent can fix the SQL and retry.
+
+Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints (older servers return a clear "upgrade kcap-server" message).
 
 ### Curate guidelines
 
