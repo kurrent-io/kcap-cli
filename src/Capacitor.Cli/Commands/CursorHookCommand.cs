@@ -234,6 +234,12 @@ public static class CursorHookCommand {
             }
             var isSubagentChild = subagentParentId is not null;
 
+            // Hoisted (rather than block-local) so the AI-1461 memory orchestration wired in
+            // at the end of this method — reached only for the same top-level, non-child
+            // sessionStart this block guards — can reuse the RAW workspace_roots[0] value as
+            // Cwd without re-deriving it.
+            string? workspaceRoot = null;
+
             // attach a `repository` node on sessionStart so the session groups
             // under its repo in the sidebar. Cursor payloads carry `workspace_roots`
             // rather than `cwd`, so the generic EnrichWithRepositoryInfo (which reads
@@ -244,7 +250,6 @@ public static class CursorHookCommand {
             if (eventName == "sessionStart" && !isSubagentChild) {
                 // Safe extract: workspace_roots[0] may be absent or a non-string; GetValue<string>
                 // would throw and (via the outer catch) drop the whole sessionStart hook.
-                string? workspaceRoot = null;
                 if (node["workspace_roots"] is JsonArray roots && roots.Count > 0
                  && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
                     workspaceRoot = wr;
@@ -391,10 +396,14 @@ public static class CursorHookCommand {
                     budget: BudgetExpired, ct);
             }
 
-            // AI-1461 Task 3 wires the real memory orchestrator in here for a top-level
-            // (isSubagentChild already diverted above) sessionStart; every other event still
-            // returns null (write nothing), unchanged.
-            return EmptyOrNull();
+            // AI-1461 §3–§6: the memory index runs strictly AFTER all of the above
+            // recording-critical work, on whatever budget is left over, and only for a
+            // top-level (isSubagentChild already diverted above at line ~309) sessionStart.
+            if (eventName != "sessionStart") return null;
+            var fragment = await RunMemoryOrchestrationAsync(
+                client, baseUrl, sessionId, workspaceRoot, sw, budgetTotal, ct,
+                memoryClientFactory, memoryStoreFactory);
+            return SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Cursor, fragment);
         } catch {
             // Fail-open per design: any exception (budget cancellation,
             // transcript-file IO race, JSON quirk we missed) must never crash Cursor's agent
@@ -402,6 +411,62 @@ public static class CursorHookCommand {
             // parse), so fall back to the published kind — the same signal the outer deadline
             // branch reads.
             return kindSignal.Kind == "sessionStart" ? SessionStartMemoryOutputAdapters.Render(SessionStartHarness.Cursor, null) : null;
+        }
+    }
+
+    /// <summary>
+    /// AI-1461 §3–§6: fetches the shared SessionStart memory index for a top-level
+    /// (non-child — <paramref name="sw"/>'s caller only reaches this once
+    /// <c>isSubagentChild</c> has already diverted) Cursor <c>sessionStart</c>, mirroring
+    /// <c>ClaudeHookCommand.StartMemoryIndexTask</c>: same shared store/provider/orchestrator,
+    /// no second auth/scope/HTTP path. Runs strictly AFTER recording-critical work — never
+    /// concurrently, never before — and only on whatever's left of <paramref name="budgetTotal"/>
+    /// (minus <see cref="HookBudget.Safety"/>); a cancelled fetch leaves the lease uncommitted
+    /// (retryable on a later hook) because the request's own <see cref="CancellationToken"/> is
+    /// bound to that SAME leftover budget via a linked <see cref="CancellationTokenSource"/> —
+    /// not a <c>WaitAsync</c> wrapper around an unbounded call.
+    /// </summary>
+    static async Task<string?> RunMemoryOrchestrationAsync(
+            HttpClient client,
+            string     baseUrl,
+            string?    sessionId,
+            string?    workspaceRoot,
+            Stopwatch  sw,
+            TimeSpan   budgetTotal,
+            CancellationToken dispatcherCt,
+            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory,
+            Func<SessionStartMemoryLeaseStore>?               memoryStoreFactory
+        ) {
+        if (sessionId is null) return null;
+
+        var memBudget = budgetTotal - sw.Elapsed - HookBudget.Safety;
+        if (memBudget <= TimeSpan.Zero) return null;
+
+        // Cursor never reads AppConfig anywhere else today — this is the one, new call site
+        // (mirrors ClaudeHookCommand's own `AppConfig.ResolvedProfile?.Profile?.DisableMemoryIndex
+        // is true` read).
+        var disabled = AppConfig.ResolvedProfile?.Profile?.DisableMemoryIndex is true;
+
+        try {
+            using var memCts = CancellationTokenSource.CreateLinkedTokenSource(dispatcherCt);
+            memCts.CancelAfter(memBudget);
+
+            var store = memoryStoreFactory?.Invoke() ?? new SessionStartMemoryLeaseStore();
+            var provider = new SessionStartMemoryContextProvider(
+                new SessionStartMemoryScopeResolver(),
+                memoryClientFactory ?? ((_, _) => Task.FromResult(client)),
+                disposeClients: memoryClientFactory is not null);
+
+            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+                // ClassificationAuthoritative is hardcoded true (not merely `!isSubagentChild`):
+                // this method is only ever reached from the top-level, non-child success path —
+                // a linked child returns {} before any orchestrator work, per §4/§5.
+                new SessionMemoryLifecycle(SessionStartHarness.Cursor, sessionId, LifecycleInstanceId: null,
+                    IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
+                    CallbackMayRepeat: false),
+                new SessionStartMemoryContextRequest(baseUrl, workspaceRoot, disabled, memBudget, memCts.Token));
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+            return null;
         }
     }
 

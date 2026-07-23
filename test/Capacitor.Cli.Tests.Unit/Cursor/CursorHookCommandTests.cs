@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.SessionStartMemory;
 
@@ -495,6 +496,183 @@ public class CursorHookCommandTests {
         }
     }
 
+    // AI-1461 Task 3: the shared memory orchestrator wired in for a top-level (non-child)
+    // sessionStart — fragment, lifecycle, budget, opt-out, and workspace-root behavior.
+
+    [Test, NotInParallel]
+    public async Task Ready_fragment_emitted() {
+        using var fx = new Fixture();
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+        var sid = Guid.NewGuid().ToString("N");
+
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+            await Assert.That(exit).IsEqualTo(0);
+
+            var stdout = stdoutWriter.ToString();
+            await Assert.That(stdout).StartsWith("""{"additional_context":""");
+            await Assert.That(stdout).EndsWith("\"}\n");
+            var node = JsonNode.Parse(stdout)!;
+            var fragment = node["additional_context"]!.GetValue<string>();
+            await Assert.That(fragment).Contains("Team memory");
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test]
+    public async Task DisableMemoryIndex_emits_empty_and_skips_provider() {
+        using var fx = new Fixture();
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+        AppConfig.SetResolvedState("http://localhost", "default", new Profile { DisableMemoryIndex = true });
+
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            var sid = Guid.NewGuid().ToString("N");
+            var exit = await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+            await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        } finally {
+            Console.SetOut(originalOut);
+            AppConfig.SetResolvedState("http://localhost", "default", new Profile());
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task NoBudget_skips_provider() {
+        using var fx = new Fixture();
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+        var sid = Guid.NewGuid().ToString("N");
+
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            // 500ms total is comfortably below HookBudget.Safety (1.5s), so
+            // memBudget = budgetTotal - elapsed - Safety is guaranteed negative regardless
+            // of how fast recording actually completes — no artificial per-POST delay needed.
+            var exit = await fx.HandleAsync(
+                $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""",
+                budgetTotal: TimeSpan.FromMilliseconds(500));
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+            await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task OncePerConversation() {
+        using var fx = new Fixture();
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+        var sid = Guid.NewGuid().ToString("N");
+        var payload = $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""";
+
+        var originalOut = Console.Out;
+        var first = new StringWriter();
+        var second = new StringWriter();
+        try {
+            Console.SetOut(first);
+            var exit1 = await fx.HandleAsync(payload);
+            await Assert.That(exit1).IsEqualTo(0);
+            await Assert.That(first.ToString()).Contains("additional_context");
+
+            Console.SetOut(second);
+            var exit2 = await fx.HandleAsync(payload);
+            await Assert.That(exit2).IsEqualTo(0);
+            await Assert.That(second.ToString()).IsEqualTo("{}\n");
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task AbsentWorkspaceRoot_calls_provider_with_null_cwd() {
+        var originalCwd = Environment.CurrentDirectory;
+        var nonRepoDir = Directory.CreateTempSubdirectory("kcap-cursor-memory-cwd-").FullName;
+        try {
+            Environment.CurrentDirectory = nonRepoDir;
+            using var fx = new Fixture();
+            fx.MemoryIndexBody = "[]";
+            var sid = Guid.NewGuid().ToString("N");
+
+            // No workspace_roots field at all.
+            var exit = await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+
+            await Assert.That(exit).IsEqualTo(0);
+            // Absent workspace_roots must still reach the provider (non-repo user/team/org
+            // memories) — NOT an early-return/auto-{} shortcut.
+            await Assert.That(fx.MemoryIndexRequested).IsTrue();
+            // With no discoverable repo (a plain non-git temp dir standing in for the
+            // scope resolver's Directory.GetCurrentDirectory() fallback when Cwd is null),
+            // the query string carries no repo scope.
+            await Assert.That(fx.MemoryIndexRequestUri!.Query).DoesNotContain("repo=");
+        } finally {
+            Environment.CurrentDirectory = originalCwd;
+            try { Directory.Delete(nonRepoDir, recursive: true); } catch { }
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task NonGuidSessionId_emits_empty() {
+        using var fx = new Fixture();
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"not-a-guid"}""");
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task CancelledFetch_leaves_lease_uncommitted() {
+        using var fx = new Fixture();
+        var sid = Guid.NewGuid().ToString("N");
+        var payload = $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""";
+        var clock = new ManualTimeProvider();
+        Func<SessionStartMemoryLeaseStore> storeFactory = () => new SessionStartMemoryLeaseStore(fx.MemoryStoreRoot, clock);
+
+        // A memory-index client whose GET never completes on its own — it only ever
+        // resolves via the caller's cancellation, letting the provider's own
+        // linked/budget-bound CancellationTokenSource be what ends the fetch.
+        using var neverRespondingClient = new HttpClient(new CancelAwareHandler());
+
+        var exit1 = await CursorHookCommand.HandleCore(
+            fx.Client, "http://localhost", new StringReader(payload), fx.Spool, TimeSpan.FromSeconds(2),
+            memoryClientFactory: (_, _) => Task.FromResult(neverRespondingClient),
+            memoryStoreFactory: storeFactory);
+        await Assert.That(exit1).IsEqualTo(0);
+
+        // Advance well past the 30s lease duration so the still-"leased" (never committed —
+        // the cancellation raced RetryAsync's own fencing too) record from the first attempt
+        // is superseded rather than fencing a second attempt for 30 real seconds.
+        clock.Advance(TimeSpan.FromSeconds(31));
+        fx.MemoryIndexBody = "[]";
+
+        var exit2 = await CursorHookCommand.HandleCore(
+            fx.Client, "http://localhost", new StringReader(payload), fx.Spool, TimeSpan.FromSeconds(2),
+            memoryStoreFactory: storeFactory);
+        await Assert.That(exit2).IsEqualTo(0);
+        // The index GET fires again on fx.Client — proving the first, cancelled attempt's
+        // lease was never spent as "completed".
+        await Assert.That(fx.MemoryIndexRequested).IsTrue();
+    }
+
     // AI-1461 Task 1: the fixture must be able to serve GET /api/memories/index
     // distinctly from the generic transcript-watermark GET (which stays 404) — the
     // seam later tasks rely on to fake the memory-index endpoint. No production
@@ -503,7 +681,7 @@ public class CursorHookCommandTests {
     [Test]
     public async Task memory_index_endpoint_is_routed_distinctly_from_the_watermark_GET() {
         using var fx = new Fixture();
-        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"fact"}]""";
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
 
         // Drive a sessionStart through the normal fixture path — no behavior change yet.
         var exit = await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"abc"}""");
@@ -558,6 +736,7 @@ public class CursorHookCommandTests {
         public string         MemoryIndexBody      { get; set; } = "[]";
         public HttpStatusCode MemoryIndexStatus    { get; set; } = HttpStatusCode.OK;
         public bool           MemoryIndexRequested { get; private set; }
+        public Uri?           MemoryIndexRequestUri { get; private set; }
 
         public HttpClient Client                { get; }
         public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
@@ -590,7 +769,8 @@ public class CursorHookCommandTests {
                     // AI-1461: the shared SessionStart memory-index GET is routed distinctly
                     // from the generic transcript-watermark GET below (which stays 404).
                     if (path == "/api/memories/index") {
-                        MemoryIndexRequested = true;
+                        MemoryIndexRequested  = true;
+                        MemoryIndexRequestUri = req.RequestUri;
                         return new HttpResponseMessage(MemoryIndexStatus) {
                             Content = new StringContent(MemoryIndexBody, Encoding.UTF8, "application/json")
                         };
@@ -610,18 +790,23 @@ public class CursorHookCommandTests {
             Client = new HttpClient(handler);
         }
 
-        public Task<int> HandleAsync(string stdin) =>
+        // Isolate every fixture-routed test's SessionStart memory lease store to its own
+        // temp dir (mirrors ClaudeHookCommandTests.Fixture) — otherwise a successful
+        // sessionStart with a GUID session_id would touch the real per-machine default
+        // store root. Exposed so a test needing a controllable clock (e.g. a lease that
+        // must be treated as expired without a real 30s wait) can build its own store
+        // against the SAME root with a custom TimeProvider.
+        public string MemoryStoreRoot => Path.Combine(_tmpHome, "memory");
+
+        public Task<int> HandleAsync(string stdin, TimeSpan? budgetTotal = null,
+                Func<SessionStartMemoryLeaseStore>? memoryStoreFactory = null) =>
             CursorHookCommand.HandleCore(
                 Client,
                 baseUrl: "http://localhost",
                 stdin: new StringReader(stdin),
                 spool: Spool,
-                budgetTotal: TimeSpan.FromSeconds(2),
-                // Isolate every fixture-routed test's SessionStart memory lease store to its
-                // own temp dir (mirrors ClaudeHookCommandTests.Fixture) — otherwise a
-                // successful sessionStart with a GUID session_id would touch the real
-                // per-machine default store root.
-                memoryStoreFactory: () => new SessionStartMemoryLeaseStore(Path.Combine(_tmpHome, "memory"))
+                budgetTotal: budgetTotal ?? TimeSpan.FromSeconds(2),
+                memoryStoreFactory: memoryStoreFactory ?? (() => new SessionStartMemoryLeaseStore(MemoryStoreRoot))
             );
 
         public string SentToHook(string segment) =>
@@ -647,5 +832,25 @@ public class CursorHookCommandTests {
     sealed class NeverCompletingReader : TextReader {
         public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) =>
             Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => "", TaskScheduler.Default);
+    }
+
+    // Settable clock for SessionStartMemoryLeaseStore tests — lets a test fast-forward past
+    // a 30s lease-expiry fence without a real wait. A local, test-file-scoped equivalent of
+    // the foundation suite's own private ManualTimeProvider (that one isn't shared/exported).
+    sealed class ManualTimeProvider : TimeProvider {
+        DateTimeOffset _now = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    // A GET that never resolves on its own — it only ends via the caller's own
+    // cancellation, honoured properly (unlike StubHandler, which ignores its ct). Used to
+    // prove a memory fetch cancelled at the budget deadline leaves the lease uncommitted
+    // rather than committing a spurious "completed" record.
+    sealed class CancelAwareHandler : HttpMessageHandler {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
     }
 }
