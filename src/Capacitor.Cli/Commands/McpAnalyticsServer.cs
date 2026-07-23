@@ -165,7 +165,7 @@ static class McpAnalyticsServer {
             case HttpStatusCode.Unauthorized:
                 return NotLoggedInMessage;
             case HttpStatusCode.NotFound:
-                return NotSupportedMessage; // pre-AI-1470 server without /api/analytics
+                return NotSupportedMessage; // server predating the /api/analytics endpoints
             case HttpStatusCode.RequestTimeout:
                 return "Query timed out — narrow the date range or aggregate.";
             case HttpStatusCode.BadRequest:

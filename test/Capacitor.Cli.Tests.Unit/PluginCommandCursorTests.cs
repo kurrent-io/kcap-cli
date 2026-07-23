@@ -71,7 +71,7 @@ public class PluginCommandCursorTests {
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-memory");
         // kcap-workitems is Claude Code plugin only — not auto-registered for Cursor.
         await Assert.That(servers.Select(kv => kv.Key)).DoesNotContain("kcap-workitems");
-        // kcap-analytics v1 is Claude Code + Codex only (AI-1475 widens to Cursor et al).
+        // kcap-analytics v1 is Claude Code + Codex only.
         await Assert.That(servers.Select(kv => kv.Key)).DoesNotContain("kcap-analytics");
         await Assert.That(servers["my-tool"]).IsNotNull(); // user server preserved
     }
