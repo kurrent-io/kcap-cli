@@ -126,8 +126,11 @@ static class McpAnalyticsServer {
             string     baseUrl,
             string?    cwdRepoHash
         ) {
-        var paramsNode = request["params"]?.AsObject();
-        var arguments  = paramsNode?["arguments"]?.AsObject();
+        // `as JsonObject` (not AsObject(), which throws) so a wrong-SHAPED params/arguments —
+        // e.g. an array where an object is expected — degrades to null and becomes an actionable
+        // error below, rather than an InvalidOperationException masked as a generic internal error.
+        var paramsNode = request["params"] as JsonObject;
+        var arguments  = paramsNode?["arguments"] as JsonObject;
 
         // Read params.name tolerantly: a wrong-typed value (LLM clients send them) must yield a
         // clean protocol error, not a throw that the outer catch masks as an internal error.

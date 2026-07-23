@@ -65,6 +65,23 @@ public class McpAnalyticsServerTests {
     }
 
     [Test]
+    public async Task Tool_call_with_wrong_shaped_params_returns_protocol_error_not_internal_error() {
+        // "params" as an array (wrong shape) must degrade to an actionable -32602, never the
+        // generic internal-error the outer catch produces. Malformed params returns before any
+        // HTTP call, so the client is never used.
+        using var client = new HttpClient();
+        var request = Args("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":[]}""");
+
+        var response = await McpAnalyticsServer.HandleToolCallAsync(
+            JsonValue.Create(1), request, client, "https://example.test", "abc123");
+
+        var error = JsonNode.Parse(response)!["error"];
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!["code"]!.GetValue<int>()).IsEqualTo(-32602);
+        await Assert.That(response).DoesNotContain("internal error");
+    }
+
+    [Test]
     public async Task Map_response_unwraps_schema_text_envelope() {
         var text = McpAnalyticsServer.MapResponse("get_analytics_schema", HttpStatusCode.OK,
             """{"text":"Views and columns:\n  v_an_sessions(...)","max_rows":300}""", out var isError);
