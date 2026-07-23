@@ -605,8 +605,11 @@ public class CursorHookCommandTests {
             // which would make this assert on the WRONG thing (a legitimate no-budget skip, not
             // a bug). This test is about the fragment/lifecycle wiring, not the budget math
             // (NoBudget_skips_provider owns that), so give it comfortable headroom.
+            // A real non-repo workspace root (system temp) is required now that an absent root
+            // skips injection; forward-slashed so it's valid JSON on Windows too.
+            var ws = Path.GetTempPath().Replace('\\', '/').TrimEnd('/');
             var exit = await fx.HandleAsync(
-                $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""",
+                $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}","workspace_roots":["{{ws}}"]}""",
                 budgetTotal: TimeSpan.FromSeconds(5));
             await Assert.That(exit).IsEqualTo(0);
 
@@ -691,7 +694,10 @@ public class CursorHookCommandTests {
         using var fx = new Fixture();
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
         var sid = Guid.NewGuid().ToString("N");
-        var payload = $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""";
+        // Real non-repo workspace root (system temp), forward-slashed for cross-platform JSON —
+        // an absent root now skips injection.
+        var ws = Path.GetTempPath().Replace('\\', '/').TrimEnd('/');
+        var payload = $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}","workspace_roots":["{{ws}}"]}""";
 
         var originalOut = Console.Out;
         var first = new StringWriter();
@@ -714,35 +720,62 @@ public class CursorHookCommandTests {
     }
 
     [Test, NotInParallel]
-    public async Task AbsentWorkspaceRoot_calls_provider_with_null_cwd() {
+    public async Task AbsentWorkspaceRoot_skips_provider_even_when_process_cwd_is_a_repo() {
         var originalCwd = Environment.CurrentDirectory;
-        var nonRepoDir = Directory.CreateTempSubdirectory("kcap-cursor-memory-cwd-").FullName;
+        // A real git repo WITH a remote as the process cwd: were the guard missing, the shared
+        // scope resolver's Directory.GetCurrentDirectory() fallback would derive THIS repo's scope
+        // and fetch its (unrelated) memories into the Cursor session. The guard must prevent any fetch.
+        var repoDir = MakeTempRepoWithRemote("https://github.com/example/leak-check.git");
+        var originalOut = Console.Out;
+        var stdoutWriter = new StringWriter();
         try {
-            Environment.CurrentDirectory = nonRepoDir;
+            Environment.CurrentDirectory = repoDir;
+            Console.SetOut(stdoutWriter);
             using var fx = new Fixture();
-            fx.MemoryIndexBody = "[]";
+            fx.MemoryIndexBody = "[]"; // decoy — never fetched because the guard short-circuits first
             var sid = Guid.NewGuid().ToString("N");
 
-            // No workspace_roots field at all. Generous budget — see Ready_fragment_emitted's
-            // comment on the tight ~0.5s margin at the production 2s default under heavy
-            // CI/full-suite CPU contention (this test also does real git-remote/machine-id
-            // I/O via the scope resolver, which is slower than the fully-faked-HTTP tests).
+            // No workspace_roots field at all. Generous budget (see Ready_fragment_emitted's note
+            // on the tight ~0.5s margin at the 2s default under full-suite CPU contention).
             var exit = await fx.HandleAsync(
                 $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""",
                 budgetTotal: TimeSpan.FromSeconds(5));
 
             await Assert.That(exit).IsEqualTo(0);
-            // Absent workspace_roots must still reach the provider (non-repo user/team/org
-            // memories) — NOT an early-return/auto-{} shortcut.
-            await Assert.That(fx.MemoryIndexRequested).IsTrue();
-            // With no discoverable repo (a plain non-git temp dir standing in for the
-            // scope resolver's Directory.GetCurrentDirectory() fallback when Cwd is null),
-            // the query string carries no repo scope.
-            await Assert.That(fx.MemoryIndexRequestUri!.Query).DoesNotContain("repo=");
+            // The guard means the provider is NEVER called when no authoritative workspace root is
+            // supplied — so the process cwd's repo memories can never leak — and the response is {}.
+            await Assert.That(fx.MemoryIndexRequested).IsFalse();
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo("{}\n");
         } finally {
+            Console.SetOut(originalOut);
             Environment.CurrentDirectory = originalCwd;
-            try { Directory.Delete(nonRepoDir, recursive: true); } catch { }
+            try { Directory.Delete(repoDir, recursive: true); } catch { }
         }
+    }
+
+    // Creates a throwaway git repo with a controlled origin remote so a test can put the process
+    // cwd inside a repository the scope resolver would otherwise detect.
+    static string MakeTempRepoWithRemote(string originUrl) {
+        var root = Path.Combine(Path.GetTempPath(), "kcap-cursor-memory-repo-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        RunGit(root, "init", "-q");
+        RunGit(root, "remote", "add", "origin", originUrl);
+        return root;
+    }
+
+    static void RunGit(string cwd, params string[] args) {
+        var psi = new System.Diagnostics.ProcessStartInfo("git", args) {
+            WorkingDirectory       = cwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true
+        };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = proc.StandardOutput.ReadToEndAsync();
+        var stderr = proc.StandardError.ReadToEndAsync();
+        proc.WaitForExit();
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.GetAwaiter().GetResult()}");
+        _ = stdout.GetAwaiter().GetResult();
     }
 
     [Test, NotInParallel]
@@ -766,7 +799,10 @@ public class CursorHookCommandTests {
     public async Task CancelledFetch_leaves_lease_uncommitted() {
         using var fx = new Fixture();
         var sid = Guid.NewGuid().ToString("N");
-        var payload = $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""";
+        // Real non-repo workspace root (system temp), forward-slashed for cross-platform JSON —
+        // an absent root now skips injection before the provider is ever reached.
+        var ws = Path.GetTempPath().Replace('\\', '/').TrimEnd('/');
+        var payload = $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}","workspace_roots":["{{ws}}"]}""";
         var clock = new ManualTimeProvider();
         Func<SessionStartMemoryLeaseStore> storeFactory = () => new SessionStartMemoryLeaseStore(fx.MemoryStoreRoot, clock);
 

@@ -503,6 +503,12 @@ public static class CursorHookCommand {
         ) {
         if (sessionId is null) return null;
 
+        // An absent/blank Cursor workspace root must NOT fall through to the scope resolver's
+        // Directory.GetCurrentDirectory() fallback: that would derive a repo scope from the hook
+        // PROCESS's cwd and could inject an UNRELATED repository's memories into this session.
+        // With no authoritative workspace root there is no safe scope, so skip injection entirely.
+        if (string.IsNullOrWhiteSpace(workspaceRoot)) return null;
+
         var memBudget = budgetTotal - sw.Elapsed - HookBudget.Safety;
         if (memBudget <= TimeSpan.Zero) return null;
 
