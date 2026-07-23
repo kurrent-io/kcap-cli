@@ -153,7 +153,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             throw new InvalidOperationException($"Source and target paths are the same: {source}");
         if (!Directory.Exists(source))
             throw new InvalidOperationException($"Source repo root does not exist: {source}");
-        if (execution != target &&
+        if (!string.Equals(execution, target, FileSystemPathComparison) &&
             !execution.StartsWith(target.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
                 FileSystemPathComparison))
             throw new InvalidOperationException("borrowed_snapshot_execution_path_outside_target");
@@ -253,18 +253,22 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             var info = new FileInfo(path);
             if (info.LinkTarget is not null || info.Attributes.HasFlag(FileAttributes.ReparsePoint))
                 throw new InvalidOperationException($"borrowed_snapshot_symlink_unsupported: {rel}");
-            total = checked(total + info.Length);
-            if (result.Count >= MaxSnapshotFiles || total > MaxSnapshotBytes)
+            if (result.Count >= MaxSnapshotFiles)
                 throw new InvalidOperationException("borrowed_snapshot_capacity_exceeded");
             await using var input = OpenSequentialRead(path);
+            var streamLength = input.Length;
+            total = checked(total + streamLength);
+            if (total > MaxSnapshotBytes)
+                throw new InvalidOperationException("borrowed_snapshot_capacity_exceeded");
             var prefix = new byte["version https://git-lfs.github.com/spec/v1\n"u8.Length];
             var prefixLength = await input.ReadAsync(prefix, ct);
             if (prefix.AsSpan(0, prefixLength).StartsWith("version https://git-lfs.github.com/spec/v1\n"u8))
                 throw new InvalidOperationException($"borrowed_snapshot_lfs_pointer_unsupported: {rel}");
             input.Position = 0;
             var hash = await SHA256.HashDataAsync(input, ct);
+            if (input.Length != streamLength) throw new SourceChangedException();
             UnixFileMode? mode = OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(path);
-            if (!result.TryAdd(rel, new SnapshotFile(info.Length, hash, mode)))
+            if (!result.TryAdd(rel, new SnapshotFile(streamLength, hash, mode)))
                 throw new InvalidOperationException($"borrowed_snapshot_path_collision: {rel}");
         }
         return result;

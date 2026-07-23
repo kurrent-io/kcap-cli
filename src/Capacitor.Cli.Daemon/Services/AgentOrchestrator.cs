@@ -1715,6 +1715,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return true;
         } catch (Exception ex) when (ex is not OperationCanceledException || !_shutdownCts.IsCancellationRequested) {
             LogBorrowedSnapshotRefreshFailed(ex, agent.Id);
+            // Fail closed: the disposable snapshot may be partial, so terminate this reviewer
+            // and never retry or reuse it for another round.
             agent.PendingEndReason = "borrowed_snapshot_refresh_failed";
             try { await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(10)); } catch { /* cleanup owns final reap */ }
             return false;
