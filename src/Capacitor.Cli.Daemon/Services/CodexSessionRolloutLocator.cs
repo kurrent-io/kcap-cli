@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 
@@ -15,11 +16,15 @@ namespace Capacitor.Cli.Daemon.Services;
 /// root, unlike Claude).
 ///
 /// The tree is shared across ALL of the user's Codex sessions, so candidates are filtered by
-/// CREATION time at/after spawn (a rollout still being written by an older, unrelated session
+/// creation time at/after spawn (a rollout still being written by an older, unrelated session
 /// must not pass just because its last-write time is recent) and verified by <c>payload.cwd</c>
 /// equal to the agent's cwd; among matches, the one created closest after spawn wins — not the
-/// numerically earliest creation. The decision logic is pure and unit-tested without a
-/// filesystem; only <see cref="TryLocate"/> touches disk.
+/// numerically earliest creation. That creation time is read from the immutable timestamp
+/// EMBEDDED IN THE FILENAME, not <see cref="File.GetCreationTimeUtc"/>: Linux cannot set file
+/// birth time (<c>SetCreationTime</c> is a no-op) and does not reliably expose it, so the
+/// filesystem creation time is unusable there for distinguishing rollouts — the filename stamp is
+/// Codex's own session-start time, stable and cross-platform. The decision logic is pure and
+/// unit-tested without a filesystem; only <see cref="TryLocate"/> touches disk.
 /// </summary>
 internal static class CodexSessionRolloutLocator {
     /// <summary>How many non-blank rollout lines to inspect for a <c>payload.cwd</c> before
@@ -71,7 +76,11 @@ internal static class CodexSessionRolloutLocator {
                     continue;
                 }
 
-                var creation = File.GetCreationTimeUtc(file);
+                // Read creation time from the filename stamp (immutable, cross-platform), not
+                // File.GetCreationTimeUtc — Linux can neither set nor reliably read file birth
+                // time. Fall back to the filesystem only for a name without a parseable stamp
+                // (never a real Codex rollout); a mislink there is display-only either way.
+                var creation = TryParseCreationFromFileName(file) ?? File.GetCreationTimeUtc(file);
 
                 if (!IsNewEnough(creation, spawnedAtUtc)) continue;
 
@@ -168,6 +177,31 @@ internal static class CodexSessionRolloutLocator {
     /// </summary>
     public static bool IsNewEnough(DateTime creationTimeUtc, DateTime spawnedAtUtc)
         => creationTimeUtc >= spawnedAtUtc - FileTimeSkewTolerance;
+
+    /// <summary>
+    /// Parses Codex's session-start timestamp out of the rollout FILENAME
+    /// (<c>rollout-&lt;yyyy-MM-ddTHH-mm-ss&gt;-&lt;uuid&gt;.jsonl</c>), returned as UTC. Codex writes
+    /// this stamp — and the enclosing <c>YYYY/MM/DD</c> day folder — in LOCAL time, so it is parsed
+    /// as local and converted; the daemon and Codex share a machine and clock, so this round-trips
+    /// against the daemon's UTC spawn time. The stamp is immutable and, unlike
+    /// <see cref="File.GetCreationTimeUtc"/>, cross-platform (Linux cannot set birth time and does
+    /// not reliably expose it). Returns null when the name carries no parseable stamp.
+    /// </summary>
+    internal static DateTime? TryParseCreationFromFileName(string filePath) {
+        var name = Path.GetFileNameWithoutExtension(filePath);
+
+        // rollout-2026-05-07T17-50-21-019e0322-05fc-7570-be65-75719c3ea861
+        // Drop the "rollout" prefix and the trailing 5-chunk UUID; the middle is the local stamp.
+        var parts = name.Split('-');
+        if (parts.Length < 6 || parts[0] != "rollout") return null;
+
+        var stamp = string.Join('-', parts[1..^5]); // 2026-05-07T17-50-21
+
+        return DateTime.TryParseExact(stamp, "yyyy-MM-ddTHH-mm-ss", CultureInfo.InvariantCulture,
+                   DateTimeStyles.AssumeLocal | DateTimeStyles.AdjustToUniversal, out var utc)
+            ? utc
+            : null;
+    }
 
     /// <summary>
     /// Enumerates <c>rollout-*.jsonl</c> files under <c>YYYY/MM/DD</c> day folders, pruning day

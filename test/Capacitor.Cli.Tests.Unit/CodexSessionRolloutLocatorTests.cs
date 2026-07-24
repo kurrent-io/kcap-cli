@@ -89,10 +89,16 @@ public class CodexSessionRolloutLocatorTests {
 
     // ── TryLocate over a real ~/.codex/sessions-shaped tree ──────────────
 
-    static string WriteRollout(string sessionsRoot, DateTime day, string uuid, string cwd) {
-        var dir = Path.Combine(sessionsRoot, day.ToString("yyyy"), day.ToString("MM"), day.ToString("dd"));
+    // Encodes the creation instant into the rollout FILENAME — Codex's own scheme
+    // (rollout-<yyyy-MM-ddTHH-mm-ss>-<uuid>.jsonl, local time under a local-dated day folder),
+    // which is exactly what the locator reads. NOT File.SetCreationTimeUtc: that is a no-op on
+    // Linux, so a creation time set that way collapses to "now" on the CI runner and the fixtures
+    // below could not express "older than spawn".
+    static string WriteRollout(string sessionsRoot, string uuid, string cwd, DateTime creationUtc) {
+        var local = creationUtc.ToLocalTime();
+        var dir   = Path.Combine(sessionsRoot, local.ToString("yyyy"), local.ToString("MM"), local.ToString("dd"));
         Directory.CreateDirectory(dir);
-        var file = Path.Combine(dir, $"rollout-{day:yyyy-MM-dd}T00-00-00-{uuid}.jsonl");
+        var file = Path.Combine(dir, $"rollout-{local:yyyy-MM-dd}T{local:HH-mm-ss}-{uuid}.jsonl");
         File.WriteAllText(file, Meta(cwd) + "\n");
         return file;
     }
@@ -104,7 +110,7 @@ public class CodexSessionRolloutLocatorTests {
             var spawn = DateTime.UtcNow;
             var uuid  = "019f0022-1702-7a02-a630-edbfb043add4";
             var wt    = Path.Combine(root, "worktree");
-            WriteRollout(root, DateTime.Now, uuid, wt);
+            WriteRollout(root, uuid, wt, creationUtc: spawn);
 
             var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn.AddSeconds(-1));
 
@@ -119,7 +125,7 @@ public class CodexSessionRolloutLocatorTests {
         var root = Directory.CreateTempSubdirectory("kcap-codexrollout-").FullName;
         try {
             var spawn = DateTime.UtcNow;
-            WriteRollout(root, DateTime.Now, "019f0022-1702-7a02-a630-edbfb043add4", "/some/other/cwd");
+            WriteRollout(root, "019f0022-1702-7a02-a630-edbfb043add4", "/some/other/cwd", creationUtc: spawn);
 
             var id = CodexSessionRolloutLocator.TryLocate(root, Path.Combine(root, "worktree"), spawn.AddSeconds(-1));
 
@@ -161,29 +167,26 @@ public class CodexSessionRolloutLocatorTests {
     }
 
     // ── TryLocate: creation-time eligibility + closest-after-spawn selection ─────
-
-    static string WriteRolloutAt(string sessionsRoot, string uuid, string cwd, DateTime creationUtc, DateTime lastWriteUtc) {
-        var file = WriteRollout(sessionsRoot, DateTime.Now, uuid, cwd);
-        File.SetCreationTimeUtc(file, creationUtc);
-        File.SetLastWriteTimeUtc(file, lastWriteUtc);
-        return file;
-    }
+    // Creation time is expressed via the rollout FILENAME stamp (see WriteRollout) — the locator
+    // reads that, not File.GetCreationTimeUtc, precisely because file birth time is un-settable
+    // and unreliable on Linux. Last-write time is deliberately not a factor: the locator ignores
+    // it, so an "older session still being appended to" is modeled purely by an old filename stamp.
 
     [Test]
     public async Task TryLocate_ignores_an_older_same_cwd_rollout_still_being_written() {
         // An older, unrelated rollout in the same (borrowed) cwd that a live process is still
-        // appending to (recent last-write) must NOT be mistaken for the freshly-spawned
-        // reviewer. Only the reviewer's own, genuinely newer rollout should be selected.
+        // appending to must NOT be mistaken for the freshly-spawned reviewer. Its recent writes
+        // are irrelevant (the locator never reads last-write); only its old creation stamp counts.
         var root = Directory.CreateTempSubdirectory("kcap-codexrollout-").FullName;
         try {
             var spawn = DateTime.UtcNow;
             var wt    = Path.Combine(root, "worktree");
 
             const string olderUuid = "019f0022-0000-7a02-a630-edbfb043add4";
-            WriteRolloutAt(root, olderUuid, wt, creationUtc: spawn.AddMinutes(-10), lastWriteUtc: spawn.AddSeconds(1));
+            WriteRollout(root, olderUuid, wt, creationUtc: spawn.AddMinutes(-10));
 
             const string newerUuid = "019f0022-1111-7a02-a630-edbfb043add5";
-            WriteRolloutAt(root, newerUuid, wt, creationUtc: spawn.AddSeconds(2), lastWriteUtc: spawn.AddSeconds(2));
+            WriteRollout(root, newerUuid, wt, creationUtc: spawn.AddSeconds(2));
 
             var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn);
 
@@ -196,14 +199,13 @@ public class CodexSessionRolloutLocatorTests {
     [Test]
     public async Task TryLocate_returns_null_when_only_a_pre_spawn_rollout_matches() {
         // Same shape as above minus the reviewer's own rollout: nothing eligible remains, so
-        // TryLocate must not fall back to the stale, still-being-written match.
+        // TryLocate must not fall back to the stale pre-spawn match.
         var root = Directory.CreateTempSubdirectory("kcap-codexrollout-").FullName;
         try {
             var spawn = DateTime.UtcNow;
             var wt    = Path.Combine(root, "worktree");
 
-            WriteRolloutAt(root, "019f0022-0000-7a02-a630-edbfb043add4", wt,
-                creationUtc: spawn.AddMinutes(-10), lastWriteUtc: spawn.AddSeconds(1));
+            WriteRollout(root, "019f0022-0000-7a02-a630-edbfb043add4", wt, creationUtc: spawn.AddMinutes(-10));
 
             var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn);
 
@@ -226,10 +228,10 @@ public class CodexSessionRolloutLocatorTests {
             var wt    = Path.Combine(root, "worktree");
 
             const string beforeUuid = "019f0022-2222-7a02-a630-edbfb043add6";
-            WriteRolloutAt(root, beforeUuid, wt, creationUtc: spawn.AddSeconds(-3), lastWriteUtc: spawn.AddSeconds(-3));
+            WriteRollout(root, beforeUuid, wt, creationUtc: spawn.AddSeconds(-3));
 
             const string afterUuid = "019f0022-3333-7a02-a630-edbfb043add7";
-            WriteRolloutAt(root, afterUuid, wt, creationUtc: spawn.AddSeconds(2), lastWriteUtc: spawn.AddSeconds(2));
+            WriteRollout(root, afterUuid, wt, creationUtc: spawn.AddSeconds(2));
 
             var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn);
 
