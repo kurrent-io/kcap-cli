@@ -34,7 +34,7 @@ public partial class AgentOrchestratorVendorTests {
 
         var agent = new AgentInstance(
             "agent-paste", null, "", null, "/tmp", "codex",
-            new PtyHostedAgentRuntime("codex", pty), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource());
+            new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource());
         orch.RegisterAgentForTest(agent);
 
         await orch.HandleSendInputForTest(new SendInputCommand("agent-paste", message, null));

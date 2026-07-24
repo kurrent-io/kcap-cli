@@ -34,14 +34,13 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task SendUserInput_wraps_text_in_a_bracketed_paste_then_carriage_return() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: true);
 
         await runtime.SendUserInputAsync("hello world");
 
-        // the text is delivered as one bracketed-paste block (ESC[200~ … ESC[201~) so the
-        // CLI's TUI treats it as a single paste, then submitted with the escalating
-        // carriage-return schedule (one CR per SubmitCarriageReturnSchedule step) so at least
-        // one CR lands as a distinct keypress after the paste is ingested (GitHub #349).
+        // Approvals disabled → one bracketed-paste block then the CR spray (one CR per
+        // SubmitCarriageReturnSchedule step) so at least one lands past codex's Enter-suppression
+        // window (GitHub #349).
         var expectedCrs = PtyHostedAgentRuntime.SubmitCarriageReturnSchedule.Length;
         await Assert.That(pty.StringWrites.Count).IsEqualTo(1 + expectedCrs);
         await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello world\x1b[201~");
@@ -51,12 +50,12 @@ public class PtyHostedAgentRuntimeTests {
     [Test]
     public async Task RequestGracefulStop_writes_exit_then_carriage_return() {
         var pty     = new RecordingPty();
-        var runtime = new PtyHostedAgentRuntime("claude", pty);
+        var runtime = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: true);
 
         await runtime.RequestGracefulStopAsync();
 
-        // "/exit" is submitted with the same escalating carriage-return schedule as user input
-        // (a single CR failed to submit it — the SIGTERM-fallback half of GitHub #349).
+        // "/exit" submits via the same CR spray (a single CR failed to submit it — the
+        // SIGTERM-fallback half of GitHub #349).
         var expectedCrs = PtyHostedAgentRuntime.SubmitCarriageReturnSchedule.Length;
         await Assert.That(pty.StringWrites.Count).IsEqualTo(1 + expectedCrs);
         await Assert.That(pty.StringWrites[0]).IsEqualTo("/exit");
@@ -125,7 +124,7 @@ public class PtyHostedAgentRuntimeTests {
         // The ~2.4s submit schedule can outlive the reviewer: HasExited becomes true right after
         // the paste write (before any CR) → the guard must short-circuit, sending zero CRs.
         var pty     = new ClosablePty(exitedAfter: writes => writes >= 1);
-        var runtime = new PtyHostedAgentRuntime("codex", pty);
+        var runtime = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true);
 
         await runtime.SendUserInputAsync("hi");
 
@@ -139,12 +138,26 @@ public class PtyHostedAgentRuntimeTests {
         // the CR write throws a pipe-closed IOException. SendUserInputAsync must NOT propagate it
         // (a benign post-exit write) and must send no further CRs (GitHub #349, Qodo finding #2).
         var pty     = new ClosablePty(throwOnCrIndex: 0);
-        var runtime = new PtyHostedAgentRuntime("codex", pty);
+        var runtime = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: true);
 
         await runtime.SendUserInputAsync("hi");   // must complete without throwing
 
         await Assert.That(pty.Writes.Count).IsEqualTo(2);                   // paste + the CR that threw
         await Assert.That(pty.Writes[1]).IsEqualTo("\r");
+    }
+
+    [Test]
+    public async Task SendUserInput_sends_a_single_CR_when_approvals_are_enabled() {
+        // Interactive session (approvals enabled → a prompt is possible): submit with ONE CR so a
+        // stray Enter can't accept a live approval dialog — never the multi-CR spray (Qodo review).
+        var pty     = new RecordingPty();
+        var runtime = new PtyHostedAgentRuntime("codex", pty, approvalsDisabled: false);
+
+        await runtime.SendUserInputAsync("hello");
+
+        await Assert.That(pty.StringWrites.Count).IsEqualTo(2);   // paste + exactly one CR
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello\x1b[201~");
+        await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 
     // Fake PTY that can report HasExited as a function of writes-so-far, and/or throw a

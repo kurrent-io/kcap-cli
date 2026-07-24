@@ -107,7 +107,9 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         }
 
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty);
+        // Gate the multi-CR submit spray on whether this launch turned off approval prompts — the
+        // launcher is the authority (it set the flags). See PtyHostedAgentRuntime.SubmitAsync.
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, launcher.DisablesApprovalPrompts(launcherCtx));
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }

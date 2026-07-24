@@ -35,6 +35,16 @@ internal interface IHostedAgentLauncher {
     /// </summary>
     bool SupportsUnattended { get; }
 
+    /// <summary>
+    /// Whether this launch turns off interactive approval/permission prompts (codex
+    /// <c>--ask-for-approval never</c>, claude <c>--permission-mode bypassPermissions</c>) — i.e.
+    /// there is no dialog an Enter keypress could accept. The PTY runtime uses this to pick its
+    /// submit strategy: the multi-CR spray (GitHub #349) is only safe when true; otherwise a single
+    /// CR is sent so a stray Enter can't answer a live prompt. Must mirror the approval/permission
+    /// flags this launcher's <see cref="BuildArgs"/> actually sets. Default false (assume prompts).
+    /// </summary>
+    bool DisablesApprovalPrompts(LauncherContext ctx) => false;
+
     /// <summary>Whether the launcher has a certified read-only borrowed-checkout review mode.</summary>
     bool SupportsBorrowedReviewFlow => false;
 
