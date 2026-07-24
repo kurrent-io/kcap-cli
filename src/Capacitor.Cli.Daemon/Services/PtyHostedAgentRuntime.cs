@@ -10,16 +10,20 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IHostedAgentRuntime {
     /// <summary>
-    /// Escalating "submit" schedule: the delay (relative to the previous write) before each of a
-    /// series of carriage returns sent after a message/command. A SINGLE CR ~50ms after a
-    /// bracketed paste is unreliably folded into paste-finalization instead of submitting the
-    /// composer — codex leaves the message unsent every time, claude intermittently (GitHub #349).
-    /// The reviewer submits reliably only when a CR arrives as a distinct keystroke AFTER it has
-    /// finished ingesting the paste, and that ingest time varies (a longer single delay does not
-    /// fix it — the CR must land as its own input event), so we send several CRs spread over an
-    /// escalating window; once the composer has submitted, every further CR is a harmless
-    /// empty-composer no-op. Validated against real codex 0.144 and claude 2.1.218 on Windows
-    /// ConPTY (3/3 each with this schedule; the old single 50ms CR was 0/2 and 1/3 respectively).
+    /// "Submit" schedule: the delay (relative to the previous write) before each of several
+    /// carriage returns sent after a pasted message / a "/exit" command. codex's TUI suppresses
+    /// Enter-as-submit for a fixed window right after it ingests a paste, treating a CR in that
+    /// window as a literal newline rather than a submit (codex's <c>PASTE_ENTER_SUPPRESS_WINDOW</c>
+    /// = 120ms; it is timer-driven and outlives the paste's own flush). A single CR ~50ms behind the
+    /// paste lands inside that window and is swallowed, so the message stays unsent (GitHub #349;
+    /// codex fails deterministically, claude — a different runtime — intermittently). A CR DOES
+    /// submit once it arrives past the window, but the daemon can't know when the reviewer finished
+    /// ingesting, so it sends several CRs on an escalating schedule; the later ones land comfortably
+    /// past the window regardless of ingest jitter. Once the composer submits, each further CR is a
+    /// no-op ONLY in the review launch config (--ask-for-approval never / bypassPermissions — no
+    /// prompt is present for a stray Enter to accept); this schedule is not safe to reuse where an
+    /// Enter could confirm a dialog. Validated against real codex 0.144 and claude 2.1.218 on
+    /// Windows ConPTY (single 50ms CR: codex 0/2, claude 1/3; this schedule: 3/3 each).
     /// </summary>
     internal static readonly TimeSpan[] SubmitCarriageReturnSchedule = [
         TimeSpan.FromMilliseconds(120),
@@ -39,11 +43,11 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
 
     /// <summary>
     /// Delivers <paramref name="text"/> as a bracketed paste (ESC[200~ … ESC[201~) so the agent's
-    /// TUI treats it as one pasted block, then submits it with the escalating carriage-return
-    /// schedule (see <see cref="SubmitCarriageReturnSchedule"/>). Without the paste markers a
-    /// large multi-line message is mis-handled; without the multi-CR submit the message is left
-    /// unsent in the composer (GitHub #349 — the single CR is folded into paste-finalization).
-    /// Both hosted CLIs enable bracketed-paste mode, so the markers are consumed as paste
+    /// TUI treats it as one pasted block, then submits it with the carriage-return schedule (see
+    /// <see cref="SubmitCarriageReturnSchedule"/>). Without the paste markers a large multi-line
+    /// message is mis-handled; without the multi-CR submit the message is left unsent in the
+    /// composer (GitHub #349 — a single CR lands inside the reviewer's post-paste Enter-suppression
+    /// window). Both hosted CLIs enable bracketed-paste mode, so the markers are consumed as paste
     /// delimiters (not echoed).
     /// </summary>
     public async Task SendUserInputAsync(string text) {
@@ -67,16 +71,29 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
     }
 
     /// <summary>
-    /// Submits the current composer by sending carriage returns on the escalating
-    /// <see cref="SubmitCarriageReturnSchedule"/> — see its remarks for why a single CR is
-    /// unreliable and why the extra CRs are safe (empty-composer no-ops once submitted). Shared by
-    /// <see cref="SendUserInputAsync"/> (a pasted message) and <see cref="RequestGracefulStopAsync"/>
-    /// (the "/exit" command), both of which otherwise stall unsubmitted for codex/claude.
+    /// Submits the current composer by sending carriage returns on the
+    /// <see cref="SubmitCarriageReturnSchedule"/> — see its remarks for why one CR is unreliable.
+    /// Shared by <see cref="SendUserInputAsync"/> (a pasted message) and
+    /// <see cref="RequestGracefulStopAsync"/> (the "/exit" command), both of which otherwise stall
+    /// unsubmitted for codex/claude. Because the schedule spans ~2.4s, the reviewer can exit
+    /// mid-way (a "/exit" that took effect, or any exit) and close its PTY input pipe; a later CR
+    /// would then write into a closed pipe. <see cref="Pty.IPtyProcess.WriteAsync(string)"/> does
+    /// not guard that, and the throw would surface to the caller (e.g. as a spurious graceful-exit
+    /// failure), so stop once the process has exited and treat a mid-write pipe-closure as benign.
     /// </summary>
     async Task SubmitAsync() {
         foreach (var delay in SubmitCarriageReturnSchedule) {
+            if (pty.HasExited) return; // reviewer already gone — nothing to submit into
             await Task.Delay(delay);
-            await pty.WriteAsync("\r");
+            if (pty.HasExited) return;
+            try {
+                await pty.WriteAsync("\r");
+            } catch (Exception ex) when (ex is IOException or ObjectDisposedException) {
+                // The reviewer exited between the HasExited check and this write and its input pipe
+                // is closing (HasExited may not have flipped yet). A CR into a closed pipe is benign
+                // here — the composer we were submitting into is gone — so stop, don't propagate.
+                return;
+            }
         }
     }
 
