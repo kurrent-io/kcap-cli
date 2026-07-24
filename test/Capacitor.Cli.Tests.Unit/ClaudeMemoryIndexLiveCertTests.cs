@@ -269,8 +269,13 @@ public class ClaudeMemoryIndexLiveCertTests {
         }
     }
 
-    static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
-            string fileName, IReadOnlyList<string> args, string? workingDirectory) {
+    /// <summary>Test-only seam: notified with the PID of every process this method spawns, so the
+    /// orphan-cleanup test below can confirm a timed-out child is actually gone afterward. Never
+    /// set by production code paths.</summary>
+    internal static Action<int>? OnProcessStarted;
+
+    internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
+            string fileName, IReadOnlyList<string> args, string? workingDirectory, TimeSpan? timeout = null) {
         var psi = new ProcessStartInfo(fileName) {
             UseShellExecute        = false,
             RedirectStandardOutput = true,
@@ -281,11 +286,21 @@ public class ClaudeMemoryIndexLiveCertTests {
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start '{fileName}'.");
-        using var timeoutCts = new CancellationTokenSource(ProcessTimeout);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
-        await process.WaitForExitAsync(timeoutCts.Token);
-        return (process.ExitCode, await stdoutTask, await stderrTask);
+        OnProcessStarted?.Invoke(process.Id);
+
+        using var timeoutCts = new CancellationTokenSource(timeout ?? ProcessTimeout);
+        try {
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
+            return (process.ExitCode, await stdoutTask, await stderrTask);
+        } finally {
+            // On normal completion the process has already exited; on a timeout cancellation (or
+            // any other exception mid-read) it may still be running — kill the whole tree so a
+            // hung `claude`/`kcap` child is never left orphaned. Best-effort: it may already have
+            // exited by the time we check.
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* already exited */ }
+        }
     }
 }
 
@@ -337,5 +352,51 @@ public class ClaudeMemoryIndexLiveCertParsingTests {
         var stdout = "{\"active_profile\":\"default\"}\r\n\r\nPath: C:\\Users\\me\\config.json\r\n";
         var result = ClaudeMemoryIndexLiveCertTests.ExtractLeadingJsonBlock(stdout);
         await Assert.That(result).IsEqualTo("{\"active_profile\":\"default\"}");
+    }
+}
+
+/// <summary>
+/// Ungated, CI-safe coverage for <see cref="ClaudeMemoryIndexLiveCertTests.RunProcessAsync"/>'s
+/// timeout-cleanup path — the other piece of the live-cert scaffold that doesn't need a live
+/// `claude`/`kcap` process to exercise.
+/// </summary>
+public class ClaudeMemoryIndexLiveCertProcessTests {
+    [Test]
+    public async Task A_timed_out_process_is_killed_rather_than_left_running() {
+        // A process that vastly outlives the tiny timeout below, spawned the same cross-platform
+        // way as Daemon.DummyProcess.StartSleep (ping's ~1s cadence needs no stdin, unlike
+        // `timeout /t`, so it reliably stays alive on a headless CI runner).
+        var (fileName, args) = OperatingSystem.IsWindows()
+            ? ("cmd.exe", (IReadOnlyList<string>) ["/c", "ping", "-n", "120", "127.0.0.1"])
+            : ("sleep", (IReadOnlyList<string>) ["120"]);
+
+        int? pid = null;
+        ClaudeMemoryIndexLiveCertTests.OnProcessStarted = p => pid = p;
+        try {
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                ClaudeMemoryIndexLiveCertTests.RunProcessAsync(
+                    fileName, args, workingDirectory: null, TimeSpan.FromMilliseconds(200)));
+        } finally {
+            ClaudeMemoryIndexLiveCertTests.OnProcessStarted = null;
+        }
+
+        await Assert.That(pid).IsNotNull();
+
+        // Confirm the child is actually gone (not merely that our await unblocked) — a brief
+        // grace window covers the OS finishing the teardown after the kill signal.
+        var deadline    = DateTime.UtcNow.AddSeconds(5);
+        var stillAlive  = true;
+        while (DateTime.UtcNow < deadline) {
+            try {
+                using var proc = System.Diagnostics.Process.GetProcessById(pid!.Value);
+                if (proc.HasExited) { stillAlive = false; break; }
+            } catch (ArgumentException) {
+                stillAlive = false; // no such process — already reaped
+                break;
+            }
+            await Task.Delay(50);
+        }
+
+        await Assert.That(stillAlive).IsFalse();
     }
 }
