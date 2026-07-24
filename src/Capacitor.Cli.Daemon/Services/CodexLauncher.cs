@@ -19,6 +19,14 @@ internal sealed partial class CodexLauncher(
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
 
+    /// <summary>
+    /// Enumerates the user-config MCP server names a review-flow reviewer would otherwise
+    /// inherit. Default reads <c>~/.codex/config.toml</c> (CODEX_HOME honoured); injectable so
+    /// <see cref="BuildArgs"/> stays deterministic in unit tests.
+    /// </summary>
+    internal Func<IReadOnlyList<string>> ReadInheritedMcpServerNames { get; init; } =
+        static () => CodexConfigToml.ReadMcpServerNames();
+
     static readonly string[] CriticalHookEvents = ["SessionStart", "Stop", "PermissionRequest"];
 
     public void Prepare(LauncherContext ctx) {
@@ -89,15 +97,22 @@ internal sealed partial class CodexLauncher(
         };
 
         // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result, which can
-        // only submit a result — never start a flow. Clear-then-whitelist, in this order:
-        // the bare `mcp_servers={}` FIRST replaces the entire [mcp_servers] table from
-        // ~/.codex/config.toml; the dotted overrides then insert into the now-empty table.
-        // Dotted overrides alone MERGE into the user's table and would re-expose whatever MCP
-        // servers the user has registered (including a hand-registered kcap-flows with
-        // start_review_flow — the recursion guard would silently vanish).
+        // only submit a result — never start a flow.
+        //
+        // Codex 0.144.3 has NO analog of Claude's `--strict-mcp-config` (an authoritative,
+        // ignores-user-config MCP set), and the previous `-c mcp_servers={}` "clear" is a
+        // NO-OP: a `-c` dotted/table override DEEP-MERGES into the loaded ~/.codex/config.toml,
+        // so an empty table removes nothing (verified with `codex mcp list`). Left as-is, a
+        // reviewer inherits EVERY user MCP server — including a hand-registered kcap-flows with
+        // start_review_flow — and the recursion guard silently vanishes.
+        //
+        // Real isolation instead: disable every server the reviewer would inherit via a
+        // per-server `-c mcp_servers.<name>.enabled=false` (a genuine, honoured Codex config
+        // field — a disabled server is not started), THEN whitelist exactly the injected
+        // kcap-flow-result server (+ any allowlisted, non-flow-starting server). The disable
+        // pass skips the names we whitelist so we never disable a server we mean to enable.
         if (ctx.IsReviewFlow) {
-            args.Add("-c");
-            args.Add("mcp_servers={}");
+            DisableInheritedMcpServers(args, ctx);
             AddFlowResultServer(args, ctx);
             AddAllowlistServers(args, ctx);
         }
@@ -120,6 +135,55 @@ internal sealed partial class CodexLauncher(
         }
 
         return new([.. args], McpConfigPath: null);
+    }
+
+    /// <summary>
+    /// Real MCP isolation for a review-flow reviewer: emits a per-server
+    /// <c>-c mcp_servers.&lt;name&gt;.enabled=false</c> for every server the reviewer would
+    /// otherwise inherit from <c>~/.codex/config.toml</c>, so only the servers we explicitly
+    /// whitelist afterwards actually load. Skips any name we are about to whitelist (so the
+    /// flow-result / allowlist servers stay enabled) and any name that cannot be expressed as a
+    /// Codex <c>-c</c> dotted key — a name containing <c>.</c> would be mis-split by Codex's key
+    /// parser (verified: it errors), so such a name is logged and left (realistic kcap-flows /
+    /// node_repl / computer-use names have no dots).
+    /// </summary>
+    void DisableInheritedMcpServers(List<string> args, LauncherContext ctx) {
+        var whitelisted = WhitelistedServerNames(ctx);
+
+        foreach (var name in ReadInheritedMcpServerNames()) {
+            if (string.IsNullOrEmpty(name)) continue;
+            if (whitelisted.Contains(name)) continue;
+
+            if (name.Contains('.')) {
+                LogInheritedServerUndisableable(name, ctx.AgentId);
+                continue;
+            }
+
+            args.Add("-c");
+            args.Add($"mcp_servers.{name}.enabled=false");
+        }
+    }
+
+    /// <summary>The MCP server names <see cref="AddFlowResultServer"/> +
+    /// <see cref="AddAllowlistServers"/> will enable — the disable pass must never disable one of
+    /// these. Empty when the daemon has no server URL / kcap path (nothing is whitelisted, so the
+    /// disable pass strips everything — the recursion-safe default).</summary>
+    HashSet<string> WhitelistedServerNames(LauncherContext ctx) {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return set;
+
+        set.Add("kcap-flow-result");
+
+        foreach (var name in ctx.McpAllowlist ?? []) {
+            var descriptor = KcapMcpRegistry.Resolve(name);
+
+            if (descriptor is null || descriptor.StartsFlows) continue;
+
+            set.Add(descriptor.Id);
+        }
+
+        return set;
     }
 
     /// <summary>Registers the reviewer-side result-submission server. Skipped (zero
@@ -314,4 +378,7 @@ internal sealed partial class CodexLauncher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP allowlist entry '{Name}' can start flows — stripped (agent {AgentId})")]
     partial void LogAllowlistEntryStripped(string name, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Inherited MCP server '{Name}' has a dotted name and cannot be disabled via a Codex -c override — it stays available to reviewer agent {AgentId}")]
+    partial void LogInheritedServerUndisableable(string name, string agentId);
 }

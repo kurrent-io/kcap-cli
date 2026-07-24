@@ -294,6 +294,36 @@ public static class CodexConfigToml {
     }
 
     /// <summary>
+    /// Reads the top-level <c>[mcp_servers]</c> table keys from <c>~/.codex/config.toml</c>
+    /// (or <paramref name="configPath"/>), honouring <c>CODEX_HOME</c> via
+    /// <see cref="CodexPaths.Home"/>. These are the MCP servers a spawned Codex session would
+    /// otherwise inherit — a review-flow reviewer disables each one so only the explicitly
+    /// injected servers load (Codex 0.144.3 has no <c>--strict-mcp-config</c> analog, and a
+    /// bare <c>-c mcp_servers={}</c> is a no-op because <c>-c</c> overrides deep-merge). Returns
+    /// an empty, ordinal-sorted list when the file is missing, unreadable, or has no
+    /// <c>[mcp_servers]</c> table. Read-only; never throws.
+    /// </summary>
+    public static IReadOnlyList<string> ReadMcpServerNames(string? configPath = null) {
+        var path = configPath ?? DefaultConfigPath;
+
+        if (!File.Exists(path)) return [];
+
+        try {
+            var root = TomlSerializer.Deserialize(File.ReadAllText(path), _tomlTypeInfo.TableInfo);
+
+            if (root is null || !root.TryGetValue("mcp_servers", out var v) || v is not TomlTable servers)
+                return [];
+
+            var names = servers.Keys.ToList();
+            names.Sort(StringComparer.Ordinal);
+
+            return names;
+        } catch {
+            return [];
+        }
+    }
+
+    /// <summary>
     /// Builds the Codex proxy allowlist from a set of Capacitor server URLs (the
     /// active one plus every configured profile). Any host under <c>kcap.ai</c>
     /// collapses to a single <c>**.kcap.ai</c> wildcard — it matches the apex and

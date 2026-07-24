@@ -1048,7 +1048,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             HostedRuntimeStart start;
 
             // Captured BEFORE the spawn so the transcript-based session-id fallback
-            // (DetectClaudeSessionIdAsync) can filter the shared project dir to files
+            // (DetectSessionIdAsync) can filter the shared project/rollout dir to files
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = DateTime.UtcNow;
 
@@ -1136,17 +1136,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
 
-            // Fallback session-id discovery: the primary link (the spawned Claude's
+            // Fallback session-id discovery: the primary link (the spawned harness's
             // session-start hook POSTing agent_host_id to /hooks/session-start) silently
-            // breaks when the hook can't authenticate (e.g. expired kcap token → 401),
-            // leaving the agent's web chat stuck on "Waiting for session to start..."
-            // forever while the terminal works. The daemon can discover the session id
-            // itself from the transcript file Claude writes and report it over its own
-            // authenticated connection. Claude-vendor only — other vendors have different
-            // transcript layouts. Best-effort background task, cancelled with the agent.
-            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase)) {
-                _ = DetectClaudeSessionIdAsync(agent, spawnedAtUtc);
-            }
+            // breaks when the hook can't authenticate (e.g. expired kcap token → 401) or
+            // doesn't land in time (an unattended/borrowed reviewer), leaving the agent
+            // without a session id for correlation/display. The daemon can discover the id
+            // itself from the transcript/rollout the harness writes and report it over its
+            // own authenticated connection. Vendor-dispatched — Claude reads its per-worktree
+            // project transcript, Codex reads its ~/.codex/sessions rollout; vendors without a
+            // daemon-side locator no-op (the hook stays their only source). Best-effort
+            // background task, cancelled with the agent — the server converges incarnations on
+            // daemon liveness, so a missing id never blocks a launch.
+            _ = DetectSessionIdAsync(agent, cmd.Vendor, spawnedAtUtc);
 
             // Report the resolved model so the server can display the real model the agent
             // is running (the dispatched `model` may be the "default" no-override sentinel,
@@ -1336,7 +1337,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 // Consent/trust dialogs are a PRE-SESSION concern: they render once at startup, before
                 // any session exists. Once the session is live (SessionId resolved from the transcript
-                // by DetectClaudeSessionIdAsync) the dialog phase is over — stop scanning so ordinary
+                // by DetectSessionIdAsync) the dialog phase is over — stop scanning so ordinary
                 // reviewer/tool output that merely quotes a banner phrase (e.g. a reviewer reading the
                 // detector's own source) can't latch a false wedge and kill a healthy reviewer.
                 if (dialogDetector is not null) {
@@ -1425,7 +1426,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // has already exited) — actively terminate it so it can't hold a daemon slot.
         try { await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5)); } catch (Exception ex) { LogStopError(ex, agent.Id); }
 
-        // Cancel the read loop's token so the fallback session-id poll (DetectClaudeSessionIdAsync)
+        // Cancel the read loop's token so the fallback session-id poll (DetectSessionIdAsync)
         // stops too; the loop itself exits via the `return` at the call site.
         try { await agent.ReadCts.CancelAsync(); } catch { /* best-effort */ }
     }
@@ -2227,31 +2228,52 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly TimeSpan SessionIdPollTimeout  = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// Background fallback that discovers the spawned Claude's session id from its transcript
-    /// file and reports it to the server, for when the session-start hook (the primary source
-    /// of the agent↔session link) fails — e.g. an expired kcap token means every /hooks POST
-    /// 401s, and the server would otherwise never learn the session id (its recovery path reads
-    /// an AgentRun heartbeat that only the same hook handler writes).
+    /// Vendor-dispatched, best-effort background fallback that discovers a spawned agent's
+    /// session id from the transcript/rollout its harness writes and reports it to the server,
+    /// for when the session-start hook (the primary source of the agent↔session link) fails or
+    /// doesn't land in time — e.g. an expired kcap token 401s every /hooks POST, or an
+    /// unattended/borrowed reviewer completes before the hook correlates. The server no longer
+    /// gates incarnation completion on this id (it converges on daemon liveness), so this only
+    /// resolves the id lazily for correlation/display and never blocks a launch.
     ///
-    /// Polls the Claude project dir for the agent's worktree (symlinked to the SOURCE repo's
-    /// project dir, so it's shared with the user's own sessions — see
-    /// <see cref="SessionTranscriptLocator"/> for how candidates are disambiguated by cwd).
-    /// On a match it sets <see cref="AgentInstance.SessionId"/> and best-effort reports via
-    /// AgentStatusChanged (live registry link) AND an <see cref="AgentRunHeartbeat"/> (so the
-    /// server's restart-recovery FindAgentSessionIdAsync path works too). Once SessionId is
-    /// set, the regular 30 s heartbeat loop and reconnect re-registration keep re-sending it,
-    /// so a transient report failure here self-heals. Stops when the id is known by other
-    /// means, the agent exits (ReadCts), or the daemon shuts down. Never breaks the launch.
+    /// Claude reads its per-worktree Claude project dir (symlinked to the SOURCE repo's, shared
+    /// with the user's own sessions — <see cref="SessionTranscriptLocator"/> disambiguates by
+    /// cwd). Codex reads its <c>~/.codex/sessions</c> rollout tree (shared across all the user's
+    /// Codex sessions — <see cref="CodexSessionRolloutLocator"/> disambiguates by
+    /// <c>payload.cwd</c> + spawn time). A vendor with no daemon-side locator is a no-op: the
+    /// hook stays its only session-id source.
     /// </summary>
-    async Task DetectClaudeSessionIdAsync(AgentInstance agent, DateTime spawnedAtUtc) {
-        try {
-            var projectDir = ClaudePaths.ProjectDir(agent.Worktree.Path);
-            var deadline   = DateTime.UtcNow + SessionIdPollTimeout;
+    async Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
+        // The locator scans a shared dir, so a foreign-session file is cached in ruledOut and
+        // never re-opened. A cwd is fixed, so a definitive non-match is permanent; a file with
+        // no cwd yet (still being written) is NOT cached, so the agent's own freshly-created
+        // transcript/rollout is always re-checked.
+        Func<ISet<string>, string?>? locate = vendor.ToLowerInvariant() switch {
+            "claude" => ruledOut => SessionTranscriptLocator.TryLocate(
+                ClaudePaths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "codex" => ruledOut => CodexSessionRolloutLocator.TryLocate(
+                CodexPaths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            _ => null,
+        };
 
-            // Transcripts confirmed to belong to another session (a foreign cwd) are remembered
-            // here so we don't re-open them every 2 s tick. A session's cwd never changes, so a
-            // definitive non-match is permanent; files still being written (no cwd yet) are NOT
-            // added, so the agent's own freshly-created transcript is always re-checked.
+        if (locate is null) return;
+
+        await PollForSessionIdAsync(agent, locate);
+    }
+
+    /// <summary>
+    /// Shared poll loop for <see cref="DetectSessionIdAsync"/>. Polls <paramref name="locate"/>
+    /// until it resolves a session id, the id is set by other means (hook succeeded), the agent
+    /// exits (ReadCts), the daemon shuts down, or the timeout elapses. On a match it sets
+    /// <see cref="AgentInstance.SessionId"/> and best-effort reports via AgentStatusChanged (live
+    /// registry link) AND an <see cref="AgentRunHeartbeat"/> (so the server's restart-recovery
+    /// FindAgentSessionIdAsync path works too). Once SessionId is set, the 30 s heartbeat loop and
+    /// reconnect re-registration keep re-sending it, so a transient report failure self-heals.
+    /// Never breaks the launch.
+    /// </summary>
+    async Task PollForSessionIdAsync(AgentInstance agent, Func<ISet<string>, string?> locate) {
+        try {
+            var deadline = DateTime.UtcNow + SessionIdPollTimeout;
             var ruledOut = new HashSet<string>();
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
@@ -2259,7 +2281,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             while (DateTime.UtcNow < deadline) {
                 if (agent.SessionId is not null) return; // linked by other means (hook succeeded)
 
-                if (SessionTranscriptLocator.TryLocate(projectDir, agent.Worktree.Path, spawnedAtUtc, ruledOut) is { } sessionId) {
+                if (locate(ruledOut) is { } sessionId) {
                     agent.SessionId ??= sessionId;
 
                     LogSessionIdDetected(agent.Id, sessionId);
