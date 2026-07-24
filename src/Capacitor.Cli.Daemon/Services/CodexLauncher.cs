@@ -96,21 +96,15 @@ internal sealed partial class CodexLauncher(
             ctx.IsReviewFlow ? "never" : "on-request"
         };
 
-        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result, which can
-        // only submit a result — never start a flow.
-        //
-        // Codex 0.144.3 has NO analog of Claude's `--strict-mcp-config` (an authoritative,
-        // ignores-user-config MCP set), and the previous `-c mcp_servers={}` "clear" is a
-        // NO-OP: a `-c` dotted/table override DEEP-MERGES into the loaded ~/.codex/config.toml,
-        // so an empty table removes nothing (verified with `codex mcp list`). Left as-is, a
-        // reviewer inherits EVERY user MCP server — including a hand-registered kcap-flows with
-        // start_review_flow — and the recursion guard silently vanishes.
-        //
-        // Real isolation instead: disable every server the reviewer would inherit via a
-        // per-server `-c mcp_servers.<name>.enabled=false` (a genuine, honoured Codex config
-        // field — a disabled server is not started), THEN whitelist exactly the injected
-        // kcap-flow-result server (+ any allowlisted, non-flow-starting server). The disable
-        // pass skips the names we whitelist so we never disable a server we mean to enable.
+        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result (+ any
+        // allowlisted, non-flow-starting server) — it can only submit a result, never start a
+        // flow. Codex's `-c` overrides deep-merge into ~/.codex/config.toml (no analog of
+        // Claude's `--strict-mcp-config`), so we disable every inherited server via a
+        // per-server `-c mcp_servers.<name>.enabled=false`, then force-enable exactly the
+        // whitelisted names with `enabled=true` — otherwise a reviewer inherits every user MCP
+        // server (including a hand-registered kcap-flows with start_review_flow, vanishing the
+        // recursion guard), or — if the user's own config already disabled a whitelisted name —
+        // starts without its result-submission channel.
         if (ctx.IsReviewFlow) {
             DisableInheritedMcpServers(args, ctx);
             AddFlowResultServer(args, ctx);
@@ -194,6 +188,12 @@ internal sealed partial class CodexLauncher(
 
         const string name = "kcap-flow-result";
 
+        // Force-enable: the disable pass above skips this name, but the user's OWN
+        // ~/.codex/config.toml may already have it (or never had it) set to enabled=false from
+        // a prior manual registration. `-c` deep-merges over that file, so skipping the disable
+        // is not enough on its own — an explicit enabled=true override wins regardless.
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.enabled=true");
         args.Add("-c");
         args.Add($"mcp_servers.{name}.command={TomlString(config.CapacitorPath)}");
         args.Add("-c");
@@ -231,6 +231,10 @@ internal sealed partial class CodexLauncher(
             var id       = descriptor.Id;
             var argsList = string.Join(",", descriptor.Args.Select(TomlString));
 
+            // Force-enable for the same reason as AddFlowResultServer: the user's own config
+            // may already carry this name disabled, and `-c` only deep-merges over it.
+            args.Add("-c");
+            args.Add($"mcp_servers.{id}.enabled=true");
             args.Add("-c");
             args.Add($"mcp_servers.{id}.command={TomlString(config.CapacitorPath)}");
             args.Add("-c");

@@ -4,33 +4,21 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Codex analog of <see cref="SessionTranscriptLocator"/>: discovers the session id of a
-/// freshly spawned hosted Codex reviewer by scanning <c>~/.codex/sessions</c> for the rollout
-/// file Codex writes.
+/// Codex analog of <see cref="SessionTranscriptLocator"/>: best-effort discovery of a freshly
+/// spawned hosted Codex reviewer's session id, for correlation/display only — the server
+/// converges on daemon liveness, so a miss or mislink here never blocks the launch.
 ///
-/// Why this exists: a hosted Codex agent's session id normally reaches the server only via the
-/// <c>kcap hook --codex</c> SessionStart POST (correlated by <c>KCAP_AGENT_ID</c>). When that
-/// link doesn't land in time (unattended/borrowed correlation, or an auth hiccup) the agent has
-/// no session id for correlation/display. Unlike Claude, Codex had no daemon-side fallback. The
-/// server no longer <em>gates</em> incarnation completion on this id (it converges on daemon
-/// liveness), so this is strictly best-effort — it resolves the id lazily when it can and never
-/// blocks the launch.
+/// Codex layout: each session is
+/// <c>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ISO-ts&gt;-&lt;uuid&gt;.jsonl</c>; the session id is
+/// the trailing filename UUID, parsed by <see cref="CodexPaths.ExtractSessionIdFromFileName"/>.
+/// The cwd lives in the opening <c>session_meta</c> envelope's <c>payload.cwd</c> (not the JSONL
+/// root, unlike Claude).
 ///
-/// Codex layout (verified against codex-cli 0.144.3): each session is
-/// <c>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ISO-ts&gt;-&lt;uuid&gt;.jsonl</c>. The session id is
-/// the trailing filename UUID (== the hook-reported <c>session_id</c> for a top-level CLI
-/// session), parsed + normalized by <see cref="CodexPaths.ExtractSessionIdFromFileName"/>. The
-/// cwd lives in the opening <c>session_meta</c> envelope's <c>payload.cwd</c> — NOT at the JSONL
-/// root the way Claude records it.
-///
-/// Disambiguation: the sessions tree is shared across ALL of the user's Codex sessions, so a
-/// new rollout there is not necessarily the reviewer's. Candidates are filtered by spawn time
-/// and verified by <c>payload.cwd</c> equal to the agent's cwd. When more than one rollout still
-/// matches (a rare borrowed-cwd race with the user's own concurrent session in the same repo),
-/// the earliest one created at/after spawn is chosen — the reviewer's own rollout is created
-/// immediately after the daemon spawns it.
-///
-/// The decision logic (cwd matching, spawn-time filtering) is pure and unit-tested without a
+/// The tree is shared across ALL of the user's Codex sessions, so candidates are filtered by
+/// CREATION time at/after spawn (a rollout still being written by an older, unrelated session
+/// must not pass just because its last-write time is recent) and verified by <c>payload.cwd</c>
+/// equal to the agent's cwd; among matches, the one created closest after spawn wins — not the
+/// numerically earliest creation. The decision logic is pure and unit-tested without a
 /// filesystem; only <see cref="TryLocate"/> touches disk.
 /// </summary>
 internal static class CodexSessionRolloutLocator {
@@ -71,8 +59,8 @@ internal static class CodexSessionRolloutLocator {
     public static string? TryLocate(string sessionsRoot, string cwd, DateTime spawnedAtUtc, ISet<string>? ruledOut = null) {
         if (!Directory.Exists(sessionsRoot)) return null;
 
-        string? earliestId       = null;
-        var     earliestCreation = DateTime.MaxValue;
+        string?   bestId       = null;
+        DateTime? bestCreation = null;
 
         foreach (var file in EnumerateRecentRolloutFiles(sessionsRoot, spawnedAtUtc)) {
             if (ruledOut?.Contains(file) == true) continue;
@@ -83,18 +71,20 @@ internal static class CodexSessionRolloutLocator {
                     continue;
                 }
 
-                var creation  = File.GetCreationTimeUtc(file);
-                var lastWrite = File.GetLastWriteTimeUtc(file);
+                var creation = File.GetCreationTimeUtc(file);
 
-                if (!IsNewEnough(creation, lastWrite, spawnedAtUtc)) continue;
+                if (!IsNewEnough(creation, spawnedAtUtc)) continue;
 
                 switch (MatchRollout(ReadFirstLines(file), cwd, DefaultPathComparison)) {
                     case CwdMatch.Yes:
-                        // Pick the earliest-created match: the reviewer's own rollout is created
-                        // immediately after spawn, so a user's later session in the same cwd loses.
-                        if (creation < earliestCreation) {
-                            earliestCreation = creation;
-                            earliestId       = sessionId;
+                        // Prefer the rollout created closest AFTER spawn — not the numerically
+                        // earliest creation, which could be an older, still-eligible (clock-skew
+                        // tolerance) match. A mislink here is display-only (the server converges
+                        // on daemon liveness), but correlating to the wrong session is still
+                        // worth getting right.
+                        if (bestCreation is null || IsCloserToSpawn(creation, bestCreation.Value, spawnedAtUtc)) {
+                            bestCreation = creation;
+                            bestId       = sessionId;
                         }
 
                         break;
@@ -109,7 +99,24 @@ internal static class CodexSessionRolloutLocator {
             }
         }
 
-        return earliestId;
+        return bestId;
+    }
+
+    /// <summary>True when <paramref name="candidate"/> is a better spawn-time match than
+    /// <paramref name="current"/>: a creation time at/after <paramref name="spawnedAtUtc"/>
+    /// always beats one before it (barring the small clock-skew slack already applied by
+    /// <see cref="IsNewEnough"/>, a rollout cannot causally predate its own spawn); within the
+    /// same side, the creation closest to <paramref name="spawnedAtUtc"/> wins.</summary>
+    static bool IsCloserToSpawn(DateTime candidate, DateTime current, DateTime spawnedAtUtc) {
+        var candidateAfter = candidate >= spawnedAtUtc;
+        var currentAfter   = current   >= spawnedAtUtc;
+
+        if (candidateAfter != currentAfter) return candidateAfter;
+
+        var candidateDistance = candidateAfter ? candidate - spawnedAtUtc : spawnedAtUtc - candidate;
+        var currentDistance   = currentAfter   ? current   - spawnedAtUtc : spawnedAtUtc - current;
+
+        return candidateDistance < currentDistance;
     }
 
     /// <summary>
@@ -152,15 +159,15 @@ internal static class CodexSessionRolloutLocator {
     }
 
     /// <summary>
-    /// True when the file's newest timestamp (creation or last write) is at/after the agent's
-    /// spawn time, minus <see cref="FileTimeSkewTolerance"/>. Filters out the user's own
-    /// pre-existing sessions in the shared tree.
+    /// True when the file's CREATION time is at/after the agent's spawn time, minus
+    /// <see cref="FileTimeSkewTolerance"/>. Deliberately ignores last-write time: an older,
+    /// unrelated session in the same cwd that is still being actively appended to must not pass
+    /// this filter just because it was written to recently — a rollout created before the
+    /// reviewer spawned is not this reviewer's session, regardless of ongoing writes. Filters
+    /// out the user's own pre-existing sessions in the shared tree.
     /// </summary>
-    public static bool IsNewEnough(DateTime creationTimeUtc, DateTime lastWriteTimeUtc, DateTime spawnedAtUtc) {
-        var newest = creationTimeUtc > lastWriteTimeUtc ? creationTimeUtc : lastWriteTimeUtc;
-
-        return newest >= spawnedAtUtc - FileTimeSkewTolerance;
-    }
+    public static bool IsNewEnough(DateTime creationTimeUtc, DateTime spawnedAtUtc)
+        => creationTimeUtc >= spawnedAtUtc - FileTimeSkewTolerance;
 
     /// <summary>
     /// Enumerates <c>rollout-*.jsonl</c> files under <c>YYYY/MM/DD</c> day folders, pruning day

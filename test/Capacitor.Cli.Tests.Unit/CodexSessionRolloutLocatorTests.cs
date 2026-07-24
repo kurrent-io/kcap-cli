@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -14,10 +15,14 @@ namespace Capacitor.Cli.Tests.Unit;
 public class CodexSessionRolloutLocatorTests {
     const string Cwd = "/Users/dev/repo";
 
+    // cwd is JSON-encoded via JsonSerializer (not naive quote-wrapping): a real Windows path
+    // contains single backslashes, which are invalid unescaped inside a JSON string and were
+    // silently corrupting every TryLocate fixture below on windows-latest CI (JsonNode.Parse
+    // threw, MatchRollout fell back to CwdMatch.Unknown, and TryLocate always returned null).
     static string Meta(string cwd) =>
         "{\"type\":\"session_meta\",\"payload\":{\"id\":\"019f0021-29e3-7461-a781-e2646e16e271\","
-      + "\"session_id\":\"019f0021-29e3-7461-a781-e2646e16e271\",\"cwd\":\"" + cwd
-      + "\",\"originator\":\"codex-tui\"}}";
+      + "\"session_id\":\"019f0021-29e3-7461-a781-e2646e16e271\",\"cwd\":" + JsonSerializer.Serialize(cwd)
+      + ",\"originator\":\"codex-tui\"}}";
 
     // ── cwd match / mismatch (payload.cwd, not root cwd) ─────────────────
 
@@ -74,7 +79,9 @@ public class CodexSessionRolloutLocatorTests {
 
     [Test]
     public async Task WindowsCaseInsensitive_DifferentCase_Matches() {
-        var lines = new[] { Meta(@"C:\\Users\\Dev\\Repo") };
+        // A single-backslash path — Meta() now JSON-encodes it correctly itself; no more
+        // manual pre-doubling to work around the old naive string concatenation.
+        var lines = new[] { Meta(@"C:\Users\Dev\Repo") };
 
         await Assert.That(CodexSessionRolloutLocator.MatchRollout(lines, @"c:\users\dev\repo", StringComparison.OrdinalIgnoreCase))
             .IsEqualTo(CodexSessionRolloutLocator.CwdMatch.Yes);
@@ -127,5 +134,108 @@ public class CodexSessionRolloutLocatorTests {
         var missing = Path.Combine(Path.GetTempPath(), "kcap-codexrollout-missing-" + Guid.NewGuid().ToString("N"));
 
         await Assert.That(CodexSessionRolloutLocator.TryLocate(missing, "/wt", DateTime.UtcNow)).IsNull();
+    }
+
+    // ── IsNewEnough: creation-time-only eligibility ──────────────────────
+
+    [Test]
+    public async Task IsNewEnough_creation_at_spawn_is_true() {
+        var spawn = DateTime.UtcNow;
+        await Assert.That(CodexSessionRolloutLocator.IsNewEnough(spawn, spawn)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsNewEnough_creation_well_before_spawn_is_false_even_if_recently_written() {
+        // The bug: a much-older rollout must fail eligibility on creation time alone — an
+        // ongoing write to it (last-write time) is no longer part of the equation at all.
+        var spawn    = DateTime.UtcNow;
+        var creation = spawn.AddMinutes(-10);
+
+        await Assert.That(CodexSessionRolloutLocator.IsNewEnough(creation, spawn)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsNewEnough_creation_just_within_skew_tolerance_is_true() {
+        var spawn = DateTime.UtcNow;
+        await Assert.That(CodexSessionRolloutLocator.IsNewEnough(spawn.AddSeconds(-4), spawn)).IsTrue();
+    }
+
+    // ── TryLocate: creation-time eligibility + closest-after-spawn selection ─────
+
+    static string WriteRolloutAt(string sessionsRoot, string uuid, string cwd, DateTime creationUtc, DateTime lastWriteUtc) {
+        var file = WriteRollout(sessionsRoot, DateTime.Now, uuid, cwd);
+        File.SetCreationTimeUtc(file, creationUtc);
+        File.SetLastWriteTimeUtc(file, lastWriteUtc);
+        return file;
+    }
+
+    [Test]
+    public async Task TryLocate_ignores_an_older_same_cwd_rollout_still_being_written() {
+        // An older, unrelated rollout in the same (borrowed) cwd that a live process is still
+        // appending to (recent last-write) must NOT be mistaken for the freshly-spawned
+        // reviewer. Only the reviewer's own, genuinely newer rollout should be selected.
+        var root = Directory.CreateTempSubdirectory("kcap-codexrollout-").FullName;
+        try {
+            var spawn = DateTime.UtcNow;
+            var wt    = Path.Combine(root, "worktree");
+
+            const string olderUuid = "019f0022-0000-7a02-a630-edbfb043add4";
+            WriteRolloutAt(root, olderUuid, wt, creationUtc: spawn.AddMinutes(-10), lastWriteUtc: spawn.AddSeconds(1));
+
+            const string newerUuid = "019f0022-1111-7a02-a630-edbfb043add5";
+            WriteRolloutAt(root, newerUuid, wt, creationUtc: spawn.AddSeconds(2), lastWriteUtc: spawn.AddSeconds(2));
+
+            var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn);
+
+            await Assert.That(id).IsEqualTo(newerUuid.Replace("-", ""));
+        } finally {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLocate_returns_null_when_only_a_pre_spawn_rollout_matches() {
+        // Same shape as above minus the reviewer's own rollout: nothing eligible remains, so
+        // TryLocate must not fall back to the stale, still-being-written match.
+        var root = Directory.CreateTempSubdirectory("kcap-codexrollout-").FullName;
+        try {
+            var spawn = DateTime.UtcNow;
+            var wt    = Path.Combine(root, "worktree");
+
+            WriteRolloutAt(root, "019f0022-0000-7a02-a630-edbfb043add4", wt,
+                creationUtc: spawn.AddMinutes(-10), lastWriteUtc: spawn.AddSeconds(1));
+
+            var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn);
+
+            await Assert.That(id).IsNull();
+        } finally {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryLocate_prefers_the_rollout_created_closest_after_spawn_over_an_earlier_eligible_one() {
+        // Both rollouts pass the creation-based eligibility window (one via the clock-skew
+        // slack, created just before spawn), so eligibility alone can't disambiguate them.
+        // Picking the numerically EARLIEST creation would wrongly prefer the pre-spawn one —
+        // the reviewer's own rollout is always created at/after its own spawn, so the
+        // at/after candidate must win.
+        var root = Directory.CreateTempSubdirectory("kcap-codexrollout-").FullName;
+        try {
+            var spawn = DateTime.UtcNow;
+            var wt    = Path.Combine(root, "worktree");
+
+            const string beforeUuid = "019f0022-2222-7a02-a630-edbfb043add6";
+            WriteRolloutAt(root, beforeUuid, wt, creationUtc: spawn.AddSeconds(-3), lastWriteUtc: spawn.AddSeconds(-3));
+
+            const string afterUuid = "019f0022-3333-7a02-a630-edbfb043add7";
+            WriteRolloutAt(root, afterUuid, wt, creationUtc: spawn.AddSeconds(2), lastWriteUtc: spawn.AddSeconds(2));
+
+            var id = CodexSessionRolloutLocator.TryLocate(root, wt, spawn);
+
+            await Assert.That(id).IsEqualTo(afterUuid.Replace("-", ""));
+        } finally {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

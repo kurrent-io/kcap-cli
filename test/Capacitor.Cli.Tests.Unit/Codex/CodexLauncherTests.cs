@@ -178,7 +178,10 @@ public class CodexLauncherTests {
         var enabled = args.Where(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal)
                                    && !a.Contains(".enabled=false")).ToArray();
         await Assert.That(enabled.All(a => a.StartsWith("mcp_servers.kcap-flow-result.", StringComparison.Ordinal))).IsTrue();
-        await Assert.That(enabled.Length).IsEqualTo(3);
+        await Assert.That(enabled.Length).IsEqualTo(4);
+
+        // Force-enabled regardless of anything the user's own config may say.
+        await Assert.That(args).Contains("mcp_servers.kcap-flow-result.enabled=true");
 
         var command = enabled.Single(a => a.Contains(".command="));
         await Assert.That(command).Contains("/opt/kcap");
@@ -219,6 +222,30 @@ public class CodexLauncherTests {
         await Assert.That(args).DoesNotContain("mcp_servers.kcap-flow-result.enabled=false");
         await Assert.That(args).Contains("mcp_servers.node_repl.enabled=false");
         await Assert.That(args.Any(a => a.StartsWith("mcp_servers.kcap-flow-result.command=", StringComparison.Ordinal))).IsTrue();
+
+        // Not merely "not disabled" — explicitly forced on. The user's real
+        // ~/.codex/config.toml is what `ReadInheritedMcpServerNames` is standing in for here,
+        // and it may itself already carry `kcap-flow-result` as enabled=false from a prior
+        // manual registration. Since `-c` deep-merges over that file, skipping our own disable
+        // pass isn't enough — only an explicit enabled=true override guarantees the reviewer's
+        // result-submission channel actually starts.
+        await Assert.That(args).Contains("mcp_servers.kcap-flow-result.enabled=true");
+    }
+
+    [Test]
+    public async Task Review_flow_force_enables_whitelisted_allowlist_server_even_if_inherited_as_disabled() {
+        // Same bug as the flow-result server, on the allowlist-server path: the user's config
+        // may already carry an allowlisted kcap server (e.g. kcap-sessions) as enabled=false —
+        // `-c` deep-merges over that, so it must be forced back on, not merely left alone.
+        var config = new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example" };
+        var launcher = new CodexLauncher(config, NullLogger<CodexLauncher>.Instance) {
+            ReadInheritedMcpServerNames = static () => ["kcap-sessions"]
+        };
+
+        var args = launcher.BuildArgs(NewFlowCtx(["kcap-sessions"])).Args;
+
+        await Assert.That(args).DoesNotContain("mcp_servers.kcap-sessions.enabled=false");
+        await Assert.That(args).Contains("mcp_servers.kcap-sessions.enabled=true");
     }
 
     [Test]
@@ -561,7 +588,8 @@ public class CodexLauncherTests {
         await Assert.That(dotted.Any(a => a.StartsWith("mcp_servers.kcap-flow-result.", StringComparison.Ordinal))).IsTrue();
 
         var sessionsDotted = dotted.Where(a => a.StartsWith("mcp_servers.kcap-sessions.", StringComparison.Ordinal)).ToArray();
-        await Assert.That(sessionsDotted.Length).IsEqualTo(3);
+        await Assert.That(sessionsDotted.Length).IsEqualTo(4);
+        await Assert.That(args).Contains("mcp_servers.kcap-sessions.enabled=true");
 
         var command = sessionsDotted.Single(a => a.Contains(".command="));
         await Assert.That(command).Contains("/opt/kcap");
@@ -603,6 +631,7 @@ public class CodexLauncherTests {
             "--cd", "/tmp/wt",
             "--sandbox", "workspace-write",
             "--ask-for-approval", "never",
+            "-c", "mcp_servers.kcap-flow-result.enabled=true",
             "-c", "mcp_servers.kcap-flow-result.command=\"/opt/kcap\"",
             "-c", "mcp_servers.kcap-flow-result.args=[\"mcp\",\"flow-result\"]",
             "-c", "mcp_servers.kcap-flow-result.env={KCAP_URL=\"https://t.example\",KCAP_FLOW_AGENT_ID=\"agent-xyz\"}",
