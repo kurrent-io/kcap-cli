@@ -71,9 +71,7 @@ public class ImportDisplayGridTests {
         await Assert.That(output).DoesNotContain("By source");
     }
 
-    // Pins the display consequence of the ranBackground fix: when the import ran background
-    // title/summary work, the Titles/Summaries rows must appear; when it didn't, they must not.
-    // The inverted guard used to drop these rows even when work had run.
+    // Titles/Summaries rows must appear iff background work ran (the inverted guard dropped them).
     [Test, NotInParallel]
     public async Task done_grid_renders_titles_and_summaries_rows_when_background_ran() {
         var output = CaptureNonTtyOutput(d => d.WriteDoneGrid(

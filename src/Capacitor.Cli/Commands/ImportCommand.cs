@@ -467,11 +467,9 @@ static class ImportCommand {
         );
 
     /// <summary>
-    /// True when the import scheduled background title/summary work that the Done phase must
-    /// await (and whose completion the Titles/Summaries rows report). Extracted as a named seam
-    /// so the await-guard decision is unit-testable and can't silently re-invert: the whole class
-    /// of "background tasks never awaited → SemaphoreSlim disposed mid-flight → ObjectDisposedException"
-    /// bug was a single missing negation here.
+    /// True when the import scheduled background title/summary work the Done phase must await
+    /// (and whose results the Titles/Summaries rows report). A named seam so the await-guard
+    /// decision is unit-testable and can't silently re-invert.
     /// </summary>
     internal static bool HadBackgroundWork(ConcurrentBag<Task> backgroundTasks) => !backgroundTasks.IsEmpty;
 

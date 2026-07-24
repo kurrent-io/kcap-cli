@@ -19,14 +19,13 @@ public class HttpClientExtensionsRetryTests {
             return new HttpResponseMessage(HttpStatusCode.OK); // unreachable — per-attempt CTS fires first.
         }
 
-        // Generous total budget relative to the per-attempt cap: even if a loaded CI runner
-        // stalls the scheduler during the first attempt, plenty of budget remains for a second
-        // one, so the `attempts > 1` assertion stays robust (it is itself condition-based —
-        // it counts real attempts, not elapsed time).
+        // Small per-attempt cap under a modest total: retries accrue fast, so a scheduler stall
+        // can't exhaust the budget before a second attempt — `attempts > 1` stays robust and the
+        // test still finishes in ~1.5s.
         var ex = await Assert.That(async () => await HttpClientExtensions.SendWithRetryAsync(
                     Send,
-                    totalTimeout: TimeSpan.FromMilliseconds(5_000),
-                    perAttemptTimeout: TimeSpan.FromMilliseconds(150),
+                    totalTimeout: TimeSpan.FromMilliseconds(1_500),
+                    perAttemptTimeout: TimeSpan.FromMilliseconds(50),
                     ct: CancellationToken.None
                 )
             )
@@ -59,9 +58,8 @@ public class HttpClientExtensionsRetryTests {
             .Throws<HttpRequestException>();
 
         sw.Stop();
-        // Generous upper bound: strict enforcement is ~300ms. The bound only needs to prove the
-        // total timeout — not the 30s per-attempt cap — governs the wall clock, so 5s stays far
-        // below 30s while giving heavy CI runners ample headroom for scheduling jitter.
+        // Bound only needs to prove the 300ms total — not the 30s per-attempt cap — governs the
+        // wall clock; 5s stays far below 30s with headroom for CI scheduling jitter.
         await Assert.That(sw.ElapsedMilliseconds).IsLessThan(5_000);
     }
 
