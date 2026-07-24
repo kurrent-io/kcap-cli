@@ -24,23 +24,27 @@ public static class ClaudeHookCommand {
     // send the POST; the server's StopAndDrain + the "kcap import" hint recover the rest.
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
 
-    public static Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null, long processStart = 0) {
+    public static Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null, long processStart = 0,
+            TextWriter? stdout = null) {
         var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
         spool.ReapOlderThan(TimeSpan.FromDays(30));
         var ps = processStart == 0 ? Stopwatch.GetTimestamp() : processStart;
-        return HandleWithDeps(spool, ps, baseUrl, stdin, updateCheckTask);
+        return HandleWithDeps(spool, ps, baseUrl, stdin, updateCheckTask, stdout);
     }
 
-    static Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask)
+    static Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin,
+            Task? updateCheckTask, TextWriter? stdout = null)
         => HandleWithDeps(spool, processStart, baseUrl, stdin, updateCheckTask,
             () => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl),
             async (forceRefresh, ct) => (await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-                baseUrl, ct, allowAutoRedirect: false, forceRefresh: forceRefresh)).Client);
+                baseUrl, ct, allowAutoRedirect: false, forceRefresh: forceRefresh)).Client,
+            stdout);
 
     internal static async Task<int> HandleWithDeps(
             HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask,
             Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory,
-            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null) {
+            Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
+            TextWriter? stdout = null) {
         string body;
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
@@ -87,7 +91,7 @@ public static class ClaudeHookCommand {
         var (client, authStatus) = created.Value;
         try {
             return await HandleCore(client, authStatus, spool, processStart, baseUrl, new StringReader(body),
-                updateCheckTask, memoryClientFactory);
+                updateCheckTask, memoryClientFactory, stdout: stdout);
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"[kcap] claude hook failed (fail-open): {ex.Message}");
             return 0;
@@ -178,7 +182,13 @@ public static class ClaudeHookCommand {
     internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool,
         long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null,
         Func<bool, CancellationToken, Task<HttpClient>>? memoryClientFactory = null,
-        Func<SessionStartMemoryLeaseStore>? memoryStoreFactory = null) {
+        Func<SessionStartMemoryLeaseStore>? memoryStoreFactory = null,
+        TextWriter? stdout = null) {
+        // Hook stdout (the SessionStart hookSpecificOutput envelope / systemMessage nudge) goes to the
+        // injected writer when provided, else the process Console. Injecting a writer lets tests capture
+        // it WITHOUT redirecting the process-global Console.Out — so a concurrently-running test writing
+        // to Console can't leak into the capture (the flake this fixes).
+        var writer = stdout ?? Console.Out;
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
@@ -304,7 +314,7 @@ public static class ClaudeHookCommand {
                         ? "[kcap] Authentication expired — session recording is paused. Run 'kcap login' to resume."
                         : "[kcap] Not authenticated — session recording is off. Run 'kcap login' to start recording."
                 };
-                Console.WriteLine(notice.ToJsonString());
+                writer.WriteLine(notice.ToJsonString());
             }
             return 0;
         }
@@ -575,7 +585,7 @@ public static class ClaudeHookCommand {
                     var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment, memoryFragment);
 
                     if (envelope is not null) {
-                        Console.WriteLine(envelope);
+                        writer.WriteLine(envelope);
                     }
                 } catch {
                     // Best effort — never break session capture for hook output emission.

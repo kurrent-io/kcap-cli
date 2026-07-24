@@ -29,7 +29,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// which kills descendants with the leader at the OS level.</para>
 /// </summary>
 internal static class ProcessReaper {
-    static readonly TimeSpan GraceBeforeKill = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan GraceBeforeKill  = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan ConfirmAfterKill = TimeSpan.FromSeconds(5);
 
     enum LeaderState { Dead, Ours, Recycled, Ambiguous }
 
@@ -113,17 +114,17 @@ internal static class ProcessReaper {
 
             SignalGroup(pid, hard: false); // SIGTERM the group (leader is proven ours → group is our lineage)
 
-            for (var waited = TimeSpan.Zero; waited < GraceBeforeKill; waited += TimeSpan.FromMilliseconds(250)) {
-                switch (Classify(pid, expectedIdentity)) {
-                    case LeaderState.Dead:      return true; // leader (and the group it anchored) gone
-                    case LeaderState.Recycled:  return true;
-                    case LeaderState.Ambiguous: return false;
-                }
-                await Task.Delay(250, ct);
-            }
+            // Grace poll. The leader was proven ours immediately above, so a TRANSIENT Ambiguous here is
+            // the death transition — kill(pid,0) still answers for an instant after the process has begun
+            // exiting while /proc/{pid}/stat has already gone, so the start-token read is momentarily
+            // unreadable — NOT a reason to spare. Keep polling for the definitive Dead/Recycled; only
+            // those confirm within the window (see PollForConfirmedDeathAsync).
+            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, GraceBeforeKill, ct)) return true;
 
-            // Grace elapsed. Re-classify immediately before the hard kill — the pid may have been recycled
-            // during the last wait, and SIGKILL to a recycled group would hit unrelated processes.
+            // Grace elapsed without a definitive gone verdict. Re-gate before the hard kill: never SIGKILL
+            // a pid recycled to a foreign process, or one we can no longer prove is ours — ambiguity spares
+            // BEFORE we escalate, so the safety invariant ("only a proven-ours leader is ever signalled")
+            // is unchanged.
             switch (Classify(pid, expectedIdentity)) {
                 case LeaderState.Dead:      return true;
                 case LeaderState.Recycled:  return true;
@@ -131,22 +132,40 @@ internal static class ProcessReaper {
             }
 
             SignalGroup(pid, hard: true); // SIGKILL the group while the leader is still proven ours
-            await Task.Delay(250, ct);
 
-            switch (Classify(pid, expectedIdentity)) {
-                case LeaderState.Dead:      return true;
-                case LeaderState.Recycled:  return true;
-                case LeaderState.Ambiguous: return false; // became uncomparable → unconfirmed, retain
-                default:
-                    logger.LogWarning("ProcessReaper: pid {Pid} (agent {AgentId}) still alive after SIGKILL — retained for next sweep", pid, agentId);
-                    return false;
-            }
+            // SIGKILL WILL terminate it; the OS just needs a moment to reflect the death (reap the zombie /
+            // update /proc), which under heavy parallel load can exceed a single tick. Poll the same way
+            // rather than checking once, so a slow-to-reflect kill isn't misreported as still-alive.
+            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, ConfirmAfterKill, ct)) return true;
+
+            logger.LogWarning(
+                "ProcessReaper: pid {Pid} (agent {AgentId}) not confirmed gone within {Grace}s+{Kill}s — retained for next sweep",
+                pid, agentId, GraceBeforeKill.TotalSeconds, ConfirmAfterKill.TotalSeconds);
+            return false;
         } catch (OperationCanceledException) {
             return false;
         } catch (Exception ex) {
             logger.LogWarning(ex, "ProcessReaper: kill of pid {Pid} (agent {AgentId}) failed", pid, agentId);
             return false;
         }
+    }
+
+    /// <summary>Poll <see cref="Classify"/> every 250ms up to <paramref name="window"/> for a DEFINITIVE
+    /// gone verdict (Dead, or a proven pid-recycle — our process is gone either way). Called ONLY after
+    /// ownership was proven and the kill signal already sent, so a transient Ambiguous (a proven-ours
+    /// leader momentarily unreadable mid-death-transition, or a slow-to-reflect kill under load) is NOT a
+    /// spare — it just keeps polling. Returns false if the window elapses without a definitive verdict, so
+    /// the caller retains the record for the next sweep (never a false confirmed-gone).</summary>
+    static async Task<bool> PollForConfirmedDeathAsync(int pid, string expectedIdentity, TimeSpan window, CancellationToken ct) {
+        for (var waited = TimeSpan.Zero; waited < window; waited += TimeSpan.FromMilliseconds(250)) {
+            switch (Classify(pid, expectedIdentity)) {
+                case LeaderState.Dead:     return true;
+                case LeaderState.Recycled: return true;
+            }
+            await Task.Delay(250, ct);
+        }
+
+        return false;
     }
 
     /// <summary>SIGTERM/SIGKILL the target's process group (Unix; falls back to the bare pid when it

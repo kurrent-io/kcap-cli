@@ -26,20 +26,25 @@ public partial class AgentOrchestratorVendorTests {
 
         await orch.HandleStopAgent("ghost");
 
-        // The record-pass reap kills once ownership is provable: Linux confirms via the KCAP_AGENT_ID
-        // env, Windows has no Unix env guard so an exact (pid, start-identity) match is sufficient. Only
-        // macOS 26 spares — its env is redacted, so the (Unix) env guard can't confirm and ambiguity
-        // never kills.
         if (!OperatingSystem.IsMacOS()) {
-            // Linux / Windows → reaped by identity, record deleted on confirmed death.
+            // Linux / Windows → ownership is provable (Linux confirms via the KCAP_AGENT_ID env,
+            // Windows via an exact (pid, start-identity) match), so the record-pass reap kills by
+            // identity and deletes the record on CONFIRMED death.
             dummy.WaitForExit(TimeSpan.FromSeconds(10));
             await Assert.That(dummy.HasExited).IsTrue();
             await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost")).IsFalse();
         } else {
-            // macOS: env unreadable → SPARED; process still alive, record retained for a later sweep.
-            await Assert.That(dummy.HasExited).IsFalse();
-            await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost")).IsTrue();
-            dummy.Kill();
+            // macOS → whether the reap can PROVE ownership depends on the OS version's start-identity
+            // readability: older macOS redacts another process's identity (Ambiguous → spared, record
+            // retained), macOS 26+ can read it (Ours → reaped by identity, deleted on confirmed death,
+            // converging with Linux/Windows). Accept either outcome, but assert the real invariant —
+            // the record is deleted IFF the process was confirmed gone. (This is what the fix restores:
+            // the reaper must not report a still-alive-then-killed process as unconfirmed and strand its
+            // record — deleted-vs-retained must track the process's actual fate.)
+            dummy.WaitForExit(TimeSpan.FromSeconds(10));
+            var retained = orch.PidRecordsForTest().Any(r => r.AgentId == "ghost");
+            await Assert.That(retained).IsEqualTo(!dummy.HasExited);
+            if (!dummy.HasExited) dummy.Kill();
         }
     }
 
