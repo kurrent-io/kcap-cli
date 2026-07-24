@@ -15,6 +15,13 @@ internal sealed partial class ClaudeLauncher(
     public string CliPath => config.ClaudePath;
     public bool   SupportsUnattended => true;
 
+    // --permission-mode bypassPermissions is set only for an OWNED review-flow worktree (see
+    // BuildArgs); a borrowed review-flow keeps default permission mode (and is fail-closed-rejected
+    // upstream anyway), and interactive launches always prompt. So approval prompts are off only for
+    // owned review-flow launches.
+    public bool DisablesApprovalPrompts(LauncherContext ctx) =>
+        ctx.IsReviewFlow && ctx.Work == WorkLocation.OwnedWorktree;
+
     public bool IsAvailable() => CliResolver.Exists(CliPath);
 
     static readonly Lock                  TrustWriteLock   = new();

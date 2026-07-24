@@ -1748,10 +1748,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var (agentId, text, attachmentIds) = cmd;
 
         if (!_agents.TryGetValue(agentId, out var agent)) {
+            LogSendInputUnknownAgent(agentId, _agents.Count);
             return;
         }
 
-        if (agent.IsPrivate) return; // server-origin input ignored for private agents
+        if (agent.IsPrivate) {
+            LogSendInputPrivateAgent(agentId);
+            return; // server-origin input ignored for private agents
+        }
+
+        LogSendInputReceived(agentId, agent.Runtime.Vendor, text.Length, attachmentIds?.Length ?? 0);
 
         await agent.BorrowedSnapshotGate.WaitAsync(_shutdownCts.Token);
         try {
@@ -1772,6 +1778,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
             else
                 await agent.Runtime.SendUserInputAsync(message);
+
+            LogSendInputDelivered(agentId, agent.Runtime.Vendor, message.Length);
         } finally {
             agent.BorrowedSnapshotGate.Release();
         }
@@ -1815,6 +1823,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task HandleSendSpecialKey(string agentId, string key) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
+            LogSendSpecialKeyUnknownAgent(agentId, key, _agents.Count);
             return;
         }
 
@@ -2565,6 +2574,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh borrowed-checkout snapshot for agent {AgentId}; rejecting the round and terminating the reviewer")]
     partial void LogBorrowedSnapshotRefreshFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "SendInput received for agent {AgentId} (vendor={Vendor}, chars={Chars}, attachments={Attachments})")]
+    partial void LogSendInputReceived(string agentId, string vendor, int chars, int attachments);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "SendInput delivered to agent {AgentId}'s {Vendor} runtime ({Chars} chars)")]
+    partial void LogSendInputDelivered(string agentId, string vendor, int chars);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
+    partial void LogSendInputUnknownAgent(string agentId, int knownAgents);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} is private — server-origin input is ignored")]
+    partial void LogSendInputPrivateAgent(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendSpecialKey '{Key}' dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
+    partial void LogSendSpecialKeyUnknownAgent(string agentId, string key, int knownAgents);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error reading output for agent {AgentId}")]
     partial void LogOutputReadError(Exception ex, string agentId);

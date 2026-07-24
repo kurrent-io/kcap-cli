@@ -15,6 +15,11 @@ internal sealed partial class CodexLauncher(
     public string CliPath => config.CodexPath;
     public bool   SupportsUnattended => true;
     public bool   SupportsBorrowedReviewFlow => true;
+
+    // Review-flow launches pass --ask-for-approval never (see BuildArgs); every other launch keeps
+    // on-request. So approval prompts are off exactly for review-flow launches (any worktree, since
+    // codex uses `never` regardless of owned/borrowed).
+    public bool DisablesApprovalPrompts(LauncherContext ctx) => ctx.IsReviewFlow;
     public string BorrowedReviewContainment => "native-tool-clamp";
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
