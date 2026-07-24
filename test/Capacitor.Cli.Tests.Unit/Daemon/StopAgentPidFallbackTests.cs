@@ -34,13 +34,9 @@ public partial class AgentOrchestratorVendorTests {
             await Assert.That(dummy.HasExited).IsTrue();
             await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost")).IsFalse();
         } else {
-            // macOS → whether the reap can PROVE ownership depends on the OS version's start-identity
-            // readability: older macOS redacts another process's identity (Ambiguous → spared, record
-            // retained), macOS 26+ can read it (Ours → reaped by identity, deleted on confirmed death,
-            // converging with Linux/Windows). Accept either outcome, but assert the real invariant —
-            // the record is deleted IFF the process was confirmed gone. (This is what the fix restores:
-            // the reaper must not report a still-alive-then-killed process as unconfirmed and strand its
-            // record — deleted-vs-retained must track the process's actual fate.)
+            // macOS → the outcome depends on this OS version's start-identity readability (older macOS
+            // redacts it → spared/retained; macOS 26+ reads it → reaped/deleted), so accept either but
+            // assert the real invariant: the record is deleted IFF the process was confirmed gone.
             dummy.WaitForExit(TimeSpan.FromSeconds(10));
             var retained = orch.PidRecordsForTest().Any(r => r.AgentId == "ghost");
             await Assert.That(retained).IsEqualTo(!dummy.HasExited);

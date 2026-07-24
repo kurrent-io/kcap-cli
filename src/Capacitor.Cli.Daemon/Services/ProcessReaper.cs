@@ -114,17 +114,12 @@ internal static class ProcessReaper {
 
             SignalGroup(pid, hard: false); // SIGTERM the group (leader is proven ours → group is our lineage)
 
-            // Grace poll. The leader was proven ours immediately above, so a TRANSIENT Ambiguous here is
-            // the death transition — kill(pid,0) still answers for an instant after the process has begun
-            // exiting while /proc/{pid}/stat has already gone, so the start-token read is momentarily
-            // unreadable — NOT a reason to spare. Keep polling for the definitive Dead/Recycled; only
-            // those confirm within the window (see PollForConfirmedDeathAsync).
+            // Poll for a definitive verdict; a transient Ambiguous (a proven-ours leader momentarily
+            // unreadable mid-death-transition) keeps polling instead of sparing — see PollForConfirmedDeathAsync.
             if (await PollForConfirmedDeathAsync(pid, expectedIdentity, GraceBeforeKill, ct)) return true;
 
-            // Grace elapsed without a definitive gone verdict. Re-gate before the hard kill: never SIGKILL
-            // a pid recycled to a foreign process, or one we can no longer prove is ours — ambiguity spares
-            // BEFORE we escalate, so the safety invariant ("only a proven-ours leader is ever signalled")
-            // is unchanged.
+            // Re-gate before the hard kill: never SIGKILL a recycled/unprovable pid — ambiguity still
+            // spares before we escalate, so the safety invariant is unchanged.
             switch (Classify(pid, expectedIdentity)) {
                 case LeaderState.Dead:      return true;
                 case LeaderState.Recycled:  return true;
@@ -133,14 +128,15 @@ internal static class ProcessReaper {
 
             SignalGroup(pid, hard: true); // SIGKILL the group while the leader is still proven ours
 
-            // SIGKILL WILL terminate it; the OS just needs a moment to reflect the death (reap the zombie /
-            // update /proc), which under heavy parallel load can exceed a single tick. Poll the same way
-            // rather than checking once, so a slow-to-reflect kill isn't misreported as still-alive.
-            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, ConfirmAfterKill, ct)) return true;
+            // Poll for the guaranteed kill to be reflected (zombie reaped / pid gone), which under load can
+            // exceed one tick. On Windows the hard signal is a no-op — the soft signal above already
+            // tree-killed and the grace poll gave it the full window — so don't add a second long wait there.
+            var postKillWindow = OperatingSystem.IsWindows() ? TimeSpan.FromMilliseconds(250) : ConfirmAfterKill;
+            if (await PollForConfirmedDeathAsync(pid, expectedIdentity, postKillWindow, ct)) return true;
 
             logger.LogWarning(
                 "ProcessReaper: pid {Pid} (agent {AgentId}) not confirmed gone within {Grace}s+{Kill}s — retained for next sweep",
-                pid, agentId, GraceBeforeKill.TotalSeconds, ConfirmAfterKill.TotalSeconds);
+                pid, agentId, GraceBeforeKill.TotalSeconds, postKillWindow.TotalSeconds);
             return false;
         } catch (OperationCanceledException) {
             return false;
@@ -150,12 +146,10 @@ internal static class ProcessReaper {
         }
     }
 
-    /// <summary>Poll <see cref="Classify"/> every 250ms up to <paramref name="window"/> for a DEFINITIVE
-    /// gone verdict (Dead, or a proven pid-recycle — our process is gone either way). Called ONLY after
-    /// ownership was proven and the kill signal already sent, so a transient Ambiguous (a proven-ours
-    /// leader momentarily unreadable mid-death-transition, or a slow-to-reflect kill under load) is NOT a
-    /// spare — it just keeps polling. Returns false if the window elapses without a definitive verdict, so
-    /// the caller retains the record for the next sweep (never a false confirmed-gone).</summary>
+    /// <summary>Poll <see cref="Classify"/> every 250ms up to <paramref name="window"/> for a definitive
+    /// gone verdict (Dead or a proven pid-recycle). Called only after ownership is proven and the kill
+    /// signal sent, so a transient Ambiguous keeps polling (never spares here); returns false at window
+    /// expiry so the caller retains the record for the next sweep.</summary>
     static async Task<bool> PollForConfirmedDeathAsync(int pid, string expectedIdentity, TimeSpan window, CancellationToken ct) {
         for (var waited = TimeSpan.Zero; waited < window; waited += TimeSpan.FromMilliseconds(250)) {
             switch (Classify(pid, expectedIdentity)) {

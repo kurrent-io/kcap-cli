@@ -12,19 +12,12 @@ namespace Capacitor.Cli.Tests.Integration;
 /// envelope shape — including the single-envelope invariant when both
 /// <c>top_clusters</c> and <c>version</c> are present.
 ///
-/// Stdout is captured by passing an explicit <see cref="TextWriter"/> to
-/// <c>Handle</c> (its <c>stdout</c> parameter) instead of redirecting the
-/// process-global <c>Console.Out</c>. The capture is private to each test, so a
-/// concurrently-running test whose SUT writes to <c>Console.Out</c> (e.g.
-/// <c>CodexHookCommand</c> emitting <c>{"continue":true}</c>) can't leak into it
-/// — the contamination flake this removes (a keyed <c>[NotInParallel]</c>
-/// couldn't, since a differently-keyed test still ran concurrently).
-///
-/// The tests stay <c>[NotInParallel]</c>: they still exercise process-global
-/// state (the <c>KCAP_CONFIG_DIR</c> config + the in-process auth-provider
-/// discovery cache) and real hook HTTP timing that isn't parallel-safe. The
-/// injected writer is the durable fix for the capture-contamination class —
-/// it holds even if the serialization is ever relaxed.
+/// Stdout is captured via an explicit <see cref="TextWriter"/> passed to
+/// <c>Handle</c> (its <c>stdout</c> parameter), not by redirecting the global
+/// <c>Console.Out</c> — so another concurrently-running test's <c>Console.Out</c>
+/// write can't leak into the capture. The tests stay <c>[NotInParallel]</c>
+/// because they still touch process-global config/auth-cache and real hook HTTP
+/// timing; the injected writer is the durable fix for the contamination class.
 ///
 /// Test payloads deliberately OMIT <c>transcript_path</c> so the session-start
 /// path short-circuits before <c>WatcherManager.EnsureWatcherRunning</c>;
