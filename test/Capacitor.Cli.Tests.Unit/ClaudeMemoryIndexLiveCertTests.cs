@@ -122,8 +122,9 @@ public class ClaudeMemoryIndexLiveCertTests {
         var (exitCode, stdout, _) = await RunProcessAsync("kcap", ["config", "show"], workingDirectory: null);
         if (exitCode != 0) return null;
 
+        var jsonPart = ExtractLeadingJsonBlock(stdout);
+
         try {
-            var jsonPart      = stdout.Split("\n\n", 2)[0];
             var root          = JsonNode.Parse(jsonPart);
             var activeProfile = root?["active_profile"]?.GetValue<string>();
             if (activeProfile is null) return null;
@@ -133,6 +134,15 @@ public class ClaudeMemoryIndexLiveCertTests {
             return null;
         }
     }
+
+    /// <summary>
+    /// Isolates the leading JSON block from <c>kcap config show</c>'s stdout — the text before the
+    /// first blank line — tolerating both <c>\n</c> and Windows <c>\r\n</c> line endings so a CRLF
+    /// stdout doesn't fail to find the blank-line boundary (which would otherwise return the whole
+    /// blob, trailing "Path:" line included, and fail to parse as JSON).
+    /// </summary>
+    internal static string ExtractLeadingJsonBlock(string stdout) =>
+        stdout.Replace("\r\n", "\n").Split("\n\n", 2)[0];
 
     static void SkipUnlessLiveGateReady() {
         Skip.Unless(
@@ -311,5 +321,21 @@ public class ClaudeMemoryIndexLiveCertParsingTests {
     public async Task Empty_output_returns_empty() {
         var result = ClaudeMemoryIndexLiveCertTests.ExtractAssistantAnswer("   \n  ");
         await Assert.That(result).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Leading_json_block_extraction_splits_on_an_lf_blank_line() {
+        var stdout = "{\"active_profile\":\"default\"}\n\nPath: ~/.config/kcap/config.json\n";
+        var result = ClaudeMemoryIndexLiveCertTests.ExtractLeadingJsonBlock(stdout);
+        await Assert.That(result).IsEqualTo("{\"active_profile\":\"default\"}");
+    }
+
+    [Test]
+    public async Task Leading_json_block_extraction_tolerates_a_crlf_blank_line() {
+        // Windows `kcap config show` stdout: the same "JSON, blank line, Path:" shape but with
+        // \r\n line endings — must still isolate the JSON, not the whole CRLF blob.
+        var stdout = "{\"active_profile\":\"default\"}\r\n\r\nPath: C:\\Users\\me\\config.json\r\n";
+        var result = ClaudeMemoryIndexLiveCertTests.ExtractLeadingJsonBlock(stdout);
+        await Assert.That(result).IsEqualTo("{\"active_profile\":\"default\"}");
     }
 }
