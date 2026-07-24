@@ -144,10 +144,10 @@ static class McpFlowsServer {
                 var wasDynamicStart = toolName is "start_flow" && arguments?["definition_yaml"] is not null;
 
                 using var postResponse = toolName switch {
-                    "start_review_flow"   => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind")),
-                    "start_flow"          => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id")),
-                    "submit_review_round" => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true)),
-                    _                     => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments)))
+                    "start_review_flow"   => await SendWithSettlementRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind"), Task.Delay),
+                    "start_flow"          => await SendWithSettlementRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id"), Task.Delay),
+                    "submit_review_round" => await SendWithSettlementRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true), Task.Delay),
+                    _                     => await SendWithSettlementRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments)), Task.Delay)
                 };
 
                 var postBody = await postResponse.Content.ReadAsStringAsync();
@@ -255,6 +255,80 @@ static class McpFlowsServer {
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", refreshed.AccessToken);
 
         return await send(client);
+    }
+
+    // How many times to transparently retry a settlement-layer coded 409 (flow_settlement_busy /
+    // reviewer_launch_incarnation_superseded) before surfacing it via FormatFlowStartError. Both
+    // codes resolve fast against the settlement layer's own reconciliation, so the bound is small
+    // and the backoff short (sub-second) — unlike the network-transient budget in
+    // PollUntilTerminalAsync or the one-shot 401 refresh retry above.
+    const int MaxSettlementRetries = 3;
+    static readonly TimeSpan SettlementRetryDelay = TimeSpan.FromMilliseconds(200);
+
+    static readonly HashSet<string> SettlementRetryableCodes =
+        new(StringComparer.Ordinal) { "flow_settlement_busy", "reviewer_launch_incarnation_superseded" };
+
+    /// <summary>Parses the coded-rejection envelope: a JSON object with a non-empty string
+    /// "error" code and a string "message". Returns false for an uncoded/unparseable body.
+    /// Shared by <see cref="FormatFlowStartError"/> and the settlement-retry gate below so both
+    /// agree on what counts as "coded".</summary>
+    internal static bool TryParseCodedError(string body, out string? code, out string? message) {
+        code = null;
+        message = null;
+
+        try {
+            var node = JsonNode.Parse(body) as JsonObject;
+            if (node?["error"] is JsonValue ev && ev.TryGetValue<string>(out var c) && c.Length > 0
+                    && node["message"] is JsonValue mv && mv.TryGetValue<string>(out var m)) {
+                code = c;
+                message = m;
+                return true;
+            }
+        } catch (JsonException) {
+            // not JSON — reads as uncoded
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Bounded, code-aware auto-retry for the two settlement-layer coded 409s a start/round POST
+    /// can return: flow_settlement_busy (a settlement CAS append exhausted its own retry budget)
+    /// and reviewer_launch_incarnation_superseded (the launch's incarnation was superseded by a
+    /// concurrent settlement transition). Both are documented server-side as retryable: retrying
+    /// the originating request re-resolves against the settlement layer's current state.
+    ///
+    /// For start_review_flow/start_flow, retrying re-POSTs the start — which mints a FRESH
+    /// flow_run_id and abandons the superseded attempt (see StartFlowAsync), so it's
+    /// unconditionally safe. For submit_review_round/send_to_participant, the server invariant
+    /// that no path appends FlowRoleAgentAssigned/FlowRoundSubmitted/FlowIntentCompleted unless
+    /// IsCurrentSettlementCompletion is true means a coded rejection here never recorded a round
+    /// — so retrying the same flow_run_id can't double-submit.
+    ///
+    /// Only these two codes (via <see cref="TryParseCodedError"/>) trigger a retry; every other
+    /// coded 4xx (budget_unverifiable, server_catching_up, client_upgrade_required, etc.) passes
+    /// through untouched. Bounded to <see cref="MaxSettlementRetries"/> attempts with a short,
+    /// sub-second backoff (<see cref="SettlementRetryDelay"/>); on exhaustion the last response
+    /// surfaces as-is via the caller's existing FormatFlowStartError. Wraps (doesn't replace)
+    /// <see cref="SendWithRefreshRetryAsync"/>, so the 401 refresh retry still applies on every
+    /// attempt. Delay is injectable so unit tests run instantly.
+    /// </summary>
+    internal static async Task<HttpResponseMessage> SendWithSettlementRetryAsync(
+            HttpClient client, Func<HttpClient, Task<HttpResponseMessage>> send, Func<TimeSpan, Task> delay
+        ) {
+        for (var attempt = 1;; attempt++) {
+            var response = await SendWithRefreshRetryAsync(client, send);
+
+            if (response.IsSuccessStatusCode || attempt >= MaxSettlementRetries) return response;
+
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!TryParseCodedError(body, out var code, out _) || !SettlementRetryableCodes.Contains(code!))
+                return response;
+
+            response.Dispose();
+            await delay(SettlementRetryDelay);
+        }
     }
 
     /// <summary>
@@ -520,19 +594,15 @@ static class McpFlowsServer {
     /// message verbatim, prefixed with the code, and never add the old-server hint. Only an
     /// UNCODED failure on a start that included definition_yaml gets the "may not support
     /// dynamic flows" hint (the coded body is the new-server capability signal), keeping the
-    /// raw body either way.</summary>
+    /// raw body either way. Decodes via <see cref="TryParseCodedError"/>, the same parse
+    /// SendWithSettlementRetryAsync's retry gate uses, so the two can never disagree about what
+    /// counts as "coded".</summary>
     internal static string FormatFlowStartError(int status, string body, bool wasDynamicStart) {
-        try {
-            var node = JsonNode.Parse(body) as JsonObject;
-            if (node?["error"] is JsonValue ev && ev.TryGetValue<string>(out var code) && code.Length > 0
-                && node["message"] is JsonValue mv && mv.TryGetValue<string>(out var message)) {
-                if (code == "server_catching_up")
-                    return $"Error ({code}): {message}\n{ServerCatchingUpGuidance}";
+        if (TryParseCodedError(body, out var code, out var message)) {
+            if (code == "server_catching_up")
+                return $"Error ({code}): {message}\n{ServerCatchingUpGuidance}";
 
-                return $"Error ({code}): {message}";
-            }
-        } catch (JsonException) {
-            // not JSON — fall through to the uncoded path
+            return $"Error ({code}): {message}";
         }
 
         var hint = wasDynamicStart
@@ -590,6 +660,9 @@ static class McpFlowsServer {
         var notFoundGraceDeadline = pollStartedAt + NotFoundGrace;
         var consecutiveTransient  = 0;
         var lastTransientError    = (string?)null;
+        // Separate, short-backoff budget for the two settlement-layer coded 409s — distinct from
+        // the network/5xx transient budget above, which uses the full 3s PollInterval.
+        var settlementRetriesUsed = 0;
 
         while (DateTimeOffset.UtcNow < deadline) {
             using var getCts = new CancellationTokenSource(PerGetTimeout);
@@ -621,6 +694,19 @@ static class McpFlowsServer {
                 var statusCode = (int)resp.StatusCode;
                 if (statusCode is >= 400 and < 500) {
                     var errBody = await resp.Content.ReadAsStringAsync();
+
+                    // The same two settlement-layer coded 409s can also surface on the poll GET
+                    // (the server-side backstop mapping an escaped settlement conflict). Bounded,
+                    // short auto-retry before falling through to the immediate-fail path; every
+                    // other coded/uncoded 4xx is untouched.
+                    if (TryParseCodedError(errBody, out var code, out _) &&
+                            SettlementRetryableCodes.Contains(code!) &&
+                            settlementRetriesUsed < MaxSettlementRetries - 1) {
+                        settlementRetriesUsed++;
+                        await Task.Delay(SettlementRetryDelay);
+                        continue;
+                    }
+
                     return new(FormatFlowStartError(statusCode, errBody, wasDynamicStart), true);
                 }
 
@@ -633,9 +719,10 @@ static class McpFlowsServer {
                     await Task.Delay(PollInterval); continue;
                 }
 
-                // Successful response — reset transient counter.
-                consecutiveTransient = 0;
-                lastTransientError   = null;
+                // Successful response — reset transient counters.
+                consecutiveTransient  = 0;
+                lastTransientError    = null;
+                settlementRetriesUsed = 0;
 
                 var body      = await resp.Content.ReadAsStringAsync();
                 var node      = JsonNode.Parse(body)?.AsObject();
