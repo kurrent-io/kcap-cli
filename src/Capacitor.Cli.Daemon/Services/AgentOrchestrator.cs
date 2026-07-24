@@ -197,6 +197,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     AgentPidRecordStore? _pidRecords;
     AgentKillQuarantine? _quarantine;
     OrphanReaper?        _orphanReaper;
+
+    // Tail-of-PTY capture for a FAILED launch, under the same per-daemon record root as the PID
+    // records ({state}/{name}/agents/failed/) — survives worktree teardown for post-mortem.
+    FailedLaunchLog?     _failedLaunchLog;
     string               _daemonId    = "";
     string               _daemonEpoch = "";
 
@@ -338,6 +342,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var recordRoot = Path.Combine(
             config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        _failedLaunchLog = new FailedLaunchLog(recordRoot);
         _quarantine  = new AgentKillQuarantine(logger);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
@@ -1310,6 +1315,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // until the whole daemon exits.
         using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
 
+        // An UNATTENDED reviewer (bypassPermissions, no human present) can wedge forever on a
+        // one-time consent/trust dialog — the original silent failure. Watch its PTY stream for the
+        // known banners and fail the launch fast with an actionable reason instead of dying at the
+        // server's session-id timeout. Only for unattended review-flow agents: an interactive agent's
+        // human viewer can dismiss the prompt themselves, so we must not fail-fast for them.
+        var dialogDetector = agent is { Kind: LaunchKind.ReviewFlow, Runtime.EmitsTerminalOutput: true }
+            ? new ConsentDialogDetector()
+            : null;
+
         try {
             await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = DateTime.UtcNow;
@@ -1318,6 +1332,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (agent.Status == "Starting") {
                     agent.Status = "Running";
                     if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+                }
+
+                // Consent/trust dialogs are a PRE-SESSION concern: they render once at startup, before
+                // any session exists. Once the session is live (SessionId resolved from the transcript
+                // by DetectClaudeSessionIdAsync) the dialog phase is over — stop scanning so ordinary
+                // reviewer/tool output that merely quotes a banner phrase (e.g. a reviewer reading the
+                // detector's own source) can't latch a false wedge and kill a healthy reviewer.
+                if (dialogDetector is not null) {
+                    if (agent.SessionId is not null) {
+                        dialogDetector = null; // session live — release the detector + its window
+                    } else if (dialogDetector.Observe(data) is { } wedgeReason) {
+                        await FailWedgedLaunchAsync(agent, data, wedgeReason);
+                        return; // stop reading — the finally runs finalize + cleanup (kills the wedged PTY)
+                    }
                 }
 
                 // Append to the replay buffer AND fan out to local sinks atomically under
@@ -1365,6 +1393,51 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    /// <summary>
+    /// Fails a launch that the PTY dialog detector caught wedged on a consent/trust dialog: reports
+    /// an actionable <c>LaunchFailed</c> (so the server surfaces it instead of timing out silently),
+    /// persists the terminal tail for post-mortem, terminates the wedged (still-alive) process, and
+    /// cancels the read loop so its finally runs the normal finalize + cleanup. Sets Status="Failed"
+    /// FIRST so FinalizeAgentRunAsync skips its own startup-failure classification (no double report).
+    /// </summary>
+    async Task FailWedgedLaunchAsync(AgentInstance agent, byte[] triggeringChunk, string reason) {
+        LogConsentDialogWedge(agent.Id, reason);
+
+        // The detector inspects a chunk BEFORE the read loop appends it to OutputBuffer, so append the
+        // triggering chunk now — otherwise a banner delivered in the first chunk (the common case) is
+        // absent from the persisted tail, defeating the very capture this log exists to preserve.
+        // TerminalOutputBuffer.Append is self-synchronized; the read loop has stopped feeding it.
+        agent.OutputBuffer.Append(triggeringChunk);
+
+        // Capture the banner before termination/cleanup discards the buffer.
+        PersistFailedLaunchLog(agent, reason);
+
+        agent.Status           = "Failed";
+        agent.PendingEndReason = "consent_dialog_wedge";
+
+        if (!agent.IsPrivate) {
+            _ = _server.LaunchFailedAsync(agent.Id, reason);
+            _ = _server.AgentStatusChangedAsync(agent.Id, "Failed", agent.SessionId);
+            _ = _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped("failed", null));
+        }
+
+        // The wedged process is still ALIVE on the dialog (unlike an ordinary startup failure, which
+        // has already exited) — actively terminate it so it can't hold a daemon slot.
+        try { await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5)); } catch (Exception ex) { LogStopError(ex, agent.Id); }
+
+        // Cancel the read loop's token so the fallback session-id poll (DetectClaudeSessionIdAsync)
+        // stops too; the loop itself exits via the `return` at the call site.
+        try { await agent.ReadCts.CancelAsync(); } catch { /* best-effort */ }
+    }
+
+    /// <summary>Best-effort: persist the tail of an agent's PTY output to the retained failed-launch
+    /// log. Never throws (FailedLaunchLog swallows I/O errors) — a diagnostic write must not disturb
+    /// teardown.</summary>
+    void PersistFailedLaunchLog(AgentInstance agent, string reason) {
+        var path = _failedLaunchLog?.Persist(agent.Id, agent.OutputBuffer.Snapshot(), reason);
+        if (path is not null) LogFailedLaunchCaptured(agent.Id, path);
+    }
+
     async Task FinalizeAgentRunAsync(AgentInstance agent) {
         try {
             // PTY output can end before waitpid reports the child as exited.
@@ -1410,6 +1483,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     status = "Failed";
 
                     LogStartupFailed(agent.Id, exitCode, reason);
+
+                    // Persist the PTY tail before cleanup drops the in-memory buffer and removes the
+                    // worktree, so a startup failure is diagnosable post-mortem (see FailedLaunchLog).
+                    PersistFailedLaunchLog(agent, reason);
 
                     if (!agent.IsPrivate) _ = _server.LaunchFailedAsync(agent.Id, reason);
                 }
@@ -2468,6 +2545,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} failed during startup (exit code {ExitCode}): {Reason}")]
     partial void LogStartupFailed(string agentId, int? exitCode, string reason);
 
+    [LoggerMessage(Level = LogLevel.Error, Message = "Agent {AgentId} wedged on an unattended consent/trust dialog — failing the launch fast: {Reason}")]
+    partial void LogConsentDialogWedge(string agentId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Captured failed-launch terminal tail for agent {AgentId} at {Path}")]
+    partial void LogFailedLaunchCaptured(string agentId, string path);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download attachment {Id}: {Status}")]
     partial void LogAttachmentNotFound(string id, System.Net.HttpStatusCode status);
 
@@ -2554,6 +2637,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// without going through SignalR. Keeps the private handler private to everyone else.
     /// </summary>
     internal Task HandleLaunchAgentForTest(LaunchAgentCommand cmd) => HandleLaunchAgent(cmd);
+
+    /// <summary>Test-only: drive the per-agent PTY read loop directly (mirrors the fire-and-forget
+    /// <c>_ = ReadAgentOutputAsync(agent)</c> in HandleLaunchAgent) so a seeded agent's consent-dialog
+    /// fail-fast + tail-capture can be exercised without the full ReviewFlow launch gauntlet.</summary>
+    internal Task ReadAgentOutputForTest(AgentInstance agent) => ReadAgentOutputAsync(agent);
+
+    /// <summary>Test-only: the retained failed-launch log root, for asserting a capture landed.</summary>
+    internal FailedLaunchLog? FailedLaunchLogForTest => _failedLaunchLog;
 
     /// <summary>Test-only: register a pre-built agent so cleanup/lifecycle can be driven directly.</summary>
     internal void RegisterAgentForTest(AgentInstance agent) => _agents[agent.Id] = agent;
