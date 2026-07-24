@@ -6,9 +6,11 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
 /// Phase B (D4 §6.4(3)): <c>HandleStopAgent</c> for an id not in the registry falls back to the
-/// PID record and reaps a matching live process by exact identity. OS-aware: Linux confirms the
-/// <c>KCAP_AGENT_ID</c> env and reaps; macOS 26 can't read the env, so it SPARES (ambiguity never
-/// kills). Partial of <see cref="AgentOrchestratorVendorTests"/> to call the private HandleStopAgent.
+/// PID record and reaps a matching live process by exact identity. OS-aware: Linux/Windows can prove
+/// ownership (Linux via the <c>KCAP_AGENT_ID</c> env) and reap; on macOS the outcome depends on the OS
+/// version's start-identity readability (redacted → spared, readable → reaped), so the test asserts the
+/// record is deleted iff the process was confirmed gone. Partial of
+/// <see cref="AgentOrchestratorVendorTests"/> to call the private HandleStopAgent.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {
     [Test]

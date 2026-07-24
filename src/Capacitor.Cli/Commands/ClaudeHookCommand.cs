@@ -252,7 +252,7 @@ public static class ClaudeHookCommand {
             var permProfile = await AppConfig.GetActiveProfileAsync();
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, processStart, command);
 
-            return await PermissionRequestCommand.Handle(baseUrl, body, selfHeal);
+            return await PermissionRequestCommand.Handle(baseUrl, body, selfHeal, stdout);
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a

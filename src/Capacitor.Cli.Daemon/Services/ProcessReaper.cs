@@ -151,15 +151,18 @@ internal static class ProcessReaper {
     /// signal sent, so a transient Ambiguous keeps polling (never spares here); returns false at window
     /// expiry so the caller retains the record for the next sweep.</summary>
     static async Task<bool> PollForConfirmedDeathAsync(int pid, string expectedIdentity, TimeSpan window, CancellationToken ct) {
-        for (var waited = TimeSpan.Zero; waited < window; waited += TimeSpan.FromMilliseconds(250)) {
+        // Classify, then delay-and-reclassify until the window elapses — the final classify happens
+        // AFTER the last delay (when waited >= window), so a death reflected during that last interval
+        // is still confirmed rather than dropped.
+        for (var waited = TimeSpan.Zero; ; waited += TimeSpan.FromMilliseconds(250)) {
             switch (Classify(pid, expectedIdentity)) {
                 case LeaderState.Dead:     return true;
                 case LeaderState.Recycled: return true;
             }
+
+            if (waited >= window) return false;
             await Task.Delay(250, ct);
         }
-
-        return false;
     }
 
     /// <summary>SIGTERM/SIGKILL the target's process group (Unix; falls back to the bare pid when it
