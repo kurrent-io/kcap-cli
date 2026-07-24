@@ -29,16 +29,13 @@ jobs:
           wait-interval: 15
           checks-discovery-timeout: 300
 
-  # Process guard: a release tag must be minted exactly once. npm can never
-  # re-publish an existing version, so the only way this workflow re-runs for
-  # a tag name whose version is already on npm is if the tag was deleted and
-  # recreated (or force-moved) — possibly onto a different commit than what
-  # was originally released. That's the failure mode that let a published
-  # npm artifact silently diverge from what its git tag claimed: the tag
-  # moved after publish, and nothing caught it. Runs standalone (no `needs`)
-  # so it fails within seconds, before the "Wait for CI" polling and the
-  # six-runner build matrix spend any time or money on a release that's
-  # going to be refused anyway.
+  # Guards against a moved/re-cut release tag: npm never lets a version
+  # republish, so this workflow only re-runs for an already-published version
+  # if the tag was deleted+recreated (or force-moved) onto a different commit
+  # — the failure mode that lets a published npm artifact silently diverge
+  # from its git tag. Runs standalone (no `needs`) so it fails in seconds,
+  # before CI polling and the six-runner build matrix spend time/money on a
+  # release that's refused anyway.
   verify-release-immutable:
     name: Refuse a moved or re-cut release tag
     runs-on: ubuntu-latest
@@ -65,21 +62,14 @@ jobs:
 
           echo "Checking npm registry for an existing $PKG@$VERSION ..."
 
-          # Queries one `npm view` field for "$PKG@$VERSION", retrying a
-          # couple of times on transient failures. Prints exactly one of:
-          #   FOUND:<value>  npm view exited 0; <value> may be empty if the
-          #                  field itself just isn't set on that published
-          #                  record (this is how versions published before
-          #                  a field existed look — safe to query).
-          #   NOTFOUND       npm gave a definitive "no such package/version"
-          #                  signal (E404) — a real answer, just negative.
-          # and returns 0 for either. On a genuine failure (network,
-          # registry outage, auth error, or anything else that can't be
-          # positively classified) after retries are exhausted, it prints
-          # nothing useful and returns 1 — the caller MUST treat that as
-          # ambiguous and refuse to release, NEVER as "not found". This is
-          # the crux of the guard: an ignored/misread npm error must not be
-          # able to masquerade as "brand-new version, proceed".
+          # Queries one `npm view` field for "$PKG@$VERSION", retrying on
+          # transient failures. Prints "FOUND:<value>" (value may be empty
+          # for a field that predates this guard) or "NOTFOUND" (npm's
+          # definitive E404) and returns 0 for either. On a genuine failure
+          # (network/registry/auth) after retries, it returns 1 — the caller
+          # MUST treat that as ambiguous and refuse to release, NEVER as
+          # "not found", so an ignored/misread npm error can't masquerade as
+          # "brand-new version, proceed".
           npm_view_field() {
             local field="$1" attempts=3 delay=3 i out err rc errfile
             for ((i = 1; i <= attempts; i++)); do
@@ -118,23 +108,18 @@ jobs:
           query_status="ok"
           published_sha=""
 
-          # kcapReleaseCommit is the explicit stamp this same guard's sibling
-          # step writes into published package.json (see "Update package
-          # versions and publish platform packages" / "Publish wrapper
-          # package" below) — the single source of truth for which commit a
-          # given npm version was built from, matching MinVer's own
-          # AssemblyInformationalVersion build-metadata suffix baked into the
-          # binary (both ultimately derive from the same checked-out HEAD /
-          # github.sha for this tag).
+          # kcapReleaseCommit is the explicit stamp the sibling publish step
+          # writes into package.json — source of truth for which commit an
+          # npm version was built from (matches MinVer's build-metadata
+          # suffix baked into the binary; both derive from the same tag's
+          # checked-out HEAD).
           if result=$(npm_view_field kcapReleaseCommit); then
             if [ "$result" != "NOTFOUND" ]; then
               published_sha="${result#FOUND:}"
 
-              # Fallback for versions published before this guard existed:
-              # npm records `gitHead` automatically on every publish run from
-              # inside a git checkout (true for every job in this workflow),
-              # so it already carries the same information for older
-              # releases.
+              # Fallback for pre-guard versions: npm auto-records `gitHead`
+              # on every publish from a git checkout, so it already carries
+              # the same info for older releases.
               if [ -z "$published_sha" ]; then
                 if result=$(npm_view_field gitHead); then
                   if [ "$result" != "NOTFOUND" ]; then
