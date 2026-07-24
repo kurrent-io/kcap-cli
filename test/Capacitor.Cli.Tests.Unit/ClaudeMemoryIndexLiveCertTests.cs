@@ -7,39 +7,23 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// The manual, recorded release-gate certification that the shared SessionStart memory index
-/// actually reaches the model for Claude Code itself — mirrors
-/// <see cref="Cursor.CursorMemoryIndexLiveCertTests"/>. Everything else in this feature (routing,
-/// parallel-fetch/budget math, lifecycle, envelope ordering, output bytes) is proven by the unit
-/// suite in <see cref="ClaudeHookCommandTests"/> against fakes; THIS file is the one place that
-/// asserts the real end-to-end claim — a fresh, high-entropy nonce placed only in a saved memory
-/// reaches the model's own answer via the SessionStart <c>hookSpecificOutput.additionalContext</c>
-/// envelope — because that claim can't be certified any other way.
+/// Manual, env-gated release-gate cert that the shared SessionStart memory index reaches the
+/// model for Claude Code — mirrors <see cref="Cursor.CursorMemoryIndexLiveCertTests"/>; routing,
+/// budget math, lifecycle, and envelope ordering are covered by the unit suite in
+/// <see cref="ClaudeHookCommandTests"/> against fakes, so this is the one place asserting the real
+/// end-to-end claim (a nonce saved as a memory reaches the model via SessionStart's
+/// <c>hookSpecificOutput.additionalContext</c>).
 ///
-/// <b>Gated</b> behind <see cref="LiveGateEnvVar"/> (unset by default) so CI, and any ordinary
-/// local test run, never executes this: it spends a real <c>claude --print</c> turn against a
-/// real, reachable kcap server. Requires:
-///   • <c>claude</c> (the Claude Code CLI) on PATH, logged in to its own account — separate from
-///     kcap's own login below.
-///   • Claude Code's SessionStart hook already configured to invoke <c>kcap</c> (e.g. via
-///     <c>kcap setup</c> / the Claude plugin installer) somewhere this test's throwaway worktree
-///     resolves settings from — a fresh temp dir carries no project-level override, so it
-///     inherits whatever is configured at the USER level (<c>~/.claude/settings.json</c>).
-///   • <see cref="ServerUrlEnvVar"/> pointing at a reachable kcap server exposing
-///     <c>GET /api/memories/index</c>.
-///   • <c>kcap login</c> already done against that server (this process's own token store is
-///     reused — see <see cref="HttpClientExtensions.CreateAuthenticatedClientAsync"/>) so a memory
-///     can be saved and later read back.
+/// Gated behind <see cref="LiveGateEnvVar"/> (unset by default): never runs in CI or an ordinary
+/// local run. Requires <c>claude</c> on PATH and logged in, its SessionStart hook already wired to
+/// <c>kcap</c>, <see cref="ServerUrlEnvVar"/> pointing at a reachable kcap server, and
+/// <c>kcap login</c> already done against it. Run manually by a human/controller before
+/// (re-)certifying this wiring.
 ///
-/// This is a MANUAL release-gate run by a human/controller before certifying (or re-certifying
-/// after a change to) Claude's SessionStart memory wiring — it is intentionally NOT wired into any
-/// CI job and this implementation does not attempt to run it. Claude Code's own <c>--print</c>
-/// output shape (plain text by default; no <c>--output-format</c> flag is passed here, mirroring
-/// <see cref="ClaudeBorrowedReviewLiveTests"/>'s own invocation) has not been independently
-/// verified against a live process for THIS purpose in this repo; <see cref="ExtractAssistantAnswer"/>
-/// parses defensively (JSON-lines OR plain text) — whoever runs this live for the first time
-/// should confirm/tighten that parsing and record the observed Claude Code version
-/// (<see cref="RecordClaudeVersionAsync"/>) alongside the result.
+/// Claude Code's <c>--print</c> output shape is unverified against a live process for this
+/// purpose — <see cref="ExtractAssistantAnswer"/> parses defensively (JSON-lines or plain text);
+/// confirm/tighten it on the first live run and record the observed version
+/// (<see cref="RecordClaudeVersionAsync"/>).
 /// </summary>
 public class ClaudeMemoryIndexLiveCertTests {
     const string LiveGateEnvVar  = "KCAP_CLAUDE_MEMORY_LIVE";

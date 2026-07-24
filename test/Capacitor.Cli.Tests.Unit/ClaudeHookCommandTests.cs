@@ -58,18 +58,11 @@ public class ClaudeHookCommandTests {
     }
 
     // ── SessionStart team-memory index: behavioral baseline ─────────────────────────────────
-    //
-    // The shared-foundation PR (#350) already migrated this command's memory path onto the
+    // Characterizes today's byte-level SessionStart output on the shared
     // SessionStartMemoryOrchestrator/ContextProvider/LeaseStore foundation (StartMemoryIndexTask
-    // below). These tests characterize TODAY's byte-level SessionStart output so a future change
-    // to that wiring can't silently regress the pre-migration behavior: the memory-index GET runs
-    // in parallel with the session-start POST (kicked off before the POST is awaited, never
-    // serialized ahead of it), is joined only within the remaining hook budget, and is composed
-    // with the lessons/version-nudge fragments into exactly ONE hookSpecificOutput.additionalContext
-    // envelope via SessionStartAdditionalContext. A failed POST returns before the response is
-    // ever read, so a Ready memory fragment can be computed but never surfaces — the memory task
-    // may be silently abandoned. `disable_memory_index` and unresolved repo/machine scope (see
-    // MemoryIndexUrlTests below) are unchanged by this migration.
+    // below) — memory-index GET runs parallel with the session-start POST, joined within the hook
+    // budget, composed with lessons/version-nudge into one hookSpecificOutput.additionalContext
+    // envelope — so a future change to that wiring can't silently regress it.
 
     [Test, NotInParallel]
     public async Task session_start_joins_lessons_nudge_and_memory_fragments_in_order() {
