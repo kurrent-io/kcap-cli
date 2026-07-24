@@ -1054,7 +1054,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             try {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
-            } catch (CodexHooksNotInstalledException ex) {
+            } catch (Exception ex) when (ex is CodexHooksNotInstalledException or CodexReviewerMcpIsolationException) {
+                // CodexHooksNotInstalledException: hooks preflight failed in Prepare.
+                // CodexReviewerMcpIsolationException: the review-flow reviewer's inherited MCP
+                // servers could not be authoritatively enumerated, so the recursion guard cannot be
+                // proven — fail the launch CLOSED rather than spawn a reviewer that might inherit a
+                // flow-starting server. Both map to the same cleanup path.
                 await _server.LaunchFailedAsync(agentId, ex.Message);
 
                 // No AgentInstance was created, so CleanupAgentAsync won't run — revoke the reviewer

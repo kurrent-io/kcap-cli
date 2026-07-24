@@ -296,12 +296,15 @@ public static class CodexConfigToml {
     /// <summary>
     /// Reads the top-level <c>[mcp_servers]</c> table keys from <c>~/.codex/config.toml</c>
     /// (or <paramref name="configPath"/>), honouring <c>CODEX_HOME</c> via
-    /// <see cref="CodexPaths.Home"/>. These are the MCP servers a spawned Codex session would
-    /// otherwise inherit — a review-flow reviewer disables each one so only the explicitly
-    /// injected servers load (Codex 0.144.3 has no <c>--strict-mcp-config</c> analog, and a
-    /// bare <c>-c mcp_servers={}</c> is a no-op because <c>-c</c> overrides deep-merge). Returns
-    /// an empty, ordinal-sorted list when the file is missing, unreadable, or has no
-    /// <c>[mcp_servers]</c> table. Read-only; never throws.
+    /// <see cref="CodexPaths.Home"/>. Returns an empty, ordinal-sorted list when the file is
+    /// missing, unreadable, or has no <c>[mcp_servers]</c> table. Read-only; never throws.
+    ///
+    /// NOTE: this reports ONLY config.toml-declared servers. It is NOT the authoritative
+    /// enumeration of what a spawned Codex session inherits — Codex 0.144.3 also composes MCP
+    /// servers from active native plugins, which this misses. The review-flow reviewer isolation
+    /// therefore enumerates via <c>codex mcp list --json</c>
+    /// (<c>Capacitor.Cli.Daemon.Services.CodexMcpInventory</c>), which reports the fully-composed
+    /// effective list (config + plugins).
     /// </summary>
     public static IReadOnlyList<string> ReadMcpServerNames(string? configPath = null) {
         var path = configPath ?? DefaultConfigPath;
