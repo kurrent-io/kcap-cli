@@ -8,11 +8,10 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Bounded, code-aware auto-retry for the two settlement-layer coded 409s the server's
-/// graceful-degradation layer can return (flow_settlement_busy /
-/// reviewer_launch_incarnation_superseded) — both the low-level SendWithSettlementRetryAsync gate
-/// and its wiring into the start path (HandleToolCallAsync) and the poll path
-/// (PollUntilTerminalAsync, reached indirectly through HandleToolCallAsync).
+/// Covers the auto-retry for the two settlement-layer coded 409s (flow_settlement_busy /
+/// reviewer_launch_incarnation_superseded): the low-level SendWithSettlementRetryAsync gate, its
+/// wiring into the start path (HandleToolCallAsync), and the poll path (PollUntilTerminalAsync,
+/// reached indirectly through HandleToolCallAsync).
 /// </summary>
 public class McpFlowsServerSettlementRetryTests {
     static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => { recorded.Add(ts); return Task.CompletedTask; };

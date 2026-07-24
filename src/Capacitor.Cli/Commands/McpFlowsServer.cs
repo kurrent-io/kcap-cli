@@ -257,26 +257,21 @@ static class McpFlowsServer {
         return await send(client);
     }
 
-    // Client-side counterpart to the server's settlement graceful-degradation layer: how many
-    // times to transparently retry a settlement-layer coded 409 (flow_settlement_busy /
-    // reviewer_launch_incarnation_superseded) before giving up
-    // and surfacing the coded message via FormatFlowStartError. Both codes are documented
-    // server-side as fast-resolving against the settlement layer's own reconciliation — never a
-    // slow backend operation — so the bound is small and the backoff is short (sub-second),
-    // unlike the network-transient budget in PollUntilTerminalAsync (MaxTransientRetries, 5
-    // attempts at the full 3s PollInterval) or the one-shot 401 refresh retry above.
+    // How many times to transparently retry a settlement-layer coded 409 (flow_settlement_busy /
+    // reviewer_launch_incarnation_superseded) before surfacing it via FormatFlowStartError. Both
+    // codes resolve fast against the settlement layer's own reconciliation, so the bound is small
+    // and the backoff short (sub-second) — unlike the network-transient budget in
+    // PollUntilTerminalAsync or the one-shot 401 refresh retry above.
     const int MaxSettlementRetries = 3;
     static readonly TimeSpan SettlementRetryDelay = TimeSpan.FromMilliseconds(200);
 
     static readonly HashSet<string> SettlementRetryableCodes =
         new(StringComparer.Ordinal) { "flow_settlement_busy", "reviewer_launch_incarnation_superseded" };
 
-    /// <summary>Parses the coded-rejection envelope any settlement-aware endpoint may return: a
-    /// JSON object carrying a non-empty string "error" code plus a string "message". Returns
-    /// false (both out params null) for an uncoded, unparseable, or wrongly-typed body. Shared by
-    /// <see cref="FormatFlowStartError"/> (the final surfaced message) and the settlement-retry
-    /// gate below (the retry decision) so the two can never disagree about what counts as
-    /// "coded".</summary>
+    /// <summary>Parses the coded-rejection envelope: a JSON object with a non-empty string
+    /// "error" code and a string "message". Returns false for an uncoded/unparseable body.
+    /// Shared by <see cref="FormatFlowStartError"/> and the settlement-retry gate below so both
+    /// agree on what counts as "coded".</summary>
     internal static bool TryParseCodedError(string body, out string? code, out string? message) {
         code = null;
         message = null;
@@ -297,31 +292,26 @@ static class McpFlowsServer {
     }
 
     /// <summary>
-    /// Bounded, code-aware auto-retry for the two settlement-layer coded 409s the server's
-    /// graceful-degradation layer can return on a start/round POST: flow_settlement_busy (a
-    /// settlement CAS append exhausted its own retry budget) and
-    /// reviewer_launch_incarnation_superseded (the launch's incarnation was superseded by a
-    /// concurrent settlement transition — e.g. a reviewer-death retry or abort racing this call).
-    /// Both are explicitly documented server-side as retryable: retrying the ORIGINATING request
-    /// re-resolves against whatever the settlement layer's current state now is.
+    /// Bounded, code-aware auto-retry for the two settlement-layer coded 409s a start/round POST
+    /// can return: flow_settlement_busy (a settlement CAS append exhausted its own retry budget)
+    /// and reviewer_launch_incarnation_superseded (the launch's incarnation was superseded by a
+    /// concurrent settlement transition). Both are documented server-side as retryable: retrying
+    /// the originating request re-resolves against the settlement layer's current state.
     ///
-    /// For start_review_flow/start_flow specifically, retrying re-POSTs the start — which mints a
-    /// FRESH flow_run_id and abandons the superseded attempt entirely (see StartFlowAsync), so
-    /// it is unconditionally safe. For submit_review_round/send_to_participant, the safety
-    /// invariant the server preserves ("no path appends FlowRoleAgentAssigned /
-    /// FlowRoundSubmitted / FlowIntentCompleted when IsCurrentSettlementCompletion is false")
-    /// means a coded rejection here never recorded a round — so retrying the same flow_run_id is
-    /// equally safe, never a duplicate submission.
+    /// For start_review_flow/start_flow, retrying re-POSTs the start — which mints a FRESH
+    /// flow_run_id and abandons the superseded attempt (see StartFlowAsync), so it's
+    /// unconditionally safe. For submit_review_round/send_to_participant, the server invariant
+    /// that no path appends FlowRoleAgentAssigned/FlowRoundSubmitted/FlowIntentCompleted unless
+    /// IsCurrentSettlementCompletion is true means a coded rejection here never recorded a round
+    /// — so retrying the same flow_run_id can't double-submit.
     ///
-    /// Every OTHER coded 4xx (budget_unverifiable, server_catching_up, client_upgrade_required,
-    /// an explicit-vendor echo mismatch, etc.) is left completely untouched — this only ever
-    /// intercepts these two exact codes via <see cref="TryParseCodedError"/>. Bounded to
-    /// <see cref="MaxSettlementRetries"/> total attempts with a short, sub-second backoff
-    /// (<see cref="SettlementRetryDelay"/>); on exhaustion the last response is returned as-is
-    /// and the caller's existing FormatFlowStartError message surfaces unchanged. Wraps (rather
-    /// than replaces) <see cref="SendWithRefreshRetryAsync"/>, so the one-shot 401 refresh retry
-    /// still applies on every attempt. Injectable delay so unit tests run instantly (mirrors
-    /// AckRenderedMessagesAsync/McpFlowResultServer.SubmitCoreAsync).
+    /// Only these two codes (via <see cref="TryParseCodedError"/>) trigger a retry; every other
+    /// coded 4xx (budget_unverifiable, server_catching_up, client_upgrade_required, etc.) passes
+    /// through untouched. Bounded to <see cref="MaxSettlementRetries"/> attempts with a short,
+    /// sub-second backoff (<see cref="SettlementRetryDelay"/>); on exhaustion the last response
+    /// surfaces as-is via the caller's existing FormatFlowStartError. Wraps (doesn't replace)
+    /// <see cref="SendWithRefreshRetryAsync"/>, so the 401 refresh retry still applies on every
+    /// attempt. Delay is injectable so unit tests run instantly.
     /// </summary>
     internal static async Task<HttpResponseMessage> SendWithSettlementRetryAsync(
             HttpClient client, Func<HttpClient, Task<HttpResponseMessage>> send, Func<TimeSpan, Task> delay
@@ -670,10 +660,8 @@ static class McpFlowsServer {
         var notFoundGraceDeadline = pollStartedAt + NotFoundGrace;
         var consecutiveTransient  = 0;
         var lastTransientError    = (string?)null;
-        // Separate, short-backoff budget for the two settlement-layer coded 409s
-        // (flow_settlement_busy / reviewer_launch_incarnation_superseded) — distinct from the
-        // network/5xx transient budget above, which uses the full 3s PollInterval. Reset on any
-        // successful response, same as consecutiveTransient.
+        // Separate, short-backoff budget for the two settlement-layer coded 409s — distinct from
+        // the network/5xx transient budget above, which uses the full 3s PollInterval.
         var settlementRetriesUsed = 0;
 
         while (DateTimeOffset.UtcNow < deadline) {
@@ -707,12 +695,10 @@ static class McpFlowsServer {
                 if (statusCode is >= 400 and < 500) {
                     var errBody = await resp.Content.ReadAsStringAsync();
 
-                    // The same two settlement-layer coded 409s SendWithSettlementRetryAsync
-                    // retries on the originating POST can also surface here on the poll GET (e.g.
-                    // the shared server-side backstop mapping an escaped settlement append
-                    // conflict to a coded rejection). Bounded, short (sub-second) auto-retry
-                    // before falling through to the immediate-fail path below — every OTHER
-                    // coded (or uncoded) 4xx is untouched.
+                    // The same two settlement-layer coded 409s can also surface on the poll GET
+                    // (the server-side backstop mapping an escaped settlement conflict). Bounded,
+                    // short auto-retry before falling through to the immediate-fail path; every
+                    // other coded/uncoded 4xx is untouched.
                     if (TryParseCodedError(errBody, out var code, out _) &&
                             SettlementRetryableCodes.Contains(code!) &&
                             settlementRetriesUsed < MaxSettlementRetries - 1) {
