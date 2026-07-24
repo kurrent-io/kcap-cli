@@ -61,6 +61,22 @@ internal sealed partial class ClaudeLauncher(
             LogTrustWorktreeFailed(ex, ctx.AgentId);
         }
 
+        // Unattended review-flow reviewers launch with `--permission-mode bypassPermissions`
+        // (see BuildArgs). On a host where the interactive Claude CLI has never accepted bypass
+        // mode, Claude blocks on a full-screen one-time consent dialog — no session ever starts and
+        // the launch dies silently at the server's session-id timeout. Pre-accept it here in the
+        // user settings (the store Claude 2.1.x actually reads/writes for this) so the reviewer
+        // starts cleanly. Only for the bypass path — interactive agents never pass bypassPermissions
+        // and a human can dismiss any prompt anyway. Best-effort: a settings glitch never blocks
+        // launch (the PTY dialog detector is the fail-fast backstop if this didn't take).
+        if (ctx.IsReviewFlow) {
+            try {
+                AcceptBypassPermissionsMode();
+            } catch (Exception ex) {
+                LogBypassAcceptFailed(ex, ctx.AgentId);
+            }
+        }
+
         try {
             if (ctx.Tools is { Length: > 0 }) {
                 MergeToolPermissions(ctx.Worktree.Path, ctx.Tools);
@@ -421,6 +437,63 @@ internal sealed partial class ClaudeLauncher(
     }
 
     /// <summary>
+    /// The user-settings boolean Claude 2.1.x reads to skip its Bypass-Permissions consent dialog.
+    /// Verified against the shipped 2.1.x binary: it reads this key from userSettings (and localSettings/
+    /// flagSettings/policySettings) and writes it to userSettings when the user accepts the dialog
+    /// interactively. The legacy <c>bypassPermissionsModeAccepted</c> flag in <c>~/.claude.json</c> was
+    /// migrated to this key and is no longer honored directly, so we write THIS one.
+    /// </summary>
+    internal const string BypassPermissionsAcceptedKey = "skipDangerousModePermissionPrompt";
+
+    /// <summary>
+    /// Records acceptance of Claude's Bypass-Permissions consent dialog in the user settings file
+    /// Claude reads (<c>$CLAUDE_CONFIG_DIR/settings.json</c> when set, else <c>~/.claude/settings.json</c>) —
+    /// the same effect as accepting the dialog once interactively, so an unattended reviewer never
+    /// wedges on it. The spawned Claude inherits <c>CLAUDE_CONFIG_DIR</c> from the daemon, so it reads
+    /// the same file this resolves.
+    /// </summary>
+    static void AcceptBypassPermissionsMode() => AcceptBypassPermissionsMode(ClaudePaths.UserSettings);
+
+    /// <summary>
+    /// Sets <see cref="BypassPermissionsAcceptedKey"/> = true in the settings file at
+    /// <paramref name="settingsPath"/>, merging into any existing settings and preserving every other
+    /// key. Idempotent. Deliberately does NOT overwrite a settings file it cannot parse — the file is
+    /// user-owned and may carry keys/comments the daemon must not destroy. Serialized under the same
+    /// lock as the other shared-config writes.
+    /// </summary>
+    internal static void AcceptBypassPermissionsMode(string settingsPath) {
+        lock (TrustWriteLock) {
+            JsonObject settings;
+
+            if (File.Exists(settingsPath)) {
+                JsonNode? parsed;
+                try {
+                    parsed = JsonNode.Parse(File.ReadAllText(settingsPath));
+                } catch {
+                    // Unparseable, user-owned settings — never clobber it.
+                    return;
+                }
+
+                if (parsed is not JsonObject obj) return; // a non-object root is not ours to rewrite
+                settings = obj;
+            } else {
+                settings = [];
+            }
+
+            var already = settings[BypassPermissionsAcceptedKey] is JsonValue v
+             && v.TryGetValue<bool>(out var b)
+             && b;
+
+            if (already) return;
+
+            // Bool literal assignment stays AOT-safe (matches the hasTrustDialogAccepted write above);
+            // JsonValue.Create<string> is the shape that trips IL3050, not this.
+            settings[BypassPermissionsAcceptedKey] = true;
+            WriteJsonAtomic(settingsPath, settings);
+        }
+    }
+
+    /// <summary>
     /// Loads a JSON object from disk, tolerating missing files and non-object roots
     /// by returning a fresh <see cref="JsonObject"/>. Ensures pre-trust logic never
     /// throws on an unexpected config shape and reintroduces the launch hang.
@@ -529,6 +602,9 @@ internal sealed partial class ClaudeLauncher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to pre-trust worktree for agent {AgentId} (continuing)")]
     partial void LogTrustWorktreeFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to pre-accept bypass-permissions mode for agent {AgentId} (continuing; the reviewer may wedge on the consent dialog)")]
+    partial void LogBypassAcceptFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to merge tool permissions for agent {AgentId} (continuing)")]
     partial void LogToolPermissionsFailed(Exception ex, string agentId);
