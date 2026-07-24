@@ -17,10 +17,15 @@ namespace Capacitor.Cli.Daemon.Services;
 ///
 /// The detector maintains a bounded, ANSI-stripped rolling window of recent output so a banner
 /// delivered across several PTY reads (or torn mid-word at a chunk boundary) still matches. A
-/// signature trips only when ALL of its markers are present in the window, which keeps ordinary
-/// session output — even output that mentions "bypass permissions mode" in prose — from tripping
-/// it. Once tripped it latches: the launch is already doomed, so every later frame reports the
-/// same reason.
+/// signature trips only when ALL of its markers are present in the window. Crucially, a signature's
+/// markers require STRUCTURAL evidence of the rendered dialog — the headline phrase PLUS the
+/// numbered selection menu ("1. No, exit" / "2. Yes, I accept") — not just the loose phrases. Prose
+/// or source that merely mentions "bypass permissions mode" and "yes, i accept" (this very file
+/// does) does not reproduce the numbered menu layout, so it cannot trip. This is defence-in-depth:
+/// the orchestrator additionally scans ONLY during the pre-session dialog phase (the consent dialog
+/// renders once at startup, before any session begins) and stops the moment the session is live, so
+/// ordinary reviewer/tool output that quotes a banner never reaches the detector at all. Once
+/// tripped it latches: the launch is already doomed, so every later frame reports the same reason.
 ///
 /// Text-only + source-generated regex — no reflection — so it is safe in the NativeAOT daemon.
 /// </summary>
@@ -31,14 +36,20 @@ internal sealed partial class ConsentDialogDetector {
     readonly record struct Signature(string[] Markers, string Message);
 
     static readonly Signature[] Signatures = [
+        // Bypass-Permissions consent dialog. Requires the headline PLUS BOTH numbered menu options
+        // ("1. No, exit" / "2. Yes, I accept") — the rendered selection layout, which prose/source
+        // that merely quotes the phrases does not reproduce. This structural set is what keeps a
+        // reviewer reading this file (or any doc that names the feature) from tripping a false wedge.
         new(
-            ["bypass permissions mode", "yes, i accept"],
+            ["bypass permissions mode", "1. no, exit", "2. yes, i accept"],
             "Claude is blocked on the Bypass-Permissions consent dialog and cannot be accepted "
           + "unattended. Accept it once by launching Claude interactively on this host and choosing "
           + "\"Yes, I accept\" (or by setting \"skipDangerousModePermissionPrompt\": true in the Claude "
           + "user settings), then retry the launch."),
+        // Workspace-trust dialog. The headline question is already highly specific; pairing it with a
+        // numbered menu option keeps it structural (a numbered selection, not loose prose).
         new(
-            ["do you trust the files in this"],
+            ["do you trust the files in this", "1. yes, proceed"],
             "Claude is blocked on the workspace-trust dialog and cannot be accepted unattended. Trust "
           + "the folder once by launching Claude interactively in it, then retry the launch."),
     ];

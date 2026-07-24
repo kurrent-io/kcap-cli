@@ -1335,9 +1335,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
                 }
 
-                if (dialogDetector?.Observe(data) is { } wedgeReason) {
-                    await FailWedgedLaunchAsync(agent, wedgeReason);
-                    return; // stop reading — the finally runs finalize + cleanup (kills the wedged PTY)
+                // Consent/trust dialogs are a PRE-SESSION concern: they render once at startup, before
+                // any session exists. Once the session is live (SessionId resolved from the transcript
+                // by DetectClaudeSessionIdAsync) the dialog phase is over — stop scanning so ordinary
+                // reviewer/tool output that merely quotes a banner phrase (e.g. a reviewer reading the
+                // detector's own source) can't latch a false wedge and kill a healthy reviewer.
+                if (dialogDetector is not null) {
+                    if (agent.SessionId is not null) {
+                        dialogDetector = null; // session live — release the detector + its window
+                    } else if (dialogDetector.Observe(data) is { } wedgeReason) {
+                        await FailWedgedLaunchAsync(agent, data, wedgeReason);
+                        return; // stop reading — the finally runs finalize + cleanup (kills the wedged PTY)
+                    }
                 }
 
                 // Append to the replay buffer AND fan out to local sinks atomically under
@@ -1392,8 +1401,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// cancels the read loop so its finally runs the normal finalize + cleanup. Sets Status="Failed"
     /// FIRST so FinalizeAgentRunAsync skips its own startup-failure classification (no double report).
     /// </summary>
-    async Task FailWedgedLaunchAsync(AgentInstance agent, string reason) {
+    async Task FailWedgedLaunchAsync(AgentInstance agent, byte[] triggeringChunk, string reason) {
         LogConsentDialogWedge(agent.Id, reason);
+
+        // The detector inspects a chunk BEFORE the read loop appends it to OutputBuffer, so append the
+        // triggering chunk now — otherwise a banner delivered in the first chunk (the common case) is
+        // absent from the persisted tail, defeating the very capture this log exists to preserve.
+        // TerminalOutputBuffer.Append is self-synchronized; the read loop has stopped feeding it.
+        agent.OutputBuffer.Append(triggeringChunk);
 
         // Capture the banner before termination/cleanup discards the buffer.
         PersistFailedLaunchLog(agent, reason);

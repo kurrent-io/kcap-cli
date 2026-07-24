@@ -45,12 +45,42 @@ public partial class AgentOrchestratorVendorTests {
         // (2) The wedged (still-alive) process was terminated.
         await Assert.That(pty.Terminated).IsTrue();
 
-        // (3) The PTY tail is on disk for post-mortem, containing the dialog text.
+        // (3) The PTY tail is on disk for post-mortem, containing the TRIGGERING banner chunk — not
+        // just the coded reason header. The detector inspects a chunk before the read loop appends it
+        // to OutputBuffer, so a banner delivered in the first chunk (this shape) must still be captured.
+        // Assert on banner-only text ("will not ask for your approval") that the reason string does
+        // NOT contain, so this can't pass merely because the reason header quotes "Yes, I accept".
         var failedDir = orch.FailedLaunchLogForTest!.Dir;
         var logs = Directory.Exists(failedDir) ? Directory.GetFiles(failedDir, "*.log") : [];
         await Assert.That(logs.Length).IsEqualTo(1);
         var captured = await File.ReadAllTextAsync(logs[0]);
-        await Assert.That(captured).Contains("Yes, I accept");
+        await Assert.That(captured).Contains("will not ask for your approval");
+    }
+
+    [Test]
+    public async Task ReviewFlow_reviewer_with_a_live_session_is_not_failed_fast_on_banner_like_output() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // The consent/trust dialog is a PRE-SESSION event: it renders once at startup, before any
+        // session exists. Once the session is live (SessionId resolved from the transcript) the dialog
+        // phase is over, so the detector must stop scanning — otherwise ordinary reviewer/tool output
+        // that merely quotes a banner phrase would latch a false wedge and kill a healthy reviewer.
+        var pty   = new BypassBannerPtyProcess(BypassDialogOutput, exitAfterBanner: true);
+        var agent = orch.SeedAgentForTest("rev-live", LaunchKind.ReviewFlow, status: "Starting", pty: pty);
+        agent.SessionId = "live-session-abc";
+
+        await orch.ReadAgentOutputForTest(agent).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // No consent-dialog fail-fast fired: the wedged-detector never terminated the process, and no
+        // Bypass-Permissions coded reason was reported (a startup-failure classification of the raw
+        // banner text is a different, non-hyphenated reason and is not asserted here).
+        await Assert.That(pty.Terminated).IsFalse();
+        await Assert.That(
+            server.LaunchFailedCalls.Any(c => c.AgentId == "rev-live" && c.Reason.Contains("Bypass-Permissions")))
+            .IsFalse();
     }
 
     [Test]

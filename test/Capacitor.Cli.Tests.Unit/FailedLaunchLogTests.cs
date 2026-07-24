@@ -77,6 +77,30 @@ public class FailedLaunchLogTests {
     }
 
     [Test]
+    public async Task Persist_creates_an_owner_only_file_in_an_owner_only_directory() {
+        // The retained tail can hold the reviewer's prompt, tool output, and any secrets the PTY
+        // echoed, so it must not be world/group readable. Unix-only: file modes are a no-op on Windows.
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir = TempDir();
+        try {
+            var log = new FailedLaunchLog(dir);
+
+            var path = log.Persist("agent-perms", Encoding.UTF8.GetBytes("secret PTY tail"), "wedged");
+
+            await Assert.That(path).IsNotNull();
+
+            const UnixFileMode ownerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            const UnixFileMode ownerOnlyDir  = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+            await Assert.That(File.GetUnixFileMode(path!)).IsEqualTo(ownerOnlyFile);
+            await Assert.That(File.GetUnixFileMode(log.Dir)).IsEqualTo(ownerOnlyDir);
+        } finally {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
     public async Task Persist_uses_a_path_safe_filename_for_a_hostile_agent_id() {
         var dir = TempDir();
         try {

@@ -513,6 +513,11 @@ internal sealed partial class ClaudeLauncher(
     /// rename (POSIX <c>rename(2)</c> / Win32 <c>MoveFileEx</c> with replace).
     /// A crash or concurrent reader never sees a truncated file — either the
     /// previous contents or the new contents, never a partial write.
+    ///
+    /// On Unix the target's existing permissions are PRESERVED across the temp+rename: rename(2)
+    /// swaps in the temp's inode, so a temp created under the umask (0644) would silently RELAX a
+    /// 0600 <c>settings.json</c> (which may hold secrets under <c>env</c>). The temp is stamped with
+    /// the target's current mode before creation, or 0600 for a brand-new file. No-op on Windows.
     /// </summary>
     internal static void WriteJsonAtomic(string path, JsonNode root) {
         // The temp file is written alongside the target, so the destination dir must
@@ -521,17 +526,50 @@ internal sealed partial class ClaudeLauncher(
         // relocated config — create it so the trust write doesn't throw.
         if (Path.GetDirectoryName(path) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
 
+        var createMode = ResolveCreateMode(path);
+
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
-        File.WriteAllText(tmp, root.ToJsonString(IndentedJsonOpts));
+
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
+        if (createMode is { } m) options.UnixCreateMode = m;
 
         try {
+            using (var fs = new FileStream(tmp, options))
+            using (var writer = new StreamWriter(fs)) {
+                writer.Write(root.ToJsonString(IndentedJsonOpts));
+            }
+
             File.Move(tmp, path, overwrite: true);
+
+            // Re-assert the mode on the published path (belt-and-braces against what the rename
+            // carries across, and against `overwrite: true` replacing a differently-moded target).
+            if (createMode is { } published && !OperatingSystem.IsWindows()) {
+                try { File.SetUnixFileMode(path, published); } catch { /* best-effort */ }
+            }
         } catch {
             try { File.Delete(tmp); } catch {
                 /* best-effort */
             }
 
             throw;
+        }
+    }
+
+    /// <summary>
+    /// The Unix create-mode for a <see cref="WriteJsonAtomic"/> temp: the target's CURRENT mode when
+    /// it already exists (preserve it — never relax a locked-down settings file), else owner-only
+    /// 0600 for a brand-new file. <c>null</c> on Windows (no Unix mode to apply).
+    /// </summary>
+    static UnixFileMode? ResolveCreateMode(string targetPath) {
+        if (OperatingSystem.IsWindows()) return null;
+
+        try {
+            return File.Exists(targetPath)
+                ? File.GetUnixFileMode(targetPath)
+                : UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        } catch {
+            // If the mode can't be read, fail safe to owner-only rather than the umask default.
+            return UnixFileMode.UserRead | UnixFileMode.UserWrite;
         }
     }
 

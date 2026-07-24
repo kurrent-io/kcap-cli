@@ -103,6 +103,24 @@ public class ConsentDialogDetectorTests {
     }
 
     [Test]
+    public async Task Prose_quoting_the_banner_phrases_without_the_menu_layout_does_not_trip() {
+        var detector = new ConsentDialogDetector();
+
+        // A reviewer reading source/docs about the feature (e.g. this detector's own file, which
+        // literally contains both phrases): the headline "bypass permissions mode" AND the accept
+        // wording "Yes, I accept" both appear, but NOT the dialog's numbered "1. No, exit" /
+        // "2. Yes, I accept" selection menu. Only the real full-screen dialog renders that numbered
+        // layout, so the co-occurrence of loose phrases in prose must NOT trip a false wedge.
+        var reason = detector.Observe(Utf8(
+            "This watchdog trips when Claude renders its bypass permissions mode dialog, where an "
+          + "unattended reviewer would otherwise have to choose \"Yes, I accept\" with no human "
+          + "present to answer it.\n"));
+
+        await Assert.That(reason).IsNull();
+        await Assert.That(detector.Tripped).IsFalse();
+    }
+
+    [Test]
     public async Task Marker_split_mid_word_across_two_chunks_still_trips() {
         var detector = new ConsentDialogDetector();
 
