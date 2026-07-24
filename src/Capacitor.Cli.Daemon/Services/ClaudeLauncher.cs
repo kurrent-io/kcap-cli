@@ -62,13 +62,12 @@ internal sealed partial class ClaudeLauncher(
         }
 
         // Unattended review-flow reviewers launch with `--permission-mode bypassPermissions`
-        // (see BuildArgs). On a host where the interactive Claude CLI has never accepted bypass
-        // mode, Claude blocks on a full-screen one-time consent dialog — no session ever starts and
-        // the launch dies silently at the server's session-id timeout. Pre-accept it here in the
-        // user settings (the store Claude 2.1.x actually reads/writes for this) so the reviewer
-        // starts cleanly. Only for the bypass path — interactive agents never pass bypassPermissions
-        // and a human can dismiss any prompt anyway. Best-effort: a settings glitch never blocks
-        // launch (the PTY dialog detector is the fail-fast backstop if this didn't take).
+        // (see BuildArgs). On a host that hasn't accepted bypass mode, Claude blocks on a
+        // one-time consent dialog and the launch dies silently at the server's timeout.
+        // Pre-accept it here in user settings so the reviewer starts cleanly — only for the
+        // bypass path, since interactive agents never pass it and a human can dismiss any
+        // prompt. Best-effort: the PTY dialog detector is the fail-fast backstop if this didn't
+        // take.
         if (ctx.IsReviewFlow) {
             try {
                 AcceptBypassPermissionsMode();

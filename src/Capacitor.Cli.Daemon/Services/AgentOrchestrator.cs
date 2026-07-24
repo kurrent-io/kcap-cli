@@ -198,9 +198,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     AgentKillQuarantine? _quarantine;
     OrphanReaper?        _orphanReaper;
 
-    // Retained tail-of-PTY capture for a FAILED launch — written under the same per-daemon record
-    // root as the PID records ({state}/{name}/agents/failed/), so a failed reviewer's terminal output
-    // (e.g. the consent dialog it wedged on) survives the worktree teardown for post-mortem.
+    // Tail-of-PTY capture for a FAILED launch, under the same per-daemon record root as the PID
+    // records ({state}/{name}/agents/failed/) — survives worktree teardown for post-mortem.
     FailedLaunchLog?     _failedLaunchLog;
     string               _daemonId    = "";
     string               _daemonEpoch = "";

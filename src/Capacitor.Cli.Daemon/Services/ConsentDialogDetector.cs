@@ -4,30 +4,21 @@ using System.Text.RegularExpressions;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Watches a spawned CLI's PTY output stream for a one-time, full-screen consent/trust dialog that
-/// a hosted, UNATTENDED launch (a review-flow reviewer) can never dismiss — so the process would
-/// otherwise sit on the prompt forever, no session would ever start, and the launch would die
-/// silently at the server's 30 s "waiting for session id" timeout with nothing surfaced.
+/// Watches a spawned CLI's PTY output for Claude Code's one-time Bypass-Permissions consent
+/// dialog, which a hosted, UNATTENDED launch (a review-flow reviewer) can never dismiss — it
+/// would otherwise block forever and die silently at the server's 30s "waiting for session id"
+/// timeout. The launcher pre-accepts bypass mode in user settings; this detector is the
+/// belt-and-braces fail-fast for when that write didn't take (org policy override, a relocated
+/// config dir, a read-only settings file, etc.).
 ///
-/// The motivating case is Claude Code's Bypass-Permissions consent dialog ("WARNING: Claude Code
-/// running in Bypass Permissions mode … 2. Yes, I accept"), which blocks on any host where the
-/// interactive CLI has never accepted bypass mode. The launcher now pre-accepts it in the user
-/// settings, but this detector is the belt-and-braces fail-fast for when that write didn't take
-/// (organization policy override, a relocated config dir, a read-only settings file, etc.).
+/// Maintains a bounded, ANSI-stripped rolling window so a banner split across PTY reads still
+/// matches. A signature trips only when ALL its markers — including the STRUCTURAL numbered
+/// menu layout ("1. No, exit" / "2. Yes, I accept"), not just the loose phrases — are present, so
+/// prose that merely mentions "bypass permissions mode" (like this file) can't false-trip.
+/// Defence-in-depth: the orchestrator also scans only during the pre-session phase, so ordinary
+/// session output never reaches the detector. Once tripped it latches.
 ///
-/// The detector maintains a bounded, ANSI-stripped rolling window of recent output so a banner
-/// delivered across several PTY reads (or torn mid-word at a chunk boundary) still matches. A
-/// signature trips only when ALL of its markers are present in the window. Crucially, a signature's
-/// markers require STRUCTURAL evidence of the rendered dialog — the headline phrase PLUS the
-/// numbered selection menu ("1. No, exit" / "2. Yes, I accept") — not just the loose phrases. Prose
-/// or source that merely mentions "bypass permissions mode" and "yes, i accept" (this very file
-/// does) does not reproduce the numbered menu layout, so it cannot trip. This is defence-in-depth:
-/// the orchestrator additionally scans ONLY during the pre-session dialog phase (the consent dialog
-/// renders once at startup, before any session begins) and stops the moment the session is live, so
-/// ordinary reviewer/tool output that quotes a banner never reaches the detector at all. Once
-/// tripped it latches: the launch is already doomed, so every later frame reports the same reason.
-///
-/// Text-only + source-generated regex — no reflection — so it is safe in the NativeAOT daemon.
+/// Text-only + source-generated regex — no reflection — safe in the NativeAOT daemon.
 /// </summary>
 internal sealed partial class ConsentDialogDetector {
     /// <summary>A known blocking dialog: it trips when every marker is present in the window.</summary>

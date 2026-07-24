@@ -5,25 +5,19 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// Persists the tail of a hosted agent's PTY output when its launch FAILS, under
-/// <c>{state-dir}/agents/failed/{sha256(agentId)}.log</c> — a directory that survives the failed
-/// launch's worktree teardown.
+/// <c>{state-dir}/agents/failed/{sha256(agentId)}.log</c> — survives the failed launch's
+/// worktree teardown, so the output that explained the failure (e.g. the consent dialog it
+/// wedged on) is still available post-mortem instead of an hours-long blind debug.
 ///
-/// Motivation: a failed launch disposed the runtime, removed the throwaway worktree, and dropped
-/// the in-memory terminal ring, so the terminal output that explained the failure (e.g. the
-/// Bypass-Permissions consent dialog the reviewer wedged on) was invisible post-mortem — the
-/// original incident was an hours-long blind debug. Keeping the last N KB on disk turns the next
-/// one into a <c>cat</c>.
+/// The retained tail can hold the reviewer's prompt, tool output, and any secrets the PTY
+/// echoed, so on Unix the directory is owner-only (0700) and the file owner-only (0600) —
+/// stamped at creation via <c>UnixCreateMode</c> and re-asserted after the atomic rename, so
+/// there's never a world-readable window. No-ops on Windows.
 ///
-/// The retained tail can hold the reviewer's prompt, tool output, and any secrets the PTY echoed,
-/// so on Unix the directory is created owner-only (0700) and the file owner-only (0600) — other
-/// local users must not be able to traverse in or read it. The mode is stamped at creation (via
-/// <c>UnixCreateMode</c>) so there is never a world-readable window, and re-asserted after the
-/// atomic rename. All mode work no-ops on Windows.
-///
-/// Best-effort by design: any I/O failure is swallowed and returns <c>null</c> — persisting a
-/// diagnostic must never itself fail a teardown. The filename is a SHA-256 of the (untrusted,
-/// wire-delivered) agent id, NOT the id itself, so no <c>..</c>/separator can escape the directory
-/// (same discipline as <see cref="AgentPidRecordStore"/>). Plain file I/O — NativeAOT-safe.
+/// Best-effort: any I/O failure is swallowed and returns <c>null</c> — a diagnostic must never
+/// fail a teardown. The filename is a SHA-256 of the (untrusted) agent id, not the id itself, so
+/// no <c>..</c>/separator can escape the directory (same discipline as
+/// <see cref="AgentPidRecordStore"/>). Plain file I/O — NativeAOT-safe.
 /// </summary>
 internal sealed class FailedLaunchLog(string stateDir, int maxBytes = 64 * 1024) {
     readonly string _dir = Path.Combine(stateDir, "agents", "failed");
