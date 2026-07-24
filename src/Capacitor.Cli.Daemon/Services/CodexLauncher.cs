@@ -19,6 +19,28 @@ internal sealed partial class CodexLauncher(
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
 
+    /// <summary>
+    /// Enumerates the effective MCP server names a review-flow reviewer would otherwise inherit —
+    /// the recursion guard's foundation. Default runs <c>codex mcp list --json</c>
+    /// (<see cref="CodexMcpInventory.ListInheritedServerNames"/>), which reports the fully-composed
+    /// effective list (user <c>$CODEX_HOME/config.toml</c> <c>[mcp_servers]</c> AND active native
+    /// plugins), honouring <c>CODEX_HOME</c> exactly as the spawned reviewer will. Reading
+    /// <c>config.toml</c> alone (the pre-hardening behaviour) missed plugin-registered servers, so a
+    /// flow-capable plugin server would never be disabled. Injectable so <see cref="BuildArgs"/>
+    /// stays deterministic in unit tests. Throwing here is fail-closed — the launch is rejected
+    /// rather than proceeding with an incomplete view of what the reviewer inherits.
+    /// </summary>
+    internal Func<IReadOnlyList<string>> ReadInheritedMcpServerNames { get; init; } =
+        () => CodexMcpInventory.ListInheritedServerNames(config.CodexPath);
+
+    /// <summary>Inert <c>command</c> stamped on every disabled server's override. Codex requires a
+    /// transport to be present to accept an <c>mcp_servers.&lt;name&gt;</c> override — a plugin-provided
+    /// server has no transport at the config layer, so <c>enabled=false</c> alone fails config load
+    /// with "invalid transport" (verified against 0.144.3). Supplying this sentinel satisfies the
+    /// validator; it is never executed because the server is disabled, and Codex does not check that
+    /// the command exists for a disabled server, so the value is cross-platform safe.</summary>
+    internal const string DisabledServerSentinelCommand = "kcap-review-flow-isolation-disabled";
+
     static readonly string[] CriticalHookEvents = ["SessionStart", "Stop", "PermissionRequest"];
 
     public void Prepare(LauncherContext ctx) {
@@ -88,16 +110,20 @@ internal sealed partial class CodexLauncher(
             ctx.IsReviewFlow ? "never" : "on-request"
         };
 
-        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result, which can
-        // only submit a result — never start a flow. Clear-then-whitelist, in this order:
-        // the bare `mcp_servers={}` FIRST replaces the entire [mcp_servers] table from
-        // ~/.codex/config.toml; the dotted overrides then insert into the now-empty table.
-        // Dotted overrides alone MERGE into the user's table and would re-expose whatever MCP
-        // servers the user has registered (including a hand-registered kcap-flows with
-        // start_review_flow — the recursion guard would silently vanish).
+        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result (+ any
+        // allowlisted, non-flow-starting server) — it can only submit a result, never start a
+        // flow. Codex's `-c` overrides deep-merge into ~/.codex/config.toml (no analog of
+        // Claude's `--strict-mcp-config`), so we (1) DISABLE every inherited server — from
+        // config.toml AND native plugins, enumerated via `codex mcp list --json` — in one
+        // `-c mcp_servers={ … }` table override that handles dotted/plugin names too, then
+        // (2) force-enable exactly the whitelisted names with `enabled=true`. Otherwise a
+        // reviewer inherits every user MCP server (including a hand-registered kcap-flows with
+        // start_review_flow, vanishing the recursion guard), or — if the user's own config
+        // already disabled a whitelisted name — starts without its result-submission channel.
+        // Fail-closed: if the inherited set can't be enumerated, DisableInheritedMcpServers
+        // throws and the launch is rejected rather than proceeding with nothing disabled.
         if (ctx.IsReviewFlow) {
-            args.Add("-c");
-            args.Add("mcp_servers={}");
+            DisableInheritedMcpServers(args, ctx);
             AddFlowResultServer(args, ctx);
             AddAllowlistServers(args, ctx);
         }
@@ -122,6 +148,78 @@ internal sealed partial class CodexLauncher(
         return new([.. args], McpConfigPath: null);
     }
 
+    /// <summary>
+    /// Real, fail-closed MCP isolation for a review-flow reviewer: disables EVERY server the
+    /// reviewer would otherwise inherit — from the user's <c>$CODEX_HOME/config.toml</c> AND from
+    /// active native plugins (both reported by <see cref="ReadInheritedMcpServerNames"/> via
+    /// <c>codex mcp list --json</c>) — so only the servers we explicitly whitelist afterwards load.
+    ///
+    /// All disables go in ONE <c>-c mcp_servers={ … }</c> TOML-value override rather than per-server
+    /// dotted keys, because:
+    /// <list type="bullet">
+    ///   <item>A dotted/quoted server name (e.g. <c>"corp.flows"</c>) cannot be expressed in Codex's
+    ///     <c>-c</c> dotted-KEY path — it mis-splits and fails config load. A TOML-quoted key inside
+    ///     the VALUE (<c>mcp_servers={"corp.flows"={…}}</c>) targets it exactly, so a dotted flow
+    ///     server is disabled, not skipped (the pre-hardening code logged and LEFT it — the guard
+    ///     bypass this fix closes).</item>
+    ///   <item>A plugin-provided server has no transport at the config layer, so a bare
+    ///     <c>enabled=false</c> fails config load with "invalid transport"; stamping the inert
+    ///     <see cref="DisabledServerSentinelCommand"/> transport satisfies the validator while the
+    ///     server stays off.</item>
+    ///   <item>Multiple separate <c>-c mcp_servers={…}</c> overrides do NOT accumulate (last wins),
+    ///     whereas a single one deep-merges cleanly over the base file and composes with the dotted
+    ///     whitelist ENABLE overrides added afterwards (all verified against Codex 0.144.3).</item>
+    /// </list>
+    ///
+    /// Fail-closed: <see cref="ReadInheritedMcpServerNames"/> throws
+    /// <see cref="CodexReviewerMcpIsolationException"/> when the inherited set cannot be
+    /// authoritatively enumerated; that propagates out of <see cref="BuildArgs"/> and the
+    /// orchestrator rejects the launch — we never proceed having disabled nothing.
+    /// </summary>
+    void DisableInheritedMcpServers(List<string> args, LauncherContext ctx) {
+        var whitelisted = WhitelistedServerNames(ctx);
+
+        var entries = new List<string>();
+
+        foreach (var name in ReadInheritedMcpServerNames()) {
+            if (string.IsNullOrEmpty(name)) continue;
+            if (whitelisted.Contains(name)) continue;
+
+            // TomlString both quotes and escapes, so ANY name — dotted, quoted, or containing
+            // control chars — becomes a valid inline-table key that Codex resolves to exactly one
+            // server. The sentinel transport makes plugin-provided (transport-less) servers
+            // disable-able too.
+            entries.Add($"{TomlString(name)}={{enabled=false,command={TomlString(DisabledServerSentinelCommand)},args=[]}}");
+        }
+
+        if (entries.Count == 0) return;
+
+        args.Add("-c");
+        args.Add($"mcp_servers={{{string.Join(",", entries)}}}");
+    }
+
+    /// <summary>The MCP server names <see cref="AddFlowResultServer"/> +
+    /// <see cref="AddAllowlistServers"/> will enable — the disable pass must never disable one of
+    /// these. Empty when the daemon has no server URL / kcap path (nothing is whitelisted, so the
+    /// disable pass strips everything — the recursion-safe default).</summary>
+    HashSet<string> WhitelistedServerNames(LauncherContext ctx) {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return set;
+
+        set.Add("kcap-flow-result");
+
+        foreach (var name in ctx.McpAllowlist ?? []) {
+            var descriptor = KcapMcpRegistry.Resolve(name);
+
+            if (descriptor is null || descriptor.StartsFlows) continue;
+
+            set.Add(descriptor.Id);
+        }
+
+        return set;
+    }
+
     /// <summary>Registers the reviewer-side result-submission server. Skipped (zero
     /// servers — the recursion-safe default) when the daemon has no server URL or kcap path;
     /// the reviewer then falls back to the transcript marker per the prompt contract.</summary>
@@ -130,6 +228,12 @@ internal sealed partial class CodexLauncher(
 
         const string name = "kcap-flow-result";
 
+        // Force-enable: the disable pass above skips this name, but the user's OWN
+        // ~/.codex/config.toml may already have it (or never had it) set to enabled=false from
+        // a prior manual registration. `-c` deep-merges over that file, so skipping the disable
+        // is not enough on its own — an explicit enabled=true override wins regardless.
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.enabled=true");
         args.Add("-c");
         args.Add($"mcp_servers.{name}.command={TomlString(config.CapacitorPath)}");
         args.Add("-c");
@@ -167,6 +271,10 @@ internal sealed partial class CodexLauncher(
             var id       = descriptor.Id;
             var argsList = string.Join(",", descriptor.Args.Select(TomlString));
 
+            // Force-enable for the same reason as AddFlowResultServer: the user's own config
+            // may already carry this name disabled, and `-c` only deep-merges over it.
+            args.Add("-c");
+            args.Add($"mcp_servers.{id}.enabled=true");
             args.Add("-c");
             args.Add($"mcp_servers.{id}.command={TomlString(config.CapacitorPath)}");
             args.Add("-c");
