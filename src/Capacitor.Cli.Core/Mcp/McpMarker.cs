@@ -26,10 +26,10 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
 
     // Test seam: redirect the CENTRAL marker root (normally the user profile's `.kcap`) so unit tests
     // never read/write the real shared `~/.kcap/mcp-markers` — a single process-global dir that races
-    // across parallel suites and pollutes the developer's home (AI-1294). Pinned once for the whole
-    // test assembly by `McpMarkerGlobalSetup` (mirrors `DaemonLockPaths.OverrideDirectoryForTesting` /
-    // `DaemonPathsGlobalSetup`), so there is no per-test null window that would fall back to the real dir.
-    static string? _centralRootOverride;
+    // across parallel suites and pollutes the developer's home. Pinned once for the whole test
+    // assembly by `McpMarkerGlobalSetup` (mirrors `DaemonLockPaths.OverrideDirectoryForTesting` /
+    // `DaemonPathsGlobalSetup`). Volatile so the assembly-hook write publishes to every test thread.
+    static volatile string? _centralRootOverride;
     internal static void OverrideCentralRootForTesting(string? kcapRoot) => _centralRootOverride = kcapRoot;
 
     public bool Owns(string configPath, string name, JsonNode entry) {

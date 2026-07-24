@@ -3,20 +3,11 @@ using Capacitor.Cli.Core.Mcp;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Assembly-level safety net for MCP ownership markers (mirrors <see cref="DaemonPathsGlobalSetup"/>).
-///
-/// <para><see cref="McpMarker"/>'s central store is pinned under the real user profile
-/// (<c>~/.kcap/mcp-markers</c>) via <c>GetFolderPath(UserProfile)</c>, which ignores a redirected
-/// <c>$HOME</c>/<c>KCAP_CONFIG_DIR</c>. So any test that constructs a real <c>McpMarker</c> (the plugin
-/// suites, <c>UninstallCommandTests</c>, <c>McpMarkerTests</c>) reads/writes/deletes the developer's
-/// real central dir. Under parallel execution those cross-suite touches raced (AI-1294) — and they
-/// pollute the real home regardless.</para>
-///
-/// <para>Pinning the central root to a throwaway temp dir for the whole process makes the real
-/// directory unreachable regardless of test order or parallelism, with no per-test override to
-/// maintain (and no <c>null</c> window that would fall back to the real dir). Marker files are keyed
-/// by config-path hash, so parallel tests write distinct files here and never collide; nothing
-/// enumerates the dir, so concurrent writes are safe.</para>
+/// Pins <see cref="McpMarker"/>'s central marker root to a throwaway temp dir for the whole test
+/// assembly (mirrors <see cref="DaemonPathsGlobalSetup"/>). Without it a real <c>McpMarker</c>
+/// resolves the central store under the real user profile (<c>~/.kcap/mcp-markers</c>), which
+/// parallel suites raced on and which pollutes the developer's home. Set once before any test runs —
+/// no per-test override, and no window where a test falls back to the real dir.
 /// </summary>
 public class McpMarkerGlobalSetup {
     internal static readonly string SharedMarkerRoot = Path.Combine(
@@ -30,9 +21,11 @@ public class McpMarkerGlobalSetup {
         McpMarker.OverrideCentralRootForTesting(SharedMarkerRoot);
     }
 
+    // Delete the temp root but leave the override pinned: a late/background McpMarker call after
+    // teardown then just recreates a file under the (removed) temp root, never the real ~/.kcap —
+    // nulling the override here would reopen that real-home fallback window.
     [After(Assembly)]
     public static void CleanupCentralMarkerRoot() {
-        McpMarker.OverrideCentralRootForTesting(null);
         try { Directory.Delete(SharedMarkerRoot, recursive: true); } catch { /* best effort */ }
     }
 }

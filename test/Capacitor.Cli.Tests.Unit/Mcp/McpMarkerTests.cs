@@ -97,7 +97,7 @@ public class McpMarkerTests {
     // Exercises the REAL central-path resolution (no per-config markerPathFor override). The central
     // root is the assembly-pinned throwaway temp dir (McpMarkerGlobalSetup), never the real
     // ~/.kcap/mcp-markers, so this touches no shared real state — no cleanup or serialization needed
-    // (a/b resolve to distinct config-hash files, AI-1294).
+    // (a/b resolve to distinct config-hash files).
     [Test]
     public async Task Two_configs_in_same_dir_have_independent_ownership() {
         var dir = Directory.CreateTempSubdirectory("kcap-marker-indep-").FullName;

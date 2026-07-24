@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// The central-marker case (the edge where the real profile is itself a git repo, so McpMarker treats
 /// the config as non-user-scope and would write under <c>~/.kcap/mcp-markers</c>) no longer needs
 /// per-test handling here: <see cref="McpMarkerGlobalSetup"/> pins McpMarker's central root to a
-/// throwaway temp dir for the whole assembly, so NO test touches the real shared dir (AI-1294).
+/// throwaway temp dir for the whole assembly, so NO test touches the real shared dir.
 ///
 /// Suites using this must be <c>[NotInParallel("HomeEnvVarMutation")]</c> so the profile McpMarker
 /// reads stays stable underneath the test.
