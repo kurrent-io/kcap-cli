@@ -13,7 +13,7 @@ public class HarnessNudgeEmitterTests {
         var set = new HashSet<string>(ids, StringComparer.Ordinal);
         DetectedAgent A(string id) => new(BinaryFound: set.Contains(id), InstallSignalFound: false);
         return new(A("claude"), A("codex"), A("cursor"), A("copilot"), A("gemini"),
-                   A("kiro"), A("pi"), A("opencode"), A("antigravity"));
+                   A("kiro"), A("pi"), A("opencode"), A("antigravity"), A("dsh"));
     }
 
     static string? Fragment(TempDir tmp, AgentDetectionResult detected, Func<string, AgentDetectionInputs, bool> isWired, bool optedOut = false) =>

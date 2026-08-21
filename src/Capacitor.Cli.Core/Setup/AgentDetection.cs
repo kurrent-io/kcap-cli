@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Dsh;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
@@ -24,7 +25,8 @@ public sealed record AgentDetectionInputs(
     string? PathEnv, string? PathExt, bool IsWindows, string? Home,
     string? KiroHome = null, string? PiAgentDir = null, string? OpenCodeConfigDir = null,
     string? XdgConfigHome = null, string? XdgDataHome = null, string? GeminiCliHome = null,
-    string? CopilotHome = null, OsPlatform Platform = OsPlatform.Linux, string? AppData = null);
+    string? CopilotHome = null, OsPlatform Platform = OsPlatform.Linux, string? AppData = null,
+    string? DshHome = null);
 
 /// <summary>
 /// One vendor's two independent detection signals: a PATH binary probe and a filesystem
@@ -39,7 +41,7 @@ public sealed record DetectedAgent(bool BinaryFound, bool InstallSignalFound) {
 public sealed record AgentDetectionResult(
     DetectedAgent Claude, DetectedAgent Codex, DetectedAgent Cursor, DetectedAgent Copilot,
     DetectedAgent Gemini, DetectedAgent Kiro, DetectedAgent Pi, DetectedAgent OpenCode,
-    DetectedAgent Antigravity);
+    DetectedAgent Antigravity, DetectedAgent Dsh);
 
 /// <summary>
 /// Detects installed coding-agent CLIs by composing a PATH binary probe with each vendor's
@@ -83,7 +85,10 @@ public static class AgentDetection {
             // IsInstalled covers either root; the PATH probes cover a fresh install that has
             // not created a root yet — and the CLI binary is `agy`, not `antigravity`, so both
             // names must be probed or an agy-only machine goes undetected.
-            Antigravity: new(Bin("antigravity") || Bin("agy"), AntigravityPaths.IsInstalledPure(home, i.GeminiCliHome)));
+            Antigravity: new(Bin("antigravity") || Bin("agy"), AntigravityPaths.IsInstalledPure(home, i.GeminiCliHome)),
+            // dsh keeps its Cordis profile + plugin under ~/.dsh (relocatable via DSH_HOME);
+            // the PATH probe covers a fresh install that hasn't created it yet.
+            Dsh: new(Bin("dsh"), DshPaths.IsInstalledPure(home, i.DshHome)));
     }
 
     /// <summary>Current-process defaults: real PATH/PATHEXT/HOME/env, matching what the CLI
@@ -104,7 +109,8 @@ public static class AgentDetection {
         Platform: OperatingSystem.IsMacOS()   ? OsPlatform.MacOs
                 : OperatingSystem.IsWindows() ? OsPlatform.Windows
                 :                               OsPlatform.Linux,
-        AppData: OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) : null);
+        AppData: OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) : null,
+        DshHome: Environment.GetEnvironmentVariable("DSH_HOME"));
 
     /// <summary>
     /// Probes <paramref name="i"/>'s PATH for <paramref name="binaryName"/>. Returns false on a

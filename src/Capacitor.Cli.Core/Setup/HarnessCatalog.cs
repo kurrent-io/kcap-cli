@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Dsh;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -57,6 +58,8 @@ public static class HarnessCatalog {
             i => OpenCodeExtensionInstaller.IsInstalled(OpenCodePaths.KcapPluginPure(i.Home, i.OpenCodeConfigDir, i.XdgConfigHome))),
         new("antigravity", "Antigravity", "--antigravity", r => r.Antigravity,
             i => AntigravityHooksInstaller.IsInstalled(AntigravityPaths.GlobalHooksJsonPure(i.Home, i.GeminiCliHome))),
+        new("dsh", "DeepSeek Harness", "--dsh", r => r.Dsh,
+            i => DshExtensionInstaller.IsInstalled(DshPaths.KcapPluginPure(i.Home, i.DshHome))),
     ];
 
     public static KnownHarness? ById(string vendorId) =>
