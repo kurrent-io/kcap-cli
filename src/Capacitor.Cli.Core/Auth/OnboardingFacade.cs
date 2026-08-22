@@ -241,6 +241,9 @@ public sealed class OnboardingFacade(
 
     async Task<AuthResult> LoginWorkOSAsync(
             HttpClient http, AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
+        // No local browser any more: construction moved into OAuthLoginFlow.AcquireWorkOSAsync, which
+        // is where the join collaborator is attached and where the instance is owned. One site instead
+        // of three — see the ownership guard, which enumerates them.
         var authenticated = await OAuthLoginFlow.WorkOSTokensForServerAsync(
             http, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice,
             WorkOSBrowser, ct, progress,
