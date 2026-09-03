@@ -30,6 +30,7 @@ public static class CommandServices {
         services.AddTransient<ReportVersionCommand>();
         services.AddTransient<ReposCommand>();
         services.AddTransient<ReviewCommand>();
+        services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();

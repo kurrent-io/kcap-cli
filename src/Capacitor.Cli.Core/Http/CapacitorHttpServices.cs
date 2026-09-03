@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Core.Http;
@@ -15,6 +16,10 @@ public static class CapacitorHttpServices {
         // Here rather than beside ConfigRoot: the refreshes need the anonymous and WorkOS lanes, so a
         // host that never stands up HTTP is never handed a store that can reach the network.
         services.AddSingleton<TokenStore>();
+        // Singletons because each holds a cache: a per-resolve instance would re-discover and re-mint
+        // on every client build, which is what these exist to avoid.
+        services.AddSingleton<AuthProviderDiscovery>();
+        services.AddSingleton<MachineTokenProvider>();
         services.AddSingleton<ICredentialSource, ResolvingCredentialSource>();
         services.AddSingleton<ICapacitorHttpClient, CapacitorHttpClient>();
         services.AddSingleton<ISessionsApi, SessionsApi>();
@@ -24,7 +29,11 @@ public static class CapacitorHttpServices {
         services.AddSingleton<IMachinesApi, MachinesApi>();
         services.AddSingleton<IReviewApi, ReviewApi>();
         services.AddTransient<ServerVersionCaptureHandler>();
-        services.AddTransient<ObservationHeaderHandler>();
+        // Both values are resolved once, here: the handler is registered per lane and constructed
+        // per request, so reading the profile inside it would re-read config on every send.
+        services.AddTransient(sp => new ObservationHeaderHandler(
+            ObservationHeaderHandler.ProcessVersion,
+            sp.GetRequiredService<ProfileContext>().Effective?.UpdateCheck == false));
         services.AddTransient<UnauthorizedRecoveryHandler>();
 
         services.AddHttpClient(CapacitorClients.Default)
@@ -54,20 +63,39 @@ public static class CapacitorHttpServices {
             // A caller may still set an Authorization header by hand on this lane.
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
-        // No proxy: an ambient proxy setting would route a loopback grant off the machine it was
-        // minted for. No redirect for the same reason — the URL is itself the credential, so a hop
-        // hands it to whatever host the 3xx names.
-        services.AddHttpClient(CapacitorClients.Loopback)
-            .AddHttpMessageHandler<ObservationHeaderHandler>()
-            .ConfigurePrimaryHttpMessageHandler(
-                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
-            .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
+        services.AddLoopbackLane();
 
         // The observation tags ride here too, so a caller supplying its own bearer no longer has to
         // remember to attach them — which is what made the guarantee a convention rather than a rule.
         services.AddHttpClient(CapacitorClients.Bearer)
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
+
+        return services;
+    }
+
+    /// <summary>
+    /// The loopback lane and nothing else, for a host with no server, no credential and no config it
+    /// is allowed to read: it declares no update-check preference rather than resolving a profile to
+    /// find one, which is the only part of the lane that would otherwise need config authority.
+    /// </summary>
+    public static IServiceCollection AddCapacitorLoopbackClient(this IServiceCollection services) {
+        services.AddTransient(_ => new ObservationHeaderHandler(
+            ObservationHeaderHandler.ProcessVersion, updateCheckOff: false));
+
+        return services.AddLoopbackLane();
+    }
+
+    // No proxy: an ambient proxy setting would route a loopback grant off the machine it was minted
+    // for. No redirect for the same reason — the URL is itself the credential, so a hop hands it to
+    // whatever host the 3xx names. Callers set their own timeout: the lane serves a 10s manifest read
+    // and a bridge that blocks until a human decides.
+    static IServiceCollection AddLoopbackLane(this IServiceCollection services) {
+        services.AddHttpClient(CapacitorClients.Loopback)
+            .AddHttpMessageHandler<ObservationHeaderHandler>()
+            .ConfigurePrimaryHttpMessageHandler(
+                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
         return services;

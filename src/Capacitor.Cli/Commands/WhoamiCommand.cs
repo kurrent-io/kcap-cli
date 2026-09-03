@@ -12,7 +12,9 @@ namespace Capacitor.Cli.Commands;
 /// is not an answer: "expires tomorrow" only says a clock hasn't passed, so a token the server
 /// rejects still looks valid. Hence the probe.
 /// </summary>
-public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
+public sealed class WhoamiCommand(
+        ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
+        AuthProviderDiscovery discovery) {
     /// <summary>Cheap authenticated GET used purely to ask "do you accept this token?".</summary>
     internal const string ProbePath = "/api/me/notification-prefs";
 
@@ -39,7 +41,7 @@ public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, To
     public async Task<int> HandleAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        var provider = await HttpClientExtensions.DiscoverProviderAsync(baseUrl, config, profiles, tokens);
+        var provider = await discovery.DiscoverAsync(baseUrl, config, profiles, tokens);
 
         if (provider == "None") {
             await Console.Out.WriteLineAsync("Provider: None (no authentication)");

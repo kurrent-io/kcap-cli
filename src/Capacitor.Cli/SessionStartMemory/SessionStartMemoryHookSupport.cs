@@ -4,29 +4,11 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.SessionStartMemory;
 
 /// <summary>
-/// The two hook-side concerns every SessionStart memory adapter needs and must not get wrong,
-/// factored out of the per-vendor hook commands so the next adapter inherits them instead of
-/// rediscovering them. Both were real defects found in review of the Codex adapter.
-///
-/// <para>The vendor hooks own their envelope, eligibility and ordering — those genuinely differ per
-/// harness. Only these two are identical everywhere, so only these two live here.</para>
+/// The SessionStart memory wiring that is identical across every vendor adapter. The hooks own their
+/// envelope, eligibility and ordering — those genuinely differ per harness — so only what does not
+/// vary lives here.
 /// </summary>
 internal static class SessionStartMemoryHookSupport {
-    /// <summary>
-    /// Whether memory injection may attempt auth discovery for <paramref name="baseUrl"/> at all.
-    ///
-    /// <para>MUST be checked before any client construction. The authenticated-client helper funnels
-    /// through <c>EnsureAbsolute</c>, which prints a hint and calls <c>Environment.Exit(2)</c> on a
-    /// URL it cannot accept. From a hook whose host blocks on (or parses) stdout, exiting there kills
-    /// the process before the required output is written, so the harness sees nothing and rejects the
-    /// session — strictly worse than silently skipping an optional memory fragment.</para>
-    ///
-    /// <para>Deliberately the SAME predicate <c>EnsureAbsolute</c> itself uses, so this guard can
-    /// never disagree with the validator it exists to protect. Single-sourced through
-    /// <see cref="HookHttp.IsPostable"/>.</para>
-    /// </summary>
-    public static bool CanAttempt(string? baseUrl) => HookHttp.IsPostable(baseUrl);
-
     /// <summary>
     /// Builds the combined memory + guidelines SessionStart context provider. Both lanes share one
     /// authenticated client and the composite resolves the repo/machine scope ONCE for both. Which lanes actually run is decided per request via

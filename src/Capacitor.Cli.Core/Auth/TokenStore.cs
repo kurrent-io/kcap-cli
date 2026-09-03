@@ -635,11 +635,9 @@ public sealed class TokenStore(ConfigRoot config, IHttpClientFactory httpFactory
         // The localhost default is a fallback, not evidence of where the token was minted.
         var stamped = tokens.ServerUrl ?? (configured is not null ? ServerIdentity.Canonicalize(configured) : null);
 
-        // PostWithRetryAsync runs EnsureAbsolute, which Environment.Exit(2)s on a scheme-less URL.
-        // Refresh is reached from daemon/background callers via GetValidTokensForProfileAsync and must fail
-        // gracefully (return null), never terminate the process — so validate here instead of
-        // letting the retry helper exit. The hook *entry* paths still EnsureAbsolute-and-exit by
-        // design; this guard only covers the refresh call.
+        // Reached from daemon/background callers via GetValidTokensForProfileAsync, which expects a
+        // stale-token failure here, not an exception — so an unusable URL degrades to null rather
+        // than the UnusableServerUrlException an interactive command path would throw.
         if (!HttpClientExtensions.IsAcceptableUrl(url)) {
             return null;
         }

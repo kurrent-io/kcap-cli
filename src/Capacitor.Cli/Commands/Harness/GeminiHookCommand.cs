@@ -55,10 +55,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// <c>decision: "allow"</c> but ANY other code to <c>decision: "deny"</c>, which
 /// <c>isBlockingDecision()</c> honours — that is a BLOCKED session, not junk
 /// context. kcap stays out of that band only because <c>hook</c> is one of
-/// <c>CrashReporter.FailOpenCommands</c>, which is what turns
-/// <c>HttpClientExtensions.EnsureAbsolute</c>'s <c>Environment.Exit(2)</c> into a
-/// throw and makes Program.cs's top-level catch return 0. That set is load-bearing
-/// here; <c>GeminiHookOutputContractTests</c> pins it.
+/// <c>CrashReporter.FailOpenCommands</c>, which is what makes every top-level
+/// handler in Program.cs return 0 for it. That set is load-bearing here;
+/// <c>GeminiHookOutputContractTests</c> pins it.
 ///
 /// Behaviour above is measured on <c>gemini 0.53.0</c> — a version-specific
 /// observation, not a guarantee. The mitigation does not depend on it: emitting a
@@ -189,7 +188,7 @@ sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookC
             TimeSpan   budget) {
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
-         || !SessionStartMemoryHookSupport.CanAttempt(Url))
+         || !HookHttp.IsPostable(Url))
             return null;
 
         try {
@@ -452,8 +451,8 @@ sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookC
 
         using var cts = new CancellationTokenSource(NotificationPostBudget);
         try {
-            // Status-returning variant (not CreateAuthenticatedClientAsync, which writes a
-            // per-turn "expired" line to stderr): on a lapse, stay quiet and skip the doomed POST.
+            // The hook verb, so a lapse writes nothing to stderr: stay quiet and skip the doomed
+            // POST rather than spend a per-turn line on it.
             var (client, status) = await http.ForHookAsync(cts.Token);
             using (client) {
                 if (AgentHookPoster.IsAuthLapsed(status)) return 0;

@@ -15,18 +15,16 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <summary>
 /// The hidden <c>kcap report-version</c> command, invoked by the npm wrapper right after
 /// `kcap update` installs a new binary. Its whole purpose is to make ONE authenticated,
-/// side-effect-free GET through <see cref="HttpClientExtensions.CreateClientWithAuthStatusAsync"/>
-/// — the single choke point that attaches <see cref="HttpClientExtensions.CliVersionHeader"/> — so
-/// the server's version observer sees the new version immediately instead of waiting for the next
-/// incidental request. It reuses <see cref="WhoamiCommand.ProbePath"/> (the same read-only
-/// identity GET <c>kcap whoami</c> uses) rather than any write-side-effecting endpoint. It must
-/// never surface an error: not-authenticated makes no request at all, and a server fault, a slow
-/// server, or no server configured at all still returns 0.
+/// side-effect-free GET through <see cref="ICapacitorHttpClient.ForHookAsync"/> — whose client
+/// pipeline attaches <see cref="HttpClientExtensions.CliVersionHeader"/> — so the server's version
+/// observer sees the new version immediately instead of waiting for the next incidental request.
+/// It reuses <see cref="WhoamiCommand.ProbePath"/> (the same read-only identity GET
+/// <c>kcap whoami</c> uses) rather than any write-side-effecting endpoint. It must never surface
+/// an error: not-authenticated makes no request at all, and a server fault, a slow server, or no
+/// server configured at all still returns 0.
 /// </summary>
 // Bare, not keyed: KCAP_URL is read by every resolution in the assembly and inherited by every
-// child, so no cohort of key-holders can exclude its observers. Assembly-wide exclusion also covers
-// HttpClientExtensions' process-wide /auth/config discovery cache, where a stub here would
-// otherwise decide what a concurrent test's stub returns.
+// child, so no cohort of key-holders can exclude its observers.
 [NotInParallel]
 public class ReportVersionCommandTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -44,23 +42,20 @@ public class ReportVersionCommandTests : IDisposable {
 
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
+        // No stand-in when resolution found none: an unusable server is exactly the state the
+        // no-base-url case has to exercise, and a placeholder would hand it a reachable one.
         services.AddSingleton(
-            new CapacitorServer(profiles.Resolution.ServerUrl ?? "http://localhost:5108", Config.Root, profiles));
+            new CapacitorServer(profiles.Resolution.ServerUrl ?? "", Config.Root, profiles));
         services.AddCapacitorHttp();
         _sp = services.BuildServiceProvider();
 
-        return new ReportVersionCommand(profiles, _sp.GetRequiredService<ICapacitorHttpClient>());
-    }
-
-    [Before(Test)]
-    public void Cleanup() {
-        HttpClientExtensions.ResetProviderCacheForTesting();
+        return new ReportVersionCommand(
+            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>());
     }
 
     public void Dispose() {
         _sp?.Dispose();
         _server.Stop();
-        HttpClientExtensions.ResetProviderCacheForTesting();
     }
 
     void StubDiscovery(string provider) =>
@@ -255,9 +250,9 @@ public class ReportVersionCommandTests : IDisposable {
 
     [Test]
     public async Task UnreachableServer_StillReturnsZero() {
-        // No discovery stub, no listener at all on this port — DiscoverProviderAsync's own
-        // catch falls back to local tokens, finds none, resolves NotAuthenticated; even if it
-        // somehow resolved Ok, the command's own try/catch must still swallow the failure.
+        // No discovery stub, no listener at all on this port — provider discovery's own catch
+        // falls back to local tokens, finds none, resolves NotAuthenticated; even if it somehow
+        // resolved Ok, the command's own try/catch must still swallow the failure.
         var result = await Command(Resolutions.At("http://127.0.0.1:1", Config.Root)).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
@@ -272,8 +267,8 @@ public class ReportVersionCommandTests : IDisposable {
     /// </summary>
     [Test]
     public async Task NoServerConfigured_MakesNoRequest_AndReturnsZero() {
-        // Nothing resolved, no KCAP_URL: CreateClientWithAuthStatusAsync falls back
-        // to its hardcoded "http://localhost:5108" default, which nothing is listening on here.
+        // Nothing resolved, no KCAP_URL: the command falls back to its hardcoded
+        // "http://localhost:5108" default, which nothing is listening on here.
         var result = await Command(Resolutions.None(Config.Root)).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);

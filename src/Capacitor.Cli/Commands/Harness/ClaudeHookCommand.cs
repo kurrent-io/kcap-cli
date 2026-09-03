@@ -104,10 +104,9 @@ public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles
             } catch { return 0; }
         }
 
-        // Skip client construction entirely for an unusable URL: the factory funnels into
-        // EnsureAbsolute, and this runs before ANY dispatch, so every Claude event would die here.
-        // Falling into the same degraded arm a client-creation timeout already uses keeps capture
-        // and the spool intact without inventing a second disposition.
+        // Skip client construction entirely for an unusable URL, before ANY dispatch, so it folds
+        // into the same degraded arm a client-creation timeout already uses — keeping capture and
+        // the spool intact without inventing a second disposition for a not-usable AuthAttempt.
         var created = HookHttp.IsPostable(Url)
             ? await CreateClientWithinBudgetAsync(clientFactory, clientCap)
             : null;

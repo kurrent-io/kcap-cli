@@ -98,7 +98,7 @@ sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClo
             TimeSpan   budget) {
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
-         || !SessionStartMemoryHookSupport.CanAttempt(Url))
+         || !HookHttp.IsPostable(Url))
             return null;
 
         try {

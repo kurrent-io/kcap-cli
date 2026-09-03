@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -39,8 +41,6 @@ public class MachineAuthTests : IDisposable {
         Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, null);
         Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, null);
         Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, null);
-        MachineTokenProvider.ResetForTesting();
-        HttpClientExtensions.ResetProviderCacheForTesting();
     }
 
     void UseStubTokenEndpoint() =>
@@ -51,6 +51,21 @@ public class MachineAuthTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody($"{{\"access_token\":\"{token}\",\"expires_in\":{expiresIn}}}"));
+
+    /// <summary>A container wired the same way production resolves a client, for the sites that go
+    /// through <see cref="ICapacitorHttpClient"/> rather than calling the minter directly. Profiles
+    /// resolve to none, matching a runner with no profile present.</summary>
+    ServiceProvider Container() {
+        var services = new ServiceCollection();
+        var profiles = Resolutions.None(Config.Root);
+
+        services.AddSingleton(Config.Root);
+        services.AddSingleton(profiles);
+        services.AddSingleton(new CapacitorServer(_server.Urls[0], Config.Root, profiles));
+        services.AddCapacitorHttp();
+
+        return services.BuildServiceProvider();
+    }
 
     // ── Credential reading ─────────────────────────────────────────────────────────────────────
 
@@ -115,7 +130,8 @@ public class MachineAuthTests : IDisposable {
         UseStubTokenEndpoint();
         StubToken("tok_minted");
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), rejectedToken: null, CancellationToken.None);
 
         await Assert.That(result.Token).IsEqualTo("tok_minted");
@@ -145,8 +161,10 @@ public class MachineAuthTests : IDisposable {
 
         var credential = new MachineCredential("client_01ABC", "sekrit");
 
-        await MachineTokenProvider.GetTokenAsync(Workos, credential, null, CancellationToken.None);
-        var second = await MachineTokenProvider.GetTokenAsync(Workos, credential, null, CancellationToken.None);
+        using var minter = new MachineTokenProvider();
+
+        await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
+        var second = await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
 
         await Assert.That(second.Token).IsEqualTo("tok_cached");
         await Assert.That(_server.LogEntries.Count).IsEqualTo(1)
@@ -166,7 +184,11 @@ public class MachineAuthTests : IDisposable {
 
         var warm = new MachineCredential("client_A", "s");
 
-        await MachineTokenProvider.GetTokenAsync(Workos, warm, null, CancellationToken.None);
+        // Shared across every call below: the cache and the gate this test exercises are both
+        // per-instance, so a fresh minter per call would prove nothing about either.
+        using var minter = new MachineTokenProvider();
+
+        await minter.GetTokenAsync(Workos, warm, null, CancellationToken.None);
 
         var entered = new TaskCompletionSource();
         var release = new TaskCompletionSource();
@@ -176,13 +198,13 @@ public class MachineAuthTests : IDisposable {
 
         // A second client id cannot be served from the cache, so this call reaches the mint and parks
         // there, holding the gate for as long as the test wants it held.
-        var minting = MachineTokenProvider.GetTokenAsync(
+        var minting = minter.GetTokenAsync(
                 blocking, new MachineCredential("client_B", "s"), null, CancellationToken.None);
 
         try {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-            var hit = await MachineTokenProvider.GetTokenAsync(Workos, warm, null, CancellationToken.None)
+            var hit = await minter.GetTokenAsync(Workos, warm, null, CancellationToken.None)
                     .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(hit.Token).IsEqualTo("tok_A");
@@ -204,11 +226,13 @@ public class MachineAuthTests : IDisposable {
         StubToken("tok_first");
 
         var credential = new MachineCredential("client_01ABC", "sekrit");
-        var first      = await MachineTokenProvider.GetTokenAsync(Workos, credential, null, CancellationToken.None);
+
+        using var minter = new MachineTokenProvider();
+        var       first  = await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
 
         await Assert.That(first.Token).IsEqualTo("tok_first");
 
-        var refreshed = await MachineTokenProvider.GetTokenAsync(Workos, credential, rejectedToken: first.Token, CancellationToken.None);
+        var refreshed = await minter.GetTokenAsync(Workos, credential, rejectedToken: first.Token, CancellationToken.None);
 
         await Assert.That(refreshed.Token).IsNotNull();
         await Assert.That(_server.LogEntries.Count).IsEqualTo(2)
@@ -229,7 +253,8 @@ public class MachineAuthTests : IDisposable {
                 // A hostile/naive endpoint reflecting the request back at us.
                 .WithBody("{\"error\":\"unauthorized\",\"echo\":\"client_secret=hunter2-the-secret\"}"));
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "hunter2-the-secret"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsNull();
@@ -248,7 +273,8 @@ public class MachineAuthTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json").WithBody("{\"expires_in\":3600}"));
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsNull();
@@ -273,16 +299,25 @@ public class MachineAuthTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("{\"provider\":\"workos\",\"client_id\":\"client_01TENANT\",\"authkit_domain\":\"\",\"organization_id\":\"org_01T\"}"));
+        _server.Given(Request.Create().WithPath("/ping").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200));
 
         Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC");
         Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, "sekrit");
 
-        var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), Workos, _server.Urls[0]);
+        using var sp      = Container();
+        var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+        using var client  = attempt.Client;
 
-        await Assert.That(status).IsEqualTo(AuthStatus.Ok);
-        await Assert.That(client.DefaultRequestHeaders.Authorization).IsNotNull();
-        await Assert.That(client.DefaultRequestHeaders.Authorization!.Scheme).IsEqualTo("Bearer");
-        await Assert.That(client.DefaultRequestHeaders.Authorization!.Parameter).IsEqualTo("tok_wired");
+        await Assert.That(attempt.Status).IsEqualTo(AuthStatus.Ok);
+
+        // The bearer is applied by a handler on send, not stamped onto DefaultRequestHeaders, so only
+        // a real request on the wire proves the client carries it.
+        using var response = await client.GetAsync($"{_server.Urls[0]}/ping");
+
+        var sent = _server.LogEntries.Single(e => e.RequestMessage.Path == "/ping").RequestMessage;
+
+        await Assert.That(sent.Headers!["Authorization"].Single()).IsEqualTo("Bearer tok_wired");
 
         // Review: without this the test would still pass if the branch moved ahead of provider
         // discovery — it would only be checking the final header, not that a mint actually happened.
@@ -307,10 +342,12 @@ public class MachineAuthTests : IDisposable {
 
         Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC"); // secret missing
 
-        var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), Workos, _server.Urls[0]);
+        using var sp      = Container();
+        var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+        using var client  = attempt.Client;
 
-        await Assert.That(status).IsEqualTo(AuthStatus.NotAuthenticated);
-        await Assert.That(client.DefaultRequestHeaders.Authorization).IsNull();
+        await Assert.That(attempt.Status).IsEqualTo(AuthStatus.NotAuthenticated);
+        await Assert.That(attempt.Usable).IsFalse();
     }
     // ── The token-URL override is a redirect primitive ─────────────────────────────────────────
 
@@ -325,7 +362,8 @@ public class MachineAuthTests : IDisposable {
         Clear();
         Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, "http://evil.example.com/oauth2/token");
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsNull();
@@ -347,7 +385,8 @@ public class MachineAuthTests : IDisposable {
         Clear();
         Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, url);
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsNull();
@@ -362,7 +401,8 @@ public class MachineAuthTests : IDisposable {
         UseStubTokenEndpoint();
         StubToken("tok_loopback");
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsEqualTo("tok_loopback");
@@ -373,7 +413,8 @@ public class MachineAuthTests : IDisposable {
         Clear();
         Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, "not-a-url");
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsNull();
@@ -390,11 +431,12 @@ public class MachineAuthTests : IDisposable {
         UseStubTokenEndpoint();
         StubToken("tok_for_A");
 
-        var a = await MachineTokenProvider.GetTokenAsync(Workos, new MachineCredential("client_A", "s"), null, CancellationToken.None);
+        using var minter = new MachineTokenProvider();
+        var       a      = await minter.GetTokenAsync(Workos, new MachineCredential("client_A", "s"), null, CancellationToken.None);
 
         await Assert.That(a.Token).IsEqualTo("tok_for_A");
 
-        var b = await MachineTokenProvider.GetTokenAsync(Workos, new MachineCredential("client_B", "s"), null, CancellationToken.None);
+        var b = await minter.GetTokenAsync(Workos, new MachineCredential("client_B", "s"), null, CancellationToken.None);
 
         await Assert.That(_server.LogEntries.Count).IsEqualTo(2)
             .Because("a different client id must mint its own token, not inherit the cached one");
@@ -440,8 +482,10 @@ public class MachineAuthTests : IDisposable {
         Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC");
         Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, "sekrit");
 
-        // The interactive builder is the one that installs the retry handler (autoRetryUnauthorized:true).
-        var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), Workos, _server.Urls[0]);
+        using var sp = Container();
+
+        // The interactive lane is the one that installs the retry handler.
+        using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
 
         using var resp = await client.GetAsync($"{_server.Urls[0]}/api/ping");
 
@@ -466,7 +510,8 @@ public class MachineAuthTests : IDisposable {
         // listening on that path) and builds the Problem string containing the URL.
         Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, "http://id:supersecret@127.0.0.1:1/oauth2/token");
 
-        var result = await MachineTokenProvider.GetTokenAsync(
+        using var minter = new MachineTokenProvider();
+        var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
         await Assert.That(result.Token).IsNull();

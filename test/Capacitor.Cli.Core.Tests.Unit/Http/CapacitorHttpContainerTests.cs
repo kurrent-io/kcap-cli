@@ -13,8 +13,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Http;
 /// server. <c>AddHttpMessageHandler</c> resolves each handler on the FIRST REQUEST, not at container
 /// build, so a missing registration cannot be caught by anything short of a real call.
 ///
-/// <para><c>[NotInParallel]</c>: the auth-provider memo and the machine-token cache are process-wide
-/// statics, and the machine-credential variables are process-wide environment.</para>
+/// <para><c>[NotInParallel]</c>: the machine-credential variables are process-wide environment. The
+/// discovery memo and the machine-token cache are not — each container owns its own.</para>
 /// </summary>
 [NotInParallel]
 public class CapacitorHttpContainerTests : IDisposable {
@@ -30,9 +30,6 @@ public class CapacitorHttpContainerTests : IDisposable {
 
     [Before(Test)]
     public void Isolate() {
-        HttpClientExtensions.ResetProviderCacheForTesting();
-        MachineTokenProvider.ResetForTesting();
-
         // Cleared so the credential source picks the token store: a runner's machine credential would
         // otherwise win over it and mint against an endpoint no test here stubs.
         _clientId     = EnvScope.Exclusive(MachineAuth.ClientIdVar, null);
@@ -44,8 +41,6 @@ public class CapacitorHttpContainerTests : IDisposable {
         _clientId?.Dispose();
         _clientSecret?.Dispose();
         _server.Stop();
-        HttpClientExtensions.ResetProviderCacheForTesting();
-        MachineTokenProvider.ResetForTesting();
     }
 
     ServiceProvider Container(string? serverUrl = null) {
@@ -606,5 +601,94 @@ public class CapacitorHttpContainerTests : IDisposable {
         using var sp = new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
 
         await Assert.That(sp.GetService<IAuthProxyClient>()).IsTypeOf<AuthProxyClient>();
+    }
+
+    // ── An unusable server URL ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Driven with an absolute wrong-scheme URL rather than a scheme-less one: that is the class
+    /// that discriminates, since an implementation validating only <c>UriKind.Absolute</c> accepts
+    /// <c>ftp://host</c> while still being unable to send to it.
+    /// </summary>
+    [Test]
+    public async Task A_command_refuses_an_unusable_server_url() {
+        using var sp = Container("ftp://host");
+
+        await Assert.That(async () => await sp.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync())
+            .Throws<UnusableServerUrlException>();
+    }
+
+    /// <summary>
+    /// A hook is told, not thrown at: vendors read hook stderr as the hook's own result, and an
+    /// exception escaping here would cost the harness its session.
+    ///
+    /// <para>A token is seeded first, so the status cannot come from an empty store — without the
+    /// check the credential source would answer for a server it can never reach.</para>
+    /// </summary>
+    [Test]
+    public async Task A_hook_is_told_the_url_is_unusable_rather_than_thrown_at() {
+        await AuthenticateAsync("tok_seeded");
+
+        using var sp      = Container("ftp://host");
+        var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+
+        using var client = attempt.Client;
+
+        await Assert.That(attempt.Status).IsEqualTo(AuthStatus.UnusableServerUrl);
+        await Assert.That(attempt.Usable).IsFalse();
+    }
+
+    /// <summary>Nothing is spent answering: no discovery call leaves the process.</summary>
+    [Test]
+    public async Task An_unusable_url_reaches_no_discovery() {
+        StubProvider(AuthProvider.GitHubApp);
+
+        using var sp      = Container("ftp://host");
+        var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+
+        using var client = attempt.Client;
+
+        await Assert.That(_server.LogEntries).IsEmpty();
+    }
+
+    /// <summary>The refusal is about the URL, not a standing refusal of every server.</summary>
+    [Test]
+    public async Task A_usable_url_still_resolves_its_credential() {
+        await AuthenticateAsync("tok_usable");
+
+        using var sp      = Container();
+        var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+
+        using var client = attempt.Client;
+
+        await Assert.That(attempt.Status).IsEqualTo(AuthStatus.Ok);
+    }
+
+    // ── The server URL itself ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Every caller builds a path by interpolating onto <see cref="CapacitorServer.Url"/>, so a
+    /// configured trailing slash would reach the server as a doubled one. Trimmed once here rather
+    /// than at each of those sites, where one omission is invisible until a route 404s.
+    /// </summary>
+    [Test]
+    [Arguments("https://host/", "https://host")]
+    [Arguments("https://host//", "https://host")]
+    [Arguments("https://host", "https://host")]
+    [Arguments("https://host/base/", "https://host/base")]
+    public async Task A_configured_trailing_slash_never_reaches_a_path(string configured, string expected) {
+        var server = new CapacitorServer(configured, Config.Root, Resolutions.At(configured, Config.Root));
+
+        await Assert.That(server.Url).IsEqualTo(expected);
+        await Assert.That(server.Usable).IsTrue();
+    }
+
+    /// <summary>Nothing resolved is not a URL: empty rather than null, and refused either way.</summary>
+    [Test]
+    public async Task An_unresolved_server_is_empty_and_unusable() {
+        var server = new CapacitorServer(null, Config.Root, Resolutions.None(Config.Root));
+
+        await Assert.That(server.Url).IsEqualTo("");
+        await Assert.That(server.Usable).IsFalse();
     }
 }

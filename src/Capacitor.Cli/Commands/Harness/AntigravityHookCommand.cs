@@ -286,9 +286,8 @@ sealed class AntigravityHookCommand(ConfigRoot config, ProfileContext profiles, 
     /// is skipped rather than letting the shared resolver fall back to the hook PROCESS's cwd and
     /// inject an unrelated repository's memories.</para>
     ///
-    /// <para><c>CanAttempt</c> is checked BEFORE any client is constructed, because the client
-    /// factory's EnsureAbsolute calls Environment.Exit(2) on an unusable base url — which would kill
-    /// the hook before it can write its output.</para>
+    /// <para>The URL is checked BEFORE any client is constructed, so an unusable base url spends no
+    /// lease and starts no task.</para>
     /// </summary>
     internal async Task<string?> StartMemoryIndexTask(
             string     sessionId,
@@ -298,7 +297,7 @@ sealed class AntigravityHookCommand(ConfigRoot config, ProfileContext profiles, 
             TimeSpan   budget) {
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
-         || !SessionStartMemoryHookSupport.CanAttempt(Url))
+         || !HookHttp.IsPostable(Url))
             return null;
 
         try {

@@ -5,6 +5,10 @@ namespace Capacitor.Cli.Core.Http;
 internal sealed class CapacitorHttpClient(
         IHttpClientFactory factory, ICredentialSource credentials, CapacitorServer server) : ICapacitorHttpClient {
     public async Task<HttpClient> ForCommandAsync(CancellationToken ct = default) {
+        // The only verb that throws, and it is not in a send path: a command with a user present owes
+        // them the hint and an exit code, which the other verbs' callers have no way to render.
+        if (!server.Usable) throw new UnusableServerUrlException(HttpClientExtensions.SchemeMissingHint);
+
         // Resolved here only for the hint: the handler applies the bearer itself, since a client the
         // factory builds has no credential at build time.
         await ReportLapseAsync(await credentials.ResolveAsync(ct));
@@ -16,6 +20,13 @@ internal sealed class CapacitorHttpClient(
         Task.FromResult(factory.CreateClient(CapacitorClients.Default));
 
     public async Task<AuthAttempt> ForHookAsync(CancellationToken ct = default) {
+        // Answered before anything is spent: an unusable URL reaches no token store, no discovery and
+        // no socket, and the caller's not-usable branch already knows what to do with it.
+        if (!server.Usable)
+            return new AuthAttempt(
+                factory.CreateClient(CapacitorClients.Default),
+                AuthStatus.UnusableServerUrl, HttpClientExtensions.SchemeMissingHint);
+
         var state = await credentials.ResolveAsync(ct);
 
         return new AuthAttempt(

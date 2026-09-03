@@ -977,8 +977,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         _httpClient ??= new();
 
-        var resolution = await new TokenStore(_config.ConfigRoot)
-            .GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct);
+        var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct);
 
         if (resolution.Tokens?.AccessToken is not null)
             _httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);

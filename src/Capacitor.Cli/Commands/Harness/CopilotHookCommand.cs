@@ -106,7 +106,7 @@ sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, Hook
             Func<CancellationToken, Task<bool>>? commitGate) {
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
-         || !SessionStartMemoryHookSupport.CanAttempt(Url))
+         || !HookHttp.IsPostable(Url))
             return null;
 
         try {
@@ -439,8 +439,8 @@ sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, Hook
         // path so a stalled server can't block Copilot's loop.
         using var cts = new CancellationTokenSource(NotificationPostBudget);
         try {
-            // Status-returning variant (not CreateAuthenticatedClientAsync, which writes a
-            // per-turn "expired" line to stderr): on a lapse, stay quiet and skip the doomed POST.
+            // The hook verb, so a lapse writes nothing to stderr: stay quiet and skip the doomed
+            // POST rather than spend a per-turn line on it.
             var (client, status) = await http.ForHookAsync(cts.Token);
             using (client) {
                 if (AgentHookPoster.IsAuthLapsed(status)) return 0;

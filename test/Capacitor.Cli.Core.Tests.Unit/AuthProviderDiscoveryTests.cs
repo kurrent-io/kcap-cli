@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -5,23 +6,23 @@ using WireMock.Server;
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 /// <summary>
-/// <see cref="HttpClientExtensions.DiscoverProviderAsync"/>'s in-process memo. It sits in front of
+/// <see cref="AuthProviderDiscovery"/>'s in-process memo. It sits in front of
 /// <see cref="AuthProviderCache"/>'s on-disk store, so if it answers for the wrong server the
 /// correctly-keyed disk lookup never gets a chance to.
-///
-/// <para><c>[NotInParallel]</c>: the memo is a process-wide static.</para>
 /// </summary>
-[NotInParallel]
 public class AuthProviderDiscoveryTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     readonly WireMockServer _a = WireMockServer.Start();
     readonly WireMockServer _b = WireMockServer.Start();
 
+    // One per test, which is the whole isolation story: the memo lives here rather than on a static,
+    // so a value cached by one test cannot be observed by another.
+    readonly AuthProviderDiscovery _discovery = new(new PlainHttpClientFactory());
+
     public void Dispose() {
         _a.Stop();
         _b.Stop();
-        HttpClientExtensions.ResetProviderCacheForTesting();
     }
 
     static void StubProvider(WireMockServer server, string provider) =>
@@ -31,7 +32,7 @@ public class AuthProviderDiscoveryTests : IDisposable {
                 .WithBody($"{{\"provider\":\"{provider}\"}}"));
 
     Task<string> Discover(WireMockServer server) =>
-        HttpClientExtensions.DiscoverProviderAsync(
+        _discovery.DiscoverAsync(
                 server.Urls[0], Config.Root, Resolutions.At(server.Urls[0], Config.Root),
                 AuthFixtures.NewTokenStore(Config.Root));
 
@@ -41,7 +42,6 @@ public class AuthProviderDiscoveryTests : IDisposable {
     /// </summary>
     [Test]
     public async Task Discovery_is_memoized_per_base_url() {
-        HttpClientExtensions.ResetProviderCacheForTesting();
         StubProvider(_a, "WorkOS");
         StubProvider(_b, "GitHub");
 
@@ -53,7 +53,6 @@ public class AuthProviderDiscoveryTests : IDisposable {
     /// <summary>The memo must still spare a repeat call its round trip.</summary>
     [Test]
     public async Task A_repeat_discovery_against_one_server_does_not_probe_twice() {
-        HttpClientExtensions.ResetProviderCacheForTesting();
         StubProvider(_a, "WorkOS");
 
         await Discover(_a);

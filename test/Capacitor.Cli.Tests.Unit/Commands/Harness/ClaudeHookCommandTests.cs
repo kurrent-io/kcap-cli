@@ -17,8 +17,8 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
-// AuthProviderDiscoveryCache: HttpClientExtensions caches the first successful /auth/config
-// discovery for the whole process, so a stub here decides what a concurrent test's stub returns.
+// Shares the AuthProviderDiscoveryCache cohort with the rest of the assembly's /auth/config
+// stubbers, so this class's own stub cannot race one of theirs.
 [NotInParallel("AuthProviderDiscoveryCache")]
 public class ClaudeHookCommandTests {
 
@@ -65,7 +65,7 @@ public class ClaudeHookCommandTests {
             "version: 1\nrules:\n  - match: { kind: shell, command: \"git push --force*\" }\n    outcome: deny\n");
         var stdout = new StringWriter();
 
-        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home)
+        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient())
             .HandleWithDeps(fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"PreToolUse","session_id":"{{Sid}}","tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"/tmp"}"""),
                 () => throw new InvalidOperationException("the seam must decide before a client exists"),
@@ -90,7 +90,7 @@ public class ClaudeHookCommandTests {
             "version: 1\nrules:\n  - match: { kind: shell, command: \"git push --force*\" }\n    outcome: deny\n");
         var stdout = new ClosedPipeWriter();
 
-        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home)
+        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient())
             .HandleWithDeps(fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"PreToolUse","session_id":"{{Sid}}","tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"/tmp"}"""),
                 () => throw new InvalidOperationException("the seam must decide before a client exists"),
@@ -113,7 +113,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -134,7 +134,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -159,7 +159,7 @@ public class ClaudeHookCommandTests {
         var stdout = new StringWriter { NewLine = "\n" };
 
         // Unusable URL: no client is ever built, so HandleWithDeps returns from the degraded arm.
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("not-a-url", Config.Root), new HookClock(TimeProvider.System), Home)
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("not-a-url", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient())
             .HandleWithDeps(fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
                 () => throw new InvalidOperationException("no client is buildable for an unusable URL"),
@@ -181,7 +181,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(File.Exists(Config.Root.Path("policy", "journal", $"{Sid}.json"))).IsTrue();
         using var fx = new Fixture(Config.Root);
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""));
 
@@ -769,7 +769,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(endIdx).IsGreaterThan(startIdx);
     }
 
-    // CRITICAL 1: bound client creation. If CreateAuthenticatedClientAsync hangs (untimed
+    // CRITICAL 1: bound client creation. If the hook's client factory hangs (untimed
     // /auth/config GET or token refresh during an outage) past the hook budget, the lifecycle
     // event must still be spooled — spooling is a local disk write that needs no client.
     [Test]

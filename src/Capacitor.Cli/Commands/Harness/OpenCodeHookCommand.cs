@@ -237,9 +237,8 @@ sealed class OpenCodeHookCommand(ConfigRoot config, ProfileContext profiles, Hoo
     /// for OpenCode is wherever the plugin's shell-out inherited, and would inject an unrelated
     /// repository's memories.</para>
     ///
-    /// <para><c>CanAttempt</c> is checked BEFORE any client is constructed, because the client factory's
-    /// <c>EnsureAbsolute</c> calls <c>Environment.Exit(2)</c> on an unusable base url — which would kill
-    /// the hook before it writes its output, and this hook's stdout is a data channel.</para>
+    /// <para>The URL is checked BEFORE any client is constructed, so an unusable base url spends no
+    /// lease and starts no task.</para>
     /// </summary>
     internal async Task<string?> StartMemoryIndexTask(
             string     sessionId,
@@ -250,7 +249,7 @@ sealed class OpenCodeHookCommand(ConfigRoot config, ProfileContext profiles, Hoo
         // Both lanes off ⇒ nothing to fetch. A single disabled lane still runs the other.
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
-         || !SessionStartMemoryHookSupport.CanAttempt(Url))
+         || !HookHttp.IsPostable(Url))
             return null;
 
         try {

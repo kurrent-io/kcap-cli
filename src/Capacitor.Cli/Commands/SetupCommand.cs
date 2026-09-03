@@ -27,6 +27,7 @@ using Spectre.Console.Rendering;
 using Profile = Capacitor.Cli.Core.Config.Profile;
 
 using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -401,7 +402,8 @@ sealed class SetupMachineActions : IFirstRunMachineActions {
 public sealed class SetupCommand(
         ConfigRoot config, ProfileContext profiles, TokenStore store, IHttpClientFactory httpFactory,
         IAuthProxyClient proxy, WorkOSClient workos, GitHubOAuthClient github, IBrowserLauncher browser,
-        UserHome home, ICapacitorHttpClient http, TenantProvisioningClient provisioning) {
+        UserHome home, ICapacitorHttpClient http, TenantProvisioningClient provisioning,
+        AuthProviderDiscovery discovery) {
     readonly HarnessPaths _paths = HarnessPaths.FromEnvironment(home);
 
     public async Task<int> HandleAsync(string[] args) {
@@ -897,13 +899,22 @@ public sealed class SetupCommand(
         // carries what this run actually chose.
         if (browserAnswers.FlowId is { } browserFlowId) {
             try {
-                // Through the same authenticated choke point the leg uses. Every flow route is
-                // authenticated, and a poll that 401s answers an empty body — indistinguishable from
-                // nothing having been asked — so an unusable client here enables nothing, silently.
-                var (deferredHttp, deferredAuth) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-                    config, saved, serverUrl, autoRetryUnauthorized: true);
+                // Its own container, not this process's: that one resolved its server at startup,
+                // and the whole point of `saved` is that this run may have just chosen a different
+                // one. Every flow route is authenticated, and a poll that 401s answers an empty body
+                // — indistinguishable from nothing having been asked — so an unusable client here
+                // enables nothing, silently.
+                await using var scoped = new ServiceCollection()
+                    .AddSingleton(config)
+                    .AddSingleton(saved)
+                    .AddSingleton(new CapacitorServer(serverUrl, config, saved))
+                    .AddCapacitorHttp()
+                    .BuildServiceProvider();
 
-                using var deferred = deferredHttp;
+                var (deferred, deferredAuth) =
+                    await scoped.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+
+                using var _ = deferred;
 
                 // The status is the point of the factory: it hands back a client either way, and an
                 // expired or missing token leaves one that cannot poll. Checked rather than assumed, or
@@ -1299,7 +1310,7 @@ public sealed class SetupCommand(
             AnsiConsole.MarkupLine($"  [yellow]![/] {Markup.Escape(normalized.Warning)}");
 
         try {
-            var provider = await HttpClientExtensions.DiscoverProviderAsync(serverUrl, config, profiles, store);
+            var provider = await discovery.DiscoverAsync(serverUrl, config, profiles, store);
             AnsiConsole.MarkupLine($"  [green]✓[/] Reachable · auth provider: [cyan]{Markup.Escape(provider)}[/]");
 
             return (serverUrl, provider);

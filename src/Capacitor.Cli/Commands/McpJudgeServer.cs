@@ -21,9 +21,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var baseUrl = profiles.Resolution.ServerUrl!;
 
         // Validate the shape locally, then defer client construction to the first tools/call —
-        // the shape every sibling MCP server already uses. Judge was the only one building its
-        // client up front, so an unusable URL reached EnsureAbsolute and killed the process
-        // BEFORE the JSON-RPC handshake, leaving the judge run to fail opaquely.
+        // the shape every sibling MCP server already uses.
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
         HttpClient? client = null;
 

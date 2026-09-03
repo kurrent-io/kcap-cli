@@ -119,13 +119,6 @@ sealed class CodexHookCommand(ConfigRoot config, ProfileContext profiles, HookCl
     }
 
     /// <summary>
-    /// Whether memory injection may attempt auth discovery for <paramref name="baseUrl"/> at all.
-    /// Guards the process-exiting URL validation inside the authenticated-client helper (see the
-    /// call-site comment): a blank or unacceptable URL must skip injection, never exit the hook.
-    /// </summary>
-    internal static bool CanAttemptMemoryInjection(string? baseUrl) => HookHttp.IsPostable(baseUrl);
-
-    /// <summary>
     /// Starts the shared SessionStart memory fetch so it overlaps the lifecycle POST
     /// instead of serializing ahead of it — the same start-early/await-bounded shape
     /// <c>ClaudeHookCommand.StartMemoryIndexTask</c> uses. Returns a task that NEVER faults:
@@ -152,12 +145,9 @@ sealed class CodexHookCommand(ConfigRoot config, ProfileContext profiles, HookCl
          || budget <= TimeSpan.Zero)
             return null;
 
-        // MUST precede any auth discovery: the authenticated-client helper funnels through
-        // EnsureAbsolute, which prints a hint and calls Environment.Exit(2) on a URL it cannot
-        // accept. Exiting here would kill the hook BEFORE the stdout handshake, so Codex would see
-        // no output at all and reject the session — the opposite of fail-open, and strictly worse
-        // than skipping an optional memory fragment. Mirrors PostBestEffortAsync's guard.
-        if (!CanAttemptMemoryInjection(Url)) return null;
+        // A blank or unacceptable URL must skip injection here, before any client is built,
+        // rather than fail later mid-fetch. Mirrors PostBestEffortAsync's guard.
+        if (!HookHttp.IsPostable(Url)) return null;
 
         // Construction itself stays inside the fail-open boundary: store-root validation and
         // the injected client factory can throw synchronously.
@@ -589,19 +579,17 @@ sealed class CodexHookCommand(ConfigRoot config, ProfileContext profiles, HookCl
     /// Callers that must satisfy Codex's stdout contract write their JSON output AFTER awaiting this.
     /// </summary>
     async Task PostBestEffortAsync(string endpoint, JsonNode node, TimeSpan cap) {
-        // A blank or non-absolute Url would trip EnsureAbsolute deep inside auth discovery,
-        // which calls Environment.Exit(2) — uncatchable, and would bypass the caller's stdout/exit
-        // contract. Bail silently before we can reach it.
-        if (string.IsNullOrWhiteSpace(Url) || !HttpClientExtensions.IsAcceptableUrl(Url)) {
+        // Silently, and before the deadline is armed: this method owes the caller no output, and a
+        // URL nothing can be sent to is not worth spending the cap discovering.
+        if (!HookHttp.IsPostable(Url)) {
             return;
         }
 
         using var cts = new CancellationTokenSource(cap);
 
         try {
-            // Use the status-returning variant, NOT CreateAuthenticatedClientAsync: the latter writes
-            // "Not authenticated" / "expired" to stderr, which a per-turn Stop would spam. Stay quiet
-            // and skip the POST when there's no usable auth (still swallow-all).
+            // The hook verb, so a lapse writes nothing to stderr: a per-turn Stop would spam it, and
+            // Codex reads hook stderr as the hook's own result.
             var (client, status) = await http.ForHookAsync(cts.Token);
 
             using (client) {

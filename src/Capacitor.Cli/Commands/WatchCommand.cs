@@ -27,11 +27,41 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 partial class WatchCommand(
-        ConfigRoot config, ProfileContext profiles, TokenStore tokens, UserHome home, ICapacitorHttpClient http) {
+        ConfigRoot config, ProfileContext profiles, UserHome home, ICapacitorHttpClient http,
+        ICredentialSource credentials) {
     readonly CursorMarkers  _markers  = new(config);
     readonly WatcherManager _watchers = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
+
+    /// <summary>
+    /// The watcher's hub connection, carrying the bearer the credential source holds at connect time.
+    /// </summary>
+    internal HubConnection BuildHubConnection(string hubUrl) {
+        var hubConnection = new HubConnectionBuilder()
+            .WithUrl(
+                hubUrl,
+                options => {
+                    // Resolved per connect and per reconnect, not captured: a reconnect after a long
+                    // outage must send whatever the credential is by then, not the one this watcher
+                    // started with.
+                    options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
+                }
+            )
+            .WithAutomaticReconnect(new InfiniteRetryPolicy())
+            .AddJsonProtocol(options => {
+                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
+                    options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+                }
+            )
+            .Build();
+
+        // Halve KeepAliveInterval (15s → 7s); see ServerConnection for rationale.
+        // ServerTimeout stays at the 30s default for rollout safety.
+        hubConnection.KeepAliveInterval = TimeSpan.FromSeconds(7);
+
+        return hubConnection;
+    }
 
     /// <summary>Outcome of deciding whether the parent-exit watchdog can run.</summary>
     internal enum ParentWatchdog {
@@ -201,11 +231,10 @@ partial class WatchCommand(
             string  vendor    = "claude"
         ) {
         // BEFORE the log redirection below: SignalR's WithUrl builds a Uri synchronously, so a
-        // relative value fails there — ahead of the connect/retry loop and independently of
-        // EnsureAbsolute — and `watch` is not fail-open, so the top-level catch turns that into an
-        // opaque exit 1. Validating here gives a hand-run watcher the actionable hint on the real
-        // stderr and the same exit 2 every interactive command gives; a few lines later Console.Error
-        // is a log file nobody is looking at.
+        // relative value fails there — ahead of the connect/retry loop — and `watch` is not
+        // fail-open, so the top-level catch turns that into an opaque exit 1. Validating here gives
+        // a hand-run watcher the actionable hint on the real stderr and the same exit 2 every
+        // interactive command gives; a few lines later Console.Error is a log file nobody is looking at.
         if (!HookHttp.IsPostable(Url)) {
             Console.Error.WriteLine(HttpClientExtensions.SchemeMissingHint);
             return 2;
@@ -500,31 +529,7 @@ partial class WatchCommand(
 
         Log($"Watching {transcriptPath} for session {sessionId}" + (agentId is not null ? $" agent {agentId}" : ""));
 
-        // Build SignalR hub connection
-        var hubUrl = $"{Url}/hubs/sessions";
-
-        var hubConnection = new HubConnectionBuilder()
-            .WithUrl(
-                hubUrl,
-                options => {
-                    options.AccessTokenProvider = async () => {
-                        var resolution = await tokens.GetValidTokensForServerAsync(profiles.Name, Url);
-
-                        return resolution.Tokens?.AccessToken;
-                    };
-                }
-            )
-            .WithAutomaticReconnect(new InfiniteRetryPolicy())
-            .AddJsonProtocol(options => {
-                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
-                    options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-                }
-            )
-            .Build();
-
-        // Halve KeepAliveInterval (15s → 7s); see ServerConnection for rationale.
-        // ServerTimeout stays at the 30s default for rollout safety.
-        hubConnection.KeepAliveInterval = TimeSpan.FromSeconds(7);
+        var hubConnection = BuildHubConnection($"{Url}/hubs/sessions");
 
         // runs DrainNewLines under cursorRewindGate when one
         // exists, so it can never observe a half-applied reconnect rewind (see cursorRewindGate's

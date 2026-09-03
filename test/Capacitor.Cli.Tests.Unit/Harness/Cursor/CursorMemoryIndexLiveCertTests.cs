@@ -3,9 +3,10 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Tests.Unit.Commands.Harness;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -24,8 +25,8 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 ///   • <c>cursor-agent</c> on PATH (Cursor CLI installed, logged in — <c>cursor-agent status</c>).
 ///   • <see cref="ServerUrlEnvVar"/> pointing at a reachable kcap server.
 ///   • <c>kcap login</c> already done against that server (this process's own token store is
-///     reused — see <see cref="HttpClientExtensions.CreateAuthenticatedClientAsync"/>) so a memory
-///     can be saved and later read back via <c>GET /api/memories/index</c>.
+///     reused — see <see cref="ICapacitorHttpClient.ForCommandAsync"/>) so a memory can be saved
+///     and later read back via <c>GET /api/memories/index</c>.
 ///
 /// This is a MANUAL release-gate run by a human/controller before certifying Cursor CLI support —
 /// it is intentionally NOT wired into any CI job and this implementation does not attempt to run
@@ -40,7 +41,20 @@ public class CursorMemoryIndexLiveCertTests {
     const string ServerUrlEnvVar = "KCAP_URL";
 
     static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(60);
-    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+
+    /// <summary>The real container, built against this machine's actual config — a stub client
+    /// cannot exercise the real refresh/discovery chain a live-cert run is meant to certify.</summary>
+    static async Task<ServiceProvider> AuthenticatedContainerAsync(ConfigRoot root, string baseUrl) {
+        var profiles = await AppConfig.ResolveActiveProfile([], root);
+        var services = new ServiceCollection();
+
+        services.AddSingleton(root);
+        services.AddSingleton(profiles);
+        services.AddSingleton(new CapacitorServer(baseUrl, root, profiles));
+        services.AddCapacitorHttp();
+
+        return services.BuildServiceProvider();
+    }
 
     // Both gated live tests are [NotInParallel]: they read/mutate the SAME process-global
     // `disable_memory_index` profile config (a real `kcap config set` subprocess writing the
@@ -56,8 +70,8 @@ public class CursorMemoryIndexLiveCertTests {
         var nonce   = $"kcap-live-nonce-{Guid.NewGuid():N}";
 
         var       root   = ConfigRoot.FromEnvironment();
-        using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(
-            root, await AppConfig.ResolveActiveProfile([], root), AuthFixtures.NewTokenStore(root), Workos, baseUrl);
+        using var sp     = await AuthenticatedContainerAsync(root, baseUrl);
+        using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
         var memoryId = await SaveNonceMemoryAsync(client, baseUrl, nonce);
 
         try {
@@ -89,8 +103,8 @@ public class CursorMemoryIndexLiveCertTests {
         var nonce   = $"kcap-live-nonce-{Guid.NewGuid():N}";
 
         var       root   = ConfigRoot.FromEnvironment();
-        using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(
-            root, await AppConfig.ResolveActiveProfile([], root), AuthFixtures.NewTokenStore(root), Workos, baseUrl);
+        using var sp     = await AuthenticatedContainerAsync(root, baseUrl);
+        using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
         var memoryId = await SaveNonceMemoryAsync(client, baseUrl, nonce);
 
         // Capture the ORIGINAL disable_memory_index value BEFORE the first mutation, and put

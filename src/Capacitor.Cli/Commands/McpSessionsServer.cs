@@ -44,10 +44,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         HttpClient? client = null;
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
-        // unusable server_url would otherwise reach EnsureAbsolute inside the auth-client factory,
-        // which hard-exits the process (Environment.Exit(2)) mid-request; and an unexpected
-        // failure would bubble out of the loop. Return a JSON-RPC tool error in both cases so the
-        // server keeps serving.
+        // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
+        // return a JSON-RPC tool error instead so it keeps serving.
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);

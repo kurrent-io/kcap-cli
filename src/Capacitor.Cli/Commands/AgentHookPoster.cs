@@ -45,9 +45,8 @@ internal enum HookPostOutcome {
 
 /// <summary>
 /// Shared recording-hook POST for the non-Claude agent hooks (Codex, Gemini, Copilot, Pi, Kiro,
-/// OpenCode), which all otherwise built their client with <c>CreateAuthenticatedClientAsync</c>
-/// and POSTed blindly. When auth has lapsed that meant a guaranteed-to-401 POST plus a
-/// misleading per-turn <c>HTTP 401</c> stderr line; this helper instead reports
+/// OpenCode). A lapsed credential makes a POST a guaranteed 401 and its stderr line a misleading
+/// per-turn <c>HTTP 401</c>, so rather than send one this helper reports
 /// <see cref="HookPostOutcome.AuthLapsed"/> so the caller can skip the doomed work and exit
 /// cleanly — carrying the Claude hook's #183 behaviour to the other hooks.
 ///

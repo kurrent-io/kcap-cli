@@ -46,7 +46,7 @@ namespace Capacitor.Cli.Tests.Integration;
                 // with WatcherLifecycleTests / WatcherHeartbeatStalenessTests (bare NotInParallel
                 // — no explicit key — puts all of them in the same implicit mutual-exclusion bucket).
 public class CursorTailingWatcherTests {
-    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), Home, new FixedCapacitorHttpClient());
+    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), Home, new FixedCapacitorHttpClient(), new FixedCredentialSource());
 
     CursorMarkers Markers => new(Config.Root);
 

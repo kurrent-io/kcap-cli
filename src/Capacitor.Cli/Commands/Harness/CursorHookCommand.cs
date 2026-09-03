@@ -111,8 +111,8 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
         using var cts = budget.CancelAtCeiling();
         HttpClient? client = null;
         try {
-            // Status-returning variant so a lapse doesn't write the per-turn "expired" stderr
-            // line CreateAuthenticatedClientAsync would. On a lapse, skip HandleCore entirely:
+            // The hook verb, so a lapse writes nothing to stderr. On a lapse, skip HandleCore
+            // entirely:
             // every POST would 401, and draining the spool would turn its 401s into Drops that
             // discard the backlog — so leave it intact for replay after the user re-runs
             // `kcap login`, and exit cleanly. Mirrors the Claude hook (#183); kcap status

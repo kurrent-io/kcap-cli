@@ -319,7 +319,7 @@ sealed class PiHookCommand(ConfigRoot config, ProfileContext profiles, HookClock
             string?  reason = null) {
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
-         || !SessionStartMemoryHookSupport.CanAttempt(Url))
+         || !HookHttp.IsPostable(Url))
             return null;
 
         try {

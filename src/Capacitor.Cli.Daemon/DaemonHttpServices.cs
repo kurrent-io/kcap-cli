@@ -12,7 +12,7 @@ public static class DaemonHttpServices {
     /// </summary>
     public static IServiceCollection AddDaemonHttp(
             this IServiceCollection services, ConfigRoot configRoot, DaemonConfig config) {
-        services.AddSingleton(_ => new CapacitorServer(config.ServerUrl.TrimEnd('/'), configRoot, config.Profiles));
+        services.AddSingleton(_ => new CapacitorServer(config.ServerUrl, configRoot, config.Profiles));
         services.AddCapacitorHttp();
 
         return services;

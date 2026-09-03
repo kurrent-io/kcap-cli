@@ -1,15 +1,14 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
-using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
-// AuthProviderDiscoveryCache: HttpClientExtensions caches the first successful /auth/config
-// discovery for the whole process, so a stub here decides what a concurrent test's stub returns.
+// Shares the AuthProviderDiscoveryCache cohort with the rest of the assembly's /auth/config
+// stubbers, so this class's own stub cannot race one of theirs.
 [NotInParallel("AuthProviderDiscoveryCache")]
 public class CodexHookCommandTests : IDisposable {
 
@@ -25,11 +24,6 @@ public class CodexHookCommandTests : IDisposable {
     // race nondeterministically corrupted Console captures (CI).
 
     readonly WireMockServer _server = WireMockServer.Start();
-
-    // First successful discovery wins process-wide regardless of baseUrl — an earlier test's cached
-    // provider would make this class skip its own /auth/config stub.
-    [Before(Test)]
-    public void ResetProviderCache() => HttpClientExtensions.ResetProviderCacheForTesting();
 
     public void Dispose() => _server.Stop();
 
@@ -189,11 +183,9 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
-    // Qodo #247: a malformed (scheme-less) server URL must NOT hard-exit via
-    // EnsureAbsolute's Environment.Exit(2) inside the best-effort POST — the hook
-    // must still emit {"continue":true} and return 0. The guard in
-    // PostBestEffortAsync bails before auth discovery (and thus EnsureAbsolute)
-    // is reached.
+    // A malformed (scheme-less) server URL must not crash the hook: it still emits
+    // {"continue":true} and returns 0. The guard in PostBestEffortAsync bails before
+    // any client is built, so an unusable URL spends no budget or lease.
     [Test, NotInParallel]
     public async Task Stop_with_malformed_base_url_still_emits_continue_and_returns_zero() {
         var payload = """
@@ -208,7 +200,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         // Scheme-less URL → IsAcceptableUrl is false → PostBestEffortAsync returns
-        // before CreateClientWithAuthStatusAsync/EnsureAbsolute can Environment.Exit.
+        // before any client is built, spending no budget or lease.
         var exit = await new CodexHookCommand(Config.Root, Resolutions.At("localhost:5108", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
         await Assert.That(exit).IsEqualTo(0);
 

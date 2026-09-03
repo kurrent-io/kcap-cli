@@ -405,8 +405,16 @@ public partial class App : Application {
         }
 
         var graph = ReauthComposition.Build(
-            _config, profiles.Name, serverUrl,
-            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action)),
+            _config,
+            _foreignHttp.GetRequiredService<TokenStore>(),
+            _foreignHttp.GetRequiredService<IHttpClientFactory>(),
+            _foreignHttp.GetRequiredService<IAuthProxyClient>(),
+            _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
+            _foreignHttp.GetRequiredService<WorkOSClient>(),
+            profiles.Name, serverUrl,
+            WizardComposition.BuildBridges(
+                action => Dispatcher.UIThread.Post(action),
+                _foreignHttp.GetRequiredService<TenantProvisioningClient>()),
             new ConsentFlipClaims(_config),
             new AppStateStore(_config.Path("app-state.json")),
             new ShellUrlOpener(),

@@ -90,15 +90,6 @@ if (isHook && args.Contains("--claude")) {
     }
 }
 
-// Agent-spawned commands owe an output contract, or must leave no orphaned child, so an unusable
-// server URL must not kill them mid-contract — EnsureAbsolute throws for them instead of exiting.
-// Interactive commands keep exiting 2 with the actionable hint, which is the right UX with a user
-// present. This covers the agent-spawned population only; it is not a claim that every reachable
-// URL consumer has been enumerated, and the explicit guards own what actually happens.
-ProcessUrlPolicy.Current = CrashReporter.IsFailOpenCommand(command)
-    ? UrlFailurePolicy.Throw
-    : UrlFailurePolicy.FailFast;
-
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
@@ -123,7 +114,7 @@ services.AddSingleton(sp => PluginEnvironment.FromProcess(
 
 // A factory, so a command that never speaks HTTP does not pay for a server URL it may not even have:
 // `baseUrl` is null until a profile resolves one.
-services.AddSingleton(_ => new CapacitorServer(baseUrl!, config, profiles));
+services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
 services.AddCapacitorHttp();
 
 await using var sp = services.BuildServiceProvider();
@@ -292,7 +283,7 @@ switch (command) {
         return await Run<RecapCommand>().HandleRecap(recapSessionId, useChain, useFull);
     }
     case "sessions":
-        return await new SessionsCommand(config, profiles).HandleAsync(args);
+        return await Run<SessionsCommand>().HandleAsync(args);
     case "validate-plan": {
         var vpSessionId = ResolveSessionId(args);
 
@@ -863,6 +854,15 @@ switch (command) {
 Console.Error.WriteLine($"Unknown command: {command}");
 
 return 1;
+} catch (UnusableServerUrlException ex) {
+    // Returned, not exited: every finally, the telemetry flush and each vendor's fail-open catch
+    // still run. Not a crash either — the repair is a config edit, so a crash report would file a
+    // bug against the user's own settings.
+    Console.Error.WriteLine(ex.Message);
+
+    // A fail-open command's exit code is read by the harness as its verdict — Gemini maps anything
+    // outside 0 and 1 to a blocked session — so a misconfigured URL must not be what blocks one.
+    return CrashReporter.IsFailOpenCommand(command) ? 0 : 2;
 } catch (Exception topLevelEx) {
     CrashReporter.Record(config, command, topLevelEx);
 

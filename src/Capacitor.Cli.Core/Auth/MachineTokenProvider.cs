@@ -28,31 +28,30 @@ public readonly record struct MachineTokenResult(string? Token, string? Problem)
 /// callers would each mint a token — WorkOS would allow it, but it is pure waste and makes the token a
 /// moving target while debugging.</para>
 ///
-/// <para><b>The failure reason is RETURNED, never parked on a static.</b> The daemon makes concurrent
+/// <para><b>The failure reason is RETURNED, never parked on a field.</b> The daemon makes concurrent
 /// calls, so a shared field lets one caller report another's reason, or lets a success clear a failure
 /// the other has not read yet. It also avoids a memory-model trap that the cache below has to handle
-/// explicitly: a <c>SemaphoreSlim</c> release is not a barrier, so a static written inside the gate is
+/// explicitly: a <c>SemaphoreSlim</c> release is not a barrier, so a field written inside the gate is
 /// not guaranteed visible to a reader outside it.</para>
 /// </summary>
-public static class MachineTokenProvider {
+public sealed class MachineTokenProvider : IDisposable {
     /// <summary>
     /// Re-mint this long before nominal expiry. A token that expires mid-flight surfaces as a 401 the
     /// caller must interpret; spending a few seconds of a 3600s lifetime avoids that entirely.
     /// </summary>
     internal static readonly TimeSpan RenewMargin = TimeSpan.FromSeconds(60);
 
-    static readonly SemaphoreSlim Gate = new(1, 1);
+    readonly SemaphoreSlim _gate = new(1, 1);
+
+    public void Dispose() => _gate.Dispose();
 
     /// <summary>A minted token with the identity and deadline that decide whether it can be reused.</summary>
     sealed record CachedToken(string Token, string ClientId, string TokenUrl, DateTimeOffset Expiry);
 
     // One reference, published atomically: the lock-free read below could otherwise see a torn
-    // combination of separate fields. A Gate release is not a memory barrier, so what makes that read
+    // combination of separate fields. A gate release is not a memory barrier, so what makes that read
     // sound is the Volatile.Write/Volatile.Read pairing rather than the semaphore.
-    static CachedToken? cached;
-
-    /// <summary>Test seam — the cache is process-wide static state.</summary>
-    internal static void ResetForTesting() => Volatile.Write(ref cached, null);
+    CachedToken? _cached;
 
     /// <summary>
     /// Returns a usable bearer for <paramref name="credential"/>, minting one if the cache is empty, keyed
@@ -71,7 +70,7 @@ public static class MachineTokenProvider {
     /// outcome rather than explode — a hook that cannot authenticate must exit quietly, not stack-trace
     /// into a transcript.</para>
     /// </summary>
-    public static async Task<MachineTokenResult> GetTokenAsync(
+    public async Task<MachineTokenResult> GetTokenAsync(
             WorkOSClient      workos,
             MachineCredential credential,
             string?           rejectedToken,
@@ -81,22 +80,22 @@ public static class MachineTokenProvider {
 
         if (tokenUrl is null) return new(null, urlProblem);
 
-        // A hit must not take the Gate. It is one process-wide semaphore, so checking the cache behind
+        // A hit must not take the gate. It is one semaphore for the process, so checking the cache behind
         // it queues every caller in the process against whichever one happens to be minting. A rejection
         // has to evict, which is a write, so it goes the long way round.
         if (rejectedToken is null
-            && Reusable(Volatile.Read(ref cached), credential, tokenUrl) is { } hit) return new(hit, null);
+            && Reusable(Volatile.Read(ref _cached), credential, tokenUrl) is { } hit) return new(hit, null);
 
-        await Gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct);
 
         try {
-            var snapshot = Volatile.Read(ref cached);
+            var snapshot = Volatile.Read(ref _cached);
 
             if (rejectedToken is not null
                 && snapshot is not null
                 && string.Equals(snapshot.Token, rejectedToken, StringComparison.Ordinal)) {
                 snapshot = null;
-                Volatile.Write(ref cached, null);
+                Volatile.Write(ref _cached, null);
             }
 
             // Re-check: a mint that finished while this call waited has already published a token.
@@ -109,14 +108,14 @@ public static class MachineTokenProvider {
             // A server that omits or zeroes expires_in must not produce a token treated as valid
             // forever. Fall back to a short life so the next call re-mints rather than reusing
             // something whose lifetime we never learned. RFC 6749 does not require the field.
-            Volatile.Write(ref cached, new CachedToken(
+            Volatile.Write(ref _cached, new CachedToken(
                     token, credential.ClientId, tokenUrl,
                     DateTimeOffset.UtcNow.AddSeconds(expiresIn > 0 ? expiresIn : 300)));
 
             return new(token, null);
         }
         finally {
-            Gate.Release();
+            _gate.Release();
         }
     }
 
