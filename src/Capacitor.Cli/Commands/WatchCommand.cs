@@ -27,7 +27,7 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 partial class WatchCommand(
-        ConfigRoot config, ProfileContext profiles, UserHome home, ICapacitorHttpClient http) {
+        ConfigRoot config, ProfileContext profiles, TokenStore tokens, UserHome home, ICapacitorHttpClient http) {
     readonly CursorMarkers  _markers  = new(config);
     readonly WatcherManager _watchers = new(config, profiles, http);
 
@@ -508,7 +508,7 @@ partial class WatchCommand(
                 hubUrl,
                 options => {
                     options.AccessTokenProvider = async () => {
-                        var resolution = await new TokenStore(config).GetValidTokensForServerAsync(profiles.Name, Url);
+                        var resolution = await tokens.GetValidTokensForServerAsync(profiles.Name, Url);
 
                         return resolution.Tokens?.AccessToken;
                     };

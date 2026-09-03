@@ -96,7 +96,7 @@ sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, Hook
     /// reason is mapped from it rather than assumed; re-injection across a resume of the same session
     /// id is prevented by the shared lease keyed on (harness, session id).</para>
     /// </summary>
-    Task<string?> StartMemoryIndexTask(
+    async Task<string?> StartMemoryIndexTask(
             string     sessionId,
             string?    scopeRoot,
             string?    source,
@@ -107,16 +107,20 @@ sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, Hook
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !SessionStartMemoryHookSupport.CanAttempt(Url))
-            return Task.FromResult<string?>(null);
+            return null;
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(
-                config,
-                SessionStartMemoryHookSupport.ClientFactory(config, profiles, Url),
-                disposeClients: true);
+            var       attempt = await http.ForHookAsync();
+            using var client  = attempt.Client;
 
-            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            // The index is bearer-authenticated, so without one the fetch can only 401 into a
+            // retryable failure the caller renders as no memory. Skipping says the same thing sooner.
+            if (!attempt.Usable) return null;
+
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, client);
+
+            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Copilot, sessionId, LifecycleInstanceId: null,
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionStartMemoryHookSupport.ReasonFor(source), CallbackMayRepeat: false),
@@ -124,7 +128,7 @@ sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, Hook
                     GuidelinesDisabled: guidelinesDisabled),
                 commitGate);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-            return Task.FromResult<string?>(null);
+            return null;
         }
     }
 

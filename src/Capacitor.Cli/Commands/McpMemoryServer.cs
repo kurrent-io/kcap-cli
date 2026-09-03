@@ -13,7 +13,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     public async Task<int> RunAsync() {
@@ -28,7 +28,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, ICapaci
         // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
         // disk must never block the server from starting.
         var loggedIn = false;
-        try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+        try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
         CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,
@@ -191,7 +191,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, ICapaci
             var body = await httpResponse.Content.ReadAsStringAsync();
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(config, profiles.Name, baseUrl), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
             }
 
             if (!httpResponse.IsSuccessStatusCode) {

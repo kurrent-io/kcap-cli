@@ -13,7 +13,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
     /// <summary>
     /// Run as a session-scoped MCP server. All tool calls must use <paramref name="expectedSessionId"/>.
     /// </summary>
@@ -32,7 +32,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, ICapacit
         // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
         // disk must never block the server from starting.
         var loggedIn = false;
-        try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+        try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
         CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
 
         var tools = BuildToolsList();

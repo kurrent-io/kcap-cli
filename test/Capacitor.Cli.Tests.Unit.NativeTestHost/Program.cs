@@ -79,7 +79,8 @@ switch (mode) {
         // Driven with an absolute wrong-scheme URL: an implementation checking only UriKind.Absolute
         // would accept it, so this is the class that discriminates.
         await Capacitor.Cli.Core.HttpClientExtensions.CreateClientWithAuthStatusAsync(
-            root, await Capacitor.Cli.Core.Config.AppConfig.ResolveActiveProfile([], root), "ftp://host");
+            root, await Capacitor.Cli.Core.Config.AppConfig.ResolveActiveProfile([], root),
+            NativeTestHostTokens.Store(root), NativeTestHostTokens.Workos, "ftp://host");
         Console.Out.Write("NO-EXIT");
         Console.Out.Flush();
         break;
@@ -89,7 +90,8 @@ switch (mode) {
         Capacitor.Cli.Core.ProcessUrlPolicy.Current = Capacitor.Cli.Core.UrlFailurePolicy.Throw;
         try {
             await Capacitor.Cli.Core.HttpClientExtensions.CreateClientWithAuthStatusAsync(
-            root, await Capacitor.Cli.Core.Config.AppConfig.ResolveActiveProfile([], root), "ftp://host");
+            root, await Capacitor.Cli.Core.Config.AppConfig.ResolveActiveProfile([], root),
+            NativeTestHostTokens.Store(root), NativeTestHostTokens.Workos, "ftp://host");
             Console.Out.Write("NO-THROW");
         } catch (Capacitor.Cli.Core.UnusableServerUrlException) {
             Console.Out.Write("THREW");
@@ -118,5 +120,18 @@ static unsafe string? CaptureOwnMacIdentity() {
         var len = 0;
         while (len < buf.Length && p[len] != 0) len++;
         return System.Text.Encoding.UTF8.GetString(p, len);
+    }
+}
+
+/// The URL policy is decided before any request is built, so this store never reaches the network —
+/// it exists because the client builder asks for one.
+static class NativeTestHostTokens {
+    internal static Capacitor.Cli.Core.Auth.WorkOSClient Workos { get; } = new(new UnusedClients());
+
+    internal static Capacitor.Cli.Core.Auth.TokenStore Store(Capacitor.Cli.Core.ConfigRoot root) =>
+        new(root, new UnusedClients(), Workos);
+
+    sealed class UnusedClients : System.Net.Http.IHttpClientFactory {
+        public System.Net.Http.HttpClient CreateClient(string name) => new();
     }
 }

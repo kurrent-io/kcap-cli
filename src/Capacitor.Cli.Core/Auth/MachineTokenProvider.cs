@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Auth;
@@ -73,10 +72,10 @@ public static class MachineTokenProvider {
     /// into a transcript.</para>
     /// </summary>
     public static async Task<MachineTokenResult> GetTokenAsync(
+            WorkOSClient      workos,
             MachineCredential credential,
             string?           rejectedToken,
-            CancellationToken ct,
-            HttpClient?       client = null
+            CancellationToken ct
         ) {
         var tokenUrl = MachineAuth.TryResolveTokenUrl(out var urlProblem);
 
@@ -103,9 +102,9 @@ public static class MachineTokenProvider {
             // Re-check: a mint that finished while this call waited has already published a token.
             if (Reusable(snapshot, credential, tokenUrl) is { } fresh) return new(fresh, null);
 
-            var (token, expiresIn, failure) = await MintAsync(credential, tokenUrl, ct, client);
+            var (token, expiresIn, problem) = await workos.MintAsync(credential, tokenUrl, ct);
 
-            if (token is null) return new(null, failure);
+            if (token is null) return new(null, problem);
 
             // A server that omits or zeroes expires_in must not produce a token treated as valid
             // forever. Fall back to a short life so the next call re-mints rather than reusing
@@ -129,51 +128,4 @@ public static class MachineTokenProvider {
         && DateTimeOffset.UtcNow < entry.Expiry - RenewMargin
             ? entry.Token
             : null;
-
-    static async Task<(string? Token, int ExpiresIn, string? Failure)> MintAsync(
-            MachineCredential credential, string tokenUrl, CancellationToken ct, HttpClient? provided) {
-        var http  = provided ?? new HttpClient();
-        var owned = provided is null;
-
-        try {
-            using var form = new FormUrlEncodedContent([
-                new KeyValuePair<string, string>("grant_type", "client_credentials"),
-                new KeyValuePair<string, string>("client_id", credential.ClientId),
-                new KeyValuePair<string, string>("client_secret", credential.ClientSecret)
-            ]);
-
-            using var response = await http.PostAsync(tokenUrl, form, ct);
-
-            if (!response.IsSuccessStatusCode) {
-                // Deliberately does NOT echo the response body. A token endpoint's error body is
-                // attacker-influenced and, on some providers, reflects the request — which here contains
-                // the secret. The status is the diagnostic; the body is not worth the risk.
-                return (null, 0, $"the machine credential was rejected by {SafeUrl(tokenUrl)} "
-                              + $"(HTTP {(int)response.StatusCode}). Check {MachineAuth.ClientIdVar}/"
-                              + $"{MachineAuth.ClientSecretVar}, or re-issue with 'kcap machine create'.");
-            }
-
-            var body = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.MachineTokenResponse, ct);
-
-            return string.IsNullOrEmpty(body?.AccessToken)
-                ? (null, 0, $"{SafeUrl(tokenUrl)} returned success with no access_token.")
-                : (body.AccessToken, body.ExpiresIn, null);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException) {
-            // Both the URL and the exception message reach stderr, so both are sanitised the same way
-            // HttpClientExtensions.RenderUnreachableError does — userinfo dropped from the URL, control
-            // characters stripped from the message so a crafted value cannot inject lines into stderr.
-            return (null, 0, $"could not reach {SafeUrl(tokenUrl)}: "
-                          + HttpClientExtensions.StripControlCharacters(ex.Message));
-        }
-        finally {
-            if (owned) http.Dispose();
-        }
-    }
-    // A token URL reaches stderr in three Problem strings. It should never carry userinfo there — a
-    // KCAP_WORKOS_TOKEN_URL of https://id:secret@host would otherwise print the secret — and it must not
-    // carry control characters that inject lines. UnusableUrlDiagnostic.Sanitize does both, and is the
-    // same helper HttpClientExtensions uses for the same reason. (Review — Qodo.)
-    static string SafeUrl(string url) => UnusableUrlDiagnostic.Sanitize(url);
 }
-

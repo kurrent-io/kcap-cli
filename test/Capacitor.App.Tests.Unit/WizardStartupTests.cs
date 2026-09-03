@@ -106,6 +106,10 @@ static class WizardFixtures {
         public readonly ConsentFlipClaims Claims;
         public readonly WizardBridges Bridges;
         public readonly WizardLifecycleSurface Surface;
+        public readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
+        public readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+        public readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
+        public readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient());
         public readonly List<LifecyclePrompt> Prompts = [];
 
         public int CliFactoryCalls;
@@ -143,6 +147,11 @@ static class WizardFixtures {
 
         public WizardGraphOptions Options() => new(
             Root,
+            AuthFixtures.NewTokenStore(Root),
+            HttpFactory,
+            Proxy,
+            Github,
+            Workos,
             Profile,
             Claims,
             Bridges,
@@ -1220,6 +1229,9 @@ public class WizardStartupTests {
 public class WizardStartupResolutionTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
+    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+
     const string ProfileName = "acme";
 
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
@@ -1236,7 +1248,8 @@ public class WizardStartupResolutionTests {
     public async Task The_gate_is_re_resolved_from_the_config_on_every_call() {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
 
-        var (before, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(Config.Root, CancellationToken.None);
+        var (before, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), CancellationToken.None);
 
         // What a committed wizard sign-in leaves behind: a real server plus its provider stamp.
         WriteConfig(SingleProfileConfig(new Profile {
@@ -1244,7 +1257,8 @@ public class WizardStartupResolutionTests {
             AuthProvider = new AuthProviderStamp("none", "https://acme.example"),
         }));
 
-        var (after, afterProfiles) = await AppUnderTest.ResolveAndEvaluateGateAsync(Config.Root, CancellationToken.None);
+        var (after, afterProfiles) = await AppUnderTest.ResolveAndEvaluateGateAsync(
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), CancellationToken.None);
 
         await Assert.That(before).IsTypeOf<GateResult.Incomplete>();
         await Assert.That(((GateResult.Incomplete)before).Reason).IsEqualTo(GateReason.InvalidServerUrl);
@@ -1336,7 +1350,8 @@ public class WizardStartupResolutionTests {
                     graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel())
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
-            var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(Config.Root, CancellationToken.None);
+            var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), CancellationToken.None);
 
             await Assert.That(harness.Lane.Requests).IsEmpty();
             await Assert.That(harness.Ops.GetCalls).IsEqualTo(0);
@@ -1376,7 +1391,8 @@ public class WizardStartupResolutionTests {
                     graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel())
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
-            var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(Config.Root, CancellationToken.None);
+            var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), CancellationToken.None);
 
             await Assert.That(await attempt.Result).IsTypeOf<AuthResult.Cancelled>();
             await Assert.That(await File.ReadAllTextAsync(ConfigPath)).IsEqualTo(configBefore);
@@ -1401,9 +1417,12 @@ public class WizardStartupResolutionTests {
         using var handler = new StubAuthHandler();
 
         var operation = WizardComposition.BuildOperation(
-            Config.Root, ProfileName, bridges, claims,
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root), new PlainHttpClientFactory(handler),
+            new AuthProxyClient(new HttpClient(handler, disposeHandler: false)), Github, Workos, ProfileName,
+            bridges, claims,
             spec => WizardSignInOperation.For(new OnboardingFacade(
-                spec.Root, spec.Progress, new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.BeforeCommit, () => new HttpClient(handler, false)), spec.Profile));
+                spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
+                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.BeforeCommit), spec.Profile));
 
         var result = await operation(new ConnectIntent.Paste("https://acme.example"), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(10));
@@ -1433,11 +1452,14 @@ public class WizardStartupResolutionTests {
 
         WizardFacadeSpec? spec = null;
         var operation = WizardComposition.BuildOperation(
-            Config.Root, ProfileName, bridges, claims,
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root), new PlainHttpClientFactory(handler),
+            new AuthProxyClient(new HttpClient(handler, disposeHandler: false)), Github, Workos, ProfileName,
+            bridges, claims,
             s => {
                 spec = s;
                 return WizardSignInOperation.For(new OnboardingFacade(
-                    s.Root, s.Progress, new RecordingBrowser(), s.Picker, s.Provisioner, s.BeforeCommit, () => new HttpClient(handler, false)), s.Profile);
+                    s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
+                    new RecordingBrowser(), s.Picker, s.Provisioner, s.BeforeCommit), s.Profile);
             });
 
         var result = await operation(intent, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));

@@ -90,7 +90,7 @@ sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClo
     /// is skipped rather than letting the shared resolver fall back to the hook PROCESS's cwd and
     /// inject an unrelated repository's memories.</para>
     /// </summary>
-    Task<string?> StartMemoryIndexTask(
+    async Task<string?> StartMemoryIndexTask(
             string     sessionId,
             string?    scopeRoot,
             bool       disabled,
@@ -99,23 +99,27 @@ sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClo
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !SessionStartMemoryHookSupport.CanAttempt(Url))
-            return Task.FromResult<string?>(null);
+            return null;
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(
-                config,
-                SessionStartMemoryHookSupport.ClientFactory(config, profiles, Url),
-                disposeClients: true);
+            var       attempt = await http.ForHookAsync();
+            using var client  = attempt.Client;
 
-            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            // The index is bearer-authenticated, so without one the fetch can only 401 into a
+            // retryable failure the caller renders as no memory. Skipping says the same thing sooner.
+            if (!attempt.Usable) return null;
+
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, client);
+
+            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Kiro, sessionId, LifecycleInstanceId: null,
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
                     GuidelinesDisabled: guidelinesDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-            return Task.FromResult<string?>(null);
+            return null;
         }
     }
 

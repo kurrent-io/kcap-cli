@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -23,7 +22,8 @@ namespace Capacitor.Cli.Commands;
 /// participant needs. Deliberately a SEPARATE command from `kcap mcp flows` — a hard security
 /// boundary so no flag regression can ever expose start_review_flow to an unattended reviewer.
 /// </summary>
-sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+sealed class McpFlowResultServer(
+        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http) {
     internal const string AgentIdEnvVar = "KCAP_FLOW_AGENT_ID";
 
     /// <summary>Daemon-minted loopback capability a BORROWED reviewer delivers through: its sandbox
@@ -62,7 +62,7 @@ sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICa
         // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
         // disk must never block the server from starting.
         var loggedIn = false;
-        try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+        try { loggedIn = await store.LoadForProfileAsync(profiles.Name) is not null; } catch { }
         CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,
@@ -128,7 +128,7 @@ sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICa
                 // reaching for one is what produced the original silent failure.
                 client ??= borrowed
                     ? http.Loopback()
-                    : await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl, autoRetryUnauthorized: false);
+                    : await http.ForSessionAsync();
 
                 var (text, isError) = toolName switch {
                     "submit_review_result" => await SubmitCoreAsync(
@@ -239,19 +239,15 @@ sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICa
         var url  = submitUrlOverride ?? $"{apiRoot.TrimEnd('/')}/api/flows/reviewer/result";
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++) {
-            using var response = await SendWithRefreshRetryAsync(
-                client,
-                apiRoot,
-                c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.SubmitReviewerResultDto)),
-                allowRefresh: submitUrlOverride is null
-            );
+            using var response = await client.PostAsync(
+                url, JsonContent.Create(body, McpJsonContext.Default.SubmitReviewerResultDto));
             var responseBody = await response.Content.ReadAsStringAsync();
 
             if (response.IsSuccessStatusCode)
                 return ("Result recorded. You may end your reply now.", false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(config, profiles.Name, apiRoot), true);
+                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), true);
 
             var errorNode = TryParse(responseBody);
             var code      = errorNode?["error"]?.GetValue<string>();
@@ -316,18 +312,14 @@ sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICa
         var url  = messageUrlOverride ?? $"{apiRoot.TrimEnd('/')}/api/flows/participant/message";
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++) {
-            using var response = await SendWithRefreshRetryAsync(
-                client,
-                apiRoot,
-                c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.SendFlowMessageDto)),
-                allowRefresh: messageUrlOverride is null
-            );
+            using var response = await client.PostAsync(
+                url, JsonContent.Create(body, McpJsonContext.Default.SendFlowMessageDto));
 
             if (response.IsSuccessStatusCode)
                 return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(config, profiles.Name, apiRoot), true);
+                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot), true);
 
             var responseBody = await response.Content.ReadAsStringAsync();
             var errorNode    = TryParse(responseBody);
@@ -362,48 +354,6 @@ sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICa
         static JsonObject? TryParse(string s) {
             try { return JsonNode.Parse(s)?.AsObject(); } catch { return null; }
         }
-    }
-
-    /// <summary>
-    /// Sends an HTTP request with one-shot retry on 401. See McpFlowsServer's copy of this
-    /// helper for the full rationale: a cached token that was valid at startup may have
-    /// expired by the time this single tool call is made, so on 401 we ask
-    /// <see cref="TokenStore.GetValidTokensForProfileAsync"/> for a fresh token, update the client's
-    /// <c>Authorization</c> header, and retry the same request once.
-    /// </summary>
-    /// <param name="allowRefresh">False on the borrowed-reviewer capability path. That process has
-    /// no token store — its HOME is a per-launch state dir — so a 401 must be surfaced as-is rather
-    /// than sent into TokenStore, which is the very read this delivery path exists to avoid. A 401
-    /// there means the DAEMON's credential was rejected upstream, and this process could not heal
-    /// that even if it could read a token: it is not the authenticating party.</param>
-    async Task<HttpResponseMessage> SendWithRefreshRetryAsync(
-            HttpClient client, string baseUrl, Func<HttpClient, Task<HttpResponseMessage>> send,
-            bool allowRefresh = true) {
-        var response = await send(client);
-
-        if (!allowRefresh || response.StatusCode != HttpStatusCode.Unauthorized) return response;
-
-        // Force a refresh against the token this client actually sent: the 401 proves the server
-        // rejected it even though it may still look unexpired locally, which a plain load would
-        // not heal. Passing the rejected token also means a peer process that already refreshed is
-        // adopted rather than rotated a second time. With no token attached at all — this MCP
-        // process outlives a `kcap login` that finished after the client was built — there is
-        // nothing to refresh, so just pick up whatever is stored now.
-        var rejected = client.DefaultRequestHeaders.Authorization?.Parameter;
-
-        // A failed rotation must not be worse than no rotation: fall back to whatever is stored so
-        // the pre-existing "re-read and resend once" recovery still happens.
-        var tokens    = new TokenStore(config);
-        var refreshed = rejected is null
-            ? (await tokens.GetValidTokensForServerAsync(profiles.Name, baseUrl)).Tokens
-            : await tokens.RecoverForServerAsync(profiles.Name, baseUrl, rejected);
-
-        if (refreshed is null) return response; // genuinely not logged in; keep the original 401
-
-        response.Dispose();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", refreshed.AccessToken);
-
-        return await send(client);
     }
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>

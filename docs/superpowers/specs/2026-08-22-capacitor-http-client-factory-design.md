@@ -313,12 +313,21 @@ One per platform, registered with `AddHttpClient<T>`, base address at registrati
 constructor. None of them gets our credential or our observation headers — our version tags must never
 travel to WorkOS or npm.
 
+`WorkOSClient` and `GitHubOAuthClient` are the exceptions, on both halves. Each takes the **factory**
+and draws from a named lane per call, because a long-lived host holds it — the token store for the
+process's life, the wizard for the app's — and a typed client would freeze one handler inside it: the
+same trap as *never inject a typed client into a singleton*. And neither pins a base address, because
+each talks to two hosts. WorkOS's refresh goes to `api.workos.com` and its machine mint to the fleet's
+AuthKit domain under an environment override; GitHub's device grant goes to `github.com` and its code
+exchange to the URL `/auth/config` names — which is our own server, sharing the lane because every leg
+carries something single-use that a followed redirect would hand onward.
+
 | platform | client | status |
 |---|---|---|
 | kcap auth proxy | `AuthProxyClient` | exists as `class AuthProxyClient(HttpClient http)` — register it |
 | provisioning control plane | `TenantProvisioningClient` | same |
-| GitHub OAuth / device flow | `GitHubOAuthClient` | new; absorbs `OAuthLoginFlow:379,527` |
-| WorkOS | `WorkOSClient` | new; absorbs `TokenStore.RefreshWorkOSAsync:684` and `MachineTokenProvider`'s mint |
+| GitHub OAuth / device flow | `GitHubOAuthClient` | new; absorbs `OAuthLoginFlow:379,527` — factory-backed, see above |
+| WorkOS | `WorkOSClient` | new; owns every WorkOS call — the token-store refresh, `MachineTokenProvider`'s mint, and the sign-in's device grant and org switch — factory-backed, see above |
 | npm registry | `NpmRegistryClient` | new; `UpdateCommand` |
 | PostHog | `TelemetryClient` | exists but takes `HttpMessageHandler`; see the trap below |
 

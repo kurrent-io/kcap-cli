@@ -20,6 +20,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Antigravity;
 /// lives in SessionStartMemoryFoundationTests (the Antigravity_* tests), next to the lease fixtures.
 /// </summary>
 public class AntigravitySessionStartMemoryTests {
+
     [TempHome] public required TempHome Home { get; init; }
 
     // Instance, not static: the hook writes under the config dir (the repo-detection cache,

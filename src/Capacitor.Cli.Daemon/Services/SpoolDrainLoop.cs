@@ -1,5 +1,5 @@
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Microsoft.Extensions.Logging;
 
@@ -29,7 +29,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal sealed class SpoolDrainLoop {
     readonly ConfigRoot                _configRoot;
-    readonly ProfileContext            _profiles;
+    readonly ICapacitorHttpClient      _http;
     readonly string                    _baseUrl;
     readonly HookSpool                 _lifecycle;
     readonly TranscriptSpool           _transcript;
@@ -42,16 +42,16 @@ internal sealed class SpoolDrainLoop {
     static readonly TimeSpan Budget = TimeSpan.FromSeconds(3);
 
     public SpoolDrainLoop(
-            ConfigRoot         configRoot,
-            ProfileContext     profiles,
-            string             baseUrl,
-            HookSpool          lifecycle,
-            TranscriptSpool    transcript,
-            ILogger            logger,
-            Action<string>?    onWhatsDoneRequested = null
+            ConfigRoot           configRoot,
+            ICapacitorHttpClient http,
+            string               baseUrl,
+            HookSpool            lifecycle,
+            TranscriptSpool      transcript,
+            ILogger              logger,
+            Action<string>?      onWhatsDoneRequested = null
         ) {
         _configRoot           = configRoot;
-        _profiles             = profiles;
+        _http                 = http;
         _markers              = new CursorMarkers(configRoot);
         _baseUrl              = baseUrl;
         _lifecycle            = lifecycle;
@@ -73,7 +73,7 @@ internal sealed class SpoolDrainLoop {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(Budget);
 
-            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(_configRoot, _profiles, _baseUrl);
+            var (client, status) = await _http.ForHookAsync(cts.Token);
 
             using (client) {
                 if (status is AuthStatus.Expired or AuthStatus.NotAuthenticated or AuthStatus.WrongServer) {

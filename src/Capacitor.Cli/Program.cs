@@ -149,7 +149,7 @@ var commandStart = System.Diagnostics.Stopwatch.GetTimestamp();
 // itself for them regardless — so the disk read has no consumer and is worth skipping outright.
 var loggedIn = false;
 if (CommandEvents.IsReportable(command)) {
-    try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+    try { loggedIn = await sp.GetRequiredService<TokenStore>().LoadForProfileAsync(profiles.Name) is not null; } catch { }
 }
 
 // `kcap config set telemetry off` must never activate telemetry for the very invocation that
@@ -360,7 +360,7 @@ switch (command) {
     case "login":
         return await Run<LoginCommand>().HandleAsync(args, baseUrl);
     case "logout": {
-        await new TokenStore(config).DeleteAsync();
+        await sp.GetRequiredService<TokenStore>().DeleteAsync();
         await Console.Out.WriteLineAsync("Logged out.");
 
         return 0;
@@ -460,7 +460,7 @@ switch (command) {
             case "sessions":
                 return await Run<McpSessionsServer>().RunAsync();
             case "flows":
-                return await new McpFlowsServer(config, profiles).RunAsync(GetArg(args, "--driver"));
+                return await Run<McpFlowsServer>().RunAsync(GetArg(args, "--driver"));
             case "flow-result":
                 return await Run<McpFlowResultServer>().RunAsync();
             case "memory":

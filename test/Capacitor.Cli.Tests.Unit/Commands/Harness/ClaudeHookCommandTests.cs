@@ -21,6 +21,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 // discovery for the whole process, so a stub here decides what a concurrent test's stub returns.
 [NotInParallel("AuthProviderDiscoveryCache")]
 public class ClaudeHookCommandTests {
+
     [TempHome] public required TempHome Home { get; init; }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }

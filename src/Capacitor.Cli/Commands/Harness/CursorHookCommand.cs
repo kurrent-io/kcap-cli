@@ -584,12 +584,8 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
             using var memCts    = CancellationTokenSource.CreateLinkedTokenSource(dispatcherCt, budgetCts.Token);
 
             var store = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            // Both lanes share the hook's own client, which is caller-owned — hence disposeClients
-            // false, the inverse of the adapters that mint one of their own.
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(
-                config,
-                (_, _) => Task.FromResult(client),
-                disposeClients: false);
+            // Both lanes send on the hook's own client, which stays this method's caller's to dispose.
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, client);
 
             return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
                 // ClassificationAuthoritative is hardcoded true, and this is VALID UNDER THE

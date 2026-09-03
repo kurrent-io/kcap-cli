@@ -52,7 +52,11 @@ public class CapacitorHttpContainerTests : IDisposable {
         var target   = serverUrl ?? Url;
         var services = new ServiceCollection();
 
-        services.AddSingleton(new CapacitorServer(target, Config.Root, Resolutions.At(target, Config.Root)));
+        var profiles = Resolutions.At(target, Config.Root);
+
+        services.AddSingleton(Config.Root);
+        services.AddSingleton(profiles);
+        services.AddSingleton(new CapacitorServer(target, Config.Root, profiles));
         services.AddCapacitorHttp();
 
         return services.BuildServiceProvider();
@@ -65,7 +69,7 @@ public class CapacitorHttpContainerTests : IDisposable {
                 .WithBody($$"""{"provider":"{{provider}}"}"""));
 
     Task SeedTokenAsync(string accessToken) =>
-        new TokenStore(Config.Root).SaveAsync(_profile, new StoredTokens {
+        AuthFixtures.NewTokenStore(Config.Root).SaveAsync(_profile, new StoredTokens {
             AccessToken    = accessToken,
             ExpiresAt      = DateTimeOffset.UtcNow.AddHours(1),
             GitHubUsername = "alice",
@@ -373,6 +377,32 @@ public class CapacitorHttpContainerTests : IDisposable {
         await Assert.That(ServerVersionStore.Get(Url, Config.Root)).IsNull();
     }
 
+    /// <summary>
+    /// Sign-in's own unauthenticated legs draw the same lane rather than a client of their own. Only a
+    /// container can show it: a hand-built factory answers every lane name with one unconfigured
+    /// client, so the name the facade asks for is invisible to every other test.
+    /// </summary>
+    [Test]
+    public async Task The_onboarding_facade_reads_auth_config_on_the_anonymous_lane() {
+        StubProvider(AuthProvider.None);
+
+        using var sp = Container();
+
+        var facade = new OnboardingFacade(
+            Config.Root, sp.GetRequiredService<TokenStore>(),
+            sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<IAuthProxyClient>(),
+            sp.GetRequiredService<GitHubOAuthClient>(), sp.GetRequiredService<WorkOSClient>(),
+            new RecordingAuthProgress(), new RecordingBrowser(), AuthFixtures.PickerReturningFirst(),
+            provisioner: null, beforeCommit: null);
+
+        await facade.LoginAsync(Url, forceDevice: false, _profile, CancellationToken.None, adoptServer: true);
+
+        var headers = RequestTo("/auth/config").RequestMessage.Headers!;
+
+        await Assert.That(headers[HttpClientExtensions.CliVersionHeader].Single())
+            .IsEqualTo(CapacitorVersion.CurrentDisplay());
+    }
+
     // ── The loopback lane ──────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -559,6 +589,16 @@ public class CapacitorHttpContainerTests : IDisposable {
         await Assert.That(sent.Headers!.ContainsKey(HttpClientExtensions.CliVersionHeader)).IsFalse();
         await Assert.That(sent.Headers["Authorization"].Single()).IsEqualTo("Bearer tok_signup")
             .Because("the caller's own token is the only credential this lane knows about");
+    }
+
+    /// The store sits under the credential source, so it takes the client factory rather than the
+    /// client: injecting the façade would close the loop and the container would refuse to build.
+    [Test]
+    public async Task The_token_store_resolves_from_the_same_container_as_the_lanes() {
+        using var sp = Container();
+
+        await Assert.That(sp.GetService<TokenStore>()).IsNotNull();
+        await Assert.That(sp.GetService<ICapacitorHttpClient>()).IsNotNull();
     }
 
     [Test]

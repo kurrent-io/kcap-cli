@@ -47,11 +47,11 @@ public static class HttpClientExtensions {
     /// enough for a token to expire mid-flight wants it; a hook that POSTs once does not.
     /// </summary>
     public static async Task<(HttpClient Client, AuthStatus Status)> CreateClientWithAuthStatusAsync(
-        ConfigRoot config, ProfileContext profiles, string baseUrl, CancellationToken ct = default,
-        bool allowAutoRedirect = true, string? rejectedAccessToken = null,
+        ConfigRoot config, ProfileContext profiles, TokenStore store, WorkOSClient workos, string baseUrl,
+        CancellationToken ct = default, bool allowAutoRedirect = true, string? rejectedAccessToken = null,
         bool autoRetryUnauthorized = false) {
-        var (client, status, _, _) = await CreateClientCoreAsync(config, profiles, baseUrl, ct, allowAutoRedirect,
-            rejectedAccessToken, autoRetryUnauthorized);
+        var (client, status, _, _) = await CreateClientCoreAsync(config, profiles, store, workos, baseUrl, ct,
+            allowAutoRedirect, rejectedAccessToken, autoRetryUnauthorized);
 
         return (client, status);
     }
@@ -68,18 +68,18 @@ public static class HttpClientExtensions {
     /// must not mutate auth state) and attaches the same headers explicitly.</para>
     /// </summary>
     static async Task<(HttpClient Client, AuthStatus Status, TokenResolution? Resolution, string? MachineProblem)> CreateClientCoreAsync(
-        ConfigRoot config, ProfileContext profiles, string baseUrl, CancellationToken ct, bool allowAutoRedirect,
-        string? rejectedAccessToken, bool autoRetryUnauthorized) {
+        ConfigRoot config, ProfileContext profiles, TokenStore store, WorkOSClient workos, string baseUrl,
+        CancellationToken ct, bool allowAutoRedirect, string? rejectedAccessToken, bool autoRetryUnauthorized) {
         var result = await CreateClientCoreImplAsync(
-            config, profiles, baseUrl, ct, allowAutoRedirect, rejectedAccessToken, autoRetryUnauthorized);
+            config, profiles, store, workos, baseUrl, ct, allowAutoRedirect, rejectedAccessToken, autoRetryUnauthorized);
         AttachObservationHeaders(profiles, result.Client);
 
         return result;
     }
 
     static async Task<(HttpClient Client, AuthStatus Status, TokenResolution? Resolution, string? MachineProblem)> CreateClientCoreImplAsync(
-        ConfigRoot config, ProfileContext profiles, string baseUrl, CancellationToken ct, bool allowAutoRedirect,
-        string? rejectedAccessToken, bool autoRetryUnauthorized) {
+        ConfigRoot config, ProfileContext profiles, TokenStore store, WorkOSClient workos, string baseUrl,
+        CancellationToken ct, bool allowAutoRedirect, string? rejectedAccessToken, bool autoRetryUnauthorized) {
         HttpClient NewClient(DelegatingHandler? retry = null) {
             var primary = new HttpClientHandler { AllowAutoRedirect = allowAutoRedirect };
 
@@ -97,7 +97,7 @@ public static class HttpClientExtensions {
             return new(capture);
         }
 
-        var provider = await DiscoverProviderAsync(baseUrl, config, profiles, ct);
+        var provider = await DiscoverProviderAsync(baseUrl, config, profiles, store, ct);
 
         if (provider == "None") {
             return (NewClient(), AuthStatus.NoAuthRequired, null, null); // No auth needed
@@ -122,7 +122,7 @@ public static class HttpClientExtensions {
 
             if (credential is null) return (NewClient(), AuthStatus.NotAuthenticated, null, problem);
 
-            var machineSource = new MachineCredentials(credential);
+            var machineSource = new MachineCredentials(workos, credential);
 
             var minted = rejectedAccessToken is null
                 ? await machineSource.ResolveAsync(ct)
@@ -139,7 +139,7 @@ public static class HttpClientExtensions {
             return (machineClient, AuthStatus.Ok, null, null);
         }
 
-        var tokenSource = new TokenStoreCredentials(config, profiles.Name, baseUrl);
+        var tokenSource = new TokenStoreCredentials(store, profiles.Name, baseUrl);
 
         // Recovery from a server rejection is self-contained: it already attempted a rotation and
         // applied the binding check. Falling through to the resolving accessor afterwards would let
@@ -222,10 +222,10 @@ public static class HttpClientExtensions {
     /// client — the MCP servers do — so a single rejection isn't retried (and refreshed) twice.
     /// </param>
     public static async Task<HttpClient> CreateAuthenticatedClientAsync(
-            ConfigRoot config, ProfileContext profiles, string baseUrl,
+            ConfigRoot config, ProfileContext profiles, TokenStore store, WorkOSClient workos, string baseUrl,
             CancellationToken ct = default, bool autoRetryUnauthorized = true) {
         var (client, status, resolution, machineProblem) = await CreateClientCoreAsync(
-            config, profiles, baseUrl, ct, allowAutoRedirect: true,
+            config, profiles, store, workos, baseUrl, ct, allowAutoRedirect: true,
             rejectedAccessToken: null, autoRetryUnauthorized);
 
         switch (status) {
@@ -267,7 +267,8 @@ public static class HttpClientExtensions {
     internal static void ResetProviderCacheForTesting() => CachedProviders.Clear();
 
     public static async Task<string> DiscoverProviderAsync(
-            string baseUrl, ConfigRoot config, ProfileContext profiles, CancellationToken ct = default) {
+            string baseUrl, ConfigRoot config, ProfileContext profiles, TokenStore store,
+            CancellationToken ct = default) {
         if (CachedProviders.TryGetValue(baseUrl, out var memo)) {
             return memo;
         }
@@ -308,7 +309,7 @@ public static class HttpClientExtensions {
         }
 
         // Fallback: try existing tokens (don't cache — allow re-discovery next time)
-        return (await new TokenStore(config).LoadForProfileAsync(profiles.Name, ct))?.Provider ?? "None";
+        return (await store.LoadForProfileAsync(profiles.Name, ct))?.Provider ?? "None";
     }
 
     static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);

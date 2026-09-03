@@ -32,7 +32,8 @@ public class AuthProviderDiscoveryTests : IDisposable {
 
     Task<string> Discover(WireMockServer server) =>
         HttpClientExtensions.DiscoverProviderAsync(
-                server.Urls[0], Config.Root, Resolutions.At(server.Urls[0], Config.Root));
+                server.Urls[0], Config.Root, Resolutions.At(server.Urls[0], Config.Root),
+                AuthFixtures.NewTokenStore(Config.Root));
 
     /// <summary>
     /// Two servers in one process must each get their own answer. `kcap setup` reaches this whenever

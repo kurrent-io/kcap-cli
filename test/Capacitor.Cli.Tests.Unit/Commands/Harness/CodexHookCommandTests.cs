@@ -12,6 +12,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 // discovery for the whole process, so a stub here decides what a concurrent test's stub returns.
 [NotInParallel("AuthProviderDiscoveryCache")]
 public class CodexHookCommandTests : IDisposable {
+
     [TempHome] public required TempHome Home { get; init; }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -820,5 +821,43 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(bridge["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
         await Assert.That(bridge["cwd"]!.GetValue<string>()).IsEqualTo("/repo");
         await Assert.That(node["agent_id"]).IsNull().Because("the hook's own node is not mutated");
+    }
+
+    sealed class Accepting : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json")
+            });
+    }
+
+    /// <summary>
+    /// The bridge post carries the raw tool input to an address the daemon minted, so it must draw the
+    /// lane that ignores an ambient proxy — the agent's own environment supplies one often enough, and
+    /// a proxied hop would take the payload off the machine.
+    /// </summary>
+    [Test, NotInParallel]
+    public async Task The_permission_request_bridge_draws_the_loopback_lane() {
+        using var daemonUrl = EnvScope.Exclusive("KCAP_DAEMON_URL", "http://127.0.0.1:51234/bridge");
+        using var handler   = new Accepting();
+        var       http      = new RecordingCapacitorHttpClient(handler);
+
+        var payload = """
+                      {
+                        "hook_event_name": "PermissionRequest",
+                        "session_id": "abc",
+                        "cwd": "/tmp",
+                        "tool_name": "shell",
+                        "tool_input": { "command": "ls" }
+                      }
+                      """;
+
+        using var capture = ConsoleOutput.StartCapture();
+
+        var exit = await new CodexHookCommand(
+            Config.Root, Resolutions.At(_server.Url!, Config.Root),
+            new HookClock(TimeProvider.System), Home, http).Handle(new StringReader(payload));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(http.Lanes).IsEquivalentTo(new[] { "Loopback" });
     }
 }

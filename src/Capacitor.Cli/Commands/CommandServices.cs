@@ -34,6 +34,7 @@ public static class CommandServices {
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
+        services.AddTransient<McpFlowsServer>();
         services.AddTransient<McpMemoryServer>();
         services.AddTransient<McpSessionsServer>();
         services.AddTransient<McpWorkItemsServer>();

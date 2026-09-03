@@ -231,12 +231,12 @@ public class SessionStartMemoryFoundationTests {
     public async Task Provider_maps_empty_malformed_and_ready_responses() {
         var scope = new FixedScopeResolver("repo", "machine");
         var empty = new SessionStartMemoryContextProvider(scope,
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, "[]"))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK, "[]")));
         var malformed = new SessionStartMemoryContextProvider(scope,
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, "[{}]"))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK, "[{}]")));
         var ready = new SessionStartMemoryContextProvider(scope,
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
-                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK,
+                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]")));
         var request = new SessionStartMemoryContextRequest("https://example", "/repo", false,
             TimeSpan.FromSeconds(1), CancellationToken.None);
 
@@ -253,7 +253,7 @@ public class SessionStartMemoryFoundationTests {
     public async Task Provider_omits_only_unresolved_scope_axes() {
         var handler = new CapturingHandler(HttpStatusCode.NoContent, "");
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, "machine tag"),
-            (_, _) => Task.FromResult(new HttpClient(handler)));
+            new HttpClient(handler));
 
         await provider.GetAsync(new SessionStartMemoryContextRequest(
             "https://example.test/", null, false, TimeSpan.FromSeconds(1), CancellationToken.None));
@@ -261,31 +261,16 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(handler.Uri).IsEqualTo("https://example.test/api/memories/index?machine=machine%20tag");
     }
 
+    /// <summary>The lane does not follow a redirect, so a 3xx arrives here as a status like any
+    /// other — and it is not an answer, so it must read as retryable rather than as "no memory".</summary>
     [Test]
-    public async Task Provider_refreshes_once_after_401_and_refuses_redirect_status() {
-        var calls = 0;
-        var rejectedTokens = new List<string?>();
-        var refreshing = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null), (rejectedAccessToken, _) => {
-            rejectedTokens.Add(rejectedAccessToken);
-            calls++;
-            var status = calls == 1 ? HttpStatusCode.Unauthorized : HttpStatusCode.NoContent;
-            var client = new HttpClient(new StaticHandler(status, ""));
-            // The real factory attaches a bearer; the retry identifies which token was rejected
-            // by reading it back off the client that sent it.
-            client.DefaultRequestHeaders.Authorization = new("Bearer", calls == 1 ? "rejected-token" : "fresh-token");
-            return Task.FromResult(client);
-        }, disposeClients: true);
+    public async Task Provider_reports_a_redirect_as_a_retryable_failure() {
         var request = new SessionStartMemoryContextRequest(
             "https://example.test", null, false, TimeSpan.FromSeconds(1), CancellationToken.None);
 
-        var healed = await refreshing.GetAsync(request);
         var redirected = await new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.Redirect, ""))))
-            .GetAsync(request);
+            new HttpClient(new StaticHandler(HttpStatusCode.Redirect, ""))).GetAsync(request);
 
-        await Assert.That(calls).IsEqualTo(2);
-        await Assert.That(rejectedTokens).IsEquivalentTo([null, "rejected-token"]);
-        await Assert.That(healed.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
         await Assert.That(redirected.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
     }
 
@@ -293,8 +278,8 @@ public class SessionStartMemoryFoundationTests {
     public async Task Orchestrator_returns_ready_fragment_only_to_commit_winner() {
         using var root = new TempDir();
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
-                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK,
+                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]")));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Claude, "session", null,
             true, true, SessionLifecycleReason.New, true);
@@ -321,8 +306,8 @@ public class SessionStartMemoryFoundationTests {
         using var root = new TempDir();
         var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero));
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
-                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK,
+                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]")));
         var orchestrator = new SessionStartMemoryOrchestrator(
             new SessionStartMemoryLeaseStore(root.Path, time), provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Copilot, "3f2504e0-4f89-41d3-9a0c-0305e82c3301", null,
@@ -346,8 +331,8 @@ public class SessionStartMemoryFoundationTests {
     public async Task A_granted_commit_gate_commits_the_lease_exactly_as_the_ungated_path() {
         using var root = new TempDir();
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK,
-                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK,
+                "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]")));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Copilot, "3f2504e0-4f89-41d3-9a0c-0305e82c3301", null,
             true, true, SessionLifecycleReason.New, true);
@@ -380,12 +365,9 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Kiro_repeated_agent_spawn_injects_once_then_yields_nothing() {
         using var root = new TempDir();
-        var calls = 0;
-        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => {
-                Interlocked.Increment(ref calls);
-                return Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson)));
-            });
+        using var handler = new CountingHandler(HttpStatusCode.OK, OneMemoryJson);
+        var provider = new SessionStartMemoryContextProvider(
+            new FixedScopeResolver(null, null), new HttpClient(handler));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
 
         var first  = await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
@@ -397,7 +379,7 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(third).IsNull();
 
         // Not merely "no output" — no repeat FETCH either, or every prompt would still pay the call.
-        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(handler.Sends).IsEqualTo(1);
     }
 
     // A genuinely new Kiro session brings a new session id, hence a new lease key. No Kiro-specific
@@ -406,7 +388,7 @@ public class SessionStartMemoryFoundationTests {
     public async Task Kiro_distinct_session_ids_inject_independently() {
         using var root = new TempDir();
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson)));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
 
         var a = await orchestrator.GetFragmentAsync(KiroLifecycle("session-a"), KiroRequest());
@@ -423,11 +405,9 @@ public class SessionStartMemoryFoundationTests {
     public async Task Kiro_retryable_failure_lets_a_later_prompt_still_inject() {
         using var root = new TempDir();
         var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero));
-        var calls = 0;
-        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(
-                Interlocked.Increment(ref calls) == 1 ? HttpStatusCode.InternalServerError : HttpStatusCode.OK,
-                OneMemoryJson))));
+        using var handler = new FailsOnceHandler(OneMemoryJson);
+        var provider = new SessionStartMemoryContextProvider(
+            new FixedScopeResolver(null, null), new HttpClient(handler));
         var orchestrator = new SessionStartMemoryOrchestrator(
             new SessionStartMemoryLeaseStore(root.Path, time), provider);
 
@@ -446,19 +426,16 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Kiro_a_successful_empty_index_still_suppresses_later_prompts() {
         using var root = new TempDir();
-        var calls = 0;
-        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => {
-                Interlocked.Increment(ref calls);
-                return Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.NoContent, "")));
-            });
+        using var handler = new CountingHandler(HttpStatusCode.NoContent, "");
+        var provider = new SessionStartMemoryContextProvider(
+            new FixedScopeResolver(null, null), new HttpClient(handler));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
 
         await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
         var second = await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
 
         await Assert.That(second).IsNull();
-        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(handler.Sends).IsEqualTo(1);
     }
 
     // A losing agentSpawn callback must be fenced by a lease that is genuinely HELD — not merely
@@ -473,21 +450,12 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Kiro_agent_spawns_arriving_while_the_lease_is_held_are_fenced_out() {
         using var root = new TempDir();
-        var fetches       = 0;
         var winnerHolding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseWinner = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            async (_, ct) => {
-                Interlocked.Increment(ref fetches);
-                winnerHolding.TrySetResult();
-                // Held until the losers have been through. The timeout is a suite-safety net only:
-                // it is never reached on the passing path, and reaching it fails the test anyway
-                // (the losers would no longer be contending for a held lease).
-                await releaseWinner.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-
-                return new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson));
-            });
+        using var handler = new GatedHandler(winnerHolding, releaseWinner, OneMemoryJson);
+        var provider = new SessionStartMemoryContextProvider(
+            new FixedScopeResolver(null, null), new HttpClient(handler));
         var store = new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System);
 
         var winner = Task.Run(() => new SessionStartMemoryOrchestrator(store, provider)
@@ -506,12 +474,12 @@ public class SessionStartMemoryFoundationTests {
 
         // Every loser was refused while that lease was held — and none of them fetched.
         await Assert.That(losers.All(r => r is null)).IsTrue();
-        await Assert.That(fetches).IsEqualTo(1);
+        await Assert.That(handler.Sends).IsEqualTo(1);
 
         releaseWinner.TrySetResult();
 
         await Assert.That(await winner).Contains("- s: d");
-        await Assert.That(fetches).IsEqualTo(1);
+        await Assert.That(handler.Sends).IsEqualTo(1);
     }
 
     // Exactly what AntigravityHookCommand.LifecycleFor builds: PreInvocation fires once per
@@ -530,12 +498,9 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Antigravity_repeated_pre_invocation_injects_once_and_does_not_refetch() {
         using var root = new TempDir();
-        var fetches = 0;
-        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => {
-                Interlocked.Increment(ref fetches);
-                return Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson)));
-            });
+        using var handler = new CountingHandler(HttpStatusCode.OK, OneMemoryJson);
+        var provider = new SessionStartMemoryContextProvider(
+            new FixedScopeResolver(null, null), new HttpClient(handler));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
 
         // A real GUID — Antigravity is on the fail-closed identity arm, which normalizes any
@@ -549,14 +514,14 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(first).Contains("- s: d");
         await Assert.That(second).IsNull();
         // The lease must prevent the WORK, not merely the output. One fetch, not two.
-        await Assert.That(fetches).IsEqualTo(1);
+        await Assert.That(handler.Sends).IsEqualTo(1);
     }
 
     [Test]
     public async Task Antigravity_distinct_conversations_each_inject_once() {
         using var root = new TempDir();
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
-            (_, _) => Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson))));
+            new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson)));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
 
         var a = await orchestrator.GetFragmentAsync(
@@ -583,11 +548,9 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Disabled_request_does_not_fetch_or_write_a_lease_record() {
         using var root = new TempDir();
-        var clientCalls = 0;
-        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null), (_, _) => {
-            clientCalls++;
-            return Task.FromResult(new HttpClient(new StaticHandler(HttpStatusCode.NoContent, "")));
-        });
+        using var handler = new CountingHandler(HttpStatusCode.NoContent, "");
+        var provider = new SessionStartMemoryContextProvider(
+            new FixedScopeResolver(null, null), new HttpClient(handler));
         var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Claude, "session", null,
             true, true, SessionLifecycleReason.New, false);
@@ -597,7 +560,7 @@ public class SessionStartMemoryFoundationTests {
                 "https://example.test", null, true, TimeSpan.FromSeconds(1), CancellationToken.None));
 
         await Assert.That(fragment).IsNull();
-        await Assert.That(clientCalls).IsEqualTo(0);
+        await Assert.That(handler.Sends).IsEqualTo(0);
         await Assert.That(Directory.EnumerateFiles(root.Path)).IsEmpty();
     }
 
@@ -617,6 +580,56 @@ public class SessionStartMemoryFoundationTests {
             Task.FromResult(new HttpResponseMessage(status) {
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
             });
+    }
+
+    /// <summary>
+    /// Counts the sends a lane actually made. The client is built once at the call site now, so a
+    /// fetch is only observable at the wire — which is the question these tests ask anyway.
+    /// </summary>
+    sealed class CountingHandler(HttpStatusCode status, string body) : HttpMessageHandler {
+        int _sends;
+
+        public int Sends => Volatile.Read(ref _sends);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Interlocked.Increment(ref _sends);
+
+            return Task.FromResult(new HttpResponseMessage(status) {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    /// <summary>Fails the first send and succeeds afterwards, so a retry is distinguishable from a
+    /// first attempt that simply worked.</summary>
+    sealed class FailsOnceHandler(string body) : HttpMessageHandler {
+        int _sends;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(
+                    Interlocked.Increment(ref _sends) == 1 ? HttpStatusCode.InternalServerError : HttpStatusCode.OK) {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            });
+    }
+
+    /// <summary>Announces that it is mid-send and stays there until released, so a caller can be held
+    /// inside its fetch while others contend for the lease it holds.</summary>
+    sealed class GatedHandler(TaskCompletionSource holding, TaskCompletionSource release, string body) : HttpMessageHandler {
+        int _sends;
+
+        public int Sends => Volatile.Read(ref _sends);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Interlocked.Increment(ref _sends);
+            holding.TrySetResult();
+            // A suite-safety net only: never reached on the passing path, and reaching it fails the
+            // test anyway, since the losers would no longer be contending for a held lease.
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+            return new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        }
     }
 
     sealed class CapturingHandler(HttpStatusCode status, string body) : HttpMessageHandler {

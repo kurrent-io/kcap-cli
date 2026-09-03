@@ -50,8 +50,19 @@ public partial class App : Application {
     /// authenticate against. Process-lifetime rather than per wizard run — a provisioning poll can
     /// outlive the window that started it, and this client degrades a transport failure but not a
     /// disposed handler.
-    readonly ServiceProvider _foreignHttp =
-        new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
+    ///
+    /// The token store rides here for its pooled clients. Its WorkOS lane is one of the foreign
+    /// ones; its refresh against our own server names a lane only <c>AddCapacitorHttp</c>
+    /// registers, and an unregistered name yields a plain pooled client rather than an error —
+    /// which is what this process wants, since that lane's handlers need a configured server.
+    readonly ServiceProvider _foreignHttp;
+
+    public App() =>
+        _foreignHttp = new ServiceCollection()
+            .AddSingleton(_config)
+            .AddCapacitorForeignClients()
+            .AddSingleton<TokenStore>()
+            .BuildServiceProvider();
 
     // And its one read of KCAP_APP_PTY_DUMP: a file every terminal feed frame is appended to as
     // received, for seeing what the emulator was given.
@@ -174,7 +185,7 @@ public partial class App : Application {
                 TimeProvider.System);
             _lane = lane;
 
-            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _shutdown.Token);
+            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _shutdown.Token);
             // A graph built while the lane still owns a live action must not also drive automatic
             // ones (spec §6a) — only the wizard's own handoff can answer this with anything but true.
             var laneQuiesced = true;
@@ -185,7 +196,7 @@ public partial class App : Application {
             if (gate is GateResult.Incomplete) {
                 laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles);
                 if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
-                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _shutdown.Token);
+                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _shutdown.Token);
             }
 
             BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);
@@ -243,8 +254,8 @@ public partial class App : Application {
     // cannot be read off a second one, and the post-wizard build re-runs this rather than reusing a
     // startup value the wizard may have invalidated.
     internal static Task<(GateResult Gate, ProfileContext? Profiles)> ResolveAndEvaluateGateAsync(
-            ConfigRoot config, CancellationToken ct) =>
-        EvaluateGateSafelyAsync(new OnboardingGate(config).EvaluateAsync, ct);
+            ConfigRoot config, TokenStore tokenStore, CancellationToken ct) =>
+        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore).EvaluateAsync, ct);
 
     // The steady-state graph, over the resolution the gate was evaluated on (never a second resolve).
     void BuildDaemonGraph(
@@ -334,7 +345,7 @@ public partial class App : Application {
 
         // One launch client for the app, not one per window the coordinator builds — each carries
         // its own HubConnection, and only a held instance can be disposed at teardown.
-        var launch = new ServerLaunchClient(_config, profiles);
+        var launch = new ServerLaunchClient(profiles, _foreignHttp.GetRequiredService<TokenStore>());
         _launch = launch;
 
         // One attach client per attempt, dialed at the daemon's own control socket; 80x24 is a
@@ -346,7 +357,7 @@ public partial class App : Application {
 
         _coordinator = new MainWindowCoordinator(
             () => BuildAndShowMainWindow(
-                service, _config, actions, notifier, ticker, _shutdown.Token, activity, lifecycle.StartActionAsync,
+                service, _config, _foreignHttp.GetRequiredService<TokenStore>(), actions, notifier, ticker, _shutdown.Token, activity, lifecycle.StartActionAsync,
                 lifecycleStatus, launch, _navigation, _workspaceTeardown.Track, BuildWorkspace,
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: permissions.AgentsWithPending,
@@ -449,6 +460,11 @@ public partial class App : Application {
 
         var graph = WizardComposition.BuildGraph(new WizardGraphOptions(
             _config,
+            _foreignHttp.GetRequiredService<TokenStore>(),
+            _foreignHttp.GetRequiredService<IHttpClientFactory>(),
+            _foreignHttp.GetRequiredService<IAuthProxyClient>(),
+            _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
+            _foreignHttp.GetRequiredService<WorkOSClient>(),
             // Nothing resolved means the gate's evaluation threw; sign-in then targets the name every
             // fallback lands on, which is what an unresolved config would have answered anyway.
             profiles?.Name ?? ProfileConfig.DefaultName,
@@ -715,7 +731,7 @@ public partial class App : Application {
     // already-visible window is a no-op, so this stays correct even if a future edit changes the
     // timing such that ShowMainWindow() DOES still see a non-null MainWindow.
     internal static MainWindow BuildAndShowMainWindow(
-            IDaemonClientService service, ConfigRoot config,
+            IDaemonClientService service, ConfigRoot config, TokenStore tokenStore,
             AgentActionService actions, IAppNotifier notifier, ITicker ticker,
             CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
             IObservable<string?>? lifecycleStatus = null, ILaunchClient? launch = null,
@@ -741,7 +757,7 @@ public partial class App : Application {
         MainWindowViewModel? vm = null;
         var home = new HomeViewModel(
             service, new AppStateStore(config.Path("app-state.json")),
-            launch ?? new ServerLaunchClient(config, null), new RepoPathStore(config).GetSortedPathsAsync, shutdownToken,
+            launch ?? new ServerLaunchClient(null, tokenStore), new RepoPathStore(config).GetSortedPathsAsync, shutdownToken,
             openSession: agentId => vm?.OpenSession(agentId),
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
             openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),

@@ -10,6 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 /// WireMock integration suite.
 /// </summary>
 public class AntigravityHookCommandTests {
+
     [TempHome] public required TempHome Home { get; init; }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }

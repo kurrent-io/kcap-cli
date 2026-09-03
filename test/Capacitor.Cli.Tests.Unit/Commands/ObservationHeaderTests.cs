@@ -26,6 +26,7 @@ public class ObservationHeaderTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     readonly WireMockServer _server = WireMockServer.Start();
+    readonly WorkOSClient _workos = new(new PlainHttpClientFactory());
 
     ServiceProvider? _sp;
 
@@ -34,11 +35,13 @@ public class ObservationHeaderTests : IDisposable {
     WhoamiCommand Whoami(ProfileContext profiles) {
         var services = new ServiceCollection();
 
+        services.AddSingleton(Config.Root);
+        services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(_server.Urls[0], Config.Root, profiles));
         services.AddCapacitorHttp();
         _sp = services.BuildServiceProvider();
 
-        return new WhoamiCommand(Config.Root, profiles, _sp.GetRequiredService<ICapacitorHttpClient>());
+        return new WhoamiCommand(Config.Root, profiles, AuthFixtures.NewTokenStore(Config.Root), _sp.GetRequiredService<ICapacitorHttpClient>());
     }
 
     [Before(Test)]
@@ -66,7 +69,7 @@ public class ObservationHeaderTests : IDisposable {
         StubDiscovery();
 
         var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-            Config.Root, Resolutions.None(Config.Root), _server.Urls[0]);
+            Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), _workos, _server.Urls[0]);
 
         await Assert.That(status).IsEqualTo(AuthStatus.NoAuthRequired);
         await Assert.That(client.DefaultRequestHeaders.Contains(HttpClientExtensions.CliVersionHeader)).IsTrue();
@@ -82,7 +85,7 @@ public class ObservationHeaderTests : IDisposable {
         var profiles = Resolutions.Of(new Profile { UpdateCheck = false }, "obs-headers-off", _server.Urls[0]);
 
         var (client, _) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-            Config.Root, profiles, _server.Urls[0]);
+            Config.Root, profiles, AuthFixtures.NewTokenStore(Config.Root), _workos, _server.Urls[0]);
 
         await Assert.That(client.DefaultRequestHeaders.Contains(HttpClientExtensions.UpdateCheckHeader)).IsTrue();
         await Assert.That(client.DefaultRequestHeaders.GetValues(HttpClientExtensions.UpdateCheckHeader).Single())
@@ -100,7 +103,7 @@ public class ObservationHeaderTests : IDisposable {
         var profiles = Resolutions.Of(new Profile { UpdateCheck = true }, "obs-headers-on", _server.Urls[0]);
 
         var (client, _) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-            Config.Root, profiles, _server.Urls[0]);
+            Config.Root, profiles, AuthFixtures.NewTokenStore(Config.Root), _workos, _server.Urls[0]);
 
         await Assert.That(client.DefaultRequestHeaders.Contains(HttpClientExtensions.UpdateCheckHeader)).IsFalse();
     }
@@ -111,7 +114,7 @@ public class ObservationHeaderTests : IDisposable {
         // Nothing resolved and no config.json under this root, so the effective profile is the
         // built-in default, whose update_check defaults to true.
         var (client, _) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-            Config.Root, Resolutions.None(Config.Root), _server.Urls[0]);
+            Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), _workos, _server.Urls[0]);
 
         await Assert.That(client.DefaultRequestHeaders.Contains(HttpClientExtensions.UpdateCheckHeader)).IsFalse();
     }
@@ -132,7 +135,7 @@ public class ObservationHeaderTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
 
         var profiles = Resolutions.Of(new Profile { UpdateCheck = false }, profileName, _server.Urls[0]);
-        await new TokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
             AccessToken    = "tok-whoami-off",
             ExpiresAt      = DateTimeOffset.UtcNow.AddHours(1),
             GitHubUsername = "alice",
@@ -160,7 +163,7 @@ public class ObservationHeaderTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
 
         var profiles = Resolutions.Of(new Profile { UpdateCheck = true }, profileName, _server.Urls[0]);
-        await new TokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
             AccessToken    = "tok-whoami-on",
             ExpiresAt      = DateTimeOffset.UtcNow.AddHours(1),
             GitHubUsername = "alice",

@@ -310,7 +310,7 @@ sealed class PiHookCommand(ConfigRoot config, ProfileContext profiles, HookClock
         _                  => SessionLifecycleReason.RepeatedTurnCallback
     };
 
-    internal Task<string?> StartMemoryIndexTask(
+    internal async Task<string?> StartMemoryIndexTask(
             string   file,
             string?  scopeRoot,
             bool     disabled,
@@ -320,21 +320,25 @@ sealed class PiHookCommand(ConfigRoot config, ProfileContext profiles, HookClock
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !SessionStartMemoryHookSupport.CanAttempt(Url))
-            return Task.FromResult<string?>(null);
+            return null;
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(
-                config,
-                SessionStartMemoryHookSupport.ClientFactory(config, profiles, Url),
-                disposeClients: true);
+            var       attempt = await http.ForHookAsync();
+            using var client  = attempt.Client;
 
-            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            // The index is bearer-authenticated, so without one the fetch can only 401 into a
+            // retryable failure the caller renders as no memory. Skipping says the same thing sooner.
+            if (!attempt.Usable) return null;
+
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, client);
+
+            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
                 LifecycleFor(file, reason),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
                     GuidelinesDisabled: guidelinesDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-            return Task.FromResult<string?>(null);
+            return null;
         }
     }
 

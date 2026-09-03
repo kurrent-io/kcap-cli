@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 /// is not an answer: "expires tomorrow" only says a clock hasn't passed, so a token the server
 /// rejects still looks valid. Hence the probe.
 /// </summary>
-public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
     /// <summary>Cheap authenticated GET used purely to ask "do you accept this token?".</summary>
     internal const string ProbePath = "/api/me/notification-prefs";
 
@@ -39,7 +39,7 @@ public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, IC
     public async Task<int> HandleAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        var provider = await HttpClientExtensions.DiscoverProviderAsync(baseUrl, config, profiles);
+        var provider = await HttpClientExtensions.DiscoverProviderAsync(baseUrl, config, profiles, tokens);
 
         if (provider == "None") {
             await Console.Out.WriteLineAsync("Provider: None (no authentication)");
@@ -53,7 +53,7 @@ public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, IC
         // WorkOS credential (single-use refresh token) as a side effect of merely running whoami,
         // and would let the expiry printed here describe a different token than the one probed.
         var profile  = profiles.Name;
-        var snapshot = await new TokenStore(config).LoadForProfileAsync(profile);
+        var snapshot = await tokens.LoadForProfileAsync(profile);
 
         if (snapshot is null) {
             Console.Error.WriteLine("Not authenticated. Run `kcap login`.");

@@ -15,7 +15,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
     /// <summary>
     /// Run with an explicit session-default PR (used by <c>kcap review &lt;pr&gt;</c>).
     /// Tool calls may still override the default by passing a <c>pr</c> argument.
@@ -43,7 +43,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, ICapaci
         // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
         // disk must never block the server from starting.
         var loggedIn = false;
-        try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+        try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
         CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,

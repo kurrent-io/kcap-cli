@@ -42,6 +42,8 @@ public class ReportVersionCommandTests : IDisposable {
     ReportVersionCommand Command(ProfileContext profiles) {
         var services = new ServiceCollection();
 
+        services.AddSingleton(Config.Root);
+        services.AddSingleton(profiles);
         services.AddSingleton(
             new CapacitorServer(profiles.Resolution.ServerUrl ?? "http://localhost:5108", Config.Root, profiles));
         services.AddCapacitorHttp();
@@ -73,7 +75,7 @@ public class ReportVersionCommandTests : IDisposable {
         Resolutions.Of(new Profile { ServerUrl = _server.Urls[0] }, profileName, _server.Urls[0]);
 
     async Task<ProfileContext> SeedValidTokenAsync(string profileName) {
-        await new TokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
             AccessToken    = "tok-" + profileName,
             ExpiresAt      = DateTimeOffset.UtcNow.AddHours(1),
             GitHubUsername = "alice",
@@ -150,7 +152,7 @@ public class ReportVersionCommandTests : IDisposable {
 
         const string profileName = "report-version-expired";
         var profiles = Profiles(profileName);
-        await new TokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(profileName, new StoredTokens {
             AccessToken    = "tok-expired",
             ExpiresAt      = DateTimeOffset.UtcNow.AddHours(-1),
             GitHubUsername = "alice",

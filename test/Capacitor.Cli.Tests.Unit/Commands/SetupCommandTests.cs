@@ -14,6 +14,10 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class SetupCommandTests {
     // Never reached: these tests drive the import and discovery steps, which do not provision.
     static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
+    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+    static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
+    static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
+    static readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient());
 
     [TempHome] public required TempHome Home { get; init; }
 
@@ -863,7 +867,7 @@ public class SetupCommandTests {
         var passed = Resolutions.At("https://example.test", Config.Root);
 
         try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
+            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
                 currentRepo:       ("acme", "widgets"),
                 authSatisfied:     true,
                 skipImport:        false,
@@ -894,7 +898,7 @@ public class SetupCommandTests {
         };
 
         try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
+            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
                 currentRepo:       ("acme", "widgets"),
                 authSatisfied:     true,
                 skipImport:        false,
@@ -917,7 +921,7 @@ public class SetupCommandTests {
         try {
             // Completing without an unhandled exception is the assertion: a non-zero exit
             // code must be swallowed (warned about, not propagated) so setup still finishes.
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
+            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
                 currentRepo:       ("acme", "widgets"),
                 authSatisfied:     true,
                 skipImport:        false,
@@ -938,7 +942,7 @@ public class SetupCommandTests {
         try {
             // Completing without the InvalidOperationException escaping is the assertion —
             // import is best-effort and must never fail setup.
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
+            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
                 currentRepo:       ("acme", "widgets"),
                 authSatisfied:     true,
                 skipImport:        false,
@@ -957,7 +961,7 @@ public class SetupCommandTests {
         SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
 
         try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
+            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
                 currentRepo:       null,
                 authSatisfied:     true,
                 skipImport:        false,
@@ -976,7 +980,7 @@ public class SetupCommandTests {
         SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
 
         try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
+            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).RunImportStepAsync(
                 currentRepo:       ("acme", "widgets"),
                 authSatisfied:     true,
                 skipImport:        true,
@@ -1051,7 +1055,7 @@ public class SetupCommandTests {
         try {
             var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--default-visibility", "org_public");
 
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
+            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
 
             await Assert.That(exit).IsEqualTo(0);
             await Assert.That(captured).IsNotNull();
@@ -1065,7 +1069,7 @@ public class SetupCommandTests {
             // to "no login required" (no OAuth flow ran), so nothing was ever stored — yet
             // import still ran (asserted above). Confirm no token exists for the profile the
             // import actually saw.
-            await Assert.That(await new TokenStore(Config.Root).LoadAsync(
+            await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadAsync(
                 captured.Profiles.Name)).IsNull();
         } finally {
             SetupCommand.ImportRunnerOverride = null;
@@ -1091,7 +1095,7 @@ public class SetupCommandTests {
 
             // Completing with exit 0 without the override's exception escaping is the
             // assertion — --skip-import must suppress the Step 6 call entirely.
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
+            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
 
             await Assert.That(exit).IsEqualTo(0);
         } finally {
@@ -1123,7 +1127,7 @@ public class SetupCommandTests {
         try {
             var args = BuildArgs("--server-url", schemeLessServerUrl, "--no-prompt");
 
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
+            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
 
             await Assert.That(exit).IsEqualTo(0);
             await Assert.That(captured).IsNotNull();
@@ -1158,7 +1162,7 @@ public class SetupCommandTests {
         try {
             var args = BuildArgs("--server-url", server.Url!, "--no-prompt");
 
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
+            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(args);
 
             await Assert.That(exit).IsEqualTo(0);
             await Assert.That(captured).IsNotNull();
@@ -1350,7 +1354,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(["setup", "--org", "Acme"]);
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(["setup", "--org", "Acme"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
@@ -1361,7 +1365,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_creating_and_pointing_at_a_server_at_once() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -1373,7 +1377,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_a_provider_that_cannot_create() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
@@ -1384,7 +1388,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_still_requires_a_server_url_with_no_prompt_and_no_answers() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(["setup", "--no-prompt"]);
+        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, new FixedCapacitorHttpClient(), Provisioning).HandleAsync(["setup", "--no-prompt"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");

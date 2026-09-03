@@ -21,7 +21,7 @@ namespace Capacitor.Cli.Commands;
 /// burying it in documentation.</para>
 /// </summary>
 public sealed class MachineCommand(
-        ConfigRoot config, ProfileContext profiles, IMachinesApi machines, IAuthProxyClient proxy) {
+        ProfileContext profiles, TokenStore store, IMachinesApi machines, IAuthProxyClient proxy) {
     /// <summary>
     /// Visibility values a machine may record with — the same set a human's profile accepts, because a
     /// machine is just another principal running this CLI. Kept in sync with the server's own list by
@@ -79,7 +79,7 @@ public sealed class MachineCommand(
         // The operator's own WorkOS access token is what the proxy scopes on: it reads org_id and role
         // from the token's signed claims, so this CLI cannot ask for another organization even if it
         // wanted to. Nothing about the request names an org.
-        var tokens = await new TokenStore(config).GetValidTokensForProfileAsync(profiles.Name);
+        var tokens = await store.GetValidTokensForProfileAsync(profiles.Name);
 
         if (tokens is null || string.IsNullOrEmpty(tokens.AccessToken)) {
             await Console.Error.WriteLineAsync("Not authenticated. Run `kcap login` first.");

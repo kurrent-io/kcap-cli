@@ -1,6 +1,5 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.SessionStartMemory;
 
@@ -29,24 +28,8 @@ internal static class SessionStartMemoryHookSupport {
     public static bool CanAttempt(string? baseUrl) => HookHttp.IsPostable(baseUrl);
 
     /// <summary>
-    /// The production memory-index client factory: authenticated, and honouring the provider's
-    /// 401-refresh contract.
-    ///
-    /// <para><c>/api/memories/index</c> is bearer-authenticated, and
-    /// <see cref="SessionStartMemoryContextProvider"/> hands the REJECTED bearer back to this factory
-    /// after a 401 so it can mint a refreshed client. A bare <c>new HttpClient()</c> would go out
-    /// anonymous on both the initial call and the refresh: the provider records a retryable failure
-    /// and the harness silently never receives memory context on any authenticated deployment.</para>
-    /// </summary>
-    public static Func<string?, CancellationToken, Task<HttpClient>> ClientFactory(
-            ConfigRoot config, ProfileContext profiles, string baseUrl)
-        => async (rejectedAccessToken, ct) => (await HttpClientExtensions.CreateClientWithAuthStatusAsync(config,
-            profiles, baseUrl, ct, allowAutoRedirect: false, rejectedAccessToken: rejectedAccessToken)).Client;
-
-    /// <summary>
-    /// Builds the combined memory + guidelines SessionStart context provider. The memory
-    /// lane and the guidelines lane share one authenticated client factory and the composite resolves
-    /// the repo/machine scope ONCE for both. Which lanes actually run is decided per request via
+    /// Builds the combined memory + guidelines SessionStart context provider. Both lanes share one
+    /// authenticated client and the composite resolves the repo/machine scope ONCE for both. Which lanes actually run is decided per request via
     /// <see cref="SessionStartMemoryContextRequest.Disabled"/> (memory) and its
     /// <c>GuidelinesDisabled</c> flag — a disabled lane contributes nothing.
     ///
@@ -54,20 +37,18 @@ internal static class SessionStartMemoryHookSupport {
     /// use it — it keeps a memory-only <see cref="SessionStartMemoryContextProvider"/> and renders
     /// guidelines from its own hook POST response.</para>
     ///
-    /// <para>The caller resolves its own <paramref name="clientFactory"/> (each adapter keeps its
-    /// factory choice) and passes <paramref name="disposeClients"/>: true when the factory mints its
-    /// own clients (ours to dispose), false when it hands back one the caller owns and reuses — the
-    /// hook's own client, which outlives this fetch. Both lanes share the one factory.</para>
+    /// <para><paramref name="client"/> stays the caller's to dispose, and both lanes send on it:
+    /// <c>/api/memories/index</c> is bearer-authenticated, so a client carrying no credential leaves
+    /// the harness silently without memory context on any authenticated deployment.</para>
     /// </summary>
     public static ISessionStartContextProvider CompositeProvider(
             ConfigRoot config,
-            Func<string?, CancellationToken, Task<HttpClient>> clientFactory,
-            bool disposeClients,
+            HttpClient client,
             ISessionStartMemoryScopeResolver? scopeResolver = null) {
         var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(config);
 
-        var memory     = new SessionStartMemoryContextProvider(resolver, clientFactory, disposeClients: disposeClients);
-        var guidelines = new SessionStartGuidelinesLane(clientFactory, disposeClients: disposeClients);
+        var memory     = new SessionStartMemoryContextProvider(resolver, client);
+        var guidelines = new SessionStartGuidelinesLane(client);
         return new SessionStartCompositeContextProvider(resolver, memory, guidelines);
     }
 

@@ -18,7 +18,7 @@ namespace Capacitor.Cli.Commands;
 /// the agent fetches the schema document, writes SQL, and self-repairs from the server's
 /// rejection reasons. Structure cloned from McpMemoryServer.
 /// </summary>
-sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     internal const string NotSupportedMessage =
@@ -44,7 +44,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, ICap
         // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
         // disk must never block the server from starting.
         var loggedIn = false;
-        try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+        try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
         CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
@@ -191,7 +191,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, ICap
             // read — resolved here so MapResponse stays a pure, unit-testable mapper (its own
             // 401 arm remains as the fallback wording).
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(config, profiles.Name, baseUrl), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
             }
 
             return BuildToolResult(id, MapResponse(toolName, httpResponse.StatusCode, body, out var isError), isError);

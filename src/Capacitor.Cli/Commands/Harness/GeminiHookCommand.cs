@@ -180,7 +180,7 @@ sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookC
             // inject on an unverified reason AND spend the once-per-session lease on it.
             SessionStartMemoryHookSupport.ReasonFor(source), CallbackMayRepeat: false);
 
-    Task<string?> StartMemoryIndexTask(
+    async Task<string?> StartMemoryIndexTask(
             string     sessionId,
             string?    scopeRoot,
             bool       disabled,
@@ -190,21 +190,25 @@ sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookC
         if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !SessionStartMemoryHookSupport.CanAttempt(Url))
-            return Task.FromResult<string?>(null);
+            return null;
 
         try {
-            var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(
-                config,
-                SessionStartMemoryHookSupport.ClientFactory(config, profiles, Url),
-                disposeClients: true);
+            var       attempt = await http.ForHookAsync();
+            using var client  = attempt.Client;
 
-            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            // The index is bearer-authenticated, so without one the fetch can only 401 into a
+            // retryable failure the caller renders as no memory. Skipping says the same thing sooner.
+            if (!attempt.Usable) return null;
+
+            var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, client);
+
+            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
                     GuidelinesDisabled: guidelinesDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-            return Task.FromResult<string?>(null);
+            return null;
         }
     }
 

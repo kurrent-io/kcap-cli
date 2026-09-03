@@ -7,7 +7,7 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
-        DaemonStore store, ProfileContext profiles, ConfigRoot config, HarnessRegistry harnesses,
+        DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
         ICapacitorHttpClient http, NpmRegistryClient npm) {
 
     public async Task<int> HandleAsync(string[] args) {
@@ -50,7 +50,7 @@ public sealed class StatusCommand(
             Console.WriteLine($"  Auth:    {machineLine}");
         } else {
             Console.Write("  Auth:    ");
-            var tokens = await new TokenStore(config).GetValidTokensForProfileAsync(profiles.Name);
+            var tokens = await tokenStore.GetValidTokensForProfileAsync(profiles.Name);
 
             if (tokens is not null) {
                 var remaining = tokens.ExpiresAt - DateTimeOffset.UtcNow;
@@ -60,7 +60,7 @@ public sealed class StatusCommand(
                     : $"expires in {remaining.TotalMinutes:F0}m";
                 await Console.Out.WriteLineAsync($"{tokens.GitHubUsername} ({tokens.Provider}) ✓ token valid ({expiryText})");
             } else {
-                var rawTokens = await new TokenStore(config).LoadForProfileAsync(profiles.Name);
+                var rawTokens = await tokenStore.LoadForProfileAsync(profiles.Name);
 
                 await Console.Out.WriteLineAsync(
                     rawTokens is not null

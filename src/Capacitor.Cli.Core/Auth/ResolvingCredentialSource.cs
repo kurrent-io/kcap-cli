@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Core.Auth;
 /// cannot construct asynchronously, so the choice happens inside the call and is memoized for the
 /// instance's life.
 /// </summary>
-internal sealed class ResolvingCredentialSource(CapacitorServer server) : ICredentialSource {
+internal sealed class ResolvingCredentialSource(CapacitorServer server, TokenStore tokens, WorkOSClient workos) : ICredentialSource {
     ICredentialSource? _chosen;
 
     public async Task<CredentialState> ResolveAsync(CancellationToken ct) =>
@@ -27,7 +27,7 @@ internal sealed class ResolvingCredentialSource(CapacitorServer server) : ICrede
     }
 
     async Task<ICredentialSource> PickAsync(CancellationToken ct) {
-        if (await HttpClientExtensions.DiscoverProviderAsync(server.Url, server.Config, server.Profiles, ct) == "None")
+        if (await HttpClientExtensions.DiscoverProviderAsync(server.Url, server.Config, server.Profiles, tokens, ct) == "None")
             return NoCredentials.Instance;
 
         // Before the token store: a runner has no profile, so that path would find nothing and advise
@@ -35,10 +35,10 @@ internal sealed class ResolvingCredentialSource(CapacitorServer server) : ICrede
         // half-configured one is told which is missing.
         if (MachineAuth.Intended)
             return MachineAuth.TryRead(out var problem) is { } credential
-                ? new MachineCredentials(credential)
+                ? new MachineCredentials(workos, credential)
                 : new Unusable(problem!);
 
-        return new TokenStoreCredentials(server.Config, server.Profiles.Name, server.Url);
+        return new TokenStoreCredentials(tokens, server.Profiles.Name, server.Url);
     }
 
     sealed class Unusable(string problem) : ICredentialSource {

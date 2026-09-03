@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Tests.Unit.Commands.Harness;
 
@@ -39,6 +40,7 @@ public class CursorMemoryIndexLiveCertTests {
     const string ServerUrlEnvVar = "KCAP_URL";
 
     static readonly TimeSpan ProcessTimeout = TimeSpan.FromSeconds(60);
+    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
 
     // Both gated live tests are [NotInParallel]: they read/mutate the SAME process-global
     // `disable_memory_index` profile config (a real `kcap config set` subprocess writing the
@@ -55,7 +57,7 @@ public class CursorMemoryIndexLiveCertTests {
 
         var       root   = ConfigRoot.FromEnvironment();
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(
-            root, await AppConfig.ResolveActiveProfile([], root), baseUrl);
+            root, await AppConfig.ResolveActiveProfile([], root), AuthFixtures.NewTokenStore(root), Workos, baseUrl);
         var memoryId = await SaveNonceMemoryAsync(client, baseUrl, nonce);
 
         try {
@@ -88,7 +90,7 @@ public class CursorMemoryIndexLiveCertTests {
 
         var       root   = ConfigRoot.FromEnvironment();
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(
-            root, await AppConfig.ResolveActiveProfile([], root), baseUrl);
+            root, await AppConfig.ResolveActiveProfile([], root), AuthFixtures.NewTokenStore(root), Workos, baseUrl);
         var memoryId = await SaveNonceMemoryAsync(client, baseUrl, nonce);
 
         // Capture the ORIGINAL disable_memory_index value BEFORE the first mutation, and put

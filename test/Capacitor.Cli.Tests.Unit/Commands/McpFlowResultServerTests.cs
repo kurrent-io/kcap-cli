@@ -9,10 +9,10 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class McpFlowResultServerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    // The dispatch is profile-scoped: its token refresh resolves a profile. These tests exercise
-    // routing, not profile selection.
+    // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowResultServer Server() =>
-        new(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient());
+        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
+            new FixedCapacitorHttpClient());
 
     static JsonObject Args(string? roundToken = "round-1", string? kind = "findings", string? findings = "1. issue") {
         var o = new JsonObject();
@@ -327,7 +327,7 @@ public class McpFlowResultServerTests {
         try {
             var exit = await new McpFlowResultServer(
                 Config.Root, Resolutions.At("https://example.test", Config.Root),
-                new FixedCapacitorHttpClient()).RunAsync();
+                AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient()).RunAsync();
             await Assert.That(exit).IsEqualTo(2);
         } finally {
             Environment.SetEnvironmentVariable(McpFlowResultServer.AgentIdEnvVar, prior);

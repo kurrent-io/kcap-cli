@@ -378,7 +378,8 @@ public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
-            return await new PermissionRequestCommand(config, profiles, http).Handle(body, selfHeal, stdout);
+            return await new PermissionRequestCommand(config, profiles, http)
+                .Handle(body, selfHeal, stdout);
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a
@@ -1097,33 +1098,35 @@ public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles
         }
     }
 
-    Task<string?> StartMemoryIndexTask(
+    async Task<string?> StartMemoryIndexTask(
         string? nativeSessionId,
         string? cwd,
         bool disabled,
         SessionLifecycleReason reason,
         TimeSpan budget) {
         if (disabled || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
-            return Task.FromResult<string?>(null);
+            return null;
 
-        // The memory subsystem is optional. Keep construction itself inside the fail-open
-        // boundary: store-root validation and the injected client factory can throw synchronously.
+        // The memory subsystem is optional, and the whole fetch stays inside the fail-open boundary.
         try {
-            var store = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            // Ours to dispose: the factory mints a fresh authenticated client per call, and hands
-            // back a refreshed one after a 401. Never the hook's own client — that one is bound to
-            // the lifecycle POST's redirect policy and outlives this fetch.
+            var       attempt = await http.ForHookAsync();
+            using var client  = attempt.Client;
+
+            // The index is bearer-authenticated, so without one the fetch can only 401 into a
+            // retryable failure the caller renders as no memory. Skipping says the same thing sooner.
+            if (!attempt.Usable) return null;
+
+            var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(config),
-                SessionStartMemoryHookSupport.ClientFactory(config, profiles, Url),
-                disposeClients: true);
-            return new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+                new SessionStartMemoryScopeResolver(config), client);
+
+            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-            return Task.FromResult<string?>(null);
+            return null;
         }
     }
 

@@ -18,7 +18,7 @@ namespace Capacitor.Cli.Commands;
 /// already attached to. Cloned from <see cref="McpMemoryServer"/>'s stdio JSON-RPC loop; unlike
 /// memory this server has no repo/machine context to resolve — the only per-call input is the
 /// session id and the declare selector, both carried in the tool arguments.</summary>
-sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     internal const string NoSessionIdMessage =
@@ -34,7 +34,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, ICap
         // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
         // disk must never block the server from starting.
         var loggedIn = false;
-        try { loggedIn = await new TokenStore(config).LoadForProfileAsync(profiles.Name) is not null; } catch { }
+        try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
         CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,
@@ -192,7 +192,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, ICap
             var body = await httpResponse.Content.ReadAsStringAsync();
 
             if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(config, profiles.Name, baseUrl), isError: true);
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl), isError: true);
             }
 
             if (!httpResponse.IsSuccessStatusCode) {

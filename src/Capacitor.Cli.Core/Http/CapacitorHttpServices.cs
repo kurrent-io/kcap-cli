@@ -12,6 +12,9 @@ public static class CapacitorHttpServices {
     /// </summary>
     public static IServiceCollection AddCapacitorHttp(this IServiceCollection services) {
         services.AddCapacitorForeignClients();
+        // Here rather than beside ConfigRoot: the refreshes need the anonymous and WorkOS lanes, so a
+        // host that never stands up HTTP is never handed a store that can reach the network.
+        services.AddSingleton<TokenStore>();
         services.AddSingleton<ICredentialSource, ResolvingCredentialSource>();
         services.AddSingleton<ICapacitorHttpClient, CapacitorHttpClient>();
         services.AddSingleton<ISessionsApi, SessionsApi>();
@@ -71,11 +74,11 @@ public static class CapacitorHttpServices {
     }
 
     /// <summary>
-    /// Typed clients for hosts that are not our server. None of them carries our credential or our
-    /// observation headers: a version tag we mint belongs to our own server and nowhere else. They
-    /// register apart from the authenticated lanes so a process that talks only to a foreign host —
-    /// the desktop wizard, signing up a workspace before any server exists to authenticate against —
-    /// can take them without standing up a credential source it has nothing to point at.
+    /// Clients that carry no credential of ours: foreign hosts, plus the sign-in exchange that mints
+    /// one. None of them carries our observation headers either — a version tag we mint belongs to our
+    /// own server and nowhere else. They register apart from the authenticated lanes so a process with
+    /// nothing to authenticate against yet — the desktop wizard, signing up a workspace before any
+    /// server exists — can take them without standing up a credential source it cannot point anywhere.
     /// </summary>
     public static IServiceCollection AddCapacitorForeignClients(this IServiceCollection services) {
         // No base address on either: their URLs come from the environment on every read, so one
@@ -89,6 +92,20 @@ public static class CapacitorHttpServices {
             c.Timeout = TimeSpan.FromSeconds(5);
             c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
         });
+
+        // A named lane, and WorkOSClient draws from it per call: the token store holds that client for
+        // the process's life, so a typed client would freeze one handler inside it. A redirect is
+        // refused outright — the refresh token and the machine secret both travel in the body, so a hop
+        // would hand one to whatever host the 3xx names.
+        services.AddHttpClient(CapacitorClients.WorkOS)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        services.AddSingleton<WorkOSClient>();
+
+        // github.com's device endpoints and the server-side code exchange share this: every leg carries
+        // a single-use secret — a device code, or the PKCE verifier — so none of them may follow a hop.
+        services.AddHttpClient(CapacitorClients.GitHub)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        services.AddSingleton<GitHubOAuthClient>();
 
         return services;
     }

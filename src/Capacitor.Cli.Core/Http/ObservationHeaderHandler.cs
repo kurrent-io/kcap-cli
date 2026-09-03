@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Config;
+
 namespace Capacitor.Cli.Core.Http;
 
 /// <summary>
@@ -8,14 +10,14 @@ internal sealed class ObservationHeaderHandler : DelegatingHandler {
     readonly string? _version;
     readonly bool    _updateCheckOff;
 
-    public ObservationHeaderHandler(CapacitorServer server) {
+    public ObservationHeaderHandler(ProfileContext profiles) {
         var version = CapacitorVersion.CurrentDisplay();
 
         _version = !string.IsNullOrWhiteSpace(version) && !version.Equals("unknown", StringComparison.OrdinalIgnoreCase)
             ? version
             : null;
 
-        _updateCheckOff = server.Profiles.Effective?.UpdateCheck == false;
+        _updateCheckOff = profiles.Effective?.UpdateCheck == false;
     }
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {

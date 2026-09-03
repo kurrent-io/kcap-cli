@@ -1,6 +1,7 @@
 namespace Capacitor.Cli.Core.Http;
 
-/// <summary>Named clients registered by <see cref="CapacitorHttpServices.AddCapacitorHttp"/>.</summary>
+/// <summary>Named clients registered by <see cref="CapacitorHttpServices.AddCapacitorHttp"/> and
+/// <see cref="CapacitorHttpServices.AddCapacitorForeignClients"/>.</summary>
 public static class CapacitorClients {
     /// <summary>Authenticated against our own server; redirects are not followed.</summary>
     public const string Default = "capacitor";
@@ -13,4 +14,10 @@ public static class CapacitorClients {
 
     /// <summary>The caller's own bearer, sent exactly once: no rotation, no redirect.</summary>
     public const string Bearer = "capacitor-bearer";
+
+    /// <summary>WorkOS token endpoints: a foreign host, so none of our headers and no redirect.</summary>
+    public const string WorkOS = "workos";
+
+    /// <summary>The GitHub sign-in exchange: none of our headers, and no redirect on any leg.</summary>
+    public const string GitHub = "github";
 }
