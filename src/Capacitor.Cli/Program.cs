@@ -1,6 +1,4 @@
 using System.Reflection;
-using System.Text;
-using System.Text.Json.Nodes;
 using Capacitor.Cli;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
@@ -10,6 +8,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
 using WatchCommand = Capacitor.Cli.Commands.WatchCommand;
@@ -122,9 +121,16 @@ services.AddSingleton(sp => PluginEnvironment.FromProcess(
         sp.GetRequiredService<ProfileContext>().Snapshot,
         sp.GetRequiredService<UserHome>()));
 
+// A factory, so a command that never speaks HTTP does not pay for a server URL it may not even have:
+// `baseUrl` is null until a profile resolves one.
+services.AddSingleton(_ => new CapacitorServer(baseUrl!, config, profiles));
+services.AddCapacitorHttp();
+
 await using var sp = services.BuildServiceProvider();
 
 TCommand Run<TCommand>() where TCommand : notnull => sp.GetRequiredService<TCommand>();
+
+ISessionsApi Api() => sp.GetRequiredService<ISessionsApi>();
 
 // Telemetry: initialised once the server URL is known (it decides the `organization` group) and
 // torn down from ProcessExit, which observes the exit code returned by top-level Main. Every
@@ -543,24 +549,23 @@ switch (command) {
         DisabledSessions.Mark(sessionId, config);
 
         // 3. Tell server to delete session data
-        using var disableClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl!);
-
         try {
-            var resp = await disableClient.DeleteWithRetryAsync($"{baseUrl!}/api/sessions/{sessionId}");
+            switch (await Api().DeleteSessionAsync(sessionId)) {
+                case DeleteSessionResponse.Deleted:
+                    await Console.Out.WriteLineAsync($"Session {sessionId} disabled. Recording stopped and server data deleted.");
 
-            if (resp.IsSuccessStatusCode) {
-                await Console.Out.WriteLineAsync($"Session {sessionId} disabled. Recording stopped and server data deleted.");
-            } else if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) {
-                await Console.Out.WriteLineAsync($"Session {sessionId} disabled. No server data found (may have already been deleted).");
-            } else if (await HttpClientExtensions.HandleUnauthorizedAsync(resp)) {
-                return 1;
-            } else {
-                Console.Error.WriteLine($"Server returned HTTP {(int)resp.StatusCode}");
+                    break;
+                case DeleteSessionResponse.NotFound:
+                    await Console.Out.WriteLineAsync($"Session {sessionId} disabled. No server data found (may have already been deleted).");
 
-                return 1;
+                    break;
             }
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl!, ex);
+        } catch (CapacitorApiException ex) {
+            Console.Error.WriteLine(ex.Message);
+
+            // Local state has already changed, so a server that was never reached is not a failure.
+            if (ex.Status is not null) return 1;
+
             await Console.Out.WriteLineAsync("Session disabled locally (watcher stopped, hooks silenced). Server data not deleted.");
         }
 
@@ -586,24 +591,11 @@ switch (command) {
             return 1;
         }
 
-        using var hideClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl!);
-        var       visPayload = new JsonObject { ["visibility"] = "none" };
-        using var visContent = new StringContent(visPayload.ToJsonString(), Encoding.UTF8, "application/json");
-
         try {
-            var resp = await hideClient.PutWithRetryAsync($"{baseUrl!}/api/sessions/{sessionId}/visibility", visContent);
-
-            if (resp.IsSuccessStatusCode) {
-                await Console.Out.WriteLineAsync($"Session {sessionId} hidden (owner-only).");
-            } else if (await HttpClientExtensions.HandleUnauthorizedAsync(resp)) {
-                return 1;
-            } else {
-                Console.Error.WriteLine($"Server returned HTTP {(int)resp.StatusCode}");
-
-                return 1;
-            }
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl!, ex);
+            await Api().HideSessionAsync(sessionId);
+            await Console.Out.WriteLineAsync($"Session {sessionId} hidden (owner-only).");
+        } catch (CapacitorApiException ex) {
+            Console.Error.WriteLine(ex.Message);
 
             return 1;
         }
@@ -791,20 +783,10 @@ switch (command) {
             title = title[..120];
         }
 
-        using var stClient  = await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl!);
-        var       payload   = new JsonObject { ["session_id"] = stSessionId, ["title"] = title };
-        using var stContent = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-
         try {
-            var resp = await stClient.PostWithRetryAsync($"{baseUrl!}/hooks/set-title", stContent);
-
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"Server returned HTTP {(int)resp.StatusCode}");
-
-                return 1;
-            }
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl!, ex);
+            await Api().SetSessionTitleAsync(stSessionId, title);
+        } catch (CapacitorApiException ex) {
+            Console.Error.WriteLine(ex.Message);
 
             return 1;
         }

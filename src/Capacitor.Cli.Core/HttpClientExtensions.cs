@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Core;
 
@@ -113,53 +115,59 @@ public static class HttpClientExtensions {
         // Gated on `Intended` (either variable present) rather than on both, so a half-configured runner
         // is told which variable is missing instead of silently falling through to that same wrong advice.
         //
-        // No UnauthorizedRetryHandler: it refreshes through TokenStore, and client_credentials has no
-        // refresh token. A 401 comes back here as `rejectedAccessToken`, and re-minting is the repair.
+        // Rotation on this path is a re-mint, not a refresh: client_credentials has no refresh token,
+        // so a 401 returns as `rejectedAccessToken` and minting another is the repair.
         if (MachineAuth.Intended) {
             var credential = MachineAuth.TryRead(out var problem);
 
             if (credential is null) return (NewClient(), AuthStatus.NotAuthenticated, null, problem);
 
-            var minted = await MachineTokenProvider.GetTokenAsync(credential, rejectedAccessToken, ct);
+            var machineSource = new MachineCredentials(credential);
 
-            if (minted.Token is null) return (NewClient(), AuthStatus.NotAuthenticated, null, minted.Problem);
+            var minted = rejectedAccessToken is null
+                ? await machineSource.ResolveAsync(ct)
+                : await machineSource.RotateAsync(rejectedAccessToken, ct);
 
-            // Install the machine 401-retry handler on the same terms the token-store path installs its
-            // own (Qodo): honour autoRetryUnauthorized so a caller running its own 401 loop — the MCP
-            // servers — is not double-retried, but give every ordinary caller automatic re-mint. Without
-            // it a mid-life revocation would 401 repeatedly until the cache expired.
+            if (minted.Bearer is null) return (NewClient(), AuthStatus.NotAuthenticated, null, minted.Problem);
+
+            // Honour autoRetryUnauthorized so a caller running its own 401 loop — the MCP servers — is
+            // not double-retried; without it a mid-life revocation 401s until the cache expires.
             var machineClient = NewClient(
-                autoRetryUnauthorized ? new MachineUnauthorizedRetryHandler(credential, minted.Token) : null);
-            machineClient.DefaultRequestHeaders.Authorization = new("Bearer", minted.Token);
+                autoRetryUnauthorized ? new UnauthorizedRecoveryHandler(machineSource) { InitialBearer = minted.Bearer } : null);
+            machineClient.DefaultRequestHeaders.Authorization = new("Bearer", minted.Bearer);
 
             return (machineClient, AuthStatus.Ok, null, null);
         }
+
+        var tokenSource = new TokenStoreCredentials(config, profiles.Name, baseUrl);
 
         // Recovery from a server rejection is self-contained: it already attempted a rotation and
         // applied the binding check. Falling through to the resolving accessor afterwards would let
         // an expired token be refreshed a SECOND time — re-spending a single-use WorkOS refresh
         // token — so this path returns directly.
         if (rejectedAccessToken is not null) {
-            var recovered = await new TokenStore(config).RecoverForServerAsync(profiles.Name, baseUrl, rejectedAccessToken, ct);
+            var recovered = await tokenSource.RotateAsync(rejectedAccessToken, ct);
 
-            if (recovered is null) return (NewClient(), AuthStatus.Expired, null, null);
+            if (recovered.Bearer is null) return (NewClient(), AuthStatus.Expired, null, null);
 
-            var recoveredClient = NewClient(autoRetryUnauthorized ? new UnauthorizedRetryHandler(config, profiles.Name, recovered, baseUrl) : null);
-            recoveredClient.DefaultRequestHeaders.Authorization = new("Bearer", recovered.AccessToken);
+            var recoveredClient = NewClient(
+                autoRetryUnauthorized ? new UnauthorizedRecoveryHandler(tokenSource) { InitialBearer = recovered.Bearer } : null);
+            recoveredClient.DefaultRequestHeaders.Authorization = new("Bearer", recovered.Bearer);
 
             return (recoveredClient, AuthStatus.Ok, null, null);
         }
 
-        var resolution = await new TokenStore(config).GetValidTokensForServerAsync(profiles.Name, baseUrl, ct);
+        var resolved = await tokenSource.ResolveAsync(ct);
 
-        if (resolution is { Status: AuthStatus.Ok, Tokens: not null }) {
-            var client = NewClient(autoRetryUnauthorized ? new UnauthorizedRetryHandler(config, profiles.Name, resolution.Tokens, baseUrl) : null);
-            client.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);
+        if (resolved.Bearer is not null) {
+            var client = NewClient(
+                autoRetryUnauthorized ? new UnauthorizedRecoveryHandler(tokenSource) { InitialBearer = resolved.Bearer } : null);
+            client.DefaultRequestHeaders.Authorization = new("Bearer", resolved.Bearer);
 
-            return (client, AuthStatus.Ok, resolution, null);
+            return (client, AuthStatus.Ok, resolved.Resolution, null);
         }
 
-        return (NewClient(), resolution.Status, resolution, null);
+        return (NewClient(), resolved.Status, resolved.Resolution, null);
     }
 
     /// <summary>Wire header naming the installed CLI's display version (see <see cref="CapacitorVersion.CurrentDisplay"/>).</summary>
@@ -209,7 +217,7 @@ public static class HttpClientExtensions {
     /// callers should prefer <see cref="CreateClientWithAuthStatusAsync"/> so they control messaging.
     /// </summary>
     /// <param name="autoRetryUnauthorized">
-    /// Installs <see cref="UnauthorizedRetryHandler"/> so a 401 is transparently retried once after
+    /// Installs <see cref="UnauthorizedRecoveryHandler"/> so a 401 is transparently retried once after
     /// a refresh. Pass <c>false</c> from callers that run their own 401-retry loop over the returned
     /// client — the MCP servers do — so a single rejection isn't retried (and refreshed) twice.
     /// </param>
@@ -245,22 +253,23 @@ public static class HttpClientExtensions {
         return client;
     }
 
-    static string? cachedProvider;
+    // Keyed by baseUrl, like the on-disk store: one process can discover against more than one
+    // server — `kcap setup` retargeting to another tenant is the reachable case — and a single memo
+    // would hand the first server's provider to the second, short-circuiting the on-disk lookup
+    // before it can answer correctly.
+    static readonly ConcurrentDictionary<string, string> CachedProviders = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Test seam: clears the in-process discovery cache above. The cache is keyed by
-    /// nothing but process lifetime (unlike <see cref="AuthProviderCache"/>'s on-disk,
-    /// per-<c>baseUrl</c> store) — the FIRST call to <see cref="DiscoverProviderAsync"/>
-    /// in a process wins for every subsequent call regardless of <c>baseUrl</c>. A test
-    /// whose SUT calls this against its own WireMock stub must reset it first, or it can
-    /// silently observe a value cached by an earlier call against a different server.
+    /// Test seam: clears the in-process discovery cache above. It outlives any one test, so a test
+    /// whose SUT discovers against its own stub must reset it first or it can observe a value cached
+    /// by an earlier test against the same URL.
     /// </summary>
-    internal static void ResetProviderCacheForTesting() => cachedProvider = null;
+    internal static void ResetProviderCacheForTesting() => CachedProviders.Clear();
 
     public static async Task<string> DiscoverProviderAsync(
             string baseUrl, ConfigRoot config, ProfileContext profiles, CancellationToken ct = default) {
-        if (cachedProvider is not null) {
-            return cachedProvider;
+        if (CachedProviders.TryGetValue(baseUrl, out var memo)) {
+            return memo;
         }
 
         // Hooks call this BEFORE any *WithRetryAsync, so a legacy scheme-less
@@ -273,7 +282,7 @@ public static class HttpClientExtensions {
         var cached = AuthProviderCache.TryGet(baseUrl, config);
 
         if (cached is not null) {
-            cachedProvider = cached;
+            CachedProviders[baseUrl] = cached;
 
             return cached;
         }
@@ -286,7 +295,7 @@ public static class HttpClientExtensions {
             if (response.IsSuccessStatusCode) {
                 var discovered = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
                 var provider   = discovered?.Provider ?? "None";
-                cachedProvider = provider;          // in-process
+                CachedProviders[baseUrl] = provider;   // in-process
                 AuthProviderCache.Set(baseUrl, provider, config); // cross-process; only cache successful discovery
 
                 return provider;
@@ -464,17 +473,22 @@ public static class HttpClientExtensions {
             return false;
         }
 
-        var body = await response.Content.ReadAsStringAsync();
-
-        try {
-            using var doc     = JsonDocument.Parse(body);
-            var       message = doc.RootElement.Str("message");
-            await Console.Error.WriteLineAsync(message ?? "Authentication failed. Run 'kcap login' to re-authenticate.");
-        } catch {
-            await Console.Error.WriteLineAsync("Authentication failed. Run 'kcap login' to re-authenticate.");
-        }
+        await Console.Error.WriteLineAsync(await UnauthorizedMessageAsync(response));
 
         return true;
+    }
+
+    /// <summary>The server's own 401 text where it sent one, else the standard re-auth guidance.</summary>
+    public static async Task<string> UnauthorizedMessageAsync(HttpResponseMessage response) {
+        const string fallback = "Authentication failed. Run 'kcap login' to re-authenticate.";
+
+        try {
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            return doc.RootElement.Str("message") ?? fallback;
+        } catch {
+            return fallback;
+        }
     }
 
     /// <summary>
@@ -619,28 +633,5 @@ public static class HttpClientExtensions {
                 $"(per-attempt timeout {perAttemptTimeout.TotalSeconds:F0}s).",
                 inner
             );
-    }
-}
-
-/// <summary>
-/// Passively records the connected server's version from each response's
-/// <see cref="HttpClientExtensions.ServerVersionHeader"/> into <see cref="ServerVersionStore"/>, so
-/// the passive update notice and <c>kcap status</c> can cap their recommendation at the server's
-/// version. Installed as the OUTERMOST handler on every authenticated client (see the choke point's
-/// <c>NewClient</c>), so it observes the final response after any retry. Best-effort: it never alters
-/// the request/response and never lets a capture failure surface.
-/// </summary>
-internal sealed class ServerVersionCaptureHandler(string serverUrl, ConfigRoot config) : DelegatingHandler {
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
-        var response = await base.SendAsync(request, ct);
-
-        try {
-            if (response.Headers.TryGetValues(HttpClientExtensions.ServerVersionHeader, out var values))
-                ServerVersionStore.Set(serverUrl, values.FirstOrDefault(), config);
-        } catch {
-            // Header capture must never affect the response the caller gets back.
-        }
-
-        return response;
     }
 }

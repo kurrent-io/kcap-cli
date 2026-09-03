@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// wrong token, resending with a stale header, leaking the first response — all live in the
 /// interaction, not in any single method.
 /// </summary>
-public class UnauthorizedRetryHandlerTests {
+public class UnauthorizedRecoveryHandlerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     [Test]
@@ -174,7 +174,8 @@ public class UnauthorizedRetryHandlerTests {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     HttpClient Client(RecordingHandler transport, StoredTokens initial) {
-        var retry = new UnauthorizedRetryHandler(Config.Root, ProfileConfig.DefaultName, initial, "https://kcap.example.com") { InnerHandler = transport };
+        var source = new TokenStoreCredentials(Config.Root, ProfileConfig.DefaultName, "https://kcap.example.com");
+        var retry  = new UnauthorizedRecoveryHandler(source) { InitialBearer = initial.AccessToken, InnerHandler = transport };
 
         return new(retry);
     }

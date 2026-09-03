@@ -182,8 +182,8 @@ public static IServiceCollection AddCapacitorHttp(this IServiceCollection servic
     foreach (var (name, authenticated) in
              new[] { (CapacitorClients.Default, true), (CapacitorClients.Anon, false) }) {
         var b = services.AddHttpClient(name)
-            // Capture FIRST so it stays outermost and observes the final response after a recovery
-            // resend. Swapping these two lines silently caps the version at the pre-retry response.
+            // Both must stay OUTSIDE recovery: capture so it records the response finally returned
+            // rather than a discarded 401, headers so a resend carries one copy of each, not two.
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>();
 
@@ -521,7 +521,10 @@ successful discovery
   (step 11) is exactly where this can happen.
 - **The in-process memo is not the same cache.** `cachedProvider` moves onto the instance; the on-disk
   one stays process-independent, and it is the only thing that helps a hook, which is a fresh process
-  every time.
+  every time. **It stays keyed on `baseUrl` wherever it lives.** One process does discover against two
+  servers: `kcap setup` resolves one, then on an `AuthResult.Retarget` resolves the tenant it was
+  pointed at. A single-valued memo answers the second with the first's provider, and because it sits
+  in front of the disk store, the correctly-keyed lookup never runs.
 
 **`DiscoverProviderAsync` has two callers outside the choke point** — `WhoamiCommand:40` and
 `SetupCommand:1241` — and it is `public`. `ICredentialSource` (`ResolveAsync`/`RotateAsync`) serves

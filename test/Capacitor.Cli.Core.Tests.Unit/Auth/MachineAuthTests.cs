@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using Capacitor.Cli.Core.Auth;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -146,6 +147,45 @@ public class MachineAuthTests : IDisposable {
         await Assert.That(second.Token).IsEqualTo("tok_cached");
         await Assert.That(_server.LogEntries.Count).IsEqualTo(1)
             .Because("the whole point of the in-memory cache is not re-minting per call");
+    }
+
+    /// <summary>
+    /// A cache hit must not queue behind an in-flight mint. The gate is one process-wide semaphore, so
+    /// checking the cache behind it makes every caller in the process wait on whichever one is talking
+    /// to WorkOS. The blocked mint really is holding the gate here — otherwise this proves nothing.
+    /// </summary>
+    [Test]
+    public async Task A_cache_hit_does_not_wait_for_an_in_flight_mint() {
+        Clear();
+        UseStubTokenEndpoint();
+        StubToken("tok_A");
+
+        var warm = new MachineCredential("client_A", "s");
+
+        await MachineTokenProvider.GetTokenAsync(warm, null, CancellationToken.None);
+
+        var entered = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+
+        using var blocking = new HttpClient(new BlockingMint(entered, release.Task));
+
+        // A second client id cannot be served from the cache, so this call reaches the mint and parks
+        // there, holding the gate for as long as the test wants it held.
+        var minting = MachineTokenProvider.GetTokenAsync(
+                new MachineCredential("client_B", "s"), null, CancellationToken.None, blocking);
+
+        try {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var hit = await MachineTokenProvider.GetTokenAsync(warm, null, CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(hit.Token).IsEqualTo("tok_A");
+        }
+        finally {
+            release.TrySetResult();
+            await minting;
+        }
     }
 
     /// <summary>
@@ -430,4 +470,21 @@ public class MachineAuthTests : IDisposable {
             .Because("userinfo in the token URL must be dropped before it reaches stderr");
     }
 
+}
+
+/// <summary>
+/// Parks inside the mint until released, so a test can pin <c>MachineTokenProvider</c>'s gate open and
+/// watch what a concurrent caller does.
+/// </summary>
+sealed class BlockingMint(TaskCompletionSource entered, Task release) : HttpMessageHandler {
+    protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) {
+        entered.TrySetResult();
+        await release.WaitAsync(cancellationToken);
+
+        return new HttpResponseMessage(HttpStatusCode.OK) {
+            Content = new StringContent("""{"access_token":"tok_B","expires_in":3600}""",
+                                        Encoding.UTF8, "application/json"),
+        };
+    }
 }
