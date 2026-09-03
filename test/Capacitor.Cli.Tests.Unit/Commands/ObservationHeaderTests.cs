@@ -2,6 +2,8 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -9,9 +11,8 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// The wire contract PR-2 (kcap-server) reads: every client built by
-/// <see cref="HttpClientExtensions"/>'s single choke point, and the raw client
-/// <see cref="WhoamiCommand"/> builds outside it, must carry the CLI's display version, and must
+/// The wire contract the server reads: every request the CLI sends must carry the CLI's display
+/// version, and must
 /// carry the update-check opt-out header if and only if the active profile turned it off. Absence
 /// of the opt-out header on a version-carrying request is read by the server as "on" — so both the
 /// present and the absent case are asserted here, not just the header's shape when it does appear.
@@ -26,6 +27,20 @@ public class ObservationHeaderTests : IDisposable {
 
     readonly WireMockServer _server = WireMockServer.Start();
 
+    ServiceProvider? _sp;
+
+    /// <summary>The real container, because the tags belong to its handler chain now: a stub client
+    /// would carry none and the assertions below would pass on nothing.</summary>
+    WhoamiCommand Whoami(ProfileContext profiles) {
+        var services = new ServiceCollection();
+
+        services.AddSingleton(new CapacitorServer(_server.Urls[0], Config.Root, profiles));
+        services.AddCapacitorHttp();
+        _sp = services.BuildServiceProvider();
+
+        return new WhoamiCommand(Config.Root, profiles, _sp.GetRequiredService<ICapacitorHttpClient>());
+    }
+
     [Before(Test)]
     public void Cleanup() {
         HttpClientExtensions.ResetProviderCacheForTesting();
@@ -33,6 +48,7 @@ public class ObservationHeaderTests : IDisposable {
     }
 
     public void Dispose() {
+        _sp?.Dispose();
         _server.Stop();
         HttpClientExtensions.ResetProviderCacheForTesting();
     }
@@ -125,7 +141,7 @@ public class ObservationHeaderTests : IDisposable {
         });
 
         // The one resolution steers both: the header preference and the profile whose token is read.
-        await new WhoamiCommand(Config.Root, profiles).HandleAsync();
+        await Whoami(profiles).HandleAsync();
 
         var probe = _server.LogEntries.Single(e => e.RequestMessage.Path == WhoamiCommand.ProbePath);
 
@@ -153,7 +169,7 @@ public class ObservationHeaderTests : IDisposable {
         });
 
         // The one resolution steers both: the header preference and the profile whose token is read.
-        await new WhoamiCommand(Config.Root, profiles).HandleAsync();
+        await Whoami(profiles).HandleAsync();
 
         var probe = _server.LogEntries.Single(e => e.RequestMessage.Path == WhoamiCommand.ProbePath);
 

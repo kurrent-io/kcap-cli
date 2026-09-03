@@ -9,6 +9,8 @@ using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
@@ -19,8 +21,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// shared 2-second wall-clock budget, a per-session canonical-event
 /// spool, and a watermark-driven transcript-line backfill.
 /// </summary>
-public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home) {
-    readonly WatcherManager _watchers = new(config, profiles);
+public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home, ICapacitorHttpClient http) {
+    readonly WatcherManager _watchers = new(config, profiles, http);
     readonly CursorMarkers  _markers  = new(config);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -76,7 +78,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
     /// </summary>
     internal Task<int> HandleInternal(TextReader stdin) =>
         HandleWithDeps(stdin,
-            ct => HttpClientExtensions.CreateClientWithAuthStatusAsync(config, profiles, Url, ct),
+            http.ForHookAsync,
             () => {
                 var s = new HookSpool(config);
                 MigrateLegacyCursorSpool(s, CursorHarness.FromEnvironment(home).Paths.SpoolDir);
@@ -92,7 +94,7 @@ public sealed class CursorHookCommand(ConfigRoot config, ProfileContext profiles
     /// </summary>
     internal async Task<int> HandleWithDeps(
             TextReader stdin,
-            Func<CancellationToken, Task<(HttpClient Client, AuthStatus Status)>> clientFactory,
+            Func<CancellationToken, Task<AuthAttempt>> clientFactory,
             Func<HookSpool> spoolFactory
         ) {
         // At this point the event kind and session id are not yet parsed, so there is nothing to spool

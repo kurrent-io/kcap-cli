@@ -8,6 +8,8 @@ using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
@@ -18,8 +20,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// in the JSON payload — mirroring <see cref="CodexHookCommand"/> and
 /// <see cref="CursorHookCommand"/>.
 /// </summary>
-public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home) {
-    readonly WatcherManager _watchers = new(config, profiles);
+public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home, ICapacitorHttpClient http) {
+    readonly WatcherManager _watchers = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -51,14 +53,14 @@ public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles
         return HandleWithDeps(
             spool,
             stdin,
-            () => HttpClientExtensions.CreateClientWithAuthStatusAsync(config, profiles, profiles.Resolution.ServerUrl!),
+            () => http.ForHookAsync(),
             stdout
         );
     }
 
     internal async Task<int> HandleWithDeps(
             HookSpool spool, TextReader stdin,
-            Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory,
+            Func<Task<AuthAttempt>> clientFactory,
             TextWriter? stdout = null) {
         string body;
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
@@ -172,8 +174,8 @@ public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles
 
     // Returns (client,status) if created within `cap`; null if the cap elapsed first
     // (abandoned creation task reaped on process exit).
-    internal static async Task<(HttpClient Client, AuthStatus Status)?> CreateClientWithinBudgetAsync(
-            Func<Task<(HttpClient Client, AuthStatus Status)>> factory, TimeSpan cap) {
+    internal static async Task<AuthAttempt?> CreateClientWithinBudgetAsync(
+            Func<Task<AuthAttempt>> factory, TimeSpan cap) {
         if (cap <= TimeSpan.Zero) return null;
         var task = factory();
         var winner = await Task.WhenAny(task, Task.Delay(cap));
@@ -376,7 +378,7 @@ public sealed class ClaudeHookCommand(ConfigRoot config, ProfileContext profiles
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
-            return await new PermissionRequestCommand(config, profiles).Handle(body, selfHeal, stdout);
+            return await new PermissionRequestCommand(config, profiles, http).Handle(body, selfHeal, stdout);
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a

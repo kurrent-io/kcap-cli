@@ -5,6 +5,8 @@ using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
@@ -33,9 +35,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// The raw fragment is written with no JSON envelope and no diagnostics: whatever lands on stdout
 /// becomes conversation context verbatim.
 /// </remarks>
-sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home) {
-    readonly WatcherManager  _watchers = new(config, profiles);
-    readonly AgentHookPoster _poster   = new(config, profiles);
+sealed class KiroHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home, ICapacitorHttpClient http) {
+    readonly WatcherManager  _watchers = new(config, profiles, http);
+    readonly AgentHookPoster _poster   = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 

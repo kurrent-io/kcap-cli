@@ -33,6 +33,13 @@ public static class CommandServices {
         services.AddTransient<SetupCommand>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
+        services.AddTransient<McpFlowResultServer>();
+        services.AddTransient<McpMemoryServer>();
+        services.AddTransient<McpSessionsServer>();
+        services.AddTransient<McpWorkItemsServer>();
+        services.AddTransient<McpAnalyticsServer>();
+        services.AddTransient<McpReviewServer>();
+        services.AddTransient<McpJudgeServer>();
         services.AddTransient<UninstallCommand>();
         services.AddTransient<UpdateCommand>();
         services.AddTransient<UseCommand>();

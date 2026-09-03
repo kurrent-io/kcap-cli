@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli;
 
@@ -55,9 +56,10 @@ internal static class UpdateNotice {
     /// so at most one network round-trip happens per process no matter how many call sites
     /// (<see cref="FlushAsync"/>, <c>kcap status</c>) ask for the result.
     /// </summary>
-    internal static Task<UpdateCommand.UpdateCheckResult?> GetSharedCheckAsync(string channel, ConfigRoot root) {
+    internal static Task<UpdateCommand.UpdateCheckResult?> GetSharedCheckAsync(
+            string channel, ConfigRoot root, NpmRegistryClient npm) {
         lock (_gate) {
-            return _sharedCheck ??= UpdateCommand.CheckForUpdateWithBudgetAsync(root, channel);
+            return _sharedCheck ??= UpdateCommand.CheckForUpdateWithBudgetAsync(root, channel, npm);
         }
     }
 
@@ -69,7 +71,8 @@ internal static class UpdateNotice {
     /// <see cref="MarkReported"/> this invocation. Never throws — an update notice must never break
     /// the command it's attached to.
     /// </summary>
-    public static async Task FlushAsync(string command, string[] args, ProfileContext profiles, ConfigRoot config) {
+    public static async Task FlushAsync(
+            string command, string[] args, ProfileContext profiles, ConfigRoot config, NpmRegistryClient npm) {
         try {
             if (_reported || !IsHumanFacing(command, args)) return;
 
@@ -77,7 +80,7 @@ internal static class UpdateNotice {
             if (profile?.UpdateCheck == false) return;
 
             var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
-            var result   = await GetSharedCheckAsync(channel, config);
+            var result   = await GetSharedCheckAsync(channel, config, npm);
 
             // Cap the recommendation at the connected server's version (min(npm latest, server)) so we
             // never steer a user to a CLI newer than the server they talk to. Uncapped ⇒ today's copy.

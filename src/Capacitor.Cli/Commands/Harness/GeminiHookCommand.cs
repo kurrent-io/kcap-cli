@@ -7,6 +7,8 @@ using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
@@ -62,9 +64,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// observation, not a guarantee. The mitigation does not depend on it: emitting a
 /// valid non-blocking object is correct under any of these selection rules.
 /// </remarks>
-sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home) {
-    readonly WatcherManager  _watchers = new(config, profiles);
-    readonly AgentHookPoster _poster   = new(config, profiles);
+sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home, ICapacitorHttpClient http) {
+    readonly WatcherManager  _watchers = new(config, profiles, http);
+    readonly AgentHookPoster _poster   = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -389,7 +391,7 @@ sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookC
                         // it (subagent-stop). Restart-safe — driven off the on-disk files,
                         // not an in-memory set. Shared with the watcher's parent-exit fallback
                         // so a crash that bypasses this hook still finalizes subagents.
-                        await new GeminiSubagentTeardown(config, profiles).DrainAsync(sessionId, transcriptPath);
+                        await new GeminiSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath);
                     },
                     PreHookDrainCap
                 );
@@ -448,7 +450,7 @@ sealed class GeminiHookCommand(ConfigRoot config, ProfileContext profiles, HookC
         try {
             // Status-returning variant (not CreateAuthenticatedClientAsync, which writes a
             // per-turn "expired" line to stderr): on a lapse, stay quiet and skip the doomed POST.
-            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(config, profiles, Url, cts.Token);
+            var (client, status) = await http.ForHookAsync(cts.Token);
             using (client) {
                 if (AgentHookPoster.IsAuthLapsed(status)) return 0;
                 using var content = new StringContent(forwarded.ToJsonString(), Encoding.UTF8, "application/json");

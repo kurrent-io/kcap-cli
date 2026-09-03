@@ -64,9 +64,9 @@ internal static class WizardComposition {
 
     /// Production bridges: one marshalling boundary (Avalonia's dispatcher in the app) and a
     /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.
-    internal static WizardBridges BuildBridges(Action<Action> post) =>
+    internal static WizardBridges BuildBridges(Action<Action> post, TenantProvisioningClient provisioning) =>
         new(post, progress => new WizardTenantProvisioner(
-            new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url, progress));
+            provisioning, ProvisioningEndpoint.Url, progress));
 
     /// Production operation: the spec IS the façade's arguments, and WizardSignInOperation owns
     /// the intent→call map (paste adopts the server; create/discover run WorkOS discovery).

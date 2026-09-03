@@ -26,6 +26,8 @@ using Spectre.Console;
 using Spectre.Console.Rendering;
 using Profile = Capacitor.Cli.Core.Config.Profile;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
 /// <summary>Setup's step-scoped rendering of façade output: every non-flush line is two-space indented, and setup still owns the guidance tail.</summary>
@@ -395,7 +397,9 @@ sealed class SetupMachineActions : IFirstRunMachineActions {
     }
 }
 
-public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBrowserLauncher browser, UserHome home) {
+public sealed class SetupCommand(
+        ConfigRoot config, ProfileContext profiles, IBrowserLauncher browser, UserHome home,
+        ICapacitorHttpClient http, TenantProvisioningClient provisioning) {
     readonly HarnessPaths _paths = HarnessPaths.FromEnvironment(home);
 
     public async Task<int> HandleAsync(string[] args) {
@@ -1277,7 +1281,7 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
     async Task<(string ServerUrl, string Provider)?> ResolveServerAndProviderAsync(string serverArg) {
         var normalized = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Checking server…",
             async _ => await ServerUrlNormalizer.NormalizeAsync(
-                serverArg, skipProbe: false, CancellationToken.None));
+                serverArg, skipProbe: false, CancellationToken.None, ServerUrlNormalizer.ProbeWith(http)));
 
         if (!normalized.Reachable) {
             AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(normalized.Warning ?? serverArg)}");
@@ -1451,11 +1455,10 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
         // recovered rather than ending a wait that can outlive a short-lived WorkOS token. The try
         // keeps the leg's "no reachable failure crashes setup" promise whole.
         try {
-            var (http, authStatus) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(
-                config, profiles, serverUrl, autoRetryUnauthorized: true);
+            var (client, authStatus) = await http.ForHookAsync();
 
-            using (http) {
-                http.Timeout = BrowserFlowHttpTimeout;
+            using (client) {
+                client.Timeout = BrowserFlowHttpTimeout;
 
                 // Ok runs the leg. NoAuthRequired is the None-provider skip again — silent, for the
                 // same reason. The rest get one line: the factory's quiet variant prints nothing, and
@@ -1482,7 +1485,7 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
                 using var progress = new SpectreFirstRunFlowProgress();
 
                 result = await new BrowserFirstRunFlow(
-                        new FirstRunFlowClient(http), progress, browser,
+                        new FirstRunFlowClient(client), progress, browser,
                         actions:   new SetupMachineActions(),
                         importing: importing)
                     .RunAsync(serverUrl, report, CancellationToken.None);
@@ -1714,7 +1717,7 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
 
         var provisioner = chosen == AuthProvider.WorkOS
             ? new SpectreTenantProvisioner(
-                new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url,
+                provisioning, ProvisioningEndpoint.Url,
                 isInteractive: () => canPrompt, requested: requested)
             : null;
 
@@ -1817,21 +1820,17 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
 
-    // best-effort signal to the server that this user has completed CLI setup.
-    // Silently swallows network/auth/server errors: the welcome-modal nudge is a UX
-    // affordance, not part of the contract of `kcap setup`.
+    // Best-effort signal that this user finished CLI setup; every failure is swallowed, because
+    // the welcome-modal nudge is not part of what `kcap setup` promises.
     //
-    // Two reliability rules (kcap-cli#113 review):
-    //   • Don't use HttpClientExtensions.CreateAuthenticatedClientAsync — its
-    //     TokenStore.GetValidTokensAsync refresh path makes HTTP calls that
-    //     don't honor a CancellationToken and can block far longer than any
-    //     CTS-based timeout. The user just logged in moments ago in this same
-    //     command, so a non-expired token is the expected case; if it's
-    //     missing or expired we silently skip rather than triggering a refresh.
-    //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)) so the
-    //     wall-clock bound is enforced independently of what HttpClient does
-    //     internally. If the delay wins, HttpClient disposal on method-exit
-    //     cancels the in-flight POST.
+    // Two reliability rules:
+    //   • Take a lane that cannot refresh. A refresh makes HTTP calls that honour no
+    //     CancellationToken and can block far past any CTS timeout. The user logged in moments
+    //     ago in this same command, so a live token is the expected case; a missing or expired
+    //     one skips silently rather than triggering one.
+    //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)), so the wall-clock bound holds
+    //     independently of what HttpClient does internally. If the delay wins, disposal on
+    //     method-exit cancels the in-flight POST.
     /// <summary>
     /// The cli-setup ping body, hand-built on purpose. A typed DTO here would inherit
     /// CapacitorJsonContext's global SnakeCaseLower policy and serialise <c>cli_version</c>,
@@ -1884,8 +1883,8 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
                 return;
             }
 
-            using var http = new HttpClient();
-            http.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
+            using var client = http.Bearer();
+            client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
@@ -1893,7 +1892,7 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            var pingTask = http.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
+            var pingTask = client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
             var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5)));
 
             if (winner == pingTask) {
@@ -1902,9 +1901,8 @@ public sealed class SetupCommand(ConfigRoot config, ProfileContext profiles, IBr
                 using var resp = await pingTask;
                 Debug($"{(int)resp.StatusCode} {resp.StatusCode} (provider={tokens.Provider})");
             } else {
-                // Wall-clock cap hit. HttpClient.Dispose() at method-exit
-                // cancels the in-flight POST; observe the orphan so its
-                // cancellation exception doesn't go unhandled.
+                // Wall-clock cap hit. Disposing the client at method-exit cancels the in-flight
+                // POST; observe the orphan so its cancellation exception doesn't go unhandled.
                 Debug("timed out after 5s");
                 _ = pingTask.ContinueWith(
                     t => {

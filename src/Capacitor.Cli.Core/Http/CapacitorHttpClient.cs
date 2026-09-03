@@ -12,6 +12,28 @@ internal sealed class CapacitorHttpClient(
         return factory.CreateClient(CapacitorClients.Default);
     }
 
+    public Task<HttpClient> ForSessionAsync(CancellationToken ct = default) =>
+        Task.FromResult(factory.CreateClient(CapacitorClients.Default));
+
+    public async Task<AuthAttempt> ForHookAsync(CancellationToken ct = default) {
+        var state = await credentials.ResolveAsync(ct);
+
+        return new AuthAttempt(
+            factory.CreateClient(CapacitorClients.Default),
+            state.Status, state.Problem, state.Resolution?.IssuedServerUrl);
+    }
+
+    // Resolves nothing: the hint is the only reason ForCommandAsync does, and the handler applies
+    // the bearer on send either way.
+    public Task<HttpClient> ForBackgroundAsync(CancellationToken ct = default) =>
+        Task.FromResult(factory.CreateClient(CapacitorClients.Default));
+
+    public HttpClient Anonymous() => factory.CreateClient(CapacitorClients.Anonymous);
+
+    public HttpClient Loopback() => factory.CreateClient(CapacitorClients.Loopback);
+
+    public HttpClient Bearer() => factory.CreateClient(CapacitorClients.Bearer);
+
     async Task ReportLapseAsync(CredentialState state) {
         switch (state.Status) {
             case AuthStatus.Expired:

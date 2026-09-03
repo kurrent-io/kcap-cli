@@ -11,9 +11,11 @@ using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
-sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles) {
+sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
     /// <summary>
     /// Run with an explicit session-default PR (used by <c>kcap review &lt;pr&gt;</c>).
     /// Tool calls may still override the default by passing a <c>pr</c> argument.
@@ -67,7 +69,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles) {
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl);
+                client ??= await http.ForSessionAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, sessionDefault);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local

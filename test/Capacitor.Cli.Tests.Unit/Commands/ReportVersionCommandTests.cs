@@ -3,9 +3,12 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -32,12 +35,28 @@ public class ReportVersionCommandTests : IDisposable {
 
     readonly WireMockServer _server = WireMockServer.Start();
 
+    ServiceProvider? _sp;
+
+    /// <summary>The real container: every case here turns on the auth status the credential source
+    /// actually resolves, which a stub client cannot produce.</summary>
+    ReportVersionCommand Command(ProfileContext profiles) {
+        var services = new ServiceCollection();
+
+        services.AddSingleton(
+            new CapacitorServer(profiles.Resolution.ServerUrl ?? "http://localhost:5108", Config.Root, profiles));
+        services.AddCapacitorHttp();
+        _sp = services.BuildServiceProvider();
+
+        return new ReportVersionCommand(profiles, _sp.GetRequiredService<ICapacitorHttpClient>());
+    }
+
     [Before(Test)]
     public void Cleanup() {
         HttpClientExtensions.ResetProviderCacheForTesting();
     }
 
     public void Dispose() {
+        _sp?.Dispose();
         _server.Stop();
         HttpClientExtensions.ResetProviderCacheForTesting();
     }
@@ -75,7 +94,7 @@ public class ReportVersionCommandTests : IDisposable {
 
         var profiles = await SeedValidTokenAsync("report-version-ok");
 
-        var result = await new ReportVersionCommand(Config.Root, profiles).HandleAsync();
+        var result = await Command(profiles).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -98,7 +117,7 @@ public class ReportVersionCommandTests : IDisposable {
         _server.Given(Request.Create().WithPath(ProbePath).UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var result = await new ReportVersionCommand(Config.Root, Resolutions.At(_server.Urls[0], Config.Root)).HandleAsync();
+        var result = await Command(Resolutions.At(_server.Urls[0], Config.Root)).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -117,7 +136,7 @@ public class ReportVersionCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
 
         // No token stored, no resolved profile — AuthStatus resolves to NotAuthenticated.
-        var result = await new ReportVersionCommand(Config.Root, Resolutions.At(_server.Urls[0], Config.Root)).HandleAsync();
+        var result = await Command(Resolutions.At(_server.Urls[0], Config.Root)).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Path == ProbePath)).IsFalse();
@@ -139,7 +158,7 @@ public class ReportVersionCommandTests : IDisposable {
             ServerUrl      = _server.Urls[0],
         });
 
-        var result = await new ReportVersionCommand(Config.Root, profiles).HandleAsync();
+        var result = await Command(profiles).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Path == ProbePath)).IsFalse();
@@ -155,7 +174,7 @@ public class ReportVersionCommandTests : IDisposable {
 
         var profiles = await SeedValidTokenAsync("report-version-500");
 
-        var result = await new ReportVersionCommand(Config.Root, profiles).HandleAsync();
+        var result = await Command(profiles).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
     }
@@ -169,7 +188,7 @@ public class ReportVersionCommandTests : IDisposable {
         var profiles = await SeedValidTokenAsync("report-version-slow");
 
         var sw     = Stopwatch.StartNew();
-        var result = await new ReportVersionCommand(Config.Root, profiles).HandleAsync();
+        var result = await Command(profiles).HandleAsync();
         sw.Stop();
 
         await Assert.That(result).IsEqualTo(0);
@@ -191,7 +210,7 @@ public class ReportVersionCommandTests : IDisposable {
 
         using var _ = EnvScope.Exclusive("KCAP_URL", "http://127.0.0.1:1");
 
-        await Assert.That(await new ReportVersionCommand(Config.Root, profiles).HandleAsync()).IsEqualTo(0);
+        await Assert.That(await Command(profiles).HandleAsync()).IsEqualTo(0);
 
         await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/auth/config")).IsEqualTo(1);
         await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == ProbePath)).IsEqualTo(1);
@@ -208,7 +227,7 @@ public class ReportVersionCommandTests : IDisposable {
 
         using var _ = EnvScope.Exclusive("KCAP_URL", _server.Urls[0]);
 
-        await Assert.That(await new ReportVersionCommand(Config.Root, Resolutions.None(Config.Root)).HandleAsync()).IsEqualTo(0);
+        await Assert.That(await Command(Resolutions.None(Config.Root)).HandleAsync()).IsEqualTo(0);
 
         await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == ProbePath)).IsEqualTo(0);
     }
@@ -225,7 +244,7 @@ public class ReportVersionCommandTests : IDisposable {
         var profiles = await SeedValidTokenAsync("report-version-slow-discovery");
 
         var sw     = Stopwatch.StartNew();
-        var result = await new ReportVersionCommand(Config.Root, profiles).HandleAsync();
+        var result = await Command(profiles).HandleAsync();
         sw.Stop();
 
         await Assert.That(result).IsEqualTo(0);
@@ -237,7 +256,7 @@ public class ReportVersionCommandTests : IDisposable {
         // No discovery stub, no listener at all on this port — DiscoverProviderAsync's own
         // catch falls back to local tokens, finds none, resolves NotAuthenticated; even if it
         // somehow resolved Ok, the command's own try/catch must still swallow the failure.
-        var result = await new ReportVersionCommand(Config.Root, Resolutions.At("http://127.0.0.1:1", Config.Root)).HandleAsync();
+        var result = await Command(Resolutions.At("http://127.0.0.1:1", Config.Root)).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
     }
@@ -253,7 +272,7 @@ public class ReportVersionCommandTests : IDisposable {
     public async Task NoServerConfigured_MakesNoRequest_AndReturnsZero() {
         // Nothing resolved, no KCAP_URL: CreateClientWithAuthStatusAsync falls back
         // to its hardcoded "http://localhost:5108" default, which nothing is listening on here.
-        var result = await new ReportVersionCommand(Config.Root, Resolutions.None(Config.Root)).HandleAsync();
+        var result = await Command(Resolutions.None(Config.Root)).HandleAsync();
 
         await Assert.That(result).IsEqualTo(0);
     }

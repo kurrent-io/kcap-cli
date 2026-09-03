@@ -7,6 +7,8 @@ using Capacitor.Cli.Core.Harness;
 
 // ReSharper disable ShortLivedHttpClient
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
@@ -34,9 +36,9 @@ namespace Capacitor.Cli.Commands.Harness;
 ///   PreToolUse        → swallowed
 ///   PostToolUse       → swallowed
 /// </remarks>
-sealed class CodexHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home) {
-    readonly WatcherManager  _watchers = new(config, profiles);
-    readonly AgentHookPoster _poster   = new(config, profiles);
+sealed class CodexHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home, ICapacitorHttpClient http) {
+    readonly WatcherManager  _watchers = new(config, profiles, http);
+    readonly AgentHookPoster _poster   = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -609,7 +611,7 @@ sealed class CodexHookCommand(ConfigRoot config, ProfileContext profiles, HookCl
             // Use the status-returning variant, NOT CreateAuthenticatedClientAsync: the latter writes
             // "Not authenticated" / "expired" to stderr, which a per-turn Stop would spam. Stay quiet
             // and skip the POST when there's no usable auth (still swallow-all).
-            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(config, profiles, Url, cts.Token);
+            var (client, status) = await http.ForHookAsync(cts.Token);
 
             using (client) {
                 if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {

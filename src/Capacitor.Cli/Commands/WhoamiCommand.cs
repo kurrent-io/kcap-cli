@@ -3,6 +3,8 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
@@ -10,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 /// is not an answer: "expires tomorrow" only says a clock hasn't passed, so a token the server
 /// rejects still looks valid. Hence the probe.
 /// </summary>
-public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles) {
+public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
     /// <summary>Cheap authenticated GET used purely to ask "do you accept this token?".</summary>
     internal const string ProbePath = "/api/me/notification-prefs";
 
@@ -85,17 +87,13 @@ public sealed class WhoamiCommand(ConfigRoot config, ProfileContext profiles) {
     // distinct from any status code the server did return.
     async Task<HttpStatusCode?> ProbeAsync(string baseUrl, string accessToken) {
         try {
-            // No redirect following: a login redirect would otherwise masquerade as some other
-            // status. No retry handler either — this client must send exactly the token we printed.
-            using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
-            http.DefaultRequestHeaders.Authorization = new("Bearer", accessToken);
+            // The lane sends exactly the token printed above: no rotation, because the question is
+            // whether THIS token is accepted, and no redirect, because the hop would strip it and
+            // return a 401 that reads as the server's verdict.
+            using var client = http.Bearer();
+            client.DefaultRequestHeaders.Authorization = new("Bearer", accessToken);
 
-            // This probe deliberately bypasses HttpClientExtensions' choke point (it must not
-            // mutate auth state), so it attaches the same observation headers explicitly rather
-            // than inheriting them for free.
-            HttpClientExtensions.AttachObservationHeaders(profiles, http);
-
-            using var response = await http.GetOnceAsync(
+            using var response = await client.GetOnceAsync(
                 $"{AppConfig.NormalizeUrl(baseUrl)}{ProbePath}", ProbeTimeout);
 
             return response.StatusCode;

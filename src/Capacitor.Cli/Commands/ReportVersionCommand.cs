@@ -1,6 +1,8 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
@@ -11,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 /// immediately. Fail-open: never throws, never prints, always returns 0, bounded to
 /// <see cref="Budget"/> total (discovery + request).
 /// </summary>
-public sealed class ReportVersionCommand(ConfigRoot config, ProfileContext profiles) {
+public sealed class ReportVersionCommand(ProfileContext profiles, ICapacitorHttpClient http) {
     static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
 
     public async Task<int> HandleAsync() {
@@ -24,7 +26,7 @@ public sealed class ReportVersionCommand(ConfigRoot config, ProfileContext profi
             var effectiveBaseUrl = profiles.Resolution.ServerUrl ?? "http://localhost:5108";
 
             var (client, status) =
-                await HttpClientExtensions.CreateClientWithAuthStatusAsync(config, profiles, effectiveBaseUrl, cts.Token);
+                await http.ForHookAsync(cts.Token);
 
             using (client) {
                 if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return 0;

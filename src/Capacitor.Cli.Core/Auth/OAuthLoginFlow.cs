@@ -521,16 +521,8 @@ public static class OAuthLoginFlow {
         }
     }
 
-    internal static async Task<string?> AcquireGitHubTokenAsync(
-            string clientId, string? codeExchangeUrl, bool forceDevice, IBrowserLauncher launcher,
-            CancellationToken ct = default, IAuthProgress? progress = null) {
-        using var http = new HttpClient();
-
-        return await AcquireGitHubTokenAsync(http, clientId, codeExchangeUrl, forceDevice, launcher, ct, progress);
-    }
-
-    // HttpClient-injectable core: the device-flow leg runs on the caller's client so the façade's
-    // one client (and a test's scripted handler) covers it.
+    // The device-flow leg runs on the caller's client, so the façade's one client — and a test's
+    // scripted handler — covers it.
     internal static async Task<string?> AcquireGitHubTokenAsync(
             HttpClient http, string clientId, string? codeExchangeUrl, bool forceDevice,
             IBrowserLauncher launcher,

@@ -13,6 +13,8 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 // AuthProviderDiscoveryCache: HttpClientExtensions caches the first successful /auth/config
@@ -227,7 +229,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         MemoryStoreProbe.Poison(Config.Root);
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""));
 
@@ -240,7 +242,8 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]"""; // decoy — must never be fetched
         var hook = new ClaudeHookCommand(
-            Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new HookClock(TimeProvider.System), Home);
+            Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new HookClock(TimeProvider.System), Home,
+            new FixedCapacitorHttpClient());
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
@@ -262,7 +265,8 @@ public class ClaudeHookCommandTests {
         var stdout = new StringWriter();
 
         var hook = new ClaudeHookCommand(
-            Config.Root, Resolutions.Of(new Profile { UpdateCheck = false }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home);
+            Config.Root, Resolutions.Of(new Profile { UpdateCheck = false }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home,
+            new FixedCapacitorHttpClient());
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
@@ -286,7 +290,8 @@ public class ClaudeHookCommandTests {
         var stdout = new StringWriter();
 
         var hook = new ClaudeHookCommand(
-            Config.Root, Resolutions.Of(new Profile { UpdateCheck = true }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home);
+            Config.Root, Resolutions.Of(new Profile { UpdateCheck = true }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home,
+            new FixedCapacitorHttpClient());
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
@@ -730,7 +735,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
 
@@ -770,12 +775,12 @@ public class ClaudeHookCommandTests {
     public async Task session_end_spooled_when_client_creation_exceeds_budget() {
         using var fx = new Fixture(Config.Root);
         // Slow factory: never completes within the cap (30s) so the budget elapses first.
-        Func<Task<(HttpClient, AuthStatus)>> slowFactory = () =>
-            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
+        Func<Task<AuthAttempt>> slowFactory = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
 
         // 13.4s already elapsed → session-end remaining = 15 - 13.4 - 1.5 ≈ 0.1s cap.
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(13.4)), Home).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(13.4)), Home, new FixedCapacitorHttpClient()).HandleWithDeps(
             fx.Spool,
             new StringReader($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
             slowFactory);
@@ -791,8 +796,8 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task create_client_within_budget_returns_null_when_factory_slower_than_cap() {
-        Func<Task<(HttpClient, AuthStatus)>> slow = () =>
-            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
+        Func<Task<AuthAttempt>> slow = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
         var sw     = System.Diagnostics.Stopwatch.StartNew();
         var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(slow, TimeSpan.FromMilliseconds(50));
         sw.Stop();
@@ -803,7 +808,7 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task create_client_within_budget_returns_client_when_factory_fast() {
         var made   = new HttpClient();
-        var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(() => Task.FromResult((made, AuthStatus.Ok)), TimeSpan.FromSeconds(2));
+        var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(() => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2));
         await Assert.That(result).IsNotNull();
         await Assert.That(ReferenceEquals(result!.Value.Client, made)).IsTrue();
         result.Value.Client.Dispose();
@@ -874,11 +879,11 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task subagent_stop_spooled_when_client_creation_exceeds_budget() {
         using var fx = new Fixture(Config.Root);
-        Func<Task<(HttpClient, AuthStatus)>> slowFactory = () =>
-            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
+        Func<Task<AuthAttempt>> slowFactory = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
         // 3.4s already elapsed → subagent-stop remaining = 5 - 3.4 - 1.5 ≈ 0.1s cap.
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(3.4)), Home).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(3.4)), Home, new FixedCapacitorHttpClient()).HandleWithDeps(
             fx.Spool,
             new StringReader($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}"""),
             slowFactory);
@@ -951,7 +956,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Expired, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
 
@@ -967,7 +972,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.WrongServer, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
 
@@ -983,7 +988,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Expired, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1004,7 +1009,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1020,7 +1025,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Notification","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1036,7 +1041,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, new FixedCapacitorHttpClient()).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1126,7 +1131,7 @@ public class ClaudeHookCommandTests {
         public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default) {
             StubMemoryServer();
 
-            return new ClaudeHookCommand(Config, Profiles, Aged(elapsed), _home).HandleCore(
+            return new ClaudeHookCommand(Config, Profiles, Aged(elapsed), _home, new FixedCapacitorHttpClient()).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin));
         }
 

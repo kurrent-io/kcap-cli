@@ -259,6 +259,228 @@ public class CapacitorHttpContainerTests : IDisposable {
         await Assert.That(ServerVersionStore.Get(Url, Config.Root)).IsEqualTo("0.42.0");
     }
 
+    // ── The background lane ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The lapsed-login hint is the whole difference between the two verbs, so it is asserted as a
+    /// pair: a watcher or teardown prints nothing, while the interactive command it used to borrow
+    /// prints the actionable line. Reaching for one hint per flush on a stderr nobody reads is what
+    /// this lane exists to stop.
+    /// </summary>
+    [Test]
+    public async Task The_background_lane_is_silent_where_an_interactive_command_prints_the_hint() {
+        StubProvider(AuthProvider.GitHubApp);
+
+        using var sp = Container();
+        var       http = sp.GetRequiredService<ICapacitorHttpClient>();
+
+        using (var quiet = ConsoleOutput.StartErrorCapture()) {
+            using var background = await http.ForBackgroundAsync();
+
+            await Assert.That(quiet.GetCapturedError()).IsEmpty();
+        }
+
+        using var loud = ConsoleOutput.StartErrorCapture();
+        using var interactive = await http.ForCommandAsync();
+
+        await Assert.That(loud.GetCapturedError()).Contains("kcap login");
+    }
+
+    /// <summary>
+    /// A vendor reads hook stderr as the hook's own result, so the lapse must reach the caller as a
+    /// value and never as a line: the status is what lets a hook skip a send it would only lose.
+    /// </summary>
+    [Test]
+    public async Task The_hook_lane_reports_a_lapse_as_a_status_and_never_on_stderr() {
+        StubProvider(AuthProvider.GitHubApp);
+
+        using var sp      = Container();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
+
+        using var client = attempt.Client;
+
+        await Assert.That(capture.GetCapturedError()).IsEmpty();
+        await Assert.That(attempt.Status).IsEqualTo(AuthStatus.NotAuthenticated);
+        await Assert.That(attempt.Usable).IsFalse();
+    }
+
+    // ── The anonymous lane ─────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A seeded, valid token is the point: the anonymous lane must stay bare when a credential IS
+    /// available, not merely when none exists. The version tag still rides, because the handler that
+    /// stamps it sits in a chain no caller can opt out of.
+    /// </summary>
+    [Test]
+    public async Task The_anonymous_lane_sends_no_bearer_but_still_carries_the_cli_version() {
+        await AuthenticateAsync("tok_must_not_travel");
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Anonymous();
+
+        using var response = await client.GetAsync($"{Url}/auth/config");
+
+        var headers = RequestTo("/auth/config").RequestMessage.Headers!;
+
+        await Assert.That(headers.ContainsKey("Authorization")).IsFalse();
+        await Assert.That(headers[HttpClientExtensions.CliVersionHeader].Single())
+            .IsEqualTo(CapacitorVersion.CurrentDisplay());
+    }
+
+    /// <summary>
+    /// The authenticated lane refuses redirects because a bearer does not survive one. With no bearer
+    /// that reason is gone, and a release download that lands on an object store needs the hop taken —
+    /// so the two lanes must genuinely differ here.
+    /// </summary>
+    [Test]
+    public async Task The_anonymous_lane_follows_a_redirect() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/moved").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(302).WithHeader("Location", $"{Url}/landed"));
+        _server.Given(Request.Create().WithPath("/landed").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("arrived"));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Anonymous();
+
+        using var response = await client.GetAsync($"{Url}/moved");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("arrived");
+    }
+
+    /// <summary>
+    /// The store is keyed by the configured server, and this lane exists to reach one the caller has
+    /// not adopted — so capturing a version here would file the candidate's under the incumbent's key
+    /// and cap the update recommendation against a server the user never chose.
+    /// </summary>
+    [Test]
+    public async Task The_anonymous_lane_files_no_server_version() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader(HttpClientExtensions.ServerVersionHeader, "9.9.9"));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Anonymous();
+
+        using var response = await client.GetAsync($"{Url}/auth/config");
+
+        await Assert.That(ServerVersionStore.Get(Url, Config.Root)).IsNull();
+    }
+
+    // ── The loopback lane ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A capability URL IS the credential, so a followed hop would hand the grant to whatever host
+    /// the 3xx names. This is the one place the anonymous rule inverts: no bearer to strip, and the
+    /// redirect still must not be taken.
+    /// </summary>
+    [Test]
+    public async Task The_loopback_lane_refuses_to_follow_a_redirect() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/capability/submit").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(302).WithHeader("Location", $"{Url}/elsewhere"));
+        _server.Given(Request.Create().WithPath("/elsewhere").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("leaked"));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Loopback();
+
+        using var response = await client.GetAsync($"{Url}/capability/submit");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Redirect);
+        await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Path == "/elsewhere")).IsFalse();
+    }
+
+    /// <summary>
+    /// The borrowed reviewer this lane serves runs with HOME redirected, so a token store read is
+    /// what fails silently. A seeded token proves the lane stays bare even where one is readable.
+    /// </summary>
+    [Test]
+    public async Task The_loopback_lane_sends_no_bearer() {
+        await AuthenticateAsync("tok_must_not_travel");
+        _server.Given(Request.Create().WithPath("/capability/submit").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Loopback();
+
+        using var response = await client.GetAsync($"{Url}/capability/submit");
+
+        await Assert.That(RequestTo("/capability/submit").RequestMessage.Headers!.ContainsKey("Authorization"))
+            .IsFalse();
+    }
+
+    /// <summary>
+    /// The one guarantee this lane cannot show on the wire: an ambient proxy would route a grant
+    /// minted for 127.0.0.1 off the machine entirely, and a test server cannot observe its own
+    /// absence from a proxy. Read off the built chain instead.
+    /// </summary>
+    [Test]
+    public async Task The_loopback_lane_bypasses_any_ambient_proxy() {
+        using var sp = Container();
+
+        HttpMessageHandler handler =
+            sp.GetRequiredService<IHttpMessageHandlerFactory>().CreateHandler(CapacitorClients.Loopback);
+
+        while (handler is DelegatingHandler delegating) handler = delegating.InnerHandler!;
+
+        await Assert.That(((HttpClientHandler)handler).UseProxy).IsFalse();
+    }
+
+    // ── The caller's-own-bearer lane ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A login redirect would otherwise masquerade as the server's verdict: the hop strips the
+    /// hand-set Authorization, so the caller reads the resulting 401 as "this token is refused"
+    /// when the truth is that it was never presented.
+    /// </summary>
+    [Test]
+    public async Task The_bearer_lane_refuses_to_follow_a_redirect() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/api/me").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(302).WithHeader("Location", $"{Url}/login"));
+        _server.Given(Request.Create().WithPath("/login").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(401));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Bearer();
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "tok_caller_supplied");
+
+        using var response = await client.GetAsync($"{Url}/api/me");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Redirect);
+        await Assert.That(RequestTo("/api/me").RequestMessage.Headers!["Authorization"].Single())
+            .IsEqualTo("Bearer tok_caller_supplied");
+    }
+
+    /// <summary>
+    /// The lane must not rotate: the caller is asking whether THIS token is accepted, so a silent
+    /// swap to a fresher one answers a different question and reports the wrong verdict.
+    /// </summary>
+    [Test]
+    public async Task The_bearer_lane_does_not_rotate_a_refused_token() {
+        await AuthenticateAsync("tok_in_the_store");
+        _server.Given(Request.Create().WithPath("/api/me").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(401));
+
+        using var sp     = Container();
+        using var client = sp.GetRequiredService<ICapacitorHttpClient>().Bearer();
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", "tok_caller_supplied");
+
+        using var response = await client.GetAsync($"{Url}/api/me");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
+        await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/api/me")).IsEqualTo(1);
+    }
+
     /// <summary>
     /// Handler order, which nothing but a live 401-then-200 exchange can pin. Recovery is INNERMOST, so
     /// the two handlers outside it see the exchange once: version capture observes only the response the
@@ -303,5 +525,46 @@ public class CapacitorHttpContainerTests : IDisposable {
 
         await Assert.That(stamped).IsEqualTo(CapacitorVersion.CurrentDisplay())
             .Because("the observation handler is outside recovery, so the resend is not stamped twice");
+    }
+
+    /// <summary>
+    /// A container holding only the foreign clients — no server, no credential source, none of what
+    /// the authenticated lanes resolve. That is all the desktop wizard has: it signs a workspace up
+    /// before there is a server to authenticate against.
+    /// </summary>
+    [Test]
+    public async Task A_foreign_client_resolves_without_the_authenticated_lanes() {
+        using var sp = new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
+
+        await Assert.That(sp.GetService<TenantProvisioningClient>()).IsNotNull();
+        await Assert.That(sp.GetService<ICapacitorHttpClient>()).IsNull();
+    }
+
+    /// <summary>Our version tags are for our own server, and the signup control plane is not it.</summary>
+    [Test]
+    public async Task A_foreign_client_carries_none_of_our_observation_headers() {
+        _server.Given(Request.Create().WithPath("/api/signup/availability").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("""{"available":true}"""));
+
+        using var sp = Container();
+
+        await sp.GetRequiredService<TenantProvisioningClient>()
+            .CheckAvailabilityAsync(Url, "tok_signup", "acme", CancellationToken.None);
+
+        var sent = _server.LogEntries
+            .Single(e => e.RequestMessage.Path == "/api/signup/availability").RequestMessage;
+
+        await Assert.That(sent.Headers!.ContainsKey(HttpClientExtensions.CliVersionHeader)).IsFalse();
+        await Assert.That(sent.Headers["Authorization"].Single()).IsEqualTo("Bearer tok_signup")
+            .Because("the caller's own token is the only credential this lane knows about");
+    }
+
+    [Test]
+    public async Task The_auth_proxy_resolves_through_its_interface() {
+        using var sp = new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
+
+        await Assert.That(sp.GetService<IAuthProxyClient>()).IsTypeOf<AuthProxyClient>();
     }
 }

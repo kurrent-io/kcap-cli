@@ -10,7 +10,7 @@ public class McpAnalyticsServerTests {
     // The dispatch is profile-scoped: its token refresh resolves a profile. These tests exercise
     // routing, not profile selection.
     McpAnalyticsServer Server() =>
-        new(Config.Root, Resolutions.None(Config.Root));
+        new(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient());
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 

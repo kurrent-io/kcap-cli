@@ -17,8 +17,10 @@ using Capacitor.App.Views.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.App;
 
@@ -43,6 +45,13 @@ public partial class App : Application {
     // And its one read of KCAP_CONFIG_DIR.
     readonly ConfigRoot _config = ConfigRoot.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
+
+    /// Only the foreign-host clients: a workspace is signed up for before there is a server to
+    /// authenticate against. Process-lifetime rather than per wizard run — a provisioning poll can
+    /// outlive the window that started it, and this client degrades a transport failure but not a
+    /// disposed handler.
+    readonly ServiceProvider _foreignHttp =
+        new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
 
     // And its one read of KCAP_APP_PTY_DUMP: a file every terminal feed frame is appended to as
     // received, for seeing what the emulator was given.
@@ -433,7 +442,9 @@ public partial class App : Application {
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
         var shimApplicable = await ResolveShimApplicableAsync(
             OperatingSystem.IsMacOS(), shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
-        var bridges = WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action));
+        var bridges = WizardComposition.BuildBridges(
+            action => Dispatcher.UIThread.Post(action),
+            _foreignHttp.GetRequiredService<TenantProvisioningClient>());
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var graph = WizardComposition.BuildGraph(new WizardGraphOptions(

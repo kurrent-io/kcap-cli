@@ -12,6 +12,8 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
@@ -21,7 +23,7 @@ namespace Capacitor.Cli.Commands;
 /// participant needs. Deliberately a SEPARATE command from `kcap mcp flows` — a hard security
 /// boundary so no flag regression can ever expose start_review_flow to an unattended reviewer.
 /// </summary>
-sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles) {
+sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
     internal const string AgentIdEnvVar = "KCAP_FLOW_AGENT_ID";
 
     /// <summary>Daemon-minted loopback capability a BORROWED reviewer delivers through: its sandbox
@@ -121,11 +123,11 @@ sealed class McpFlowResultServer(ConfigRoot config, ProfileContext profiles) {
                 if (toolName is not ("submit_review_result" or "send_flow_message"))
                     return BuildToolResult(callId, $"Error: Unknown tool: {toolName}", isError: true);
 
-                // The borrowed path deliberately does NOT create an authenticated client: the token
-                // store lives under a HOME this process cannot reach, so attempting it is what
-                // produced the original silent failure.
+                // The borrowed path takes a lane that cannot authenticate rather than one that
+                // declines to: its token store lives under a HOME this process cannot reach, and
+                // reaching for one is what produced the original silent failure.
                 client ??= borrowed
-                    ? new HttpClient()
+                    ? http.Loopback()
                     : await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl, autoRetryUnauthorized: false);
 
                 var (text, isError) = toolName switch {

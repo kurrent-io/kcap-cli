@@ -6,6 +6,8 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
@@ -40,9 +42,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// sessionStart, which writes a single {"additionalContext":"…"} document when — and only when —
 /// a team-memory fragment is available to inject.
 /// </remarks>
-sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home) {
-    readonly WatcherManager  _watchers = new(config, profiles);
-    readonly AgentHookPoster _poster   = new(config, profiles);
+sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home, ICapacitorHttpClient http) {
+    readonly WatcherManager  _watchers = new(config, profiles, http);
+    readonly AgentHookPoster _poster   = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -435,7 +437,7 @@ sealed class CopilotHookCommand(ConfigRoot config, ProfileContext profiles, Hook
         try {
             // Status-returning variant (not CreateAuthenticatedClientAsync, which writes a
             // per-turn "expired" line to stderr): on a lapse, stay quiet and skip the doomed POST.
-            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(config, profiles, Url, cts.Token);
+            var (client, status) = await http.ForHookAsync(cts.Token);
             using (client) {
                 if (AgentHookPoster.IsAuthLapsed(status)) return 0;
                 using var content = new StringContent(forwarded.ToJsonString(), Encoding.UTF8, "application/json");

@@ -9,9 +9,11 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
-sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles) {
+sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
     /// <summary>
     /// Run as a session-scoped MCP server. All tool calls must use <paramref name="expectedSessionId"/>.
     /// </summary>
@@ -83,7 +85,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles) {
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk) return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
-            client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(config, profiles, baseUrl);
+            client ??= await http.ForSessionAsync();
             return await HandleToolCallAsync(callId, callRequest, client, baseUrl, expectedSessionId);
         }
 

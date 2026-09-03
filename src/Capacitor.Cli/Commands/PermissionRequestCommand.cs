@@ -6,10 +6,12 @@ using Capacitor.Cli.Harness.Claude;
 
 // ReSharper disable MethodHasAsyncOverload
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Commands;
 
-class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles) {
-    readonly WatcherManager _watchers = new(config, profiles);
+class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+    readonly WatcherManager _watchers = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 

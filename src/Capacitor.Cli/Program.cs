@@ -440,11 +440,11 @@ switch (command) {
 
                 // Explicit PR args — use directly
                 if (mcpOwner is not null && mcpRepo is not null && mcpPr is not null && int.TryParse(mcpPr, out var mcpPrNum)) {
-                    return await new McpReviewServer(config, profiles).RunAsync(mcpOwner, mcpRepo, mcpPrNum);
+                    return await Run<McpReviewServer>().RunAsync(mcpOwner, mcpRepo, mcpPrNum);
                 }
 
                 // No args — auto-detect from git
-                return await new McpReviewServer(config, profiles).RunAutoAsync();
+                return await Run<McpReviewServer>().RunAutoAsync();
             }
             case "judge": {
                 var session = GetArg(args, "--session");
@@ -455,20 +455,20 @@ switch (command) {
                     return 1;
                 }
 
-                return await new McpJudgeServer(config, profiles).RunAsync(session);
+                return await Run<McpJudgeServer>().RunAsync(session);
             }
             case "sessions":
-                return await new McpSessionsServer(config, profiles).RunAsync();
+                return await Run<McpSessionsServer>().RunAsync();
             case "flows":
                 return await new McpFlowsServer(config, profiles).RunAsync(GetArg(args, "--driver"));
             case "flow-result":
-                return await new McpFlowResultServer(config, profiles).RunAsync();
+                return await Run<McpFlowResultServer>().RunAsync();
             case "memory":
-                return await new McpMemoryServer(config, profiles).RunAsync();
+                return await Run<McpMemoryServer>().RunAsync();
             case "workitems":
-                return await new McpWorkItemsServer(config, profiles).RunAsync();
+                return await Run<McpWorkItemsServer>().RunAsync();
             case "analytics":
-                return await new McpAnalyticsServer(config, profiles).RunAsync();
+                return await Run<McpAnalyticsServer>().RunAsync();
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
@@ -532,7 +532,7 @@ switch (command) {
         }
 
         // 1. Kill the watcher (and any subagent watchers)
-        var watchers = new WatcherManager(config, profiles);
+        var watchers = new WatcherManager(config, profiles, sp.GetRequiredService<ICapacitorHttpClient>());
         await watchers.KillWatcher(sessionId);
 
         // Also kill subagent watchers — scan PID files matching "{sessionId}-*"
@@ -813,7 +813,7 @@ switch (command) {
         // spools BEFORE returning. Gating the call would mean a config broken for weeks never reaps
         // anything, and the per-session cap does not bound the number of stale files.
         if (!args.Contains("--codex") && baseUrl is not null) {
-            await new AgentHookPoster(config, profiles).DrainSpoolsAsync(
+            await new AgentHookPoster(config, profiles, sp.GetRequiredService<ICapacitorHttpClient>()).DrainSpoolsAsync(
                 new HookSpool(config),
                 new TranscriptSpool(config),
                 sessionId: null); // current session unknown here — reading stdin now would consume it
@@ -870,7 +870,7 @@ return 1;
 }
 
 } finally {
-    await UpdateNotice.FlushAsync(command, args, profiles, config);
+    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>());
     await HarnessSetupNotice.FlushAsync(command, config, profiles, home);
 }
 
