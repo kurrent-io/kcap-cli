@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// wrong token, resending with a stale header, leaking the first response — all live in the
 /// interaction, not in any single method.
 /// </summary>
-public class UnauthorizedRetryHandlerTests {
+public class UnauthorizedRecoveryHandlerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     [Test]
@@ -55,7 +55,7 @@ public class UnauthorizedRetryHandlerTests {
         // The store already holds a NEWER token than the one this request sent — exactly what a
         // peer process leaves behind. The retry must adopt it (and the dedup rule means no
         // rotation is attempted, so no refresh endpoint is contacted).
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -68,7 +68,7 @@ public class UnauthorizedRetryHandlerTests {
 
     [Test]
     public async Task Exactly_one_extra_attempt_is_made_when_the_retry_also_fails() {
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.Unauthorized);
         using var client = Client(transport, Token("original"));
@@ -82,7 +82,7 @@ public class UnauthorizedRetryHandlerTests {
     [Test]
     public async Task The_first_401_response_is_disposed_before_the_retry() {
         // Every recovered 401 would otherwise leak its response content/connection.
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -94,7 +94,7 @@ public class UnauthorizedRetryHandlerTests {
 
     [Test]
     public async Task A_buffered_body_is_replayed_on_the_retry() {
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -110,7 +110,7 @@ public class UnauthorizedRetryHandlerTests {
     public async Task A_json_body_is_replayed_on_the_retry() {
         // JsonContent re-serializes its value on every send, so it IS replayable. Excluding it
         // would silently leave every JSON-posting call site without 401 recovery.
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -126,7 +126,7 @@ public class UnauthorizedRetryHandlerTests {
     public async Task A_peer_token_for_a_different_server_is_never_adopted() {
         // The handler is pinned to one server; a peer login elsewhere must not be picked up and
         // sent to it.
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-elsewhere") with { ServerUrl = "http://127.0.0.1:9" });
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-elsewhere") with { ServerUrl = "http://127.0.0.1:9" });
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -141,7 +141,7 @@ public class UnauthorizedRetryHandlerTests {
     public async Task A_non_replayable_body_is_not_retried() {
         // Resending a consumed stream would send an empty or corrupt body; surfacing the 401 is
         // the honest outcome.
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -159,7 +159,7 @@ public class UnauthorizedRetryHandlerTests {
         // rejected-token attribution this depends on is asserted directly against the dedup rule
         // in TokenServerBindingTests — here we only establish that concurrency doesn't produce a
         // token that was never in play, or a torn read.
-        await new TokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
 
         var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
         using var client = Client(transport, Token("original"));
@@ -174,7 +174,8 @@ public class UnauthorizedRetryHandlerTests {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     HttpClient Client(RecordingHandler transport, StoredTokens initial) {
-        var retry = new UnauthorizedRetryHandler(Config.Root, ProfileConfig.DefaultName, initial, "https://kcap.example.com") { InnerHandler = transport };
+        var source = new TokenStoreCredentials(AuthFixtures.NewTokenStore(Config.Root), ProfileConfig.DefaultName, "https://kcap.example.com");
+        var retry  = new UnauthorizedRecoveryHandler(source) { InitialBearer = initial.AccessToken, InnerHandler = transport };
 
         return new(retry);
     }

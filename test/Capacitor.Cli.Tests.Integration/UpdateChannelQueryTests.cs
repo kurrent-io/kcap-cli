@@ -1,4 +1,6 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -17,6 +19,12 @@ public class UpdateChannelQueryTests : IDisposable {
     readonly WireMockServer _server         = WireMockServer.Start();
     readonly string         _originalBaseUrl = UpdateCommand.RegistryBaseUrl;
 
+    /// The registered client, not a hand-built one: the 5 s cap these tests reason about is set at
+    /// registration, so a client assembled here would not have it.
+    readonly ServiceProvider _http = new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
+
+    NpmRegistryClient Npm => _http.GetRequiredService<NpmRegistryClient>();
+
     public UpdateChannelQueryTests() {
         UpdateCommand.RegistryBaseUrl = _server.Url!;
 
@@ -29,6 +37,7 @@ public class UpdateChannelQueryTests : IDisposable {
 
     public void Dispose() {
         UpdateCommand.RegistryBaseUrl = _originalBaseUrl;
+        _http.Dispose();
         _server.Stop();
     }
 
@@ -36,7 +45,7 @@ public class UpdateChannelQueryTests : IDisposable {
     // tests in this class so they don't race each other's WireMock server.
     [Test, NotInParallel("UpdateCommand_RegistryBaseUrl")]
     public async Task Beta_channel_reports_beta_dist_tag_version() {
-        var result = await UpdateCommand.CheckForUpdateAsync(forceCheck: true, "beta", Config.Root);
+        var result = await UpdateCommand.CheckForUpdateAsync(forceCheck: true, "beta", Config.Root, Npm);
 
         await Assert.That(result.Latest).IsEqualTo("0.9.0-beta.1");
 
@@ -46,7 +55,7 @@ public class UpdateChannelQueryTests : IDisposable {
 
     [Test, NotInParallel("UpdateCommand_RegistryBaseUrl")]
     public async Task Latest_channel_reports_latest_dist_tag_version() {
-        var result = await UpdateCommand.CheckForUpdateAsync(forceCheck: true, "latest", Config.Root);
+        var result = await UpdateCommand.CheckForUpdateAsync(forceCheck: true, "latest", Config.Root, Npm);
 
         await Assert.That(result.Latest).IsEqualTo("0.8.0");
 
@@ -68,11 +77,11 @@ public class UpdateChannelQueryTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.12.0"}""")
                 .WithDelay(TimeSpan.FromMilliseconds(400)));
 
-        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root);
+        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm);
         await Assert.That(first.Latest).IsEqualTo("0.12.0");
         await Assert.That(first.FromCache).IsFalse();
 
-        var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root);
+        var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm);
         await Assert.That(second.Latest).IsEqualTo("0.12.0");
         await Assert.That(second.FromCache).IsTrue();
 
@@ -107,7 +116,7 @@ public class UpdateChannelQueryTests : IDisposable {
 
         using var passiveBound = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
         var firstSw = System.Diagnostics.Stopwatch.StartNew();
-        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, passiveBound.Token);
+        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm, passiveBound.Token);
         firstSw.Stop();
         await Assert.That(first.Latest).IsNull();
         await Assert.That(first.FromCache).IsTrue();
@@ -117,7 +126,7 @@ public class UpdateChannelQueryTests : IDisposable {
         await Assert.That(firstSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
 
         var secondSw = System.Diagnostics.Stopwatch.StartNew();
-        var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root);
+        var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm);
         secondSw.Stop();
         await Assert.That(second.Latest).IsNull();
         await Assert.That(second.FromCache).IsTrue();
@@ -139,7 +148,7 @@ public class UpdateChannelQueryTests : IDisposable {
         _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(503));
 
-        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root);
+        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm);
         await Assert.That(first.Latest).IsNull();
 
         // The endpoint "recovers" — but the backoff record, not the endpoint,
@@ -149,7 +158,7 @@ public class UpdateChannelQueryTests : IDisposable {
         _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.14.0"}"""));
 
-        var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root);
+        var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm);
         await Assert.That(second.Latest).IsNull();
         await Assert.That(second.FromCache).IsTrue();
 
@@ -168,7 +177,7 @@ public class UpdateChannelQueryTests : IDisposable {
         _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(503));
 
-        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root);
+        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm);
         await Assert.That(first.Latest).IsNull();
 
         _server.ResetMappings();
@@ -176,7 +185,7 @@ public class UpdateChannelQueryTests : IDisposable {
         _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.15.0"}"""));
 
-        var forced = await UpdateCommand.CheckForUpdateAsync(forceCheck: true, channel, Config.Root);
+        var forced = await UpdateCommand.CheckForUpdateAsync(forceCheck: true, channel, Config.Root, Npm);
         await Assert.That(forced.Latest).IsEqualTo("0.15.0");
         await Assert.That(forced.FromCache).IsFalse();
 

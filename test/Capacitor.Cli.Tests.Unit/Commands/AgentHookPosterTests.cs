@@ -5,6 +5,8 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
+using Capacitor.Cli.Core.Http;
+
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
@@ -23,12 +25,12 @@ public class AgentHookPosterTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // The poster targets the resolution's URL, so the stub server's is what the resolution names.
-    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root));
+    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
 
     public void Dispose() => _server.Stop();
 
-    static Func<Task<(HttpClient, AuthStatus)>> Factory(AuthStatus status)
-        => () => Task.FromResult((new HttpClient(), status));
+    static Func<Task<AuthAttempt>> Factory(AuthStatus status)
+        => () => Task.FromResult(new AuthAttempt(new HttpClient(), status));
 
     [Test]
     public async Task Expired_auth_skips_the_post_and_reports_AuthLapsed() {
@@ -141,7 +143,7 @@ public class AgentHookPosterTests : IDisposable {
         using var tmp = new TempDir();
         var spool = new HookSpool(tmp.Path);
         var outcome = await Poster.PostOrSpoolAsync(
-            () => Task.FromResult<(HttpClient, AuthStatus)>((new HttpClient(), AuthStatus.Expired)), "session-start/kiro", """{"session_id":"x"}""",
+            () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.Expired)), "session-start/kiro", """{"session_id":"x"}""",
             "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro");
 
         await Assert.That(outcome).IsEqualTo(HookPostOutcome.Spooled);
@@ -154,7 +156,7 @@ public class AgentHookPosterTests : IDisposable {
         var spool = new HookSpool(tmp.Path);
         using var handler = new StubHandler(System.Net.HttpStatusCode.OK); // 200
         var outcome = await Poster.PostOrSpoolAsync(
-            () => Task.FromResult<(HttpClient, AuthStatus)>((new HttpClient(handler), AuthStatus.Ok)), "session-start/kiro", """{"session_id":"x"}""",
+            () => Task.FromResult(new AuthAttempt(new HttpClient(handler), AuthStatus.Ok, null, null)), "session-start/kiro", """{"session_id":"x"}""",
             "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro");
 
         await Assert.That(outcome).IsEqualTo(HookPostOutcome.Posted);
