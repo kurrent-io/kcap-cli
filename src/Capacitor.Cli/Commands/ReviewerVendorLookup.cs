@@ -37,7 +37,7 @@ public sealed record ReviewerVendorDiagnostics(
     [property: JsonPropertyName("supported_but_not_unattended")] string[] SupportedButNotUnattended,
     [property: JsonPropertyName("reason")]                       string? Reason);
 
-/// <summary>Pure repo-aware aggregation behind the <c>list_reviewer_vendors</c> MCP tool: given the
+/// <summary>Repo-aware aggregation behind the <c>list_reviewer_vendors</c> MCP tool: given the
 /// daemons the server reports and the current session's repo, returns the reviewer vendors that can
 /// ACTUALLY run an unattended review flow for this repo right now. All the failure modes are
 /// disambiguated by a single <c>reason</c> so an empty result never reads as one specific cause it is
@@ -56,6 +56,10 @@ public static class ReviewerVendorLookup {
 
     /// <param name="daemons">Parsed daemon records, or null when the lookup itself failed
     /// (transport/auth/API) — distinct from an empty list, which is "connected zero daemons".</param>
+    /// <param name="repoRoot">The session's local repo root. Collapsed to its main repository before
+    /// the hosting match, because <see cref="Core.Config.RepoPathStore"/> collapses one before advertising
+    /// it — without that a session in a linked worktree reads as no_repo_hosting_daemon for a
+    /// repository the daemon does host.</param>
     /// <param name="repoIdentity">A non-sensitive, stable id for the repo (e.g. owner/repo), surfaced
     /// as <c>repo.identity</c>. Never the local path.</param>
     /// <param name="schemaSkew">Set when the server response could not be parsed at all (client too
@@ -80,8 +84,10 @@ public static class ReviewerVendorLookup {
         if (daemons is null)
             return Empty(repo, driverVendor, 0, 0, skippedRecords, Reason.LookupFailed);
 
+        var hostingRoot = GitRepository.ResolveMainRepoRoot(repoRoot!);
+
         var hosting = daemons
-            .Where(d => d.RepoPaths.Any(p => RepoPathMatches(p, repoRoot!)) &&
+            .Where(d => d.RepoPaths.Any(p => RepoPathMatches(p, hostingRoot)) &&
                         (requesterMachineId is null || d.MachineId == requesterMachineId))
             .ToList();
 
