@@ -6,6 +6,33 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Declared work structure is bounded by visibility, not by repository
+
+The server takes a breakdown or a relation whose other end lives in another repository — it bounds
+both by what the caller can see, and repository is display only. The `declare_work_breakdown` and
+`declare_work_relation` descriptions, the `kcap-workitems` preamble, the skill and the README state
+that boundary, because an agent reads them before it calls: a repository rule in that text costs
+declarations the server would have accepted, and the loss is silent — the structure is simply never
+declared.
+
+## The reviewer lookup places a session running in a linked worktree
+
+A daemon advertises repository roots that `RepoPathStore` has already collapsed — a linked worktree
+becomes its main repository before it is stored. `GitRepository.FindRoot` stops at the worktree's own
+`.git` file, so comparing that against the advertised paths answers `no_repo_hosting_daemon` for a
+repository the daemon does host, from every session inside `<repo>/.claude/worktrees/<slug>`. That
+the same session can `start_review_flow` is not a contradiction: the server matches daemons by
+repository identity, not by path.
+
+**The collapse lives in the aggregation, which costs it its purity.** Resolving at the call site
+would leave the next caller free to compare a raw root again, and hashing the way the server does
+would put the server's identity algorithm on the client. Making the same call the store makes means
+the two sides can only disagree if one of them stops making it. It touches the filesystem, but a path
+that names nothing comes back unchanged, so a synthetic root still compares as itself.
+
+A submodule keeps its own identity through this: its `.git` points into `.git/modules`, which the
+resolver leaves alone, so a submodule checkout does not match a daemon hosting the superproject.
+
 ## The SessionStart index names the repo's projects
 
 An agent can only land a memory at project scope by passing a slug, and nothing in a session told it
