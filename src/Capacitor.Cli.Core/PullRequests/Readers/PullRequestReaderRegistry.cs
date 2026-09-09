@@ -78,7 +78,8 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var stamp = Stamp(provider);
         if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.OverviewAsync(sessionId, subject, ct).ConfigureAwait(false);
-        return Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        // The provider's own identity can drift while this read is in flight even when nothing else touched the session's stamp.
+        return stamp != Stamp(provider) || Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
     }
 
     public async Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
@@ -90,7 +91,7 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var stamp = Stamp(provider);
         if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.PageAsync<T>(sessionId, subject, section, cursor, resolved, threadId, ct).ConfigureAwait(false);
-        return Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return stamp != Stamp(provider) || Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
     }
 
     public PullRequestReaderNote? NoteFor(string provider, string host) {

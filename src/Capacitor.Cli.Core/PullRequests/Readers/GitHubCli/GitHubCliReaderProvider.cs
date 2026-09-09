@@ -199,7 +199,8 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider? t
     }
 
     Task<(GitHubCliView? View, GitHubCliResult Result)> ViewAsync(PullRequestSubjectDto subject, CancellationToken ct) {
-        var key = Key(subject);
+        // Identity-qualified: a fetch dispatched under one account must never satisfy or seed a request made under another.
+        var key = Key(subject) + "|" + Identity;
         Task<(GitHubCliView?, GitHubCliResult)> task;
         lock (_views) {
             if (_recent.TryGetValue(key, out var recent) && _time.GetElapsedTime(recent.At) < TimeSpan.FromSeconds(10))

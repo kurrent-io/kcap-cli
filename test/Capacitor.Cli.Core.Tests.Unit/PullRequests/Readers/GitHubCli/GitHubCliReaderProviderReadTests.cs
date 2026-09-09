@@ -213,6 +213,22 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task A_fetch_that_straddles_an_account_switch_is_not_served_to_the_new_account() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        var pending = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], pending);
+        await h.Provider.ProbeAsync(false, default);
+        var straddling = h.Provider.OverviewAsync("session", Subject, default);
+        h.SignedIn(["github.com"], "other");
+        await h.Provider.ProbeAsync(true, default);
+        var concurrent = h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        pending.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await Assert.That((await straddling).Kind).IsEqualTo(PullRequestReadKind.Ready);
+        await Assert.That((await concurrent).Kind).IsEqualTo(PullRequestReadKind.Ready);
+    }
+
+    [Test]
     public async Task A_synchronously_completed_fetch_does_not_pin_the_subject_after_the_reuse_window() {
         using var h = await Ready(Tmp);
         await h.Provider.OverviewAsync("session", Subject, default);

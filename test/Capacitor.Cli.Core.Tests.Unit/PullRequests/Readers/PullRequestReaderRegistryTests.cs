@@ -168,6 +168,20 @@ public class PullRequestReaderRegistryTests {
     }
 
     [Test]
+    public async Task A_read_dispatched_before_an_identity_change_restarts_without_a_fresh_dispatch() {
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Identity = "github.com=octocat", PendingOverview = new() };
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        await registry.DiscoverAsync(false, default);
+        var pending = registry.OverviewAsync("session", Subject(), default);
+        gh.Identity = "github.com=other";
+        await registry.DiscoverAsync(true, default);
+        gh.PendingOverview!.SetResult(new(PullRequestReadKind.Ready, new() { Title = "gh" }, Subject(), DateTime.UtcNow, AccessValidForSeconds: 30));
+        var restart = await pending;
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+    }
+
+    [Test]
     public async Task Losing_the_last_reader_for_a_subject_rejects_a_pending_read() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
         var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
