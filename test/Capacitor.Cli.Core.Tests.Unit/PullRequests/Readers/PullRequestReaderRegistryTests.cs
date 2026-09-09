@@ -70,7 +70,7 @@ public class PullRequestReaderRegistryTests {
         await Assert.That(gh.DiscoverCalls).IsEqualTo(1);
         registry.ResetSession("session");
         await registry.ListAsync("session", default);
-        await Assert.That(gh.DiscoverCalls).IsEqualTo(1);
+        await Assert.That(gh.DiscoverCalls).IsEqualTo(2);
     }
 
     [Test]
@@ -123,6 +123,24 @@ public class PullRequestReaderRegistryTests {
         await registry.DiscoverAsync(false, default);
         await registry.OverviewAsync("session", Subject(), default);
         gh.Hosts = ["github.com"];
+        await registry.DiscoverAsync(true, default);
+        var restart = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+        var ready = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(ready.Kind).IsEqualTo(PullRequestReadKind.Ready);
+        await Assert.That(ready.Data!.Title).IsEqualTo("gh");
+    }
+
+    [Test]
+    public async Task A_manual_reset_before_a_reroute_still_restarts_once() {
+        var gh = new StubProvider("gh", ready: true, hosts: []);
+        var server = new StubProvider("server", ready: true, hosts: ["github.com"]);
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        await registry.DiscoverAsync(false, default);
+        await registry.OverviewAsync("session", Subject(), default);
+        gh.Hosts = ["github.com"];
+        registry.ResetSession("session");
         await registry.DiscoverAsync(true, default);
         var restart = await registry.OverviewAsync("session", Subject(), default);
         await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);

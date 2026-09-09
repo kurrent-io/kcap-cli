@@ -20,8 +20,9 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         return statuses.Any(status => status.IsReady) ? new(PullRequestCapabilityKind.Supported, 1) : capability;
     }
 
+    // The served-provider stamp survives a reset: only the link source and providers restart, so a
+    // reroute discovered right after this call still fires TakeChange's one-time Restart.
     public void ResetSession(string sessionId) {
-        lock (_lock) _sessions.Remove(sessionId);
         sessionLinks.ResetSession(sessionId);
         foreach (var provider in providers) provider.ResetSession(sessionId);
     }
