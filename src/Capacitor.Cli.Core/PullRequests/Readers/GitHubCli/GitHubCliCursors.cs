@@ -28,4 +28,8 @@ public sealed class GitHubCliCursors {
             return node.Value.Entry;
         }
     }
+
+    public void Clear() {
+        lock (_lock) { _entries.Clear(); _order.Clear(); }
+    }
 }

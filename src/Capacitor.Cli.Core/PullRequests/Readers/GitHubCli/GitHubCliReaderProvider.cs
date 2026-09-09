@@ -12,12 +12,16 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider? t
     readonly Dictionary<string, Task<(GitHubCliView? View, GitHubCliResult Result)>> _inflight = new(StringComparer.Ordinal);
     readonly Dictionary<string, (long At, GitHubCliView View)> _recent = new(StringComparer.Ordinal);
     HashSet<string> _hosts = new(StringComparer.OrdinalIgnoreCase);
+    Dictionary<string, string> _accounts = new(StringComparer.OrdinalIgnoreCase);
     PullRequestReaderStatus? _status;
     long _probedAt;
     int _failures;
     TimeSpan _ttl;
 
     public string Name => "github-cli";
+    public string Identity => _status is { IsReady: true }
+        ? string.Join(",", _accounts.OrderBy(account => account.Key, StringComparer.OrdinalIgnoreCase).Select(account => account.Key + "=" + account.Value))
+        : "";
     public string ProviderKind => "github";
     public PullRequestReaderTool? Tool => GitHubCliTool;
 
@@ -32,18 +36,22 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider? t
                 return Save(new(PullRequestReaderStatusKind.Failed, result.Outcome == GitHubCliOutcome.TimedOut ? "timeout" : "oversized"), []);
             if (result.Outcome == GitHubCliOutcome.Failed && result.Stderr.Contains("unknown flag", StringComparison.OrdinalIgnoreCase))
                 return Save(new(PullRequestReaderStatusKind.Failed, "unsupported_version"), []);
-            var hosts = GitHubCliMapping.SignedInHosts(result.Stdout);
-            if (hosts is null) return Save(result.Outcome == GitHubCliOutcome.Failed ? new(PullRequestReaderStatusKind.SignedOut) : new(PullRequestReaderStatusKind.Failed, "malformed"), []);
-            return Save(hosts.Count == 0 ? new(PullRequestReaderStatusKind.SignedOut) : new(PullRequestReaderStatusKind.Ready), hosts);
+            var accounts = GitHubCliMapping.SignedInHosts(result.Stdout);
+            if (accounts is null) return Save(result.Outcome == GitHubCliOutcome.Failed ? new(PullRequestReaderStatusKind.SignedOut) : new(PullRequestReaderStatusKind.Failed, "malformed"), []);
+            return Save(accounts.Count == 0 ? new(PullRequestReaderStatusKind.SignedOut) : new(PullRequestReaderStatusKind.Ready), accounts);
         } finally { _probeGate.Release(); }
     }
-    PullRequestReaderStatus Save(PullRequestReaderStatus status, HashSet<string> hosts) {
+    PullRequestReaderStatus Save(PullRequestReaderStatus status, Dictionary<string, string> accounts) {
         var failed = status.Kind == PullRequestReaderStatusKind.Failed;
         _failures = failed ? Math.Min(_failures + 1, 3) : 0;
         _ttl = failed ? TimeSpan.FromSeconds(_failures switch { 1 => 30, 2 => 60, _ => 300 }) : TimeSpan.FromMinutes(5);
-        _hosts = hosts;
+        var previousIdentity = Identity;
+        _hosts = new HashSet<string>(accounts.Keys, StringComparer.OrdinalIgnoreCase);
+        _accounts = accounts;
         _status = status;
         _probedAt = _time.GetTimestamp();
+        // A switched account can still return the previous one's view from the reuse window; drop it rather than serve it under a new identity.
+        if (Identity != previousIdentity) { lock (_views) _recent.Clear(); _cursors.Clear(); }
         return status;
     }
 

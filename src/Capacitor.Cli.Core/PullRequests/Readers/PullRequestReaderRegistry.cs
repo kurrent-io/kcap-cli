@@ -75,9 +75,10 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
             lock (_lock) Stamp(sessionId, SubjectKey(subject), "");
             return NoReader<PullRequestOverviewDto>(subject);
         }
-        if (TakeChange(sessionId, subject, provider.Name)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
+        var stamp = Stamp(provider);
+        if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.OverviewAsync(sessionId, subject, ct).ConfigureAwait(false);
-        return Superseded(sessionId, subject, provider.Name) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
     }
 
     public async Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
@@ -86,9 +87,10 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
             lock (_lock) Stamp(sessionId, SubjectKey(subject), "");
             return NoReader<PullRequestPageDto<T>>(subject);
         }
-        if (TakeChange(sessionId, subject, provider.Name)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
+        var stamp = Stamp(provider);
+        if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.PageAsync<T>(sessionId, subject, section, cursor, resolved, threadId, ct).ConfigureAwait(false);
-        return Superseded(sessionId, subject, provider.Name) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
     }
 
     public PullRequestReaderNote? NoteFor(string provider, string host) {
@@ -123,29 +125,31 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         return providers.Where((_, i) => statuses[i].IsReady);
     }
     IPullRequestReaderProvider? Route(PullRequestSubjectDto subject) => Ready().FirstOrDefault(provider => provider.Serves(subject.Provider, subject.Host));
+    // Captured once per read: the provider's own Identity can change while a read is in flight, and the stale value must still be rejected on completion.
+    static string Stamp(IPullRequestReaderProvider provider) => provider.Name + "|" + provider.Identity;
     static string SubjectKey(PullRequestSubjectDto s) => $"{s.Provider}|{s.Host}|{s.Owner}|{s.RepoName}|{s.Number}".ToLowerInvariant();
     // A read dispatched to one provider can outlive a rediscovery that rerouted the session's stamp to another; a stale answer is a restart, never data.
-    bool Superseded(string sessionId, PullRequestSubjectDto subject, string providerName) {
+    bool Superseded(string sessionId, PullRequestSubjectDto subject, string stamp) {
         lock (_lock) {
             _sessions.TryGetValue(sessionId, out var entry);
-            return entry.SubjectKey == SubjectKey(subject) && entry.ProviderName != providerName;
+            return entry.SubjectKey == SubjectKey(subject) && entry.ProviderName != stamp;
         }
     }
-    bool TakeChange(string sessionId, PullRequestSubjectDto subject, string providerName) {
+    bool TakeChange(string sessionId, PullRequestSubjectDto subject, string stamp) {
         lock (_lock) {
             _sessions.TryGetValue(sessionId, out var entry);
             var subjectKey = SubjectKey(subject);
             // A prior "" stamp means no reader was ever dispatched; regaining one is a fresh start, not a reroute.
-            var changed = entry.SubjectKey == subjectKey && entry.ProviderName is { Length: > 0 } previous && previous != providerName;
-            Stamp(sessionId, subjectKey, providerName);
+            var changed = entry.SubjectKey == subjectKey && entry.ProviderName is { Length: > 0 } previous && previous != stamp;
+            Stamp(sessionId, subjectKey, stamp);
             return changed;
         }
     }
     // Callers hold `_lock`.
-    void Stamp(string sessionId, string subjectKey, string providerName) {
+    void Stamp(string sessionId, string subjectKey, string stamp) {
         if (_sessions.Count >= 1024 && !_sessions.ContainsKey(sessionId)) _sessions.Remove(_sessions.Keys.First());
         _sessions.TryGetValue(sessionId, out var entry);
-        _sessions[sessionId] = (entry.Repository, entry.Branch, subjectKey, providerName);
+        _sessions[sessionId] = (entry.Repository, entry.Branch, subjectKey, stamp);
     }
     PullRequestLinkDto Resolve(PullRequestLinkDto link) {
         if (link.Provider != "unknown") return link;

@@ -8,6 +8,7 @@ public sealed class ServerReaderProvider(ServerPullRequestSource source) : IPull
     PullRequestCapability _capability = new(PullRequestCapabilityKind.Unavailable, Reason: "not_probed");
 
     public string Name => "server";
+    public string Identity => _capability.Kind.ToString();
     public string ProviderKind => "github";
     public PullRequestReaderTool? Tool => null;
 

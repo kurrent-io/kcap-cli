@@ -150,6 +150,10 @@ server source depends on the app's authenticated client lease.
 `IPullRequestReaderProvider` is what a provider implements:
 
 - **Name**, a stable identifier such as `github-cli` or `server`.
+- **Identity**, a string that changes whenever the provider's credential or
+  routing state changes, such as the signed-in account per host. The registry
+  restarts a session's subject when the identity of the provider serving it
+  changes, exactly as it does for a provider switch.
 - **ProbeAsync** returns a `PullRequestReaderStatus`: `Ready`, `ToolMissing`,
   `SignedOut`, `HostSignedOut` naming the host, or `Failed`; plus the tool name,
   install URL and sign-in command a CLI provider wants the note to show. The

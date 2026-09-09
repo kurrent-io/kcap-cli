@@ -136,6 +136,38 @@ public class PullRequestReaderRegistryTests {
     }
 
     [Test]
+    public async Task An_identity_change_on_the_serving_provider_restarts_once() {
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Identity = "github.com=octocat" };
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        await registry.DiscoverAsync(false, default);
+        await registry.OverviewAsync("session", Subject(), default);
+        gh.Identity = "github.com=other";
+        await registry.DiscoverAsync(true, default);
+        var restart = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+        var ready = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(ready.Kind).IsEqualTo(PullRequestReadKind.Ready);
+        await Assert.That(gh.Overviews).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_read_from_a_provider_whose_identity_changed_returns_restart() {
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Identity = "github.com=octocat", PendingOverview = new() };
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        await registry.DiscoverAsync(false, default);
+        var pending = registry.OverviewAsync("session", Subject(), default);
+        gh.Identity = "github.com=other";
+        await registry.DiscoverAsync(true, default);
+        var fresh = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(fresh.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        gh.PendingOverview!.SetResult(new(PullRequestReadKind.Ready, new() { Title = "gh" }, Subject(), DateTime.UtcNow, AccessValidForSeconds: 30));
+        var restart = await pending;
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+    }
+
+    [Test]
     public async Task Losing_the_last_reader_for_a_subject_rejects_a_pending_read() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
         var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
@@ -251,6 +283,7 @@ public class PullRequestReaderRegistryTests {
         public PullRequestLinkDto[] Discovered = [];
         public TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>? PendingOverview;
         public string Name => name;
+        public string Identity { get; set; } = "";
         public string ProviderKind => kind;
         public PullRequestReaderTool? Tool => kind == "github"
             ? new("GitHub CLI", "https://cli.github.com", host => host is null ? "gh auth login" : "gh auth login --hostname " + host)

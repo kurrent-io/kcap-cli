@@ -21,8 +21,11 @@ internal sealed class GhHarness : IDisposable {
 
     public static string Fixture(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "gh", name));
 
-    public void SignedIn(params string[] hosts) {
-        var entries = hosts.Select(host => $"\"{host}\":[{{\"state\":\"success\",\"active\":true,\"host\":\"{host}\",\"login\":\"octocat\"}}]");
+    public void SignedIn(params string[] hosts) => SignedIn(hosts, "octocat");
+    // A distinct parameter shape, not an overload on arg count: `SignedIn(login, params hosts)` is ambiguous with the
+    // params-only overload for a single-host call, since C# prefers the fixed-arity candidate with an empty expansion.
+    public void SignedIn(string[] hosts, string login) {
+        var entries = hosts.Select(host => $"\"{host}\":[{{\"state\":\"success\",\"active\":true,\"host\":\"{host}\",\"login\":\"{login}\"}}]");
         Process.When(["auth", "status"], "{\"hosts\":{" + string.Join(',', entries) + "}}");
     }
 

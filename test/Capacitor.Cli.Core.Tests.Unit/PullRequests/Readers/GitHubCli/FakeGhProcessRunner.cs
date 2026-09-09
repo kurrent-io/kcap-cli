@@ -6,8 +6,11 @@ internal sealed class FakeGhProcessRunner : IProcessRunner {
     readonly List<(string[] Prefix, Func<Task<ProcessResult>> Reply)> _replies = [];
     public Exception? StartFailure;
 
-    public void When(string[] prefix, string stdout, int exitCode = 0, string stderr = "", bool timedOut = false)
-        => _replies.Add((prefix, () => Task.FromResult(new ProcessResult(exitCode, stdout, stderr, timedOut))));
+    // Replaces an earlier rule for the same exact prefix, so a test can re-script a call mid-run.
+    public void When(string[] prefix, string stdout, int exitCode = 0, string stderr = "", bool timedOut = false) {
+        _replies.RemoveAll(reply => reply.Prefix.SequenceEqual(prefix));
+        _replies.Add((prefix, () => Task.FromResult(new ProcessResult(exitCode, stdout, stderr, timedOut))));
+    }
     public void WhenPending(string[] prefix, TaskCompletionSource<ProcessResult> source) => _replies.Add((prefix, () => source.Task));
     /// <summary>Matches when every needle appears somewhere in the argument list; register the more specific rule first.</summary>
     public void WhenAll(string[] needles, string stdout, int exitCode = 0, string stderr = "")

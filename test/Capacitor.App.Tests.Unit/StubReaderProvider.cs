@@ -13,6 +13,8 @@ internal sealed class StubReaderProvider(FakeTimeProvider time, params string[] 
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public TaskCompletionSource<object>? PendingPage;
     public string Name => "stub";
+    public string Identity = "";
+    string IPullRequestReaderProvider.Identity => Identity;
     public string ProviderKind => "github";
     public PullRequestReaderTool? Tool => new("GitHub CLI", "https://cli.github.com", host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
     public Task<PullRequestReaderStatus> ProbeAsync(bool refresh, CancellationToken ct) { Probes++; RefreshFlags.Add(refresh); return Task.FromResult(new PullRequestReaderStatus(Status)); }

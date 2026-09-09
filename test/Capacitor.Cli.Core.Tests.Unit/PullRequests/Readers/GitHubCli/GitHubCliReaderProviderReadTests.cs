@@ -122,6 +122,18 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task An_active_account_switch_changes_the_identity_and_drops_cached_views() {
+        using var h = await Ready(Tmp);
+        await h.Provider.OverviewAsync("session", Subject, default);
+        var identity = h.Provider.Identity;
+        h.SignedIn(["github.com"], "other");
+        await h.Provider.ProbeAsync(true, default);
+        await Assert.That(h.Provider.Identity).IsNotEqualTo(identity);
+        await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task A_list_at_the_tool_limit_is_limited_paged_by_fifty_and_reloadable_by_cursor() {
         using var fixture = JsonDocument.Parse(GhHarness.Fixture("pr-view.json"));
         var comments = Enumerable.Range(0, 100).Select(i => $$"""{"author":{"login":"u{{i}}"},"body":"c{{i}}","createdAt":"2026-09-08T08:00:00Z","id":"IC_{{i}}","url":"https://github.com/example/repo/pull/12#issuecomment-{{i}}"}""");

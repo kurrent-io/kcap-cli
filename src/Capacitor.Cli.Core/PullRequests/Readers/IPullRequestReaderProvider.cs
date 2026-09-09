@@ -2,6 +2,8 @@ namespace Capacitor.Cli.Core.PullRequests.Readers;
 
 public interface IPullRequestReaderProvider {
     string Name { get; }
+    /// <summary>Changes whenever the provider's credential or routing state changes; the registry restarts a session's subject when it does.</summary>
+    string Identity { get; }
     /// <summary>The subject provider kind this reader handles, e.g. <c>github</c>.</summary>
     string ProviderKind { get; }
     PullRequestReaderTool? Tool { get; }
