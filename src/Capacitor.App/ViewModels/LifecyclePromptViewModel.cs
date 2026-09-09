@@ -67,7 +67,6 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
     }
 
     internal static string TitleFor(string kind) => kind switch {
-        LifecyclePrompt.KindRestartUpdate => "Restart daemon to update",
         LifecyclePrompt.KindTakeover      => "Take over daemon management",
         LifecyclePrompt.KindShim          => "Install command-line tool",
         LifecyclePrompt.KindQuarantine    => "Corrupted consent claims file",

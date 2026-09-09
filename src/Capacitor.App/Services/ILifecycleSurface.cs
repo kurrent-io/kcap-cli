@@ -16,11 +16,10 @@ public interface ILifecycleSurface {
 }
 
 /// <param name="Kind">One of the Kind* consts below.</param>
-/// <param name="PathDegraded">Decision-7 disclosure when the terminal PATH is unknown.</param>
-/// <param name="Disclosure">Replacement/recapture text (decision 3).</param>
+/// <param name="PathDegraded">Disclosed when the terminal PATH is unknown.</param>
+/// <param name="Disclosure">Replacement/recapture text.</param>
 public sealed record LifecyclePrompt(
     string Kind, string? DaemonVersion, string? CliVersion, bool PathDegraded, string Disclosure) {
-    public const string KindRestartUpdate = "restart-update";
     public const string KindTakeover      = "takeover";
     public const string KindRepair        = "repair";
     public const string KindShim          = "shim";

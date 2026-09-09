@@ -9,7 +9,6 @@ namespace Capacitor.App.Services;
 public sealed record AppState(
     bool ShimOffered = false,
     bool ShimDenied = false,
-    IReadOnlyList<string>? DeclinedTakeoverPairs = null,
     bool ConsentQuarantineAcked = false,
     // Absolute repo path -> vendor token. "" is the reserved key for the not-yet-in-a-repository
     // target (HomeViewModel.ScratchRepoPath) — a stored preference only, since the daemon does

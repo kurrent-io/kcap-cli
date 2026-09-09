@@ -62,15 +62,14 @@ public class AppStateStoreTests {
 
         var tasks = Enumerable.Range(0, 50).Select(i =>
             store.UpdateAsync(s => s with {
-                DeclinedTakeoverPairs = [.. s.DeclinedTakeoverPairs ?? [], $"{i}.0.0|{i}.0.1"]
+                HarnessByRepo = new Dictionary<string, string>(s.HarnessByRepo ?? new Dictionary<string, string>()) { [$"/repo/{i}"] = "claude" }
             }));
         var results = await Task.WhenAll(tasks);
 
         await Assert.That(results.All(r => r)).IsTrue();
 
         var final = await store.LoadAsync();
-        await Assert.That(final.DeclinedTakeoverPairs!.Count).IsEqualTo(50);
-        await Assert.That(final.DeclinedTakeoverPairs!.Distinct().Count()).IsEqualTo(50);
+        await Assert.That(final.HarnessByRepo!.Count).IsEqualTo(50);
     }
 
     [Test]
