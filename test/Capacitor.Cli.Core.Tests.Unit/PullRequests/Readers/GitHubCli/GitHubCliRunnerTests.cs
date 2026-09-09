@@ -7,6 +7,9 @@ public class GitHubCliRunnerTests {
 
     static string Executable => OperatingSystem.IsWindows() ? "gh.exe" : "gh";
 
+    // Windows resolves the extension from PATHEXT, which can carry a different case than the fixture wrote.
+    static bool SamePath(string? actual, string? expected) => string.Equals(actual, expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
     string InstallGh(string directory) {
         var path = Tmp.CreateFile([directory, Executable]);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -20,7 +23,7 @@ public class GitHubCliRunnerTests {
         var shell = new FakeLoginShellProbe(Path.GetDirectoryName(terminal));
         var runner = new GitHubCliRunner(new FakeGhProcessRunner(), shell, name => name == "PATH" ? Path.GetDirectoryName(process) : null);
         var expected = OperatingSystem.IsWindows() ? process : terminal;
-        await Assert.That(await runner.LocateAsync(false, default)).IsEqualTo(expected);
+        await Assert.That(SamePath(await runner.LocateAsync(false, default), expected)).IsTrue();
         await runner.LocateAsync(false, default);
         await Assert.That(shell.Probes).IsEqualTo(OperatingSystem.IsWindows() ? 0 : 1);
     }
@@ -29,7 +32,7 @@ public class GitHubCliRunnerTests {
     public async Task Falls_back_to_the_process_path_and_reports_null_when_nothing_has_gh() {
         var process = InstallGh("process");
         var runner = new GitHubCliRunner(new FakeGhProcessRunner(), new FakeLoginShellProbe(Tmp.CreateDir("empty").Path), name => name == "PATH" ? Path.GetDirectoryName(process) : null);
-        await Assert.That(await runner.LocateAsync(false, default)).IsEqualTo(process);
+        await Assert.That(SamePath(await runner.LocateAsync(false, default), process)).IsTrue();
         string nothing = Tmp.CreateDir("nothing");
         var missing = new GitHubCliRunner(new FakeGhProcessRunner(), new FakeLoginShellProbe(null), _ => nothing);
         await Assert.That(await missing.LocateAsync(false, default)).IsNull();
@@ -47,7 +50,7 @@ public class GitHubCliRunnerTests {
         await Assert.That(result.Outcome).IsEqualTo(GitHubCliOutcome.Ok);
         await Assert.That(result.Stdout).IsEqualTo("""{"hosts":{}}""");
         var call = process.Calls.Single();
-        await Assert.That(call.FileName).IsEqualTo(gh);
+        await Assert.That(SamePath(call.FileName, gh)).IsTrue();
         await Assert.That(call.Options.Timeout).IsEqualTo(TimeSpan.FromSeconds(20));
         await Assert.That(call.Options.CancelMode).IsEqualTo(CancelMode.KillTree);
         var overlay = call.Options.EnvOverlay!;
