@@ -351,9 +351,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DisposeWith(disposables);
 
             // Only while attached: a marker left by a daemon we cannot reach says nothing about
-            // what the user is looking at.
+            // what the user is looking at. The watcher publishes from its poll thread, so it is
+            // marshalled like status/snapshots above before it touches a bound property.
             var pendingWhileConnected = status
-                .CombineLatest(restartPending ?? Observable.Return(false), (st, pending) => pending && st.State == AttachState.Connected)
+                .CombineLatest(
+                    (restartPending ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler),
+                    (st, pending) => pending && st.State == AttachState.Connected)
                 .DistinctUntilChanged();
 
             _restartPending = pendingWhileConnected

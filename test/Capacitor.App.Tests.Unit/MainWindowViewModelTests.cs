@@ -63,8 +63,6 @@ public class MainWindowViewModelTests {
         });
     }
 
-    // ---- daemon restart pending (the daemon's own queued restart-after-update) ----
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Restart_pending_marks_the_indicator_while_connected() {

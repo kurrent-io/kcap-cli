@@ -85,6 +85,21 @@ public class DaemonRestartPendingWatcherTests {
         await Assert.That(h.Seen).IsEquivalentTo([true, false]);
     }
 
+    /// Disposal alone must end the poll: startup-failure cleanup disposes the watcher without
+    /// cancelling the lifetime token it was given.
+    [Test]
+    public async Task Dispose_stops_the_poll_without_the_lifetime_token() {
+        using var h = new Harness(Daemons.Store);
+        h.Start();
+        await WaitUntilAsync(() => h.Time.TimersCreated >= 1, what: "the poll to be armed");
+
+        h.Watcher.Dispose();
+        h.Clock.Advance(DaemonRestartPendingWatcher.PollInterval);
+        await Task.Delay(50); // a negative: give a surviving loop every chance to re-arm
+
+        await Assert.That(h.Time.TimersCreated).IsEqualTo(1);
+    }
+
     [Test]
     public async Task Rereads_that_find_the_same_state_emit_nothing() {
         using var h = new Harness(Daemons.Store);

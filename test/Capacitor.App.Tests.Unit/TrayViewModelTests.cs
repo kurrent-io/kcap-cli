@@ -39,8 +39,6 @@ public class TrayViewModelTests {
     static AgentActionService NewActions(FakeDaemonClientService service, ScriptedLocalControlOps? ops = null) =>
         new(ops ?? new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
 
-    // ---- daemon restart pending (the daemon's own queued restart-after-update) ----
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Restart_pending_suffixes_the_header_while_connected() {
