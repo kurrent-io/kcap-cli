@@ -9,10 +9,11 @@ internal sealed class StubReaderProvider(FakeTimeProvider time, params string[] 
     public readonly List<(PullRequestRepository Repository, string Branch)> Discoveries = [];
     public PullRequestLinkDto[] Discovered = [];
     public int Probes;
+    public readonly List<bool> RefreshFlags = [];
     public string Name => "stub";
     public string ProviderKind => "github";
     public PullRequestReaderTool? Tool => new("GitHub CLI", "https://cli.github.com", host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
-    public Task<PullRequestReaderStatus> ProbeAsync(bool refresh, CancellationToken ct) { Probes++; return Task.FromResult(new PullRequestReaderStatus(Status)); }
+    public Task<PullRequestReaderStatus> ProbeAsync(bool refresh, CancellationToken ct) { Probes++; RefreshFlags.Add(refresh); return Task.FromResult(new PullRequestReaderStatus(Status)); }
     public bool Serves(string provider, string host) => Status == PullRequestReaderStatusKind.Ready && provider == "github" && hosts.Contains(host);
     public PullRequestSubjectDto? ParseLink(string? url) => null;
     public string? PrLink(string? url, PullRequestSubjectDto subject) => PullRequestWire.SafeLink(url) is { } safe

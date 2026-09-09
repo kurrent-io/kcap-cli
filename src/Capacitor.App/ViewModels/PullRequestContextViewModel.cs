@@ -169,7 +169,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _grace = false;
         _graceSection = null;
         Notify();
-        if (foreground) { _lastRefresh = null; _refreshDiscovery = true; RequestRefresh(); }
+        // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
+        // already fresh; force only a genuine return, where a prior refresh could have gone stale.
+        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; RequestRefresh(); }
     }
     public void Reconnected() {
         if (_disposed) return;

@@ -110,11 +110,14 @@ public class PullRequestContextViewModelRegistryTests {
     public Task Returning_to_the_foreground_reprobes_the_readers() => RunOnUiAsync(async () => {
         var h = new Harness("github.com", Primary);
         h.Push(); await h.Show();
+        await Assert.That(h.Provider.RefreshFlags.Contains(true)).IsFalse();
         var before = h.Provider.Probes;
+        h.Provider.RefreshFlags.Clear();
         h.Vm.SetForeground(false);
         h.Vm.SetForeground(true);
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "reprobed after returning to the foreground");
         await Assert.That(h.Provider.Probes - before).IsEqualTo(1);
+        await Assert.That(h.Provider.RefreshFlags).IsEquivalentTo(new[] { true });
         await h.Dispose();
     });
 
