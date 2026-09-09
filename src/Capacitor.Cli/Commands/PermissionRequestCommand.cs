@@ -160,9 +160,10 @@ class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapa
         return false;
     }
 
-    /// The server payload plus what the daemon's attribution ladder reads: agent_id when this
-    /// process runs inside a hosted agent, and the hook's cwd. The server-bound payload never
-    /// carries either.
+    /// The server payload plus what the daemon reads for attribution (agent_id when this process
+    /// runs inside a hosted agent, the hook's cwd) and for the pending card's tool_use_id, which
+    /// is what lets the desktop app retire the card once the transcript shows the tool's result.
+    /// The server-bound payload carries none of these.
     internal static JsonObject BuildBridgePayload(JsonNode node, string sessionId, string? agentId) {
         var payload = new JsonObject {
             ["session_id"]             = sessionId,
@@ -172,6 +173,7 @@ class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapa
         };
         if (agentId is not null) payload["agent_id"] = agentId;
         if (node["cwd"] is JsonValue cwd && cwd.TryGetValue<string>(out var c)) payload["cwd"] = c;
+        if (node["tool_use_id"] is JsonValue toolUse && toolUse.TryGetValue<string>(out var id)) payload["tool_use_id"] = id;
         return payload;
     }
 
