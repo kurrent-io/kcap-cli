@@ -71,7 +71,10 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
     public Task<PullRequestRead<PullRequestLinkListDto>> LegacyLinksAsync(string sessionId, CancellationToken ct) => sessionLinks.LegacyLinksAsync(sessionId, ct);
 
     public async Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
-        if (Route(subject) is not { } provider) return NoReader<PullRequestOverviewDto>(subject);
+        if (Route(subject) is not { } provider) {
+            lock (_lock) Stamp(sessionId, SubjectKey(subject), "");
+            return NoReader<PullRequestOverviewDto>(subject);
+        }
         if (TakeChange(sessionId, subject, provider.Name)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.OverviewAsync(sessionId, subject, ct).ConfigureAwait(false);
         return Superseded(sessionId, subject, provider.Name) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
@@ -79,7 +82,10 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
 
     public async Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
             string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
-        if (Route(subject) is not { } provider) return NoReader<PullRequestPageDto<T>>(subject);
+        if (Route(subject) is not { } provider) {
+            lock (_lock) Stamp(sessionId, SubjectKey(subject), "");
+            return NoReader<PullRequestPageDto<T>>(subject);
+        }
         if (TakeChange(sessionId, subject, provider.Name)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.PageAsync<T>(sessionId, subject, section, cursor, resolved, threadId, ct).ConfigureAwait(false);
         return Superseded(sessionId, subject, provider.Name) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
@@ -127,13 +133,19 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
     }
     bool TakeChange(string sessionId, PullRequestSubjectDto subject, string providerName) {
         lock (_lock) {
-            if (_sessions.Count >= 1024 && !_sessions.ContainsKey(sessionId)) _sessions.Remove(_sessions.Keys.First());
             _sessions.TryGetValue(sessionId, out var entry);
             var subjectKey = SubjectKey(subject);
-            var changed = entry.SubjectKey == subjectKey && entry.ProviderName != providerName;
-            _sessions[sessionId] = (entry.Repository, entry.Branch, subjectKey, providerName);
+            // A prior "" stamp means no reader was ever dispatched; regaining one is a fresh start, not a reroute.
+            var changed = entry.SubjectKey == subjectKey && entry.ProviderName is { Length: > 0 } previous && previous != providerName;
+            Stamp(sessionId, subjectKey, providerName);
             return changed;
         }
+    }
+    // Callers hold `_lock`.
+    void Stamp(string sessionId, string subjectKey, string providerName) {
+        if (_sessions.Count >= 1024 && !_sessions.ContainsKey(sessionId)) _sessions.Remove(_sessions.Keys.First());
+        _sessions.TryGetValue(sessionId, out var entry);
+        _sessions[sessionId] = (entry.Repository, entry.Branch, subjectKey, providerName);
     }
     PullRequestLinkDto Resolve(PullRequestLinkDto link) {
         if (link.Provider != "unknown") return link;

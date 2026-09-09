@@ -129,6 +129,29 @@ public class PullRequestContextViewModelRegistryTests {
     });
 
     [Test]
+    public Task A_no_reader_failure_cancels_the_reads_in_flight() => RunOnUiAsync(async () => {
+        var h = new Harness("github.com", Primary);
+        h.Push(); await h.Show();
+        h.Provider.PendingPage = new();
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await Assert.That(h.Vm.IsReading).IsTrue();
+        h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Unavailable, Subject: subject, Reason: "no_reader", AccessFailure: "invalid")));
+        h.Time.Advance(TimeSpan.FromSeconds(16));
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.CanReveal, what: "no-reader failure clears protected state");
+        await Assert.That(h.Vm.Notice).IsEqualTo("No reader is available for this pull request's host.");
+        h.Provider.PendingPage.SetResult(new PullRequestRead<PullRequestPageDto<PullRequestCheckDto>>(PullRequestReadKind.Ready,
+            new() { SnapshotId = new string('a', 64), SnapshotStartedAt = h.Time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = h.Time.GetUtcNow().UtcDateTime,
+                Coverage = "complete", Total = new() { Kind = "exact", Value = 1 }, ExcludedByFilter = new() { Kind = "exact", Value = 0 },
+                Items = [new() { Id = "check-stale", Availability = "available", Name = "stale", Outcome = "success" }], PageCursor = new string('a', 64), HasMore = false },
+            h.Vm.Selected!.Subject, h.Time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: h.Time.GetTimestamp()));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "stale page settles");
+        await Assert.That(h.Vm.Rows).IsEmpty();
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Returning_to_the_foreground_reprobes_the_readers() => RunOnUiAsync(async () => {
         var h = new Harness("github.com", Primary);
         h.Push(); await h.Show();

@@ -136,6 +136,23 @@ public class PullRequestReaderRegistryTests {
     }
 
     [Test]
+    public async Task Losing_the_last_reader_for_a_subject_rejects_a_pending_read() {
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
+        await registry.DiscoverAsync(false, default);
+        var pending = registry.OverviewAsync("session", Subject(), default);
+        gh.Hosts = [];
+        await registry.DiscoverAsync(true, default);
+        var noReader = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(noReader.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
+        await Assert.That(noReader.Reason).IsEqualTo("no_reader");
+        gh.PendingOverview!.SetResult(new(PullRequestReadKind.Ready, new() { Title = "gh" }, Subject(), DateTime.UtcNow, AccessValidForSeconds: 30));
+        var restart = await pending;
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+    }
+
+    [Test]
     public async Task A_host_sign_in_that_reroutes_the_same_subject_restarts_once() {
         var gh = new StubProvider("gh", ready: true, hosts: []);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]);
