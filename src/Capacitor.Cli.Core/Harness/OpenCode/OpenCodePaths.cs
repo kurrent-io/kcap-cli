@@ -55,10 +55,6 @@ public sealed class OpenCodePaths {
     /// </summary>
     public string AgentsMd => Path.Combine(ConfigDir, "AGENTS.md");
 
-    /// <summary>
-    /// Detection by OpenCode's config or data dir presence — OpenCode creates one
-    /// on first run. The binary name <c>opencode</c> can also be probed by callers
-    /// via <c>BinaryProbe.OnPath("opencode")</c>.
-    /// </summary>
-    public bool IsInstalled => Directory.Exists(ConfigDir) || Directory.Exists(DataDir);
+    /// <summary>Whether OpenCode has run here — it creates one of these on first run.</summary>
+    public bool HasUserData() => Directory.Exists(ConfigDir) || Directory.Exists(DataDir);
 }

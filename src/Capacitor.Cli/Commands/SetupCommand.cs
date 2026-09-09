@@ -759,7 +759,7 @@ public sealed class SetupCommand(
             CapacitorOnPath:        () => BinaryProbe.OnPath("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
-            InstallKiroHooks:       PluginCommand.InstallKiroHooks,
+            InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses),
             InstallPiExtension:     PiExtensionInstaller.Install,
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,

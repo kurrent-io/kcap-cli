@@ -1,4 +1,3 @@
-using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -19,10 +18,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 public class CodexWindowsVersionGateTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    // An empty search path, so "unresolvable" is a property of the probe rather than of whatever
-    // the host happens to have installed.
     CodexLauncher NewLauncher(string cliPath) =>
-        new(new DaemonConfig { CodexPath = cliPath, Binaries = BinaryProbe.Searching(null) },
+        new(new DaemonConfig { CodexPath = cliPath, Binaries = TestBinaries.None },
             TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance);
 
     /// <summary>CI runs Windows Server 2022 / Windows 11 and Linux — all supported. A false here

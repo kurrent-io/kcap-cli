@@ -14,14 +14,17 @@ public sealed class CursorHarness : IHarness<CursorHarness> {
     public static HarnessId Id    => HarnessId.Cursor;
     public static string    Label => "Cursor";
 
+    /// <summary>Shipped with the editor, and never probed for: the editor is the install signal.</summary>
+    public static string CliBinary => "cursor-agent";
+
     /// <summary>This vendor's layout. Public because our own readers of its files take the typed
     /// paths; they reach them through the instance the entry point built, never by resolving the
     /// override a second time.</summary>
     public CursorPaths Paths { get; }
 
-    // No CLI to probe: Cursor ships as an editor, so its own state is the only signal.
+    // No name to probe: Cursor ships as an editor, so its own state is the only signal.
     public HarnessSignals Signals => new() {
-        Installed = () => Paths.IsInstalled,
-        Wired     = () => CursorHooksInstaller.IsInstalled(Paths.UserHooksJson),
+        UserDataSignal = Paths.HasUserData,
+        Wired          = () => CursorHooksInstaller.IsInstalled(Paths.UserHooksJson),
     };
 }

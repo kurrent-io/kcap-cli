@@ -53,14 +53,9 @@ public static partial class DaemonRunner {
         // And the same for the home directory, which the two above fall back to.
         var userHome = UserHome.FromEnvironment();
 
-        // One probe for the daemon's lifetime, shared by the registry below and by every configured
-        // vendor path's resolver (CliResolver, VendorVersionResolver) — "where is a harness's own
-        // binary" and "resolve this configured path" search the same PATH by construction, never two
-        // independently-read ones.
-        var binaries = Core.Setup.BinaryProbe.FromEnvironment();
-
-        // One registry for the daemon's lifetime: it caches no detection answer, so a vendor
-        // installed while the daemon runs is still seen.
+        // One probe for the daemon's lifetime; the registry below is built over it, so a harness
+        // binary and a configured vendor path search one PATH.
+        var binaries  = Core.Setup.BinaryProbe.FromEnvironment();
         var harnesses = Core.Harness.HarnessRegistry.FromEnvironment(userHome, binaries);
 
         // OriginalArgs is captured for self-respawn (detached restart-after-update) and to detect
@@ -362,7 +357,6 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(userHome);
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(harnesses);
-        builder.Services.AddSingleton(binaries);
         builder.Services.AddSingleton(daemonLock);
         builder.Services.AddDaemonHttp(configRoot, config);
         builder.Services.AddSingleton<ServerConnection>();
@@ -623,7 +617,7 @@ public static partial class DaemonRunner {
         // Fingerprinted BEFORE the probe: a vendor that updates between the two then reads as a
         // change to the watcher, instead of as the baseline the stale advertisement already matches.
         config.UnattendedVendorBaselines =
-            FingerprintUnattendedVendors(new(config.Binaries), runtimeFactories, config.UnattendedVendors);
+            FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.UnattendedVendors);
         config.UnattendedVendorCapabilities =
             ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
 
@@ -1254,19 +1248,21 @@ public static partial class DaemonRunner {
     /// bounded <c>agy --version</c> on the first boot that finds no record, never again.</para>
     /// </summary>
     internal static void SeedReviewerFloors(string stateDir, DaemonConfig config) {
+        var binaries = config.Binaries;
+
         SeedReviewerAffirmation(
             stateDir, AcpVendorDescriptors.Kiro.Vendor,
-            config.KiroUnattendedReviewerEnabled, config.KiroPath, config);
+            config.KiroUnattendedReviewerEnabled, config.KiroPath, binaries);
 
         SeedReviewerAffirmation(
             stateDir, AcpVendorDescriptors.Gemini.Vendor,
-            config.GeminiUnattendedReviewerEnabled, config.GeminiPath, config);
+            config.GeminiUnattendedReviewerEnabled, config.GeminiPath, binaries);
 
         SeedReviewerAffirmation(
             stateDir, AcpVendorDescriptors.OpenCode.Vendor,
-            config.OpenCodeUnattendedReviewerEnabled, config.OpenCodePath, config);
+            config.OpenCodeUnattendedReviewerEnabled, config.OpenCodePath, binaries);
 
-        SeedVersionFloor(stateDir, AntigravityVendor, config.AntigravityPath, config.Binaries);
+        SeedVersionFloor(stateDir, AntigravityVendor, config.AntigravityPath, binaries);
     }
 
     /// <summary>
@@ -1285,12 +1281,10 @@ public static partial class DaemonRunner {
     /// <c>kcap daemon reviewer affirm</c> can clear. A floor is meant to exclude a build found to be
     /// bad, not to be an opt-in gate wearing a different hat.</param>
     internal static void SeedReviewerAffirmation(
-            string stateDir, string vendor, bool enabled, string binaryPath, DaemonConfig config) {
+            string stateDir, string vendor, bool enabled, string binaryPath, Core.Setup.BinaryProbe binaries) {
         if (!enabled) return;
 
-        // config.Binaries is read only past the guard above: a daemon with every reviewer disabled
-        // must not need it set.
-        SeedVersionFloor(stateDir, vendor, binaryPath, config.Binaries);
+        SeedVersionFloor(stateDir, vendor, binaryPath, binaries);
     }
 
     /// <summary>
@@ -1444,12 +1438,12 @@ public static partial class DaemonRunner {
     /// <summary>Fingerprints each advertised vendor's binary through the factory that launches it —
     /// the same path the version probe runs. A vendor with no locatable binary maps to null.</summary>
     internal static IReadOnlyDictionary<string, CliBinaryStat?> FingerprintUnattendedVendors(
-            CliResolver cli, IEnumerable<IHostedAgentRuntimeFactory> factories, IEnumerable<string> vendors) {
+            Core.Setup.BinaryProbe binaries, IEnumerable<IHostedAgentRuntimeFactory> factories, IEnumerable<string> vendors) {
         var byVendor = factories.ToDictionary(f => f.Vendor, StringComparer.Ordinal);
         return vendors.ToDictionary(
             vendor => vendor,
             vendor => byVendor.TryGetValue(vendor, out var factory) && !string.IsNullOrEmpty(factory.CliPath)
-                ? VendorCliWatcher.StatCliBinary(cli, factory.CliPath)
+                ? VendorCliWatcher.StatCliBinary(binaries, factory.CliPath)
                 : null,
             StringComparer.Ordinal);
     }

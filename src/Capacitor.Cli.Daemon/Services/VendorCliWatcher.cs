@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,7 +43,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         _factories = factories;
         _logger    = logger;
         Refresh    = reason => orchestrator.RefreshAdvertisedCapabilities(reason);
-        StatBinary = path => StatCliBinary(new CliResolver(config.Binaries), path);
+        StatBinary = path => StatCliBinary(config.Binaries, path);
         Watched    = [];
     }
 
@@ -89,11 +90,11 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     internal static bool Changed(CliBinaryStat? baseline, CliBinaryStat? current) =>
         current is { } c && baseline != c;
 
-    /// <summary>Resolves a bare command on the resolver's search path, follows the symlink chain to
+    /// <summary>Resolves a bare command on the probe's search path, follows the symlink chain to
     /// the file that runs and stats it. Null when the binary cannot be found right now.</summary>
-    internal static CliBinaryStat? StatCliBinary(CliResolver cli, string cliPath) {
+    internal static CliBinaryStat? StatCliBinary(BinaryProbe binaries, string cliPath) {
         try {
-            if (cli.ResolveExecutable(cliPath) is not { } resolved) return null;
+            if (binaries.Resolve(cliPath) is not { } resolved) return null;
             var info   = new FileInfo(resolved);
             var target = info.ResolveLinkTarget(returnFinalTarget: true) as FileInfo ?? info;
             return target.Exists ? new CliBinaryStat(target.FullName, target.Length, target.LastWriteTimeUtc.Ticks) : null;

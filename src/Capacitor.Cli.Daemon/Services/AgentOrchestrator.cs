@@ -523,7 +523,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     int _quarantineSweepRunning;
     readonly DaemonConfig                                      _config;
     readonly ConfigRoot                                        _configRoot;
-    readonly UserHome                                          _home;
     // The vendors this daemon sees, resolved once for its lifetime: an override cannot change under
     // a running process, and the inventory refresh would otherwise re-resolve all nine per TTL.
     readonly HarnessRegistry                                   _harnesses;
@@ -638,7 +637,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     public AgentOrchestrator(
             DaemonConfig                                      config,
             ConfigRoot                                        configRoot,
-            UserHome                                          home,
             HarnessRegistry                                   harnesses,
             ServerConnection                                  server,
             WorktreeManager                                   worktreeManager,
@@ -673,7 +671,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _shutdownCts       = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
         _config            = config;
         _configRoot        = configRoot;
-        _home              = home;
         _tokens            = tokens;
         _harnesses         = harnesses;
         _server            = server;

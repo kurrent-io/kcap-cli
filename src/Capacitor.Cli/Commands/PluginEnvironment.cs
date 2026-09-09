@@ -50,8 +50,10 @@ public sealed record PluginEnvironment(
     public required HarnessRegistry Harnesses { get; init; }
 
     /// <summary>The cross-vendor <c>~/.agents</c> tree. Derived from <see cref="Home"/> rather than
-    /// supplied: it honours no override, so a second value could only disagree with this one.</summary>
-    public AgentsPaths Agents { get; } = new(Home);
+    /// supplied: it honours no override, so a second value could only disagree with this one — and
+    /// computed per read, so a <c>with</c> rebinding <see cref="Home"/> cannot leave it at the old
+    /// root.</summary>
+    public AgentsPaths Agents => new(Home);
 
     public static PluginEnvironment FromProcess(
             ProfileConfig profiles, UserHome home, HarnessRegistry harnesses) => new(

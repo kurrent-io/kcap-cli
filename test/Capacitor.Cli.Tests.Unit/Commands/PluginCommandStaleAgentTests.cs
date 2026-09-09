@@ -18,9 +18,9 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// one is a re-install.
 /// </para>
 /// </remarks>
-// PATH: the fresh-install precheck resolves `kcap` through it, and so does every peer that
-// probes for a vendor CLI.
-[NotInParallel("VendorEnvOverrides")]
+// PATH is process-global: the fresh-install precheck resolves `kcap` through it, and every spawned
+// child inherits it.
+[NotInParallel]
 public sealed class PluginCommandStaleAgentTests {
     static readonly StaleAgentProcess Running = new("kiro", 4821, "/home/dev/gaffer");
 
@@ -109,7 +109,7 @@ public sealed class PluginCommandStaleAgentTests {
                 File.SetUnixFileMode(exe, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
             _bin.CreateFile("kcap.exe");
-            _path = new EnvScope("PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
+            _path = EnvScope.Exclusive("PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
         }
 
         public void Dispose() {

@@ -16,12 +16,8 @@ public class CodexHookCommandTests : IDisposable {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    // Every test that mutates Console.Out or the KCAP_DAEMON_URL env
-    // var is decorated [NotInParallel] (no group) so it runs strictly alone.
-    // A group key was insufficient: parallel tests in *other* files (e.g.
-    // ImportDisplayGridTests / CliResolverTests) still mutate the same
-    // process-global state under different group keys, and the cross-group
-    // race nondeterministically corrupted Console captures (CI).
+    // Console and KCAP_DAEMON_URL are process-global, and tests in other files mutate them too, so
+    // no group key can exclude every reader: each mutating test below carries a bare [NotInParallel].
 
     readonly WireMockServer _server = WireMockServer.Start();
 

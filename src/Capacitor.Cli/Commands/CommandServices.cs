@@ -26,11 +26,8 @@ public static class CommandServices {
         services.AddSingleton(clock);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
 
-        // Only a handful of commands take either, so they stay factories: resolving a command that
-        // wants neither must not pay to build them. Neither stats disk here — that happens per call,
-        // lazily, when a command actually asks Resolve/Detect a question. One BinaryProbe for the
-        // process — the registry is built over the SAME instance, so a caller resolving a harness's
-        // binary and a caller resolving an arbitrary configured path search one PATH.
+        // Factories because only a handful of commands take either. The registry is built over the
+        // same probe instance, so a harness binary and a configured path search one PATH.
         services.AddSingleton(_ => BinaryProbe.FromEnvironment());
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));

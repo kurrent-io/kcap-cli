@@ -2,10 +2,10 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Pi;
-using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness;
 
@@ -16,6 +16,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Harness;
 /// </summary>
 public class HarnessRegistryTests {
     [TempHome] public required TempHome Home { get; init; }
+
+    static UserHome Nowhere => new("/nonexistent-home");
 
     // Bare: FromEnvironment reads every vendor override variable.
     [Test, NotInParallel]
@@ -35,6 +37,22 @@ public class HarnessRegistryTests {
 
         await Assert.That(labels.Any(string.IsNullOrWhiteSpace)).IsFalse();
         await Assert.That(labels.Distinct().Count()).IsEqualTo(labels.Count);
+    }
+
+    /// <summary>A vendor that answers the launch question at all answers it for the command it
+    /// spawns, or a machine carrying only that CLI reads as absent. Cursor declares no launch signal
+    /// and is skipped.</summary>
+    [Test]
+    public async Task A_declared_cli_satisfies_its_vendors_launch_signal() {
+        using var bin = new TempDir();
+
+        var stray = TestHarnesses.Under(Home)
+            .Where(h => h.Signals.LaunchSignal is not null
+                     && !h.Signals.CanLaunch(TestBinaries.Searching(bin, h.CliBinary)))
+            .Select(h => h.Id)
+            .ToList();
+
+        await Assert.That(stray).IsEmpty();
     }
 
     /// <summary>Each vendor's layout comes from its own factory rather than the registry reading the
@@ -75,47 +93,98 @@ public class HarnessRegistryTests {
     }
 
     [Test]
-    public async Task Resolves_the_executable_a_vendor_declares() {
+    public async Task Resolves_the_cli_a_vendor_declares() {
         using var bin = new TempDir();
         var       probe = TestBinaries.Searching(bin, "claude");
 
-        var harnesses = TestHarnesses.Over(probe, TestHarnesses.Probing(HarnessId.Claude, "claude"));
+        var harnesses = HarnessRegistry.Over(probe, TestHarnesses.Spawning(HarnessId.Claude, "claude"));
 
         await Assert.That(harnesses.ResolveExecutable(HarnessId.Claude)).IsEqualTo(probe.Resolve("claude"));
     }
 
-    /// Cursor ships no CLI, so it declares no binary names — nothing to resolve regardless of what
-    /// is staged on the search path.
+    /// <summary>A CLI resolves even for a vendor that probes for no binary at all.</summary>
     [Test]
-    public async Task A_vendor_declaring_no_binaries_yields_null() {
-        using var bin = new TempDir();
-        var       probe = TestBinaries.Searching(bin, "cursor");
+    public async Task Resolves_a_cli_a_vendor_never_probes_for() {
+        using var bin   = new TempDir();
+        var       probe = TestBinaries.Searching(bin, "cursor-agent");
 
-        var harnesses = TestHarnesses.Over(probe, TestHarnesses.Probing(HarnessId.Cursor));
+        var cursor    = CursorHarness.Over(new CursorPaths(Nowhere));
+        var harnesses = HarnessRegistry.Over(probe, cursor);
 
-        await Assert.That(harnesses.ResolveExecutable(HarnessId.Cursor)).IsNull();
+        await Assert.That(cursor.Signals.LaunchSignal).IsNull();
+        await Assert.That(harnesses.ResolveExecutable(HarnessId.Cursor)).IsEqualTo(probe.Resolve("cursor-agent"));
     }
 
     /// Mirrors <see cref="HarnessRegistry.Detect"/>: an id this registry never carried reads as
     /// absent rather than throwing.
     [Test]
     public async Task An_id_this_registry_does_not_carry_yields_null() {
-        var harnesses = TestHarnesses.Over(
-            BinaryProbe.Searching(null), TestHarnesses.Probing(HarnessId.Claude, "claude"));
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, TestHarnesses.Spawning(HarnessId.Claude, "claude"));
 
         await Assert.That(harnesses.ResolveExecutable(HarnessId.Codex)).IsNull();
     }
 
-    /// Antigravity declares its product name and its CLI name; a caller must not have to know to try
-    /// both — the registry resolves via whichever one is actually on the search path.
+    /// <summary>A declared name that is not the CLI is no fallback. The first assertion is the
+    /// precondition: that same name does detect the vendor.</summary>
     [Test]
-    public async Task Resolves_via_a_later_declared_name_when_an_earlier_one_is_absent() {
-        using var bin = new TempDir();
-        var       probe = TestBinaries.Searching(bin, "agy");
+    public async Task A_declared_name_that_is_not_the_cli_is_no_fallback() {
+        using var bin   = new TempDir();
+        var       probe = TestBinaries.Searching(bin, "kiro");
 
-        var harnesses = TestHarnesses.Over(
-            probe, TestHarnesses.Probing(HarnessId.Antigravity, "antigravity", "agy"));
+        var harnesses = HarnessRegistry.Over(probe, KiroHarness.Over(new KiroPaths(Nowhere, null)));
+
+        await Assert.That(harnesses.Detect(HarnessId.Kiro).BinaryFound).IsTrue();
+        await Assert.That(harnesses.ResolveExecutable(HarnessId.Kiro)).IsNull();
+    }
+
+    /// <summary>Both of Antigravity's names on the search path: the CLI is what comes back.</summary>
+    [Test]
+    public async Task Antigravity_resolves_its_cli_rather_than_the_ide_launcher() {
+        using var bin   = new TempDir();
+        var       probe = TestBinaries.Searching(bin, "antigravity", "agy");
+
+        var harnesses = HarnessRegistry.Over(
+            probe, AntigravityHarness.Over(GeminiHarness.Over(new GeminiPaths(Nowhere, null))));
 
         await Assert.That(harnesses.ResolveExecutable(HarnessId.Antigravity)).IsEqualTo(probe.Resolve("agy"));
+    }
+
+    /// <summary>The same for Kiro, whose bare name is the IDE.</summary>
+    [Test]
+    public async Task Kiro_resolves_its_cli_rather_than_the_ide_launcher() {
+        using var bin   = new TempDir();
+        var       probe = TestBinaries.Searching(bin, "kiro", "kiro-cli");
+
+        var harnesses = HarnessRegistry.Over(probe, KiroHarness.Over(new KiroPaths(Nowhere, null)));
+
+        await Assert.That(harnesses.ResolveExecutable(HarnessId.Kiro)).IsEqualTo(probe.Resolve("kiro-cli"));
+    }
+
+    /// <summary>A redirected registry resolves on the path it was handed, not the one it was built
+    /// over. The first assertion is the precondition: the original probe genuinely cannot see it.</summary>
+    [Test]
+    public async Task Searching_resolves_on_the_new_path() {
+        using var launcher = new TempDir();
+        using var shell    = new TempDir();
+
+        var inherited = TestBinaries.Searching(launcher);
+        var login     = TestBinaries.Searching(shell, "claude");
+
+        var harnesses = HarnessRegistry.Over(inherited, TestHarnesses.Spawning(HarnessId.Claude, "claude"));
+
+        await Assert.That(harnesses.ResolveExecutable(HarnessId.Claude)).IsNull();
+        await Assert.That(harnesses.Searching(login).ResolveExecutable(HarnessId.Claude))
+            .IsEqualTo(login.Resolve("claude"));
+    }
+
+    /// <summary>An entry under the right id but of another type is named, not cast blindly.</summary>
+    [Test]
+    public async Task Of_names_the_id_and_the_expected_type_when_the_entry_is_another_implementation() {
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, TestHarnesses.Of(HarnessId.Claude));
+
+        var error = Assert.Throws<InvalidOperationException>(() => harnesses.Of<ClaudeHarness>());
+
+        await Assert.That(error.Message).Contains(nameof(HarnessId.Claude));
+        await Assert.That(error.Message).Contains(nameof(ClaudeHarness));
     }
 }

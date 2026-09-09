@@ -1010,11 +1010,8 @@ public class SetupCommandTests {
     //   • uses auth provider "None" (a WireMock /auth/config stub): with any other provider the
     //     --server-url path has no way to no-prompt past the login.
     //
-    // They move the working directory, probe this machine's process environment, and stub
-    // /auth/config — so they join all three cohorts below.
-    const string HandleAsyncNotInParallelGroups_VendorEnvOverrides = "VendorEnvOverrides";
-    const string HandleAsyncNotInParallelGroups_CwdMutation        = "CwdMutation";        // shared w/ UninstallCommandTests
-    const string HandleAsyncNotInParallelGroups_ProviderCache      = "AuthProviderDiscoveryCache"; // shared w/ every /auth/config stubber
+    // The working directory they move, the environment they probe and the /auth/config cache they
+    // stub are all process-global, so no cohort of key-holders can exclude the readers: bare.
 
     static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
@@ -1036,11 +1033,7 @@ public class SetupCommandTests {
                 .WithBody("""{"provider":"None"}"""));
 
     [Test]
-    [NotInParallel([
-        HandleAsyncNotInParallelGroups_VendorEnvOverrides, HandleAsyncNotInParallelGroups_CwdMutation,
-        HandleAsyncNotInParallelGroups_ProviderCache,
-        ImportRunnerOverrideMutation
-    ])]
+    [NotInParallel]
     public async Task HandleAsync_NoPromptWithServerUrl_AutoImportsWithPinnedInvocation_UnderAuthProviderNoneAndNoToken() {
         using var server = WireMockServer.Start();
         StubAuthProviderNone(server);
@@ -1078,11 +1071,7 @@ public class SetupCommandTests {
     }
 
     [Test]
-    [NotInParallel([
-        HandleAsyncNotInParallelGroups_VendorEnvOverrides, HandleAsyncNotInParallelGroups_CwdMutation,
-        HandleAsyncNotInParallelGroups_ProviderCache,
-        ImportRunnerOverrideMutation
-    ])]
+    [NotInParallel]
     public async Task HandleAsync_SkipImportFlag_SuppressesAutoImport() {
         using var server = WireMockServer.Start();
         StubAuthProviderNone(server);
@@ -1105,11 +1094,7 @@ public class SetupCommandTests {
     }
 
     [Test]
-    [NotInParallel([
-        HandleAsyncNotInParallelGroups_VendorEnvOverrides, HandleAsyncNotInParallelGroups_CwdMutation,
-        HandleAsyncNotInParallelGroups_ProviderCache,
-        ImportRunnerOverrideMutation
-    ])]
+    [NotInParallel]
     public async Task HandleAsync_SchemeLessServerUrl_ReachesImportRunnerNormalizedWithHttpScheme() {
         using var server = WireMockServer.Start();
         StubAuthProviderNone(server);

@@ -242,7 +242,7 @@ public class AntigravityReviewerLiveCertTests {
             // the installed agy, so the cert still judges the INSTALLED build rather than a seamed one.
             DaemonRunner.SeedReviewerAffirmation(
                 AntigravityHostedAgentRuntimeFactory.ReviewerStateDir(config),
-                DaemonRunner.AntigravityVendor, enabled: true, config.AntigravityPath, config);
+                DaemonRunner.AntigravityVendor, enabled: true, config.AntigravityPath, config.Binaries);
 
             return new LiveHarness(tmp, daemons, worktree, config);
         }

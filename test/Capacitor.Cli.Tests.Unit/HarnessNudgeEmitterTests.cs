@@ -64,10 +64,10 @@ public class HarnessNudgeEmitterTests {
     [Test]
     public async Task Exception_in_a_vendor_probe_yields_null() {
         using var config = new TempConfigRoot();
-        var exploding = TestHarnesses.Over(
-            BinaryProbe.Searching(null),
+        var exploding = HarnessRegistry.Over(
+            TestBinaries.None,
             new TestHarness(HarnessId.Antigravity, "Antigravity", new HarnessSignals {
-                Installed = () => throw new InvalidOperationException("boom"),
+                UserDataSignal = () => throw new InvalidOperationException("boom"),
             }));
 
         var result = HarnessNudgeEmitter.ResolveFragment(exploding, new(config.Root), false, Now);

@@ -1,6 +1,5 @@
 using System.Runtime.Versioning;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
@@ -38,7 +37,7 @@ public class DaemonRunnerAntigravityFloorTests {
             AntigravityPath                      = "agy",
             AntigravityUnattendedReviewerEnabled = true,
             Store                                = Daemons.Store,
-            Binaries                             = BinaryProbe.Searching(null),
+            Binaries                             = TestBinaries.None,
             Name                                 = "test-daemon"
         };
 
@@ -119,7 +118,7 @@ public class DaemonRunnerAntigravityFloorTests {
         var stateDir = config.Store.StateDirectory(config.Name);
 
         DaemonRunner.SeedReviewerAffirmation(
-            stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub, config);
+            stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub, config.Binaries);
 
         var vendors = DaemonRunner.ComputeUnattendedVendors(
             [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);

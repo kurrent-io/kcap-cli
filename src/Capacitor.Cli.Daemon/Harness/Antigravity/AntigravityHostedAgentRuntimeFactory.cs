@@ -105,12 +105,13 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
             new AgyTurnProcess(psi, loggerFactory.CreateLogger<AgyTurnProcess>())));
 
     readonly Func<string, bool> _binaryExists =
-        binaryExists ?? (path => new CliResolver(config.Binaries).Exists(path));
+        binaryExists ?? (path => config.Binaries.Finds(path));
 
     readonly Func<string, string?> _resolveVersion =
         resolveVersion ?? (path => new VendorVersionResolver(config.Binaries).Resolve(path));
 
     readonly bool _posixHost = posixHost ?? !OperatingSystem.IsWindows();
+
 
     /// <summary>The vendor token, never <c>agy</c>: the server routes on this exact string and the
     /// capture side already knows <c>antigravity</c>. <c>agy</c> is only ever a binary name.</summary>
@@ -568,9 +569,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // KCAP_CONFIG_DIR exported had agy's own hooks reading the real profile by inheritance.
         psi.Environment[ConfigRoot.ConfigDirEnvVar] = ConfigRoot.UnderHome(home).Directory;
 
-        // GEMINI_CLI_HOME REPLACES the Gemini root outright (see AntigravityReviewerHome.LayoutFor),
-        // so an inherited one points agy's config, MCP servers and result channel at the operator's
-        // profile rather than this isolated HOME.
+        // GEMINI_CLI_HOME replaces the Gemini root agy derives from HOME, so an inherited one points
+        // its config, MCP servers and result channel at the operator's profile, not this home.
         psi.Environment.Remove("GEMINI_CLI_HOME");
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;

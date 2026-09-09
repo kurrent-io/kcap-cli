@@ -128,7 +128,7 @@ public class AcpVendorDescriptorTests {
     /// <para><c>KiroPath</c> predates this descriptor and defaulted to <c>"kiro"</c> while nothing
     /// consumed it. <c>kiro</c> is not the shipped binary — <c>kiro-cli</c> is, and it is what
     /// <c>PluginCommand.KiroBinary</c> resolves. Because availability is
-    /// <c>CliResolver.Exists(KiroPath)</c>, the old default meant Kiro was silently never advertised
+    /// <c>Binaries.Finds(KiroPath)</c>, the old default meant Kiro was silently never advertised
     /// on a correct install until an operator discovered <c>KCAP_KIRO_PATH</c>. An override test
     /// passes identically whichever name the default holds, which is precisely how the wrong default
     /// survived; this test is the one that fails.</para>

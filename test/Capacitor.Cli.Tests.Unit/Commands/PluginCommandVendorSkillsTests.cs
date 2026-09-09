@@ -20,9 +20,9 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// top a tree up, never create one. The npm postinstall runs it for every vendor on each
 /// `npm install -g`, so creating there would undo a deliberate `plugin remove --skills`.
 /// </remarks>
-// PATH: the install refuses unless `kcap` resolves through it, and a peer probing for a vendor
-// CLI reads the same variable.
-[NotInParallel("VendorEnvOverrides")]
+// PATH is process-global: the install refuses unless `kcap` resolves through it, and every spawned
+// child inherits it.
+[NotInParallel]
 public class PluginCommandVendorSkillsTests {
     [Test]
     [MethodDataSource(nameof(Vendors))]
@@ -183,7 +183,7 @@ public class PluginCommandVendorSkillsTests {
                     File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
             }
 
-            _envScopes.Add(new EnvScope(
+            _envScopes.Add(EnvScope.Exclusive(
                 "PATH", _binDir.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH")));
 
             Env = new PluginEnvironment(

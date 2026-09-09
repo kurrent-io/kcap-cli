@@ -4,7 +4,6 @@ using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Capacitor.Cli.Core.Harness.Gemini;
 
 namespace Capacitor.Cli.Daemon.Harness.Antigravity;
 
@@ -149,13 +148,10 @@ internal static class AntigravityReviewerHome {
         return home;
     }
 
-    /// <summary>This home's Antigravity layout, derived from the home directory alone. No vendor
-    /// override is applied: <c>GEMINI_CLI_HOME</c> REPLACES the Gemini root, so honouring it here
-    /// would resolve every file below outside the isolated home — the reviewer's result channel and
-    /// its grants into the operator's own tree, and the plugin-directory check against a directory
-    /// this home does not own.</summary>
-    static AntigravityPaths LayoutFor(string home) =>
-        AntigravityHarness.Over(GeminiHarness.Over(new GeminiPaths(new(home), null))).Paths;
+    /// <summary>This home's Antigravity layout, derived from the home directory alone. The null
+    /// override is load-bearing: <c>GEMINI_CLI_HOME</c> REPLACES the Gemini root, so honouring it
+    /// here would resolve every file below outside the isolated home.</summary>
+    static AntigravityPaths LayoutFor(string home) => new AntigravityPaths(new(home), null);
 
     /// <summary>Writes <c>{home}/.gemini/config/mcp_config.json</c> — the plain, trust-less
     /// <c>mcpServers</c> shape (<c>McpConfigShape.Standard</c>) — holding only <paramref name="injected"/>.
@@ -225,9 +221,9 @@ internal static class AntigravityReviewerHome {
     /// <summary>
     /// The full path of a file this class means to write INSIDE <paramref name="home"/>, or a throw.
     /// Isolation is this class's whole purpose, so containment is verified for every file the home
-    /// writes rather than assumed from <see cref="LayoutFor"/> — a derivation that reintroduced a
-    /// vendor override would otherwise write the reviewer's result channel, or the grants that admit
-    /// it, into the operator's own Gemini tree.
+    /// writes rather than assumed from <see cref="LayoutFor"/> — a derivation that honoured a vendor
+    /// override would write the reviewer's result channel, or the grants that admit it, into the
+    /// operator's own Gemini tree.
     /// </summary>
     internal static string ResolveInsideHome(string home, string path, string what) {
         var homeFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(home));

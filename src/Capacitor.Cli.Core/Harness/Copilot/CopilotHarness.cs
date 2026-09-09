@@ -11,8 +11,9 @@ public sealed class CopilotHarness : IHarness<CopilotHarness> {
     /// <summary>Over a layout resolved elsewhere — a reviewer's isolated home, or a test's.</summary>
     public static CopilotHarness Over(CopilotPaths paths) => new(paths);
 
-    public static HarnessId Id    => HarnessId.Copilot;
-    public static string    Label => "Copilot";
+    public static HarnessId Id        => HarnessId.Copilot;
+    public static string    Label     => "Copilot";
+    public static string    CliBinary => "copilot";
 
     /// <summary>This vendor's layout. Public because our own readers of its files take the typed
     /// paths; they reach them through the instance the entry point built, never by resolving the
@@ -22,8 +23,8 @@ public sealed class CopilotHarness : IHarness<CopilotHarness> {
     // The marker covers users who launch Copilot through an IDE wrapper; the PATH probe covers
     // a fresh install that has not created ~/.copilot yet.
     public HarnessSignals Signals => new() {
-        Binaries  = ["copilot"],
-        Installed = () => Paths.IsInstalled,
-        Wired     = () => CopilotHooksInstaller.IsInstalled(Paths.KcapHooksJson),
+        LaunchSignal   = probe => probe.Finds(CliBinary),
+        UserDataSignal = Paths.HasUserData,
+        Wired          = () => CopilotHooksInstaller.IsInstalled(Paths.KcapHooksJson),
     };
 }

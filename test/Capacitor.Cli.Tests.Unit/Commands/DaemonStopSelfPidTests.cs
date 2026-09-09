@@ -1,6 +1,5 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -61,7 +60,7 @@ public class DaemonStopSelfPidTests {
         // CI, as a random UninstallCommandTests failure.
         var exit = await new DaemonCommands(
                 Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
-                TestHarnesses.All(), BinaryProbe.Searching(null))
+                TestHarnesses.All(), TestBinaries.None)
             .HandleAsync(["daemon", "stop", "--name", "self", "--yes"]);
 
         await Assert.That(exit).IsEqualTo(1);

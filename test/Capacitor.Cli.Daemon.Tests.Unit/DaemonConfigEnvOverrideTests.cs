@@ -44,7 +44,7 @@ public class DaemonConfigEnvOverrideTests {
 
         await Assert.That(config.CopilotPath).IsEqualTo("copilot");
         // Still a bare command, but "kiro-cli" — the shipped binary name — now that an ACP descriptor
-        // consumes this field and availability is CliResolver.Exists(KiroPath).
+        // consumes this field and availability is Binaries.Finds(KiroPath).
         await Assert.That(config.KiroPath).IsEqualTo("kiro-cli");
         await Assert.That(config.OpenCodePath).IsEqualTo("opencode");
         await Assert.That(config.GeminiPath).IsEqualTo("gemini");

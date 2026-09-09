@@ -37,9 +37,9 @@ public class PiPathsTests {
     }
 
     [Test]
-    public async Task IsInstalled_follows_the_agent_dir() {
-        await Assert.That(Under("/nonexistent", Tmp.Path).IsInstalled).IsTrue();
-        await Assert.That(Under("/nonexistent", "/also-nonexistent").IsInstalled).IsFalse();
+    public async Task Installed_follows_the_agent_dir() {
+        await Assert.That(PiHarness.Over(Under("/nonexistent", Tmp.Path)).Signals.HasUserData).IsTrue();
+        await Assert.That(PiHarness.Over(Under("/nonexistent", "/also-nonexistent")).Signals.HasUserData).IsFalse();
     }
 
     // Bare: PI_CODING_AGENT_DIR is inherited by any child a concurrent test spawns.

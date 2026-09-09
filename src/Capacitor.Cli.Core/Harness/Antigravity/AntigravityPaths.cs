@@ -18,9 +18,8 @@ namespace Capacitor.Cli.Core.Harness.Antigravity;
 /// GUI does NOT read it, so installing hooks there (as #256 originally did) is invisible
 /// to the running IDE (GUI re-test).
 ///
-/// ⚠️ <c>~/.gemini</c> is shared with the Gemini CLI — <see cref="GeminiPaths.IsInstalled"/>
-/// must require a Gemini-specific marker so an Antigravity-only home doesn't read as
-/// a Gemini install.
+/// ⚠️ <c>~/.gemini</c> is shared with the Gemini CLI, so Gemini's install signal must require a
+/// Gemini-specific marker or an Antigravity-only home reads as a Gemini install.
 /// </summary>
 public sealed class AntigravityPaths(GeminiPaths gemini) {
     public AntigravityPaths(UserHome home, string? geminiCliHome) : this(new GeminiPaths(home, geminiCliHome)) { }
@@ -89,17 +88,6 @@ public sealed class AntigravityPaths(GeminiPaths gemini) {
     /// <summary>Plugin manifest marker the GUI requires: <c>&lt;plugin-dir&gt;/plugin.json</c>.</summary>
     public string GlobalPluginManifest => Path.Combine(PluginDir, "plugin.json");
 
-    /// <summary>
-    /// Detection by data-root presence — the GUI creates <c>~/.gemini/antigravity</c> and the
-    /// <c>agy</c> CLI creates <c>~/.gemini/antigravity-cli</c>, each on first run. EITHER root means
-    /// the product is present: they are one vendor (<c>antigravity</c>) over two surfaces sharing
-    /// the same plugin/MCP config, so an <c>agy</c>-only machine — GUI root absent, CLI root present
-    /// — must detect exactly as a GUI machine does, or the shared hooks plugin never installs and no
-    /// downstream capture runs. Callers additionally PATH-probe <c>agy</c> for the fresh case where
-    /// neither root exists yet (see <c>SetupCommand</c>).
-    /// </summary>
-    public bool IsInstalled => Directory.Exists(Root) || Directory.Exists(CliConfigRoot);
-
     /// <summary>Per-conversation "brain" dir under an EXPLICIT product root:
     /// <c>&lt;productRoot&gt;/brain/&lt;id&gt;</c>. The root-parameterized form the dual-root import
     /// resolves paths through; the instance members above fix the root to the GUI's.</summary>
@@ -154,4 +142,7 @@ public sealed class AntigravityPaths(GeminiPaths gemini) {
         return Path.Combine(root, "conversations", $"{convId}.db");
     }
 
+    /// <summary>Whether Antigravity has run here. Either root counts: one vendor over two surfaces
+    /// sharing one plugin config, so an agy-only machine must read as a GUI one does.</summary>
+    public bool HasUserData() => Directory.Exists(Root) || Directory.Exists(CliConfigRoot);
 }

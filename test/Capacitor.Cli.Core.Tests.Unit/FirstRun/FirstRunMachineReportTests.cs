@@ -36,7 +36,7 @@ public class FirstRunMachineReportTests {
         // Claude answers only from PATH and Cursor only from its own state, so a report that folded
         // the two would show the same shape for both.
         using var bin      = new TempDir();
-        var       report   = Evaluate(TestHarnesses.Over(
+        var       report   = Evaluate(HarnessRegistry.Over(
             TestBinaries.Searching(bin, "claude"),
             TestHarnesses.Probing(HarnessId.Claude, "claude"),
             TestHarnesses.Of(HarnessId.Cursor, detected: true)));

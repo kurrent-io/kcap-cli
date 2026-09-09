@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon.Harness.Cursor;
 
@@ -43,11 +43,11 @@ internal static class CursorBorrowedReviewValidation {
     /// mismatch, and also on any platform other than macOS/arm64, which is where the maintainer
     /// probe suite runs; neither outcome says anything about whether borrowed review is
     /// supported.</summary>
-    internal static CursorBorrowedReviewArtifact? TryMatchValidatedBuild(CliResolver cli, string configuredPath) {
+    internal static CursorBorrowedReviewArtifact? TryMatchValidatedBuild(BinaryProbe binaries, string configuredPath) {
         if (!OperatingSystem.IsMacOS()) return null;
         if (RuntimeInformation.ProcessArchitecture != Architecture.Arm64) return null;
         try {
-            var resolved = cli.ResolveExecutable(configuredPath);
+            var resolved = binaries.Resolve(configuredPath);
             if (resolved is null) return null;
             var launcher = ResolveFinalLink(resolved);
             var versionDir = Directory.GetParent(launcher)?.FullName;

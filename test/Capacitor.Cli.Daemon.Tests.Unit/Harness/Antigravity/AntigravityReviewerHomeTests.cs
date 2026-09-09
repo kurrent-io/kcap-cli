@@ -275,8 +275,8 @@ public class AntigravityReviewerHomeTests {
     // ── ResolveInsideHome: the containment guard itself ────────────────────────────────────────────
     //
     // Everything above drives the guard only through Create's real writes. These call it directly —
-    // it is the one thing standing between a reintroduced vendor override and a reviewer's result
-    // channel landing in the operator's own tree, so it earns direct coverage of its own.
+    // it is the one thing standing between a layout that honours a vendor override and a reviewer's
+    // result channel landing in the operator's own tree, so it earns direct coverage of its own.
 
     [Test]
     public async Task Resolve_inside_home_returns_the_full_normalized_path() {

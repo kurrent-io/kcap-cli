@@ -104,8 +104,8 @@ public class WorkItemsNudgeEmitterTests {
     }
 }
 
-// Availability is read per harness through the hermetic registry (Harnesses.Of<T>()), which
-// consults no override variable — so no VendorEnvOverrides constraint is needed here.
+// Availability reads the hermetic registry, which consults no override variable — so this needs no
+// parallel constraint.
 public class WorkItemsNudgeAvailabilityTests {
     [TempHome] public required TempHome Home { get; init; }
 

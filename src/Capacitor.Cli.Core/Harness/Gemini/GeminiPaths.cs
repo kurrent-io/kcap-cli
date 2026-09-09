@@ -19,28 +19,12 @@ public sealed class GeminiPaths {
     public string Root { get; }
 
     /// <summary>
-    /// Detection by a Gemini-CLI-specific marker under <c>~/.gemini</c>. The bare
-    /// root is NOT sufficient because <c>~/.gemini</c> is SHARED with Google
-    /// Antigravity, which stores its state under <c>antigravity/</c> +
-    /// <c>antigravity-cli/</c> — so an Antigravity-only home would otherwise falsely
-    /// read as a Gemini install. Require one of the config/recording
-    /// markers Gemini CLI creates that Antigravity does not: <c>settings.json</c>,
-    /// <c>projects.json</c>, or the <c>tmp/</c> chat-recording dir. The binary name
-    /// <c>gemini</c> is too generic to be the only signal, so callers that want a
-    /// PATH probe OR this with <c>BinaryProbe.OnPath("gemini")</c>
-    /// (a fresh install whose markers aren't written yet is still caught there).
-    /// </summary>
-    public bool IsInstalled =>
-        Directory.Exists(Root)
-     && (File.Exists(SettingsJson)
-      || File.Exists(Path.Combine(Root, "projects.json"))
-      || Directory.Exists(TmpDir));
-
-    /// <summary>
     /// Shared settings file (<c>~/.gemini/settings.json</c>) — holds user config
     /// plus the <c>hooks</c> block kcap merges into. NEVER overwrite wholesale.
     /// </summary>
     public string SettingsJson => Path.Combine(Root, "settings.json");
+
+    public string ProjectsJson => Path.Combine(Root, "projects.json");
 
     /// <summary>
     /// Global context/memory file (<c>~/.gemini/GEMINI.md</c>) — Gemini CLI loads it for
@@ -74,4 +58,10 @@ public sealed class GeminiPaths {
     /// </summary>
     public static string SubagentDir(string chatsDir, string parentSessionId)
         => Path.Combine(chatsDir, parentSessionId);
+
+    /// <summary>Whether the Gemini CLI has run here. <c>~/.gemini</c> is shared with Antigravity, so
+    /// only a marker the Gemini CLI itself writes counts — the bare root does not.</summary>
+    public bool HasUserData() =>
+        Directory.Exists(Root)
+     && (File.Exists(SettingsJson) || File.Exists(ProjectsJson) || Directory.Exists(TmpDir));
 }

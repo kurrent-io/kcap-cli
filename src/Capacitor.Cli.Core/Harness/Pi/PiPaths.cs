@@ -59,14 +59,6 @@ public sealed class PiPaths {
     /// </summary>
     public string AgentsMd => Path.Combine(AgentDir, "AGENTS.md");
 
-    /// <summary>
-    /// Detection by the agent-state dir's presence — Pi creates it on first run.
-    /// The binary name <c>pi</c> is too generic for a PATH probe to be the only
-    /// signal, so callers that also want the PATH probe OR this with
-    /// <c>BinaryProbe.OnPath("pi")</c>.
-    /// </summary>
-    public bool IsInstalled => Directory.Exists(AgentDir);
-
     /// <summary>Expand a leading <c>~</c>/<c>~/</c> against <paramref name="home"/>, matching
     /// Pi's <c>expandTildePath</c>.</summary>
     static string ExpandTilde(string path, string home) {
@@ -74,4 +66,7 @@ public sealed class PiPaths {
 
         return path.Length <= 1 ? home : Path.Combine(home, path[2..]);
     }
+
+    /// <summary>Whether Pi has run here — it creates the agent dir on first run.</summary>
+    public bool HasUserData() => Directory.Exists(AgentDir);
 }

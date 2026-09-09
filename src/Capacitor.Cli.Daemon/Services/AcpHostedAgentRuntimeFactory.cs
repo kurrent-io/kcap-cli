@@ -117,7 +117,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
     public string CliPath => descriptor.ResolveBinaryPath(config);
 
-    public bool IsAvailable() => new CliResolver(config.Binaries).Exists(CliPath);
+    public bool IsAvailable() => config.Binaries.Finds(CliPath);
 
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
@@ -894,7 +894,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             // recursively, while sandbox-exec separately executed the real binary from PATH. Resolving
             // once and using the result for both the profile and the argv is what keeps "what is
             // granted" and "what runs" the same program.
-            var vendorBinary = new CliResolver(config.Binaries).ResolveExecutable(binaryPath)
+            var vendorBinary = config.Binaries.Resolve(binaryPath)
                 ?? throw new InvalidOperationException(
                     $"borrowed_review_vendor_binary_unresolved: cannot resolve '{binaryPath}' to an "
                   + "executable, so the sandbox cannot be drawn around it.");
@@ -923,9 +923,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // left to the vendor: it must exist, and be owner-only, before the child writes the first
         // transcript line into it. Review launches only; an interactive hosted Kiro must behave as the
         // user's own session does, global servers included.
-        if (ctx.IsReviewFlow && descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor)
+        if (ctx.IsReviewFlow && descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor) {
             psi.Environment["KIRO_HOME"] = KiroReviewerHome.Create(
                 ReviewerStateDir(config), config.DaemonEpoch ?? "unpinned", ctx.AgentId);
+        }
 
         // OpenCode's launch controls are env-shaped rather than argv-shaped (`opencode acp` accepts
         // none of the global flags), so its whole posture lives here. Unlike Kiro's branch above this
@@ -939,13 +940,24 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             // deriving the permission entries from server ids instead would be a second derivation of
             // the same names, and that failure is silent: the reviewer starts normally and its own
             // result channel is simply absent from its toolset (measured).
-            if (ctx.IsReviewFlow)
+            if (ctx.IsReviewFlow) {
+                // Both merge OVER the isolated dir stamped below, so an inherited one puts the
+                // operator's own servers — the flows server included — back into the reviewer.
+                psi.Environment.Remove(OpenCodeLaunchEnvironment.ConfigFileVariable);
+                psi.Environment.Remove(OpenCodeLaunchEnvironment.ConfigContentVariable);
+
                 OpenCodeLaunchEnvironment.ApplyReviewer(
                     psi.Environment,
                     OpenCodeReviewerConfigDir.Create(
                         ReviewerStateDir(config), config.DaemonEpoch ?? "unpinned", ctx.AgentId),
                     ValidateAndBuildReviewFlowMcp(ctx, descriptor, resolved)!);
+            }
         }
+
+        if (stateRoot is not null && descriptor.Vendor == AcpVendorDescriptors.Copilot.Vendor)
+            // COPILOT_HOME relocates Copilot's whole tree, so an inherited one points the reviewer
+            // outside the sandbox home below — at a path this deny-default profile never grants.
+            psi.Environment.Remove("COPILOT_HOME");
 
         if (stateRoot is not null) {
             // HOME and TMPDIR both move into the per-launch root, which is what keeps the reviewer

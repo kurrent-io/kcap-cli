@@ -31,7 +31,7 @@ internal sealed partial class ClaudeLauncher(
     /// equivalence key). Stateless singleton.</summary>
     public IReviewerModelResolver? ReviewerModelResolver => ClaudeReviewerModelResolver.Instance;
 
-    public bool IsAvailable() => new CliResolver(config.Binaries).Exists(CliPath);
+    public bool IsAvailable() => config.Binaries.Finds(CliPath);
 
     readonly ClaudePaths _paths = harnesses.Of<ClaudeHarness>().Paths;
 

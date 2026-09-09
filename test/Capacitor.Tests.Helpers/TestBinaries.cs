@@ -3,6 +3,10 @@ using Capacitor.Cli.Core.Setup;
 namespace Capacitor.Tests.Helpers;
 
 public static class TestBinaries {
+    /// <summary>A probe over an empty search path: it finds nothing, whatever this machine has
+    /// installed.</summary>
+    public static BinaryProbe None => BinaryProbe.Searching(null);
+
     /// <summary>
     /// A probe over <paramref name="dir"/>, holding a launchable file per name. The extension and the
     /// execute bit are this host's, so what is staged is what the platform will actually run — a

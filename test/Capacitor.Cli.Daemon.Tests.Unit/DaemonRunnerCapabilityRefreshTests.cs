@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// </summary>
 public class DaemonRunnerCapabilityRefreshTests {
     /// <summary>Every path here is rooted, which resolves without a search path.</summary>
-    static CliResolver Cli => new(BinaryProbe.Searching(null));
+    static BinaryProbe Binaries => TestBinaries.None;
 
     static UnattendedVendorCapability Cap(string vendor, string? version, bool borrowed = false) =>
         new(vendor, version, $"{vendor}-unattended-v1", borrowed);
@@ -81,7 +81,7 @@ public class DaemonRunnerCapabilityRefreshTests {
             File.SetUnixFileMode(claude, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         var baselines = DaemonRunner.FingerprintUnattendedVendors(
-            Cli, [Factory("claude", claude), Factory("codex", tmp.PathTo("missing-codex"))],
+            Binaries, [Factory("claude", claude), Factory("codex", tmp.PathTo("missing-codex"))],
             ["claude", "codex"]);
 
         await Assert.That(baselines["claude"]!.Value.ResolvedPath).IsEqualTo(new FileInfo(claude).FullName);

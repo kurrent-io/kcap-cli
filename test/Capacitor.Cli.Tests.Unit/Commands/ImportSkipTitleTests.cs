@@ -14,9 +14,9 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// The fake `claude` on PATH shadows a real, authenticated one — the positive control must prove a
 /// title is posted, without that costing a live model call.
 /// </remarks>
-// Mutates PATH, and joins the vendor-override cohort because those suites resolve `kcap` and the
-// vendor CLIs through PATH — a phantom `claude` is exactly what would mislead them.
-[NotInParallel("VendorEnvOverrides")]
+// PATH is process-global: every spawned child inherits it, so a phantom `claude` is visible to the
+// whole assembly, not to an enumerable cohort.
+[NotInParallel]
 public class ImportSkipTitleTests : IDisposable {
     [TempHome] public required TempHome Home { get; init; }
 
@@ -103,12 +103,11 @@ public class ImportSkipTitleTests : IDisposable {
     /// non-JSON stdout as the result, so a one-line script satisfies it.
     /// </summary>
     sealed class FakeClaudeOnPath : IDisposable {
-        readonly TempDir _bin;
-        readonly string? _previousPath;
+        readonly TempDir  _bin;
+        readonly EnvScope _path;
 
         public FakeClaudeOnPath() {
-            _bin          = new TempDir();
-            _previousPath = Environment.GetEnvironmentVariable("PATH");
+            _bin = new TempDir();
 
             var script = _bin.CreateFile("claude", "#!/bin/sh\necho 'Retry the import loop'\n");
 
@@ -117,11 +116,12 @@ public class ImportSkipTitleTests : IDisposable {
                 File.SetUnixFileMode(script,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            Environment.SetEnvironmentVariable("PATH", _bin.Path + Path.PathSeparator + _previousPath);
+            _path = EnvScope.Exclusive(
+                "PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
         }
 
         public void Dispose() {
-            Environment.SetEnvironmentVariable("PATH", _previousPath);
+            _path.Dispose();
             _bin.Dispose();
         }
     }

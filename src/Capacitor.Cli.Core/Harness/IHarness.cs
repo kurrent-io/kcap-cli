@@ -13,6 +13,10 @@ public interface IHarness {
     string         Label   { get; }
     HarnessSignals Signals { get; }
 
+    /// <summary>The command this vendor's agent CLI answers to. Not a detection signal: Cursor
+    /// declares no <see cref="HarnessSignals.LaunchSignal"/> at all yet spawns <c>cursor-agent</c>.</summary>
+    string CliBinary { get; }
+
     string VendorId => Id.VendorId;
 }
 
@@ -27,9 +31,11 @@ public interface IHarness {
 /// <c>HarnessRegistryTests</c> pins that every entry reports its own identity.</para>
 /// </summary>
 public interface IHarness<TSelf> : IHarness where TSelf : IHarness<TSelf> {
-    new abstract static HarnessId Id    { get; }
-    new abstract static string    Label { get; }
+    new abstract static HarnessId Id        { get; }
+    new abstract static string    Label     { get; }
+    new abstract static string    CliBinary { get; }
 
-    HarnessId IHarness.Id    => TSelf.Id;
-    string    IHarness.Label => TSelf.Label;
+    HarnessId IHarness.Id        => TSelf.Id;
+    string    IHarness.Label     => TSelf.Label;
+    string    IHarness.CliBinary => TSelf.CliBinary;
 }

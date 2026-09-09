@@ -49,7 +49,7 @@ internal sealed partial class CodexLauncher(
 
     // Version gate BEFORE the PATH probe, so an unsupported host never advertises the vendor at
     // all — the launch dialog hides Codex rather than offering a launch that cannot work.
-    public bool IsAvailable() => WindowsVersionSupported && new CliResolver(config.Binaries).Exists(CliPath);
+    public bool IsAvailable() => WindowsVersionSupported && config.Binaries.Finds(CliPath);
 
     /// <summary>
     /// Enumerates the effective MCP servers a review-flow reviewer would otherwise inherit —

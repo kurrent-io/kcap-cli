@@ -862,7 +862,7 @@ return 1;
 
 } finally {
     await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>);
-    await HarnessSetupNotice.FlushAsync(command, config, profiles, sp.GetRequiredService<HarnessRegistry>());
+    await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>);
 }
 
 static string? GetArg(string[] arguments, string flag) {

@@ -87,6 +87,21 @@ public class OpenCodeHostedLaunchTests {
         await Assert.That(interactive.Environment[OpenCodeLaunchEnvironment.PureVariable]).IsEqualTo("1");
     }
 
+    /// <summary>An interactive session keeps the operator's own config overrides — nothing isolates a
+    /// root here, so nothing may drop the variables that would replace one.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task AnInteractiveLaunch_KeepsTheOperatorsConfigOverride() {
+        const string inherited = "/tmp/kcap-opencode-config-probe.json";
+        // The value has to be established here: the child's block is seeded from this process, so
+        // reading it back proves the scrub was skipped only if something set it.
+        using var _ = EnvScope.Exclusive(OpenCodeLaunchEnvironment.ConfigFileVariable, inherited);
+
+        var psi = Psi();
+
+        await Assert.That(psi.Environment[OpenCodeLaunchEnvironment.ConfigFileVariable]).IsEqualTo(inherited);
+    }
+
     /// <summary>
     /// The suppression must not leak onto a sibling vendor: it is a statement about OpenCode's plugin
     /// system, and setting it for everyone would be inert today but silently wrong the moment another
