@@ -43,6 +43,39 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task A_cancelled_or_unknown_check_leaves_the_rollup_unknown() {
+        var json = GhHarness.Fixture("pr-view.json")
+            .Replace("\"completedAt\":null,\"conclusion\":\"\",\"detailsUrl\":\"https://github.com/example/repo/actions/runs/1/job/3\",\"name\":\"Build and test (windows-latest)\",\"startedAt\":\"2026-09-08T11:05:47Z\",\"status\":\"IN_PROGRESS\"",
+                "\"completedAt\":\"2026-09-08T11:19:44Z\",\"conclusion\":\"CANCELLED\",\"detailsUrl\":\"https://github.com/example/repo/actions/runs/1/job/3\",\"name\":\"Build and test (windows-latest)\",\"startedAt\":\"2026-09-08T11:05:47Z\",\"status\":\"COMPLETED\"")
+            .Replace("\"state\":\"FAILURE\"", "\"state\":\"SUCCESS\"");
+        using var h = await Ready(Tmp, json);
+        var data = (await h.Provider.OverviewAsync("session", Subject, default)).Data!;
+        await Assert.That(data.Checks!.Rollup).IsNull();
+    }
+
+    [Test]
+    public async Task A_capped_rollup_reports_unknown_success_with_lower_bound_counts() {
+        using var fixture = JsonDocument.Parse(GhHarness.Fixture("pr-view.json"));
+        var checks = Enumerable.Range(0, 100).Select(i => $$"""{"__typename":"CheckRun","completedAt":"2026-09-08T11:19:44Z","conclusion":"SUCCESS","detailsUrl":"https://github.com/example/repo/actions/runs/1/job/{{i}}","name":"check-{{i}}","startedAt":"2026-09-08T11:05:47Z","status":"COMPLETED","workflowName":"CI"}""");
+        var json = GhHarness.Fixture("pr-view.json").Replace(fixture.RootElement.GetProperty("statusCheckRollup").GetRawText(), "[" + string.Join(',', checks) + "]");
+        using var h = await Ready(Tmp, json);
+        var data = (await h.Provider.OverviewAsync("session", Subject, default)).Data!;
+        await Assert.That(data.Checks!.Rollup).IsNull();
+        await Assert.That(data.Checks.Counts!["success"].Kind).IsEqualTo("lower_bound");
+    }
+
+    [Test]
+    public async Task All_passing_checks_roll_up_to_success() {
+        var json = GhHarness.Fixture("pr-view.json")
+            .Replace("\"completedAt\":null,\"conclusion\":\"\",\"detailsUrl\":\"https://github.com/example/repo/actions/runs/1/job/3\",\"name\":\"Build and test (windows-latest)\",\"startedAt\":\"2026-09-08T11:05:47Z\",\"status\":\"IN_PROGRESS\"",
+                "\"completedAt\":\"2026-09-08T11:19:44Z\",\"conclusion\":\"SUCCESS\",\"detailsUrl\":\"https://github.com/example/repo/actions/runs/1/job/3\",\"name\":\"Build and test (windows-latest)\",\"startedAt\":\"2026-09-08T11:05:47Z\",\"status\":\"COMPLETED\"")
+            .Replace("\"state\":\"FAILURE\"", "\"state\":\"SUCCESS\"");
+        using var h = await Ready(Tmp, json);
+        var data = (await h.Provider.OverviewAsync("session", Subject, default)).Data!;
+        await Assert.That(data.Checks!.Rollup).IsEqualTo("success");
+    }
+
+    [Test]
     [Arguments("MERGED", false, "merged")] [Arguments("CLOSED", true, "closed")] [Arguments("OPEN", true, "draft")] [Arguments("WEIRD", false, "unknown")]
     public async Task Lifecycle_prefers_merged_over_closed_and_draft_over_open(string state, bool draft, string lifecycle) {
         var json = GhHarness.Fixture("pr-view.json").Replace("\"state\":\"OPEN\"", $"\"state\":\"{state}\"").Replace("\"isDraft\":false", $"\"isDraft\":{(draft ? "true" : "false")}");

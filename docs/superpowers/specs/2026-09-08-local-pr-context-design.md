@@ -265,6 +265,10 @@ projections and the retention budget stay as they are.
   `reviews` and `comments`. `gh pr view` returns at most 100 of each; a list of
   exactly 100 — checks included — reports `coverage` limited and a lower-bound
   total, so the reader shows More on GitHub rather than claiming completeness.
+  The overview rollup reports success only when every returned check passed,
+  was skipped or neutral and the rollup was not capped; a cancelled, stale or
+  unknown result, or a capped rollup, leaves it unknown and counts become
+  lower bounds.
   Threads come from the GraphQL `reviewThreads` connection in pages of 50, with
   each thread's root comment, path, side, lines, resolution, outdated flag and
   diff hunk; thread replies come from the thread's `comments` connection.

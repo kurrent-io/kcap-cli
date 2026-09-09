@@ -65,7 +65,7 @@ public static class GitHubCliMapping {
         var (description, truncated) = Truncate(Text(root, "body"));
         var availability = new PullRequestAvailabilityDto { Status = "ready", FetchedAt = fetchedAt };
         var counts = checks.GroupBy(check => check.Outcome ?? "unknown", StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => new PullRequestCountDto { Kind = "exact", Value = group.Count() }, StringComparer.Ordinal);
+            .ToDictionary(group => group.Key, group => new PullRequestCountDto { Kind = checksCapped ? "lower_bound" : "exact", Value = group.Count() }, StringComparer.Ordinal);
         var latest = root.Prop("latestReviews") is { } latestReviews && latestReviews.IsArray ? latestReviews.EnumerateArray().ToArray() : [];
         var requests = root.Prop("reviewRequests") is { } reviewRequests && reviewRequests.IsArray ? reviewRequests.EnumerateArray().ToArray() : [];
         var overview = new PullRequestOverviewDto {
@@ -73,7 +73,7 @@ public static class GitHubCliMapping {
             IsDraft = root.Bool("isDraft"), HeadRef = Text(root, "headRefName"), BaseRef = Text(root, "baseRefName"),
             HeadSha = headSha, Description = description, DescriptionTruncated = truncated, UpdatedAt = Time(root, "updatedAt"),
             ReviewDecision = ReviewDecision(Text(root, "reviewDecision")), AccessCheckedFor = "your GitHub CLI sign-in",
-            Checks = new() { Availability = availability, Rollup = Rollup(checks), HeadSha = headSha, Counts = counts },
+            Checks = new() { Availability = availability, Rollup = Rollup(checks, checksCapped), HeadSha = headSha, Counts = counts },
             Reviews = new() { Availability = availability, Published = Count(reviews.Length, reviewsCapped),
                 Approved = Exact(latest.Count(review => Text(review, "state") == "APPROVED")),
                 ChangesRequested = Exact(latest.Count(review => Text(review, "state") == "CHANGES_REQUESTED")),
@@ -94,9 +94,14 @@ public static class GitHubCliMapping {
         "APPROVED" => "approved", "CHANGES_REQUESTED" => "changes_requested", "REVIEW_REQUIRED" => "review_required", _ => null };
     static string? ReviewState(string? value) => value switch {
         "APPROVED" => "approved", "CHANGES_REQUESTED" => "changes_requested", "COMMENTED" => "commented", "DISMISSED" => "dismissed", "PENDING" => "pending", _ => null };
-    static string? Rollup(PullRequestCheckDto[] checks) => checks.Length == 0 ? null
-        : checks.Any(check => check.Outcome is "failure" or "timed_out" or "action_required") ? "failure"
-        : checks.Any(check => check.Outcome == "pending") ? "pending" : "success";
+    // Success requires complete, unambiguous evidence: a capped page, or a cancelled/stale/unknown result, leaves the rollup unknown rather than claiming success.
+    static string? Rollup(PullRequestCheckDto[] checks, bool capped) {
+        if (checks.Length == 0) return null;
+        if (checks.Any(check => check.Outcome is "failure" or "timed_out" or "action_required")) return "failure";
+        if (checks.Any(check => check.Outcome == "pending")) return "pending";
+        if (capped || checks.Any(check => check.Outcome is "cancelled" or "stale" or "unknown")) return null;
+        return checks.All(check => check.Outcome is "success" or "skipped" or "neutral") ? "success" : null;
+    }
 
     static PullRequestCheckDto[] Checks(JsonElement? rollup, string? headSha) {
         if (rollup is not { } array || !array.IsArray) return [];
