@@ -476,7 +476,6 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// Pins that a user turn is rendered as markdown, like the assistant's text.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_user_turn_renders_as_markdown() {

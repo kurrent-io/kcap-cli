@@ -150,6 +150,33 @@ public class MarkdownViewTests {
         });
     }
 
+    /// Pins the layout guard: a multi-line HTML block and a hard break lay out under a parent that
+    /// leaves height unconstrained, the shape of every chat list and reader pane, and reach the
+    /// block as line breaks between runs, never as a newline inside one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Timeout(30_000)]
+    public async Task Multi_line_html_and_hard_breaks_lay_out_under_an_unconstrained_parent(CancellationToken _) {
+        await RunOnUiAsync(async () => {
+            var view = new MarkdownView { Text = "<div>\n  <p>text</p>\n</div>\n\nline one  \nline two", Width = 400 };
+            var window = new Window { Content = new ScrollViewer { Content = new StackPanel { Children = { view } } }, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                await Assert.That(view.Bounds.Height).IsGreaterThan(0);
+                var paragraphs = Paragraphs(view).ToList();
+                await Assert.That(paragraphs.Count).IsEqualTo(2);
+                await Assert.That(paragraphs[0].Inlines!.OfType<LineBreak>().Count()).IsEqualTo(2);
+                await Assert.That(paragraphs[1].Inlines!.OfType<LineBreak>().Count()).IsEqualTo(1);
+                var runs = paragraphs.SelectMany(p => Spans<Run>(p.Inlines!)).Select(r => r.Text!).ToList();
+                await Assert.That(runs.Any(t => t.Contains('\n'))).IsFalse();
+                await Assert.That(runs.First()).IsEqualTo("<div>");
+                await Assert.That(runs.Any(t => t.Contains("<p>text</p>"))).IsTrue();
+            } finally { window.Close(); }
+        });
+    }
+
     /// Pins the image and label rules: an image keeps its source text and fetches nothing, and a
     /// label's code span survives inside the link.
     [Test]
