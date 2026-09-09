@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Cursor;
 using Capacitor.Cli.Daemon.Services;
@@ -1718,7 +1719,8 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         var realBinary = Environment.ProcessPath!;
 
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
-            AcpVendorDescriptors.Copilot, new DaemonConfig { CopilotPath = realBinary, Home = Home },
+            AcpVendorDescriptors.Copilot,
+            new DaemonConfig { CopilotPath = realBinary, Home = Home, Binaries = Binaries },
             ctx, supported, BrokeredEnv());
         var argv = psi.ArgumentList.ToArray();
 
@@ -1754,7 +1756,10 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
                 AcpVendorDescriptors.Copilot,
-                new DaemonConfig { CopilotPath = "/definitely/not/an/executable/copilot" },
+                new DaemonConfig {
+                    CopilotPath = "/definitely/not/an/executable/copilot",
+                    Binaries    = Binaries,
+                },
                 ctx, supported, BrokeredEnv()));
 
         await Assert.That(ex.Message).Contains("borrowed_review_vendor_binary_unresolved");
@@ -1859,6 +1864,47 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
 #pragma warning restore RS0030
     }
 
+    /// <summary>An inherited <c>COPILOT_HOME</c> does not reach the sandboxed reviewer: it would
+    /// replace the tree the isolated HOME derives, and the profile does not grant it.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task BuildProcessStartInfo_Copilot_BorrowedSnapshot_DropsTheVendorHomeOverride() {
+        // Absence is assertable only because this scope established the value: the child's block is
+        // seeded from this process, so a variable nothing set proves nothing about the scrub.
+        using var _ = EnvScope.Exclusive("COPILOT_HOME", "/tmp/kcap-copilot-home-probe");
+
+        var ctx = ReviewContext(["kcap-review"]) with {
+            Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true,
+            Worktree = new WorktreeInfo(Path: "/snap/b1", Branch: "b", SourceRepo: "/repo",
+                                        SnapshotRoot: "/snap/b1")
+        };
+        var supported = CopilotBorrowedReviewPolicy.Resolve(
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
+
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported, BrokeredEnv()).Environment;
+
+        await Assert.That(env.ContainsKey("COPILOT_HOME")).IsFalse();
+    }
+
+    /// <summary>The paired direction: an unsandboxed review keeps the operator's own
+    /// <c>COPILOT_HOME</c>, because nothing has isolated the root it would replace.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task BuildProcessStartInfo_Copilot_NonBorrowedReview_KeepsTheVendorHomeOverride() {
+        const string inherited = "/tmp/kcap-copilot-home-probe";
+        using var _ = EnvScope.Exclusive("COPILOT_HOME", inherited);
+
+        var ctx = ReviewContext(["kcap-review"]) with { Work = WorkLocation.OwnedWorktree };
+        var supported = CopilotBorrowedReviewPolicy.Resolve(
+            OSPlatform.OSX, Architecture.Arm64, sandboxAvailable: true, authBrokerAvailable: () => true);
+
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Copilot, ResolvableConfig(), ctx, supported, BrokeredEnv()).Environment;
+
+        await Assert.That(env["COPILOT_HOME"]).IsEqualTo(inherited);
+    }
+
     /// <summary>The paired direction: a NON-borrowed launch gets no state redirection and no brokered
     /// token. An interactive agent runs as the user, with the user's own vendor profile and
     /// credentials — redirecting those would break it, and doing so silently would be worse.</summary>
@@ -1948,6 +1994,8 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     static RuntimeStartContext BorrowedSnapshotContext() =>
         ReviewContext() with { Work = WorkLocation.OwnedWorktree, IsBorrowedSnapshot = true };
 
+    static BinaryProbe Binaries => TestBinaries.None;
+
     /// <summary>A daemon environment carrying a brokered credential.
     ///
     /// <para>A sandboxed borrowed launch fails closed without one — the profile does not grant the
@@ -1966,7 +2014,8 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     /// so any borrowed-argv test using <c>new DaemonConfig()</c> passes only on a machine that happens
     /// to have Copilot installed — green locally, red on CI, which is exactly what happened. The test
     /// host's own binary is guaranteed to exist and be executable everywhere.</para></summary>
-    DaemonConfig ResolvableConfig() => new() { CopilotPath = Environment.ProcessPath!, Home = Home };
+    DaemonConfig ResolvableConfig() =>
+        new() { CopilotPath = Environment.ProcessPath!, Home = Home, Binaries = Binaries };
 
     /// <summary>The borrowed-snapshot binary is the plainly configured one — the same path every
     /// other vendor and every other launch shape uses. A configured path that matches no validated

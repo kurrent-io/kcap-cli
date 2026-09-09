@@ -37,6 +37,7 @@ public class DaemonRunnerAntigravityFloorTests {
             AntigravityPath                      = "agy",
             AntigravityUnattendedReviewerEnabled = true,
             Store                                = Daemons.Store,
+            Binaries                             = TestBinaries.None,
             Name                                 = "test-daemon"
         };
 
@@ -117,7 +118,7 @@ public class DaemonRunnerAntigravityFloorTests {
         var stateDir = config.Store.StateDirectory(config.Name);
 
         DaemonRunner.SeedReviewerAffirmation(
-            stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub);
+            stateDir, DaemonRunner.AntigravityVendor, enabled: true, stub, config.Binaries);
 
         var vendors = DaemonRunner.ComputeUnattendedVendors(
             [new AntigravityHostedAgentRuntimeFactory(config, NullLoggerFactory.Instance)], config);

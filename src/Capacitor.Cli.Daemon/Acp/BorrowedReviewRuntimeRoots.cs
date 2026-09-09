@@ -102,7 +102,7 @@ internal static class BorrowedReviewRuntimeRoots {
         // Path.GetFullPath would resolve it against the DAEMON'S CURRENT DIRECTORY, making that
         // directory the "package directory" and granting it recursively. A daemon started from a source
         // checkout or a home directory would hand the reviewer an unrelated tree, and nothing about the
-        // profile would look wrong. Callers resolve through CliResolver first; this refuses the class
+        // profile would look wrong. Callers resolve through the binary probe first; this refuses the class
         // outright rather than trusting them to.
         if (string.IsNullOrWhiteSpace(vendorBinaryPath) || !Path.IsPathFullyQualified(vendorBinaryPath))
             return BorrowedReviewRuntimeGrants.None;

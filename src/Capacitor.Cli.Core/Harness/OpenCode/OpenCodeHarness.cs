@@ -16,8 +16,9 @@ public sealed class OpenCodeHarness : IHarness<OpenCodeHarness> {
     /// <summary>Over a layout resolved elsewhere — a reviewer's isolated home, or a test's.</summary>
     public static OpenCodeHarness Over(OpenCodePaths paths) => new(paths);
 
-    public static HarnessId Id    => HarnessId.OpenCode;
-    public static string    Label => "OpenCode";
+    public static HarnessId Id        => HarnessId.OpenCode;
+    public static string    Label     => "OpenCode";
+    public static string    CliBinary => "opencode";
 
     /// <summary>This vendor's layout. Public because our own readers of its files take the typed
     /// paths; they reach them through the instance the entry point built, never by resolving the
@@ -26,8 +27,8 @@ public sealed class OpenCodeHarness : IHarness<OpenCodeHarness> {
 
     // Config and data dirs are the marker; the PATH probe covers a fresh install.
     public HarnessSignals Signals => new() {
-        Binaries  = ["opencode"],
-        Installed = () => Paths.IsInstalled,
-        Wired     = () => OpenCodeExtensionInstaller.IsInstalled(Paths.KcapPlugin),
+        LaunchSignal   = probe => probe.Finds(CliBinary),
+        UserDataSignal = Paths.HasUserData,
+        Wired          = () => OpenCodeExtensionInstaller.IsInstalled(Paths.KcapPlugin),
     };
 }

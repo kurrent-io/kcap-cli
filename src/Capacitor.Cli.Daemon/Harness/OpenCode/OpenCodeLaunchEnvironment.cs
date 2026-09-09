@@ -17,6 +17,12 @@ internal static class OpenCodeLaunchEnvironment {
     /// <summary>Replaces the global config root, so the operator's own <c>mcp</c> servers are absent.</summary>
     internal const string ConfigDirVariable = "OPENCODE_CONFIG_DIR";
 
+    /// <summary>A single config FILE, merged over whatever <see cref="ConfigDirVariable"/> resolves to.</summary>
+    internal const string ConfigFileVariable = "OPENCODE_CONFIG";
+
+    /// <summary>Inline config, merged at local scope over both of the above.</summary>
+    internal const string ConfigContentVariable = "OPENCODE_CONFIG_CONTENT";
+
     /// <summary>Suppresses project-scoped config discovery AND the repo instruction-file scan.</summary>
     internal const string ProjectConfigVariable = "OPENCODE_DISABLE_PROJECT_CONFIG";
 

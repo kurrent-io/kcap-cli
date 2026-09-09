@@ -13,14 +13,6 @@ public sealed class CopilotPaths {
     public string Root { get; }
 
     /// <summary>
-    /// Detection by root-dir presence — Copilot CLI creates <c>~/.copilot</c>
-    /// on first run, and (unlike Codex) the binary name <c>copilot</c> is too
-    /// generic for a PATH probe to be the only signal. Callers that want the
-    /// PATH probe too OR this with <c>BinaryProbe.OnPath("copilot")</c>.
-    /// </summary>
-    public bool IsInstalled => Directory.Exists(Root);
-
-    /// <summary>
     /// User-level hooks directory. Copilot merges every <c>*.json</c> file in
     /// here at startup, so kcap owns its own file (<see cref="KcapHooksJson"/>)
     /// instead of merging into a shared one the way the Cursor installer must.
@@ -69,4 +61,7 @@ public sealed class CopilotPaths {
 
     public string WorkspaceYaml(string sessionStateDir, string sessionDirName)
         => Path.Combine(sessionStateDir, sessionDirName, "workspace.yaml");
+
+    /// <summary>Whether Copilot has run here — it creates this root on first run.</summary>
+    public bool HasUserData() => Directory.Exists(Root);
 }

@@ -5,6 +5,9 @@ namespace Capacitor.Cli.Core.Tests.Unit.Harness.Gemini;
 public class GeminiPathsTests {
     static GeminiPaths Gem(string home, string? geminiCliHome) => new(new(home), geminiCliHome);
 
+    // "" forces home-based resolution: no GEMINI_CLI_HOME read, so these carry no exclusion.
+    static bool Installed(string home) => GeminiHarness.Over(Gem(home, "")).Signals.HasUserData;
+
     [Test]
     public async Task Root_gemini_cli_home_param_is_parent_of_dot_gemini() {
         await Assert.That(Gem("/fake/home", "/foo").Root)
@@ -54,27 +57,27 @@ public class GeminiPathsTests {
     // ~/.gemini is shared with Google Antigravity — an Antigravity-only
     // home must NOT read as a Gemini install, but a real Gemini marker still must.
     [Test]
-    public async Task IsInstalled_false_when_only_antigravity_present() {
+    public async Task Installed_false_when_only_antigravity_present() {
         using var tmp = new TempDir();
         // Antigravity-only: ~/.gemini exists but holds only antigravity subdirs.
         tmp.CreateDir(".gemini", "antigravity", "brain");
         tmp.CreateDir(".gemini", "antigravity-cli");
-        await Assert.That(Gem(tmp.Path, "").IsInstalled).IsFalse();
+        await Assert.That(Installed(tmp.Path)).IsFalse();
     }
 
     [Test]
     [Arguments("settings.json")]
     [Arguments("projects.json")]
-    public async Task IsInstalled_true_on_gemini_marker_file(string marker) {
+    public async Task Installed_true_on_gemini_marker_file(string marker) {
         using var tmp = new TempDir();
         tmp.CreateFile([".gemini", marker], "{}");
-        await Assert.That(Gem(tmp.Path, "").IsInstalled).IsTrue();
+        await Assert.That(Installed(tmp.Path)).IsTrue();
     }
 
     [Test]
-    public async Task IsInstalled_true_on_tmp_recordings_dir() {
+    public async Task Installed_true_on_tmp_recordings_dir() {
         using var tmp = new TempDir();
         tmp.CreateDir(".gemini", "tmp");
-        await Assert.That(Gem(tmp.Path, "").IsInstalled).IsTrue();
+        await Assert.That(Installed(tmp.Path)).IsTrue();
     }
 }

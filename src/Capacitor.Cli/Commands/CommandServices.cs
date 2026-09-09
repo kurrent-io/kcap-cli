@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Commands;
@@ -25,12 +26,15 @@ public static class CommandServices {
         services.AddSingleton(clock);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
 
-        // Both probe the filesystem, and only a handful of commands take either, so they stay
-        // factories: resolving a command that wants neither must not pay for them.
-        services.AddSingleton(sp => HarnessRegistry.FromEnvironment(sp.GetRequiredService<UserHome>()));
+        // Factories because only a handful of commands take either. The registry is built over the
+        // same probe instance, so a harness binary and a configured path search one PATH.
+        services.AddSingleton(_ => BinaryProbe.FromEnvironment());
+        services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
+            sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
-                sp.GetRequiredService<UserHome>()));
+                sp.GetRequiredService<UserHome>(),
+                sp.GetRequiredService<HarnessRegistry>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
         services.AddCapacitorHttp();

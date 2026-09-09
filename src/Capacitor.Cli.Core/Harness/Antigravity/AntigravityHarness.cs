@@ -15,16 +15,20 @@ public sealed class AntigravityHarness : IHarness<AntigravityHarness> {
     public static HarnessId Id    => HarnessId.Antigravity;
     public static string    Label => "Antigravity";
 
+    /// <summary>`antigravity` starts the IDE; `agy` is the agent CLI.</summary>
+    public static string CliBinary => "agy";
+
+    /// <summary>Antigravity's IDE shim. Not spawnable as an agent, but its presence means Antigravity is here.</summary>
+    const string IdeBinary = "antigravity";
+
     /// <summary>This vendor's layout. Public because our own readers of its files take the typed
     /// paths; they reach them through the instance the entry point built, never by resolving the
     /// override a second time.</summary>
     public AntigravityPaths Paths { get; }
 
-    // The CLI binary is `agy`, not `antigravity`, so both names must be probed or an agy-only
-    // machine reads as absent. The marker covers either product root.
     public HarnessSignals Signals => new() {
-        Binaries  = ["antigravity", "agy"],
-        Installed = () => Paths.IsInstalled,
-        Wired     = () => AntigravityHooksInstaller.IsInstalled(Paths.GlobalHooksJson),
+        LaunchSignal   = probe => probe.Finds(CliBinary) || probe.Finds(IdeBinary),
+        UserDataSignal = Paths.HasUserData,
+        Wired          = () => AntigravityHooksInstaller.IsInstalled(Paths.GlobalHooksJson),
     };
 }

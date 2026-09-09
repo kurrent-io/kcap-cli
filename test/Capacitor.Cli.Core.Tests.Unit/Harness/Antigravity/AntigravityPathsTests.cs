@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Harness.Antigravity;
+using Capacitor.Cli.Core.Harness.Gemini;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Antigravity;
 
@@ -12,6 +13,10 @@ public class AntigravityPathsTests {
     static string GeminiRoot => Path.Combine(P, ".gemini");
 
     static AntigravityPaths Ags(string home, string? geminiCliHome) => new(new(home), geminiCliHome);
+
+    // "" forces home-based resolution: no GEMINI_CLI_HOME read, so this carries no exclusion.
+    static AntigravityHarness Agy(string home) =>
+        AntigravityHarness.Over(GeminiHarness.Over(new GeminiPaths(new(home), "")));
 
     [Test]
     public async Task Root_is_antigravity_under_gemini_home() {
@@ -77,21 +82,20 @@ public class AntigravityPathsTests {
             .IsEqualTo(Path.Combine("/repo", ".agents", "plugins", "kcap", "hooks.json"));
     }
 
-    // G2 gateway: EITHER product root means installed. The agy-only row (GUI absent, CLI present)
-    // is the one this fix exists for — before it, that machine was undetected and nothing installed.
+    // The agy-only row is the one that matters: CLI root present, GUI root absent must still detect,
+    // or the plugin both surfaces share never installs.
     [Test]
     [Arguments(false, false, false)] // neither root
     [Arguments(true,  false, true)]  // GUI only
-    [Arguments(false, true,  true)]  // agy CLI only  <-- the gateway case
+    [Arguments(false, true,  true)]  // agy CLI only
     [Arguments(true,  true,  true)]  // both
-    public async Task IsInstalled_is_true_when_EITHER_product_root_exists(
+    public async Task HasUserData_is_true_when_EITHER_product_root_exists(
             bool gui, bool cli, bool expected) {
         using var tmp = new TempDir();
-        // geminiCliHome: "" forces home-based resolution (no env read).
         if (gui) tmp.CreateDir(".gemini", "antigravity");
         if (cli) tmp.CreateDir(".gemini", "antigravity-cli");
 
-        await Assert.That(Ags(tmp.Path, "").IsInstalled).IsEqualTo(expected);
+        await Assert.That(Agy(tmp.Path).Paths.HasUserData()).IsEqualTo(expected);
     }
 
     [Test]

@@ -201,6 +201,25 @@ public class OpenCodeReviewerLaunchTests {
         await Assert.That(psi.Environment[OpenCodeLaunchEnvironment.ProjectConfigVariable]).IsEqualTo("1");
     }
 
+    /// <summary>The config sources that merge OVER the isolated dir do not reach a reviewer.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task AReviewLaunch_DropsTheConfigSourcesThatMergeOverTheIsolatedDir() {
+        SkipOnWindows();
+
+        // Absence is assertable only because these scopes established the values: the child's block is
+        // seeded from this process, so a variable nothing set proves nothing about the scrub.
+        using var file    = EnvScope.Exclusive(OpenCodeLaunchEnvironment.ConfigFileVariable,
+                                               "/tmp/kcap-opencode-config-probe.json");
+        using var content = EnvScope.Exclusive(OpenCodeLaunchEnvironment.ConfigContentVariable,
+                                               """{"mcp":{"kcap-flows":{"type":"local"}}}""");
+
+        var psi = Psi(isReviewFlow: true);
+
+        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.ConfigFileVariable)).IsFalse();
+        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.ConfigContentVariable)).IsFalse();
+    }
+
     /// <summary>
     /// None of the reviewer containment may leak onto an interactive session, which must behave as the
     /// user's own does. The plugin suppression is the ONE setting both share.

@@ -10,8 +10,9 @@ public sealed class PiHarness : IHarness<PiHarness> {
     /// <summary>Over a layout resolved elsewhere — a reviewer's isolated home, or a test's.</summary>
     public static PiHarness Over(PiPaths paths) => new(paths);
 
-    public static HarnessId Id    => HarnessId.Pi;
-    public static string    Label => "Pi";
+    public static HarnessId Id        => HarnessId.Pi;
+    public static string    Label     => "Pi";
+    public static string    CliBinary => "pi";
 
     /// <summary>This vendor's layout. Public because our own readers of its files take the typed
     /// paths; they reach them through the instance the entry point built, never by resolving the
@@ -20,8 +21,8 @@ public sealed class PiHarness : IHarness<PiHarness> {
 
     // Pi keeps state under ~/.pi/agent; the PATH probe covers an install that has not created it.
     public HarnessSignals Signals => new() {
-        Binaries  = ["pi"],
-        Installed = () => Paths.IsInstalled,
-        Wired     = () => PiExtensionInstaller.IsInstalled(Paths.KcapExtension),
+        LaunchSignal   = probe => probe.Finds(CliBinary),
+        UserDataSignal = Paths.HasUserData,
+        Wired          = () => PiExtensionInstaller.IsInstalled(Paths.KcapExtension),
     };
 }

@@ -80,7 +80,7 @@ public class PiHostedRuntimeLiveCertTests {
             config: config,
             loggerFactory: liveLoggerFactory,
             processSource: null,  // real `pi --mode rpc` spawn — the production path
-            binaryExists: null);  // real CliResolver.Exists probe
+            binaryExists: null);  // real BinaryProbe.Finds probe
 
         var ctx = new RuntimeStartContext(
             AgentId: "ai-894-pi-hosted-live",

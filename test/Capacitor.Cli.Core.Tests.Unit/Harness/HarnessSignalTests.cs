@@ -31,8 +31,8 @@ public class HarnessSignalTests {
     /// them — kcap's own skills install creates one — so neither declares a marker at all.
     [Test]
     public async Task Claude_and_Codex_declare_no_install_marker() {
-        await Assert.That(ClaudeHarness.Over(new ClaudePaths(Home, null)).Signals.Installed is null).IsTrue();
-        await Assert.That(CodexHarness.Over(new CodexPaths(Home, null)).Signals.Installed is null).IsTrue();
+        await Assert.That(ClaudeHarness.Over(new ClaudePaths(Home, null)).Signals.UserDataSignal is null).IsTrue();
+        await Assert.That(CodexHarness.Over(new CodexPaths(Home, null)).Signals.UserDataSignal is null).IsTrue();
     }
 
     /// A bare <c>~/.gemini</c> is created by things other than a Gemini run; a settings file is not.
@@ -41,34 +41,34 @@ public class HarnessSignalTests {
         var gemini = GeminiHarness.Over(new GeminiPaths(Home, null));
 
         Home.CreateDir(".gemini");
-        await Assert.That(gemini.Signals.IsInstalled).IsFalse();
+        await Assert.That(gemini.Signals.HasUserData).IsFalse();
 
         Home.CreateFile([".gemini", "settings.json"], "{}");
-        await Assert.That(gemini.Signals.IsInstalled).IsTrue();
+        await Assert.That(gemini.Signals.HasUserData).IsTrue();
     }
 
     [Test]
     public async Task Kiro_reads_the_root_it_was_given_and_nothing_else() {
         using var tmp = new TempDir();
 
-        await Assert.That(KiroHarness.Over(new KiroPaths(Nowhere, null)).Signals.IsInstalled).IsFalse();
-        await Assert.That(KiroHarness.Over(new KiroPaths(Nowhere, tmp.Path)).Signals.IsInstalled).IsTrue();
+        await Assert.That(KiroHarness.Over(new KiroPaths(Nowhere, null)).Signals.HasUserData).IsFalse();
+        await Assert.That(KiroHarness.Over(new KiroPaths(Nowhere, tmp.Path)).Signals.HasUserData).IsTrue();
     }
 
     [Test]
     public async Task Pi_reads_the_agent_dir_it_was_given_and_nothing_else() {
         using var tmp = new TempDir();
 
-        await Assert.That(PiHarness.Over(new PiPaths(Nowhere, null)).Signals.IsInstalled).IsFalse();
-        await Assert.That(PiHarness.Over(new PiPaths(Nowhere, tmp.Path)).Signals.IsInstalled).IsTrue();
+        await Assert.That(PiHarness.Over(new PiPaths(Nowhere, null)).Signals.HasUserData).IsFalse();
+        await Assert.That(PiHarness.Over(new PiPaths(Nowhere, tmp.Path)).Signals.HasUserData).IsTrue();
     }
 
     [Test]
     public async Task Copilot_reads_the_home_it_was_given_and_nothing_else() {
         using var tmp = new TempDir();
 
-        await Assert.That(CopilotHarness.Over(new CopilotPaths(Nowhere, null)).Signals.IsInstalled).IsFalse();
-        await Assert.That(CopilotHarness.Over(new CopilotPaths(Nowhere, tmp.Path)).Signals.IsInstalled).IsTrue();
+        await Assert.That(CopilotHarness.Over(new CopilotPaths(Nowhere, null)).Signals.HasUserData).IsFalse();
+        await Assert.That(CopilotHarness.Over(new CopilotPaths(Nowhere, tmp.Path)).Signals.HasUserData).IsTrue();
     }
 
     [Test]
@@ -76,7 +76,7 @@ public class HarnessSignalTests {
         using var tmp = new TempDir();
         var       paths = new OpenCodePaths(Nowhere, tmp.Path, null, null);
 
-        await Assert.That(OpenCodeHarness.Over(paths).Signals.IsInstalled).IsTrue();
+        await Assert.That(OpenCodeHarness.Over(paths).Signals.HasUserData).IsTrue();
     }
 
     /// Cursor's second signal is this host's Electron user dir, wherever that host keeps it. Windows
@@ -89,7 +89,7 @@ public class HarnessSignalTests {
 
         Directory.CreateDirectory(cursor.Paths.UserDir);
 
-        await Assert.That(cursor.Signals.IsInstalled).IsTrue();
+        await Assert.That(cursor.Signals.HasUserData).IsTrue();
     }
 
     // ── binaries ──
@@ -103,19 +103,33 @@ public class HarnessSignalTests {
         var cursor   = CursorHarness.Over(new CursorPaths(Nowhere));
         var detected = Detect(cursor, TestBinaries.Searching(bin, "cursor"));
 
-        await Assert.That(cursor.Signals.Binaries).IsEmpty();
+        await Assert.That(cursor.Signals.LaunchSignal).IsNull();
         await Assert.That(detected.BinaryFound).IsFalse();
     }
 
-    /// Antigravity's CLI is <c>agy</c>, not <c>antigravity</c>, so an agy-only machine would read as
-    /// absent if only the product name were probed.
+    /// Antigravity's CLI is <c>agy</c> and its IDE is <c>antigravity</c>; either alone installs the
+    /// vendor, so both names are probed.
     [Test]
-    public async Task Antigravity_probes_agy_as_well_as_its_product_name() {
+    [Arguments("agy")]
+    [Arguments("antigravity")]
+    public async Task Antigravity_is_detected_by_either_of_its_names(string staged) {
         using var bin = new TempDir();
 
         var antigravity = AntigravityHarness.Over(GeminiHarness.Over(new GeminiPaths(Nowhere, null)));
 
-        await Assert.That(Detect(antigravity, TestBinaries.Searching(bin, "agy")).BinaryFound).IsTrue();
+        await Assert.That(Detect(antigravity, TestBinaries.Searching(bin, staged)).BinaryFound).IsTrue();
+    }
+
+    /// Kiro's agent CLI is <c>kiro-cli</c> and its IDE is <c>kiro</c>; a machine can carry either.
+    [Test]
+    [Arguments("kiro-cli")]
+    [Arguments("kiro")]
+    public async Task Kiro_is_detected_by_either_of_its_names(string staged) {
+        using var bin = new TempDir();
+
+        var kiro = KiroHarness.Over(new KiroPaths(Nowhere, null));
+
+        await Assert.That(Detect(kiro, TestBinaries.Searching(bin, staged)).BinaryFound).IsTrue();
     }
 
     [Test]

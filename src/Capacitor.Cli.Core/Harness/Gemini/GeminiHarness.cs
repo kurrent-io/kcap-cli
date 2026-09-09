@@ -12,19 +12,19 @@ public sealed class GeminiHarness : IHarness<GeminiHarness> {
     /// <summary>Over a layout resolved elsewhere — a reviewer's isolated home, or a test's.</summary>
     public static GeminiHarness Over(GeminiPaths paths) => new(paths);
 
-    public static HarnessId Id    => HarnessId.Gemini;
-    public static string    Label => "Gemini";
+    public static HarnessId Id        => HarnessId.Gemini;
+    public static string    Label     => "Gemini";
+    public static string    CliBinary => "gemini";
 
     /// <summary>This vendor's layout. Public because our own readers of its files take the typed
     /// paths; they reach them through the instance the entry point built, never by resolving the
     /// override a second time.</summary>
     public GeminiPaths Paths { get; }
 
-    // The marker covers IDE-launched Gemini; the PATH probe covers a fresh install that has not
-    // created ~/.gemini yet.
+    // The PATH probe covers a fresh install that has written none of the markers yet.
     public HarnessSignals Signals => new() {
-        Binaries  = ["gemini"],
-        Installed = () => Paths.IsInstalled,
-        Wired     = () => GeminiHooksInstaller.IsInstalled(Paths.SettingsJson),
+        LaunchSignal   = probe => probe.Finds(CliBinary),
+        UserDataSignal = Paths.HasUserData,
+        Wired          = () => GeminiHooksInstaller.IsInstalled(Paths.SettingsJson),
     };
 }

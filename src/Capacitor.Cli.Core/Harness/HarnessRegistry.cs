@@ -54,7 +54,13 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness> {
 
     /// <summary>Every vendor as this machine's environment resolves it, searched over this process's
     /// own PATH.</summary>
-    public static HarnessRegistry FromEnvironment(UserHome home) {
+    public static HarnessRegistry FromEnvironment(UserHome home) =>
+        FromEnvironment(home, BinaryProbe.FromEnvironment());
+
+    /// <summary>Every vendor as this machine's environment resolves it, searched over
+    /// <paramref name="binaries"/> — the composition root's own DI singleton, so this registry and
+    /// every other consumer of that singleton search the same path.</summary>
+    public static HarnessRegistry FromEnvironment(UserHome home, BinaryProbe binaries) {
         var gemini = GeminiHarness.FromEnvironment(home);
 
         return new([
@@ -67,7 +73,7 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness> {
             PiHarness.FromEnvironment(home),
             OpenCodeHarness.FromEnvironment(home),
             AntigravityHarness.Over(gemini),
-        ], BinaryProbe.FromEnvironment());
+        ], binaries);
     }
 
     /// <summary>Over harnesses resolved elsewhere — a test's, or a subset.</summary>
@@ -91,22 +97,32 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness> {
     public IHarness? ById(HarnessId id) => _harnesses.FirstOrDefault(h => h.Id == id);
 
     /// <summary>One vendor's own harness, for code that reads that vendor's files and needs its
-    /// typed layout.</summary>
-    public TSelf Of<TSelf>() where TSelf : IHarness<TSelf> => (TSelf)this[TSelf.Id];
+    /// typed layout. A registry holding another implementation under that id throws naming both,
+    /// rather than an unattributed <see cref="InvalidCastException"/>.</summary>
+    public TSelf Of<TSelf>() where TSelf : IHarness<TSelf> =>
+        this[TSelf.Id] is TSelf harness
+            ? harness
+            : throw new InvalidOperationException($"Harness {TSelf.Id} in this registry is not a {typeof(TSelf).Name}.");
 
-    /// <summary>What a PATH probe and this vendor's own marker say about it, asked now. The two
-    /// signals stay apart: the first-run screen names the one it saw.</summary>
+    /// <summary>What the launch and user-data signals say about this vendor, asked now. The two
+    /// stay apart: the first-run screen names the one it saw.</summary>
     public DetectedAgent Detect(HarnessId id) =>
         ById(id) is { } harness
             ? new DetectedAgent(
-                BinaryFound:        harness.Signals.Binaries.Any(_binaries.Finds),
-                InstallSignalFound: harness.Signals.IsInstalled)
+                BinaryFound:        harness.Signals.CanLaunch(_binaries),
+                InstallSignalFound: harness.Signals.HasUserData)
             // An id this registry never carried — a stale flag, a server payload — reads as absent
             // rather than throwing: neither must take a command down.
             : DetectedAgent.None;
 
     /// <summary>Whether either signal found this vendor.</summary>
     public bool Detected(HarnessId id) => Detect(id).Detected;
+
+    /// <summary>Full path to <paramref name="id"/>'s <see cref="IHarness.CliBinary"/> on this
+    /// registry's search path, or null. Detection signals are not consulted: a machine with the Kiro
+    /// IDE and no <c>kiro-cli</c> must resolve to null, never to a GUI launcher.</summary>
+    public string? ResolveExecutable(HarnessId id) =>
+        ById(id) is { } harness ? _binaries.Resolve(harness.CliBinary) : null;
 
     public int      Count           => _harnesses.Count;
     public IHarness this[int index] => _harnesses[index];
