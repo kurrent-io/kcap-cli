@@ -27,6 +27,8 @@ pressed and keyboard-focus states. Current restores the original chip templates 
 The sidebar also follows the material: glass modes use an inset panel with 22 DIP corners,
 frosted tint, a light rim and a shared backdrop extending behind the session tree. The panel
 starts below the macOS window controls. Current restores the original full-height sidebar.
+A faint continuous outline sits beneath the softer directional highlight, keeping the
+top-right and bottom-left corners visible where the shader's diagonal lighting fades.
 
 Move the pointer inside the launcher to shift the glow slightly and see the live backdrop.
 Use the buttons or left/right arrows to switch; text fields retain their usual arrow-key behaviour.

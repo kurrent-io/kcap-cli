@@ -16,12 +16,24 @@ sealed class GlassSidebarPrototype {
     readonly Grid _chrome;
     readonly IBrush? _originalBackground;
     readonly Thickness _originalBorder;
+    // The surface draws its directional highlight over this continuous, non-interactive rim.
+    readonly Grid _glassContent = new() {
+        Children = {
+            new Border {
+                CornerRadius = new CornerRadius(22),
+                BorderBrush = Brush.Parse("#2EFFFFFF"),
+                BorderThickness = new Thickness(1),
+                IsHitTestVisible = false,
+            },
+        },
+    };
     readonly LiquidGlassSurface _glass = new() {
         CornerRadius = new CornerRadius(22),
         HorizontalContentAlignment = HorizontalAlignment.Stretch,
         VerticalContentAlignment = VerticalAlignment.Stretch,
         RefractionHeight = 18,
         Vibrancy = 0.8,
+        HighlightFalloff = 0.65,
         ShadowRadius = 20,
         ShadowOffset = new Vector(4, 8),
         ShadowColor = Color.Parse("#65000000"),
@@ -41,6 +53,7 @@ sealed class GlassSidebarPrototype {
     public void Apply(int mode) {
         _rail.Content = null;
         _glass.Content = null;
+        _glassContent.Children.Remove(_content);
         _rail.Classes.Set("glassPrototypeRail", mode != 0);
         _rail.Margin = mode == 0 ? default : new Thickness(12, 40, 12, 12);
         _chrome.Height = mode == 0 ? 44 : 16;
@@ -55,9 +68,10 @@ sealed class GlassSidebarPrototype {
         _glass.RefractionAmount = mode == 1 ? 5 : 14;
         _glass.TintColor = Color.Parse(mode == 1 ? "#344E667C" : "#284E667C");
         _glass.SurfaceColor = Color.Parse("#462F3745");
-        _glass.HighlightOpacity = mode == 1 ? 0.55 : 0.75;
-        _glass.HighlightWidth = mode == 1 ? 0.9 : 1.15;
-        _glass.Content = _content;
+        _glass.HighlightOpacity = mode == 1 ? 0.28 : 0.42;
+        _glass.HighlightWidth = mode == 1 ? 0.75 : 1;
+        _glassContent.Children.Insert(0, _content);
+        _glass.Content = _glassContent;
         _rail.Content = _glass;
     }
 }
