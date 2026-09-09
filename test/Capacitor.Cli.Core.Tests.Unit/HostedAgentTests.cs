@@ -22,6 +22,23 @@ public class HostedAgentTests {
         await Assert.That(HostedAgent.FromEnvironment().AgentId).IsEqualTo("6ba7b8109dad11d180b400c04fd430c8");
     }
 
+    /// <summary>
+    /// The daemon exports one exact value here; the hook decides whether the bridge owns this
+    /// session's prompts on it, so anything else has to read as not rendered rather than as
+    /// truthy. Written with the literals, so a rename on either side has to be deliberate.
+    /// </summary>
+    [Test]
+    [Arguments("1", true)]
+    [Arguments("0", false)]
+    [Arguments("true", false)]
+    [Arguments("", false)]
+    [Arguments(null, false)]
+    public async Task Only_the_exported_marker_marks_a_rendered_session(string? raw, bool rendered) {
+        using var _ = EnvScope.Exclusive("KCAP_RENDERED_AGENT", raw);
+
+        await Assert.That(HostedAgent.FromEnvironment().IsRendered).IsEqualTo(rendered);
+    }
+
     /// The daemon exports the id unconditionally and the bridge only when it has one, so an id
     /// without a bridge is the ordinary shape rather than a broken environment.
     [Test]

@@ -23,9 +23,10 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     public static readonly HostedAgent Terminal = new(null, false, DaemonBridge.None);
 
     /// <summary>
-    /// An exported variable can be blank, and a hook inherits its host's environment wholesale. A
-    /// blank id is not an id: posted as <c>agent_host_id</c> it attributes the session to an agent
-    /// nothing hosts.
+    /// An exported variable can be empty, and a hook inherits its host's environment wholesale. An
+    /// empty id is not an id: posted as <c>agent_host_id</c> it attributes the session to an agent
+    /// nothing hosts. An id of blanks is still an id — nothing downstream reads it, so there is no
+    /// call to guess at what was meant.
     /// </summary>
     public static HostedAgent FromEnvironment() =>
         new(Environment.GetEnvironmentVariable(AgentIdVar) is { Length: > 0 } id ? id : null,
