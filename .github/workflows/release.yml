@@ -262,7 +262,7 @@ jobs:
         shell: bash
         run: >
           bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN"
-          src/Capacitor.App/Packaging/daemon.entitlements.plist
+          src/Capacitor.App/Packaging/daemon.entitlements
           publish/daemon/${{ matrix.daemon-binary }} publish/daemon/libpty_shim.dylib
 
       - name: Compute daemon digest
@@ -290,7 +290,7 @@ jobs:
         shell: bash
         run: >
           bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN"
-          src/Capacitor.App/Packaging/cli.entitlements.plist publish/cli/${{ matrix.cli-binary }}
+          src/Capacitor.App/Packaging/cli.entitlements publish/cli/${{ matrix.cli-binary }}
 
       - name: Smoke signed binaries (macOS)
         if: startsWith(matrix.rid, 'osx-')
@@ -736,7 +736,7 @@ jobs:
           while IFS= read -r f; do
             if file "$f" | grep -q 'Mach-O'; then machos+=("$f"); fi
           done < <(find publish/app -type f)
-          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements.plist "${machos[@]}"
+          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements "${machos[@]}"
 
       # The trio arrives already signed; it is copied, never touched by codesign again.
       - name: Assemble pack directory
@@ -762,7 +762,7 @@ jobs:
           --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
           --packDir publish/app --plist publish/Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns
           --channel osx-arm64 --noInst --outputDir releases
-          --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements.plist
+          --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
           --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
 
       - name: Assert and smoke the packed bundle

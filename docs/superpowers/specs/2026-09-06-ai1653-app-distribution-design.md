@@ -73,11 +73,11 @@ Nothing else changes: hooks, MCP registrations, the LaunchAgent and the shim all
 
 Three committed plists under `src/Capacitor.App/Packaging/`:
 
-- `app.entitlements.plist` — the app executable and every runtime dylib: `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.cs.allow-dyld-environment-variables`, `com.apple.security.cs.disable-library-validation` (Microsoft's documented set for a JIT .NET app under hardened runtime).
-- `cli.entitlements.plist` — `kcap`: `com.apple.security.cs.disable-library-validation` only. The on-demand `e_sqlite3` it downloads for OpenCode import is not signed by our team, and library validation would refuse to load it.
-- `daemon.entitlements.plist` — `kcap-daemon` and `libpty_shim.dylib`: empty dictionary. The daemon's only native import is our own signed shim; vendor CLIs it spawns are separate processes.
+- `app.entitlements` — the app executable and every runtime dylib: `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.cs.allow-dyld-environment-variables`, `com.apple.security.cs.disable-library-validation` (Microsoft's documented set for a JIT .NET app under hardened runtime).
+- `cli.entitlements` — `kcap`: `com.apple.security.cs.disable-library-validation` only. The on-demand `e_sqlite3` it downloads for OpenCode import is not signed by our team, and library validation would refuse to load it.
+- `daemon.entitlements` — `kcap-daemon` and `libpty_shim.dylib`: empty dictionary. The daemon's only native import is our own signed shim; vendor CLIs it spawns are separate processes.
 
-The outer bundle is signed by Velopack with `app.entitlements.plist` (passed as `--signEntitlements`); `UpdateMac` gets Velopack's own default entitlements.
+The outer bundle is signed by Velopack with `app.entitlements` (passed as `--signEntitlements`); `UpdateMac` gets Velopack's own default entitlements.
 
 ### 4.3 Secrets and keychain
 
@@ -149,7 +149,7 @@ New job `app-bundle`, display name `App bundle (osx-arm64)`, on `macos-latest`, 
 vpk pack --packId KurrentCapacitor --packVersion "$VERSION" --packTitle "Kurrent Capacitor" --packAuthors Kurrent \
   --mainExe "Kurrent Capacitor" --packDir publish/app --plist Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns \
   --channel osx-arm64 --noInst --outputDir releases \
-  --signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements.plist \
+  --signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements \
   --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
 ```
 
