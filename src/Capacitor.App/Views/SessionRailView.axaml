@@ -76,6 +76,8 @@
                         <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapWarningBrush}"
                                    IsVisible="{Binding ServerLaneTip, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
+                                   IsVisible="{Binding RestartPendingText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                 </ToolTip.Tip>
                 <DockPanel Margin="16,10,16,14" Background="Transparent">
@@ -90,6 +92,11 @@
                         <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" FontSize="11.5"
                                    Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
                                    IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="·" FontSize="11.5" Foreground="{StaticResource KcapFaintBrush}"
+                                   IsVisible="{Binding RestartPending}" />
+                        <TextBlock Text="update pending" FontSize="11.5"
+                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
+                                   IsVisible="{Binding RestartPending}" />
                     </StackPanel>
                 </DockPanel>
             </Border>
