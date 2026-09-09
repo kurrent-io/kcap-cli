@@ -1128,7 +1128,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
         // LAST, and gated on MEASURED quiescence rather than an assumption of it. The callback removes
         // the per-launch HOME, which holds the reviewer's own conversation JSONL — the caller's diff,
-        // source excerpts and findings. Kill(entireProcessTree: true) is not atomic against a
+        // source excerpts and findings. ProcessTree.Kill is not atomic against a
         // grandchild forked between tree enumeration and signal, and agy's children include its MCP
         // stdio servers, so a survivor past these budgets is a real shape rather than a hypothetical.
         //

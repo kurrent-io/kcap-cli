@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Acp;
@@ -7,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// <see cref="IAcpProcess"/> over a real <see cref="Process"/> — the <c>cursor-agent acp</c> child
 /// spawned by <see cref="Services.AcpHostedAgentRuntimeFactory"/>. Mirrors the
 /// terminate/wait semantics of <c>Pty.Unix.UnixPtyProcess</c>/<c>WinPtyProcess</c> (SIGTERM-then-kill
-/// via <see cref="Process.Kill(bool)"/>, bounded waits that return silently on timeout) but owns no
+/// via <see cref="ProcessTree.Kill(Process)"/>, bounded waits that return silently on timeout) but owns no
 /// terminal I/O — stdin/stdout carry ACP JSON-RPC frames, consumed by <see cref="AcpConnection"/>.
 ///
 /// Also owns a background drain of the child's redirected stderr. <c>cursor-agent</c> is spawned
@@ -169,7 +170,7 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
         try {
             if (_process.HasExited) return;
 
-            _process.Kill(entireProcessTree: true);
+            ProcessTree.Kill(_process);
         } catch {
             // Already exited/disposed, or the kill raced the exit — either way there's
             // nothing left to terminate.
@@ -185,7 +186,7 @@ internal sealed partial class AcpChildProcess : IAcpProcess {
 
         try {
             if (!_process.HasExited)
-                _process.Kill(entireProcessTree: true);
+                ProcessTree.Kill(_process);
         } catch {
             // Best-effort — already exited or inaccessible.
         }

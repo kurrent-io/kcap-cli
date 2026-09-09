@@ -593,7 +593,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 /// <summary>
 /// <see cref="IAgyTurnProcess"/> over a real <see cref="Process"/> — ONE <c>agy -p</c> turn. Mirrors
 /// <see cref="AcpChildProcess"/>'s terminate/wait semantics (SIGTERM-then-kill via
-/// <see cref="Process.Kill(bool)"/>, bounded waits that return silently on timeout), and honours the
+/// <see cref="ProcessTree.Kill(Process)"/>, bounded waits that return silently on timeout), and honours the
 /// two contracts <see cref="IAgyTurnProcess"/> states: <see cref="DisposeAsync"/> is idempotent, and
 /// <see cref="TerminateAsync"/> is safe after it — the runtime can reach both on the same instance
 /// microseconds apart when a stop races a turn's own unwinding.
@@ -736,7 +736,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
         try {
             if (_process.HasExited) return;
 
-            _process.Kill(entireProcessTree: true);
+            ProcessTree.Kill(_process);
         } catch {
             // Already exited, already disposed (the contract explicitly permits this call after
             // DisposeAsync), or the kill raced the exit — nothing left to terminate either way.
@@ -749,14 +749,14 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
     public async ValueTask DisposeAsync() {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;   // idempotent, per the interface contract
 
-        // No bounded wait after the kill, deliberately. Kill(entireProcessTree: true) is SIGKILL on
+        // No bounded wait after the kill, deliberately. ProcessTree.Kill is SIGKILL on
         // POSIX, which no child can catch or defer, so the death is already effectively synchronous
         // with the call — a wait here was measured to change nothing observable against a real child.
         // Callers that need a CONFIRMED exit terminate first and read HasExited while the handle is
         // still valid (see AntigravityHostedAgentRuntime.ProcessTurnAsync's teardown), which is the
         // only place that reading is truthful anyway.
         try {
-            if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+            if (!_process.HasExited) ProcessTree.Kill(_process);
         } catch {
             // Best-effort — already exited or inaccessible.
         }

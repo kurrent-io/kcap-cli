@@ -1,0 +1,1 @@
+M:System.Diagnostics.Process.Kill(System.Boolean);Use ProcessTree.Kill. The runtime's tree kill SIGSTOPs first, and a stopped member of the daemon's own process group makes the kernel SIGHUP the daemon when that group is orphaned.
