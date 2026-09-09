@@ -13,6 +13,10 @@ app is the one the shim links and the LaunchAgent runs, at a path that survives 
 packs and updates the bundle; one Velopack channel carries every release, and the app itself drops
 prerelease entries when the installed version is stable.
 
+**The app is one executable.** codesign treats every file under `Contents/MacOS` as nested code that
+must carry its own signature, and a managed assembly cannot, so the publish folds the assemblies
+into the host and only Mach-O files sit beside it.
+
 **The daemon is signed before its digest is computed, and never again.** The CLI embeds the
 daemon's SHA-256 and refuses a mismatch on app-managed starts; signing rewrites the bytes, so the
 order is fixed and Velopack runs with deep signing disabled. npm and the app receive the same signed
