@@ -5,15 +5,63 @@ Throwaway branch: `prototype/desktop-liquid-glass`.
 Question: does LiquidGlassAvaloniaUI make the existing Capacitor launcher feel better?
 The layout, controls and typography stay consistent so the material can be judged directly.
 
-From the worktree root:
+## Build and run locally
+
+You need Git, access to this repository, and the **.NET 10 SDK** on your PATH. The
+repository's `global.json` selects SDK 10.0.100 or a later .NET 10 feature band; a
+runtime-only installation cannot build the app. Check your installation with
+`dotnet --list-sdks`.
+
+The preview has been built and visually checked on **macOS with Apple silicon**.
+Windows and Linux rendering have not been validated; the direct .NET commands below
+can also be used there from a graphical desktop session.
+
+### Get the branch
+
+For a separate clone:
+
+```sh
+git clone --branch prototype/desktop-liquid-glass https://github.com/kurrent-io/kcap-cli.git kcap-liquid-glass
+cd kcap-liquid-glass
+```
+
+Or, from an existing clone, create a separate worktree:
+
+```sh
+git fetch origin prototype/desktop-liquid-glass
+git worktree add --detach ../kcap-liquid-glass origin/prototype/desktop-liquid-glass
+cd ../kcap-liquid-glass
+```
+
+### Launch the preview
+
+From the clone or worktree root, on macOS or Linux:
 
 ```sh
 bash scripts/preview-liquid-glass.sh
 ```
 
+The script restores packages, builds in Debug, and opens the preview. The first build
+needs access to NuGet.org; the exact LiquidGlassAvaloniaUI package is already included
+in this branch and resolved through the root `nuget.config`.
+
+To build and run separately, including from Windows PowerShell:
+
+```sh
+dotnet build src/Capacitor.App/Capacitor.App.csproj -c Debug
+dotnet "src/Capacitor.App/bin/Debug/net10.0/Kurrent Capacitor.dll" --glass-prototype
+```
+
+Use **Debug** and keep **`--glass-prototype`** in the launch command. That entry point
+is compiled only in Debug; omitting the flag starts the normal desktop app. The preview
+window is titled **Capacitor · Liquid glass prototype** and opens in **Soft glass**.
+
+## What to try
+
 The preview opens the real MainWindow, session rail and launcher with three sample sessions.
 Data and picker preferences live in memory. Start displays a preview message. No daemon,
 server connection, updater or tray is started. Close the window to quit.
+You do not need to install the CLI, sign in, configure a server, or install a coding agent.
 
 - **Current:** the existing opaque composer.
 - **Soft glass:** 14 DIP blur, 5 DIP refraction, muted tint and restrained edge lighting.
