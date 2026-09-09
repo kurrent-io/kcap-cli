@@ -19,7 +19,8 @@ public class CodexWindowsVersionGateTests {
     [TempHome] public required TempHome Home { get; init; }
 
     CodexLauncher NewLauncher(string cliPath) =>
-        new(new DaemonConfig { CodexPath = cliPath }, Home, NullLogger<CodexLauncher>.Instance);
+        new(new DaemonConfig { CodexPath = cliPath, Binaries = TestBinaries.None },
+            TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance);
 
     /// <summary>CI runs Windows Server 2022 / Windows 11 and Linux — all supported. A false here
     /// means the gate is wrong, not that the host is genuinely too old.</summary>

@@ -129,7 +129,7 @@ public class BorrowedReviewRuntimeRootsTests {
     /// CURRENT DIRECTORY — making that directory the package directory and granting it recursively,
     /// while sandbox-exec separately executed the real binary from PATH. A daemon started from a source
     /// checkout or a home directory would have handed the reviewer an unrelated tree with nothing in the
-    /// profile looking wrong. Callers now resolve through <c>CliResolver</c> first; this refuses the
+    /// profile looking wrong. Callers resolve through the binary probe first; this refuses the
     /// class regardless.</para></summary>
     [Test]
     [Arguments("copilot")]

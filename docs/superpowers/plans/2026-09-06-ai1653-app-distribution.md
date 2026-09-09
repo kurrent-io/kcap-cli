@@ -38,7 +38,7 @@
 **App (`src/Capacitor.App/`)**
 - `App.axaml`: `Name`.
 - `Assets/kcap-icon.svg` (new source), `Assets/kcap-icon.png` (re-rendered 512px), `Assets/kcap-icon.icns` (new).
-- `Packaging/Info.plist`, `Packaging/app.entitlements.plist`, `Packaging/cli.entitlements.plist`, `Packaging/daemon.entitlements.plist` (new).
+- `Packaging/Info.plist`, `Packaging/app.entitlements`, `Packaging/cli.entitlements`, `Packaging/daemon.entitlements` (new).
 - `Capacitor.App.csproj`: Velopack reference.
 - `Program.cs`: Velopack bootstrap, `UpdateRelaunch`.
 - `Services/CliResolver.cs`: bundle-sibling arm.
@@ -417,7 +417,7 @@ git commit -m "Point a bundled kcap's update surfaces at the desktop app"
 
 **Files:**
 - Modify: `src/Capacitor.App/App.axaml` (root element), `src/Capacitor.App/Program.cs`, `src/Capacitor.App/Capacitor.App.csproj`, `Directory.Packages.props`
-- Create: `src/Capacitor.App/Assets/kcap-icon.svg`, `src/Capacitor.App/Assets/kcap-icon.icns`, `scripts/render-app-icons.sh`, `src/Capacitor.App/Packaging/Info.plist`, `src/Capacitor.App/Packaging/app.entitlements.plist`, `src/Capacitor.App/Packaging/cli.entitlements.plist`, `src/Capacitor.App/Packaging/daemon.entitlements.plist`
+- Create: `src/Capacitor.App/Assets/kcap-icon.svg`, `src/Capacitor.App/Assets/kcap-icon.icns`, `scripts/render-app-icons.sh`, `src/Capacitor.App/Packaging/Info.plist`, `src/Capacitor.App/Packaging/app.entitlements`, `src/Capacitor.App/Packaging/cli.entitlements`, `src/Capacitor.App/Packaging/daemon.entitlements`
 - Replace: `src/Capacitor.App/Assets/kcap-icon.png` (rendered at 512 px)
 
 **Interfaces:**
@@ -564,7 +564,7 @@ Expected: both files written; `file src/Capacitor.App/Assets/kcap-icon.png` repo
 </plist>
 ```
 
-`src/Capacitor.App/Packaging/app.entitlements.plist`:
+`src/Capacitor.App/Packaging/app.entitlements`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -583,7 +583,7 @@ Expected: both files written; `file src/Capacitor.App/Assets/kcap-icon.png` repo
 </plist>
 ```
 
-`src/Capacitor.App/Packaging/cli.entitlements.plist` (the downloaded `e_sqlite3` is not signed by our team):
+`src/Capacitor.App/Packaging/cli.entitlements` (the downloaded `e_sqlite3` is not signed by our team):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -596,7 +596,7 @@ Expected: both files written; `file src/Capacitor.App/Assets/kcap-icon.png` repo
 </plist>
 ```
 
-`src/Capacitor.App/Packaging/daemon.entitlements.plist`:
+`src/Capacitor.App/Packaging/daemon.entitlements`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -3151,7 +3151,7 @@ echo "KEYCHAIN=$KEYCHAIN" >> "${GITHUB_ENV:?GITHUB_ENV is required}"
 #!/usr/bin/env bash
 # Signs each file with hardened runtime, a secure timestamp and the given entitlements — the same
 # flags Velopack uses, so pre-signed binaries and the outer bundle agree.
-# Usage: sign-macos.sh <identity> <keychain> <entitlements.plist> <file...>
+# Usage: sign-macos.sh <identity> <keychain> <entitlements> <file...>
 set -euo pipefail
 identity="${1:?usage: sign-macos.sh <identity> <keychain> <entitlements> <file...>}"
 keychain="${2:?usage: sign-macos.sh <identity> <keychain> <entitlements> <file...>}"
@@ -3357,7 +3357,7 @@ Right after "Publish daemon AOT binary" and before "Compute daemon digest":
         shell: bash
         run: >
           bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN"
-          src/Capacitor.App/Packaging/daemon.entitlements.plist
+          src/Capacitor.App/Packaging/daemon.entitlements
           publish/daemon/${{ matrix.daemon-binary }} publish/daemon/libpty_shim.dylib
 ```
 
@@ -3369,7 +3369,7 @@ Delete the stale comment line `# When app bundling/signing lands, sign the daemo
         shell: bash
         run: >
           bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN"
-          src/Capacitor.App/Packaging/cli.entitlements.plist publish/cli/${{ matrix.cli-binary }}
+          src/Capacitor.App/Packaging/cli.entitlements publish/cli/${{ matrix.cli-binary }}
 
       - name: Smoke signed binaries (macOS)
         if: startsWith(matrix.rid, 'osx-')
@@ -3488,7 +3488,7 @@ git commit -m "Sign the macOS daemon before its digest and the CLI after its pub
           while IFS= read -r f; do
             if file "$f" | grep -q 'Mach-O'; then machos+=("$f"); fi
           done < <(find publish/app -type f)
-          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements.plist "${machos[@]}"
+          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements "${machos[@]}"
 
       # The trio arrives already signed; it is copied, never touched by codesign again.
       - name: Assemble pack directory
@@ -3514,7 +3514,7 @@ git commit -m "Sign the macOS daemon before its digest and the CLI after its pub
           --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
           --packDir publish/app --plist publish/Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns
           --channel osx-arm64 --noInst --outputDir releases
-          --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements.plist
+          --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
           --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
 
       - name: Assert and smoke the packed bundle

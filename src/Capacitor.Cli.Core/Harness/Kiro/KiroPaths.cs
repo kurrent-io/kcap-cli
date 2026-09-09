@@ -63,13 +63,9 @@ public sealed class KiroPaths {
     /// </summary>
     public string KcapAgentJson => Path.Combine(AgentsDir, "kcap.json");
 
-    /// <summary>
-    /// Detection: the config tree exists. The binary name (<c>kiro</c> /
-    /// <c>kiro-cli</c>) is also probed by callers via <c>BinaryProbe.OnPath</c>;
-    /// OR the two for the widest coverage.
-    /// </summary>
-    public bool IsInstalled => Directory.Exists(ConfigRoot);
-
     /// <summary>The running process's name — a real binary, so an exact match.</summary>
     public const string ProcessName = "kiro-cli";
+
+    /// <summary>Whether Kiro has run here — it creates this tree on first run.</summary>
+    public bool HasUserData() => Directory.Exists(ConfigRoot);
 }

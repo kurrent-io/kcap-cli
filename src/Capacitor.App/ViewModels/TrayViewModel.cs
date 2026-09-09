@@ -24,6 +24,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     // the APP is the older side — so the UI must not prescribe an upgrade direction.
     const string SkewMessage = "app and daemon are incompatible — make sure both are up to date";
 
+    internal const string RestartPendingSuffix = "update pending";
+
     readonly IPauseController _pause;
     readonly CompositeDisposable _disposables = new();
 
@@ -79,13 +81,18 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     /// The server lane's live-agent summary (an IAgentDirectory, via SummaryFrom below). Null
     /// (every pre-existing test) keeps ProjectAggregate's verdict identical to Project's.
     /// </param>
+    /// <param name="restartPending">
+    /// DaemonRestartPendingWatcher.Pending. Null (most tests) means the header never carries the
+    /// suffix.
+    /// </param>
     public TrayViewModel(
             IDaemonClientService service, IPauseController pause, AgentActionService actions, IConsentService consent,
             Action? openMainWindow = null, Action? quit = null, Action? openReviewPrompts = null,
             IObservable<string?>? lifecycleAttention = null, IObservable<bool>? shimOfferable = null,
             Func<Task>? installShim = null, IPermissionService? permissions = null,
             IObservable<RemoteTraySummary>? remote = null,
-            IObservable<UpdateMenuItem>? updateMenu = null, Func<Task>? updateAction = null) {
+            IObservable<UpdateMenuItem>? updateMenu = null, Func<Task>? updateAction = null,
+            IObservable<bool>? restartPending = null) {
         _pause = pause;
 
         TogglePauseCommand = ReactiveCommand.Create<bool>(pause.RequestToggle);
@@ -132,19 +139,26 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         var update = updateMenu ?? Observable.Return(new UpdateMenuItem(false, ""));
         var withUpdate = withShim.CombineLatest(update, (model, item) => model with { UpdateItemLabel = item.Visible ? item.Label : null });
 
+        // The daemon's own queued restart-after-update, shown only while attached to it: a
+        // marker left by a daemon we cannot reach says nothing about the header's subject.
+        var pendingWhileConnected = service.Status
+            .CombineLatest(restartPending ?? Observable.Return(false), (status, pending) => pending && status.State == AttachState.Connected);
+        var withRestartPending = withUpdate.CombineLatest(pendingWhileConnected,
+            (model, pending) => pending ? model with { Header = $"{model.Header} · {RestartPendingSuffix}" } : model);
+
         // Status, snapshots (seeded above), pause.State, consent.PendingCount, attention,
-        // pendingSummary, remoteSummary, shim, and update are all replay-1-shaped (seed on
-        // subscribe), so CombineLatest emits synchronously on subscribe — captured here as the
-        // OAPH's initial value so MenuModel is never default(TrayMenuModel) (null) before
+        // pendingSummary, remoteSummary, shim, update, and restartPending are all replay-1-shaped
+        // (seed on subscribe), so CombineLatest emits synchronously on subscribe — captured here
+        // as the OAPH's initial value so MenuModel is never default(TrayMenuModel) (null) before
         // RxSchedulers.MainThreadScheduler delivers the ObserveOn'd copy below. The
         // synchronous-emission assumption rests on IPauseController.State's,
         // IConsentService.PendingCount's, IPermissionService.Summary's, and SummaryFrom's
         // documented replay-on-subscribe contracts, which a future implementation could violate —
         // defended below rather than left to surface as an unexplained NRE on first MenuModel access.
         TrayMenuModel? seed = null;
-        using (withUpdate.Subscribe(v => seed = v)) { }
+        using (withRestartPending.Subscribe(v => seed = v)) { }
 
-        _menuModel = withUpdate
+        _menuModel = withRestartPending
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.MenuModel, seed ?? throw new InvalidOperationException(
                 "IPauseController.State, IConsentService.PendingCount, and IPermissionService.Summary must replay a value on subscribe."))

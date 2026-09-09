@@ -11,7 +11,6 @@ namespace Capacitor.Cli.Core.Harness.Cursor;
 /// </summary>
 public sealed class CursorPaths {
     readonly string _home;
-    readonly bool   _userDirIsNameable;
 
     public CursorPaths(UserHome home) {
         _home = home.Path;
@@ -28,13 +27,16 @@ public sealed class CursorPaths {
                 : OperatingSystem.IsWindows() ? Path.Combine(appData, "Cursor", "User")
                 :                               Path.Combine(_home, ".config", "Cursor", "User");
 
-        // An AppData the OS declines to name leaves UserDir relative, and probing a relative path
-        // reads the working directory instead. Whether it was named is knowable only here.
         _userDirIsNameable = !OperatingSystem.IsWindows() || appData.Length > 0;
     }
 
     /// <summary>This host's Electron user dir.</summary>
     public string UserDir { get; }
+
+    /// <summary>Whether this host named the Electron dir's parent. An AppData the OS declines to
+    /// name leaves <see cref="UserDir"/> relative, and probing a relative path reads the working
+    /// directory instead.</summary>
+    readonly bool _userDirIsNameable;
 
     public string WorkspaceStorageDir => Path.Combine(UserDir, "workspaceStorage");
 
@@ -57,14 +59,8 @@ public sealed class CursorPaths {
     /// </summary>
     public string ProjectsDir => Path.Combine(CursorDir, "projects");
 
-    /// <summary>
-    /// True when either Cursor root exists, asked now — an install that appears later must be seen.
-    /// Detection by directory presence: Cursor IDE users without the <c>cursor</c> shell command on
-    /// PATH must still be detected.
-    ///
-    /// <para>A root this host could not name is no signal at all, and detection then rests on
-    /// <c>~/.cursor</c> alone.</para>
-    /// </summary>
-    public bool IsInstalled =>
+    /// <summary>Whether Cursor has run here — the editor creates a root on first run, and that is
+    /// the only signal it gives. A root this host could not name is no signal at all.</summary>
+    public bool HasUserData() =>
         Directory.Exists(CursorDir) || (_userDirIsNameable && Directory.Exists(UserDir));
 }

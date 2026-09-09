@@ -135,7 +135,7 @@ internal static class AgentOrchestratorHarness {
             ) : base(
             config,
             configRoot.Root,
-            home,
+            TestHarnesses.Under(home),
             server,
             worktreeManager,
             repoMatcher,

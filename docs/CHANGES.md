@@ -25,6 +25,39 @@ background: the viewer's click and selection handlers sit on its content, which 
 only through a hit-tested descendant, and a bare text block hits on glyph geometry alone. User
 turns now render through the same view as assistant text.
 
+## Read pull requests through the local GitHub CLI
+
+The desktop reads a linked pull request through the user's own `gh` when it is
+installed and signed in, and falls back to the server route otherwise. Reading
+sits behind a registry of reader providers, each declaring the provider kind and
+hosts it serves; a read routes to the first ready provider for that PR's host,
+local CLI providers before the server. Session links stay a server concern.
+
+The user's own sign-in is the authorization, so there is no linked-user gate and
+the access window is a constant 30 seconds that keeps the existing masking and
+renewal logic unchanged. `gh` is spawned with an argument array, a fixed
+environment overlay, a 20-second deadline and a 4 MiB output cap, and every
+identifier is validated before a spawn. Snapshot ids and cursors are minted
+locally; whole sections page in fifties over a frozen array, threads page over
+the GraphQL connection and restart on a head change.
+
+The PR card carries a provider-generic note naming what to install or sign in
+to. A GitLab provider is one new type plus one registration line. See the
+[design](superpowers/specs/2026-09-08-local-pr-context-design.md).
+
+## The desktop app shows when the daemon has a restart queued
+
+After a CLI update a busy daemon keeps running the old binary until it is idle, and the app said
+nothing about it. The session rail's daemon indicator and the tray header now carry "update pending"
+while the daemon's own restart-pending marker exists and the app is attached to that daemon, with the
+rail tooltip spelling out that the restart happens once no agents are running. The signal is the
+marker file the daemon writes when it queues the restart and its successor deletes at startup, read
+the same way `kcap daemon status` reads it: nothing about a queued restart travels over the status
+socket, so the app re-reads the file on every attach transition and on a 15-second poll matching the
+daemon's own binary poll. It is a passive marker only. There is no button and no forced restart,
+because forcing one would take the running agents down with it, which is exactly what the daemon's
+idle gate exists to avoid.
+
 ## The desktop app no longer offers to restart or take over the daemon on a version mismatch
 
 The daemon already handles a CLI update by itself: it stats its own binary every 15 seconds, queues
@@ -49,6 +82,10 @@ The app bundles `kcap`, `kcap-daemon` and the PTY shim in `Contents/MacOS`, so t
 app is the one the shim links and the LaunchAgent runs, at a path that survives updates. Velopack
 packs and updates the bundle; one Velopack channel carries every release, and the app itself drops
 prerelease entries when the installed version is stable.
+
+**The app is one executable.** codesign treats every file under `Contents/MacOS` as nested code that
+must carry its own signature, and a managed assembly cannot, so the publish folds the assemblies
+into the host and only Mach-O files sit beside it.
 
 **The daemon is signed before its digest is computed, and never again.** The CLI embeds the
 daemon's SHA-256 and refuses a mismatch on app-managed starts; signing rewrites the bytes, so the

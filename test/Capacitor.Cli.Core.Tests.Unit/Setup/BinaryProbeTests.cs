@@ -36,6 +36,13 @@ public class BinaryProbeTests {
     }
 
     [Test]
+    public async Task Resolve_is_null_for_a_rooted_path_that_does_not_exist() {
+        using var tmp = new TempDir();
+
+        await Assert.That(BinaryProbe.Searching(null).Resolve(tmp.PathTo("absent"))).IsNull();
+    }
+
+    [Test]
     public async Task Resolve_finds_a_bare_command_on_the_search_path() {
         using var tmp = new TempDir();
         var staged = await Stage(tmp.PathTo(Launchable("probe")));
@@ -56,6 +63,7 @@ public class BinaryProbeTests {
         await Assert.That(resolved).IsNotNull();
         await Assert.That(Path.IsPathFullyQualified(resolved!)).IsTrue();
         await Assert.That(resolved).IsEqualTo(staged);
+        await Assert.That(BinaryProbe.Searching(null).Resolve(staged)).IsEqualTo(staged);
     }
 
     /// <summary>An unusable entry must not abort the walk before later ones are tried — a missing

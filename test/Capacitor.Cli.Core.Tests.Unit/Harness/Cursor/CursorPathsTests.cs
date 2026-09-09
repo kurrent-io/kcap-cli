@@ -50,4 +50,16 @@ public class CursorPathsTests {
     public async Task UserMcpJson_is_dot_cursor_mcp_json_under_home() {
         await Assert.That(Cur("/h").UserMcpJson).IsEqualTo(Path.Combine("/h", ".cursor", "mcp.json"));
     }
+
+    [Test]
+    public async Task UserHooksJson_is_dot_cursor_hooks_json_under_home() {
+        await Assert.That(Cur("/tmp/h").UserHooksJson)
+                    .IsEqualTo(Path.Combine("/tmp/h", ".cursor", "hooks.json"));
+    }
+
+    [Test]
+    public async Task SpoolDir_is_dot_cursor_kcap_pending_under_home() {
+        await Assert.That(Cur("/tmp/h").SpoolDir)
+                    .IsEqualTo(Path.Combine("/tmp/h", ".cursor", "kcap-pending"));
+    }
 }

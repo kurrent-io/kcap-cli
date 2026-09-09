@@ -21,6 +21,8 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests.Readers;
+using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -147,6 +149,7 @@ public partial class App : Application {
     // subscriber above IS disposed. Held so the consent prompt and the activity feed share the
     // same 1 Hz heartbeat.
     UiTicker? _ticker;
+    DaemonRestartPendingWatcher? _restartPending;
     // Wizard-first mode only (spec decision 2): the sign-in driver shutdown cancels and awaits
     // before anything is disposed, the Import step whose in-flight run shutdown must also kill
     // (spec §7 — closing the window never navigates through ImportStepViewModel.CanLeaveAsync), and
@@ -260,7 +263,7 @@ public partial class App : Application {
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
-                desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _permissions, _activity, _home, _rail, _pause], _lifecycle, _lane);
+                desktop, ex, _service, _shutdown, [_tray, _trayVm, _promptCoordinator, _consent, _permissions, _activity, _home, _rail, _pause, _restartPending], _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -394,6 +397,11 @@ public partial class App : Application {
         var ops      = new LocalControlOps(_daemonStore, service.DaemonName);
         var notifier = new AppNotifier();
 
+        var restartPending = new DaemonRestartPendingWatcher(
+            _daemonStore, service.DaemonName, service.Status, TimeProvider.System, _shutdown.Token);
+        restartPending.Start();
+        _restartPending = restartPending;
+
         // spec: BehaviorSubjects, not plain Subjects — MainWindowViewModel and
         // TrayViewModel don't exist yet at this point in StartAsync (built further down), so a
         // BehaviorSubject replays its latest value to whichever one subscribes later, meaning a
@@ -478,6 +486,10 @@ public partial class App : Application {
         serverLane.Start();
         var workContext = new ServerWorkContextSource(_config, profiles);
         var pullRequests = new ServerPullRequestSource(_config, profiles);
+        var ghRunner = new ProcessRunner();
+        var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
+        // Registration order is precedence: local CLI readers before the server.
+        var readers = new PullRequestReaderRegistry(pullRequests, [new GitHubCliReaderProvider(gh), new ServerReaderProvider(pullRequests)], TimeProvider.System);
         var serverClients = new ServerClients(serverLane, workContext, pullRequests);
         _serverLane = serverLane;
 
@@ -515,7 +527,7 @@ public partial class App : Application {
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), TimeProvider.System, opener, permissions,
-            workContext, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: pullRequests,
+            workContext, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             });
@@ -530,7 +542,7 @@ public partial class App : Application {
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
-                viewerId: viewerId, localMachineId: machineId),
+                viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -555,7 +567,8 @@ public partial class App : Application {
             lifecycleAttention: lifecycleAttention, shimOfferable: shimOffer.Offerable,
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory),
-            updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync);
+            updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
+            restartPending: restartPending.Pending);
         _tray = new TrayIconManager(this, _trayVm);
     }
 
@@ -948,7 +961,7 @@ public partial class App : Application {
             IObservable<string?>? lifecycleAttention = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
-            string? localMachineId = null) {
+            string? localMachineId = null, IObservable<bool>? restartPending = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -988,7 +1001,7 @@ public partial class App : Application {
             service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
-            laneStatus: lane?.Status);
+            laneStatus: lane?.Status, restartPending: restartPending);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
@@ -1493,7 +1506,7 @@ public partial class App : Application {
             // disposed one. A resolve already in flight was cancelled by _shutdown at the top of
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
-                [_tray, _trayVm, _promptCoordinator, _consent, _permissions, _activity, _home, _rail, _pause],
+                [_tray, _trayVm, _promptCoordinator, _consent, _permissions, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => _updates?.ApplyPendingOnExit());
         } else {

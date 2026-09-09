@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
 
 namespace Capacitor.Cli.Daemon;
@@ -158,10 +159,17 @@ public class DaemonConfig {
         set;
     }
 
+    /// <summary>The PATH probe resolved at boot, the one the <c>HarnessRegistry</c> is built over. A
+    /// configured vendor path is not a harness question, so its resolvers take this.</summary>
+    public BinaryProbe Binaries {
+        get => field ?? throw new InvalidOperationException($"DaemonConfig.Binaries was never set; pass a {nameof(BinaryProbe)} in from the entry point.");
+        set;
+    }
+
     public string WorktreeRoot { get; set; } = "";
 
-    public string ClaudePath { get; set; } = "claude";
-    public string CodexPath  { get; set; } = "codex";
+    public string ClaudePath { get; set; } = Core.Harness.Claude.ClaudeHarness.CliBinary;
+    public string CodexPath  { get; set; } = Core.Harness.Codex.CodexHarness.CliBinary;
 
     /// <summary>Transport for hosted Codex reviewers: <c>pty</c> (default) or <c>app-server</c>.
     /// Set via <c>KCAP_CODEX_TRANSPORT</c>. Governs NEW review-flow launches only; interactive
@@ -196,7 +204,7 @@ public class DaemonConfig {
     /// <c>{CursorPath} acp</c> by <c>AcpHostedAgentRuntimeFactory</c>. Overridable
     /// via <c>KCAP_CURSOR_PATH</c>, mirroring <see cref="ClaudePath"/>/<see cref="CodexPath"/>.
     /// </summary>
-    public string CursorPath { get; set; } = "cursor-agent";
+    public string CursorPath { get; set; } = Core.Harness.Cursor.CursorHarness.CliBinary;
 
     /// <summary>
     /// Family-prefix default model for Cursor ACP sessions, e.g.
@@ -212,23 +220,15 @@ public class DaemonConfig {
 
     /// <summary>Reserved for a future AcpVendorDescriptor (this change adds the plumbing; no
     /// descriptor consumes this yet). Overridable via KCAP_COPILOT_PATH, mirroring CursorPath.</summary>
-    public string CopilotPath { get; set; } = "copilot";
+    public string CopilotPath { get; set; } = Core.Harness.Copilot.CopilotHarness.CliBinary;
 
     /// <summary>
     /// Path or bare command for AWS Kiro CLI's ACP entry point, spawned as <c>{KiroPath} acp</c> by
     /// <c>AcpHostedAgentRuntimeFactory</c>. Overridable via <c>KCAP_KIRO_PATH</c>, mirroring
-    /// <see cref="CursorPath"/>.
-    ///
-    /// <para><b>The default is <c>kiro-cli</c>, not <c>kiro</c>.</b> This field predates the
-    /// descriptor that now consumes it and was originally defaulted to <c>"kiro"</c> while unused.
-    /// The shipped binary is <c>kiro-cli</c> — it is what <c>PluginCommand.KiroBinary</c> resolves and
-    /// what a standard install puts on PATH; <c>kiro</c> is not present. Because availability is
-    /// <c>CliResolver.Exists(KiroPath)</c>, leaving the old default would have meant Kiro was never
-    /// advertised as a hosted-agent vendor on a correct install until the operator discovered
-    /// <c>KCAP_KIRO_PATH</c> — a silent no-op rather than a visible failure. Only one name is probed;
-    /// operators with a differently-named binary set the env var.</para>
+    /// <see cref="CursorPath"/>. Only this one name is probed, so an operator whose binary is named
+    /// otherwise sets the variable.
     /// </summary>
-    public string KiroPath { get; set; } = "kiro-cli";
+    public string KiroPath { get; set; } = Core.Harness.Kiro.KiroHarness.CliBinary;
 
     /// <summary>
     /// Daemon-wide default model for Kiro ACP sessions, e.g. <c>"claude-haiku-4.5"</c>, resolved
@@ -292,12 +292,10 @@ public class DaemonConfig {
     /// <summary>
     /// Path or bare command for the Antigravity CLI, spawned per turn by
     /// <c>AntigravityHostedAgentRuntimeFactory</c>. Overridable via <c>KCAP_ANTIGRAVITY_PATH</c>.
-    ///
-    /// <para><b>The default is <c>agy</c></b> — the name a standard install puts on PATH. Because
-    /// availability is <c>CliResolver.Exists(AntigravityPath)</c>, a wrong default would mean the
-    /// vendor is never advertised on a correct install: a silent no-op, not a visible failure.</para>
+    /// Availability is <c>Binaries.Finds(AntigravityPath)</c>, so a name that is not what the install
+    /// puts on PATH withdraws the vendor silently rather than failing visibly.
     /// </summary>
-    public string AntigravityPath { get; set; } = "agy";
+    public string AntigravityPath { get; set; } = Core.Harness.Antigravity.AntigravityHarness.CliBinary;
 
     /// <summary>Daemon-wide default model for Antigravity reviewer launches, passed as
     /// <c>--model</c>. Null leaves agy on its own default. An unknown slug makes agy hard-fail,
@@ -324,10 +322,10 @@ public class DaemonConfig {
     public int AntigravityReviewerTurnTimeoutSeconds { get; set; } = 600;
 
     /// <summary>Path or bare command for SST OpenCode's ACP entry point, spawned as
-    /// <c>{OpenCodePath} acp</c> by <c>AcpHostedAgentRuntimeFactory</c>. No longer reserved: it drives
-    /// interactive hosting, and availability is <c>CliResolver.Exists(OpenCodePath)</c>. Overridable
-    /// via <c>KCAP_OPENCODE_PATH</c>.</summary>
-    public string OpenCodePath { get; set; } = "opencode";
+    /// <c>{OpenCodePath} acp</c> by <c>AcpHostedAgentRuntimeFactory</c>. It drives interactive
+    /// hosting, and availability is <c>Binaries.Finds(OpenCodePath)</c>. Overridable via
+    /// <c>KCAP_OPENCODE_PATH</c>.</summary>
+    public string OpenCodePath { get; set; } = Core.Harness.OpenCode.OpenCodeHarness.CliBinary;
 
     /// <summary>
     /// Optional daemon-wide default model for hosted OpenCode agents, resolved against
@@ -370,8 +368,8 @@ public class DaemonConfig {
     /// <summary>Path or bare command for Pi's RPC entry point, spawned as
     /// <c>{PiPath} --mode rpc</c> by <c>PiRpcHostedAgentRuntimeFactory</c>. Interactive hosting only
     /// in PR-1 — the reviewer lane is not implemented yet. Availability is
-    /// <c>CliResolver.Exists(PiPath)</c>. Overridable via <c>KCAP_PI_PATH</c>.</summary>
-    public string PiPath { get; set; } = "pi";
+    /// <c>Binaries.Finds(PiPath)</c>. Overridable via <c>KCAP_PI_PATH</c>.</summary>
+    public string PiPath { get; set; } = Core.Harness.Pi.PiHarness.CliBinary;
 
     /// <summary>
     /// Optional daemon-wide default model for hosted Pi agents, passed as <c>--model</c> on the
@@ -387,10 +385,10 @@ public class DaemonConfig {
     public string? PiModel { get; set; }
 
     /// <summary>Path or bare command for Google Gemini CLI's ACP entry point, spawned as
-    /// <c>{GeminiPath} --experimental-acp …</c> by <c>AcpHostedAgentRuntimeFactory</c>. No longer
-    /// reserved: it drives interactive hosting AND the gated unattended reviewer, whose build-affirmation
-    /// probe reads whichever binary this names. Overridable via <c>KCAP_GEMINI_PATH</c>.</summary>
-    public string GeminiPath { get; set; } = "gemini";
+    /// <c>{GeminiPath} --experimental-acp …</c> by <c>AcpHostedAgentRuntimeFactory</c>. It drives
+    /// interactive hosting AND the gated unattended reviewer, whose build-affirmation probe reads
+    /// whichever binary this names. Overridable via <c>KCAP_GEMINI_PATH</c>.</summary>
+    public string GeminiPath { get; set; } = Core.Harness.Gemini.GeminiHarness.CliBinary;
 
     /// <summary>
     /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When

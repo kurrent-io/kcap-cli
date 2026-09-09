@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -98,7 +99,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         var settingsPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
-            : env.Paths.Claude.UserSettings;
+            : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook.
         // Skip when the user never opted in; short-circuit when the marker
@@ -158,7 +159,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         var settingsPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
-            : env.Paths.Claude.UserSettings;
+            : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         if (!File.Exists(settingsPath)) {
             await env.Stdout.WriteLineAsync("Nothing to remove — settings file not found.");
@@ -245,12 +246,12 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var refreshOnly = args.Contains("--if-installed");
 
         switch (refreshOnly) {
-            case true when !AgentsSkillsInstaller.IsInstalled(env.Paths.Agents.UserSkillsDir):
+            case true when !AgentsSkillsInstaller.IsInstalled(env.Agents.UserSkillsDir):
             // Fast path: marker already matches the current build, no point
             // re-copying every skill on a same-version reinstall (e.g. `npm
             // install -g` of the version already on disk).
             case true when
-                AgentsSkillsInstaller.ReadMarker(env.Paths.Agents.UserSkillsDir) ==
+                AgentsSkillsInstaller.ReadMarker(env.Agents.UserSkillsDir) ==
                 AgentsSkillsInstaller.CurrentVersion():
                 return 0;
         }
@@ -281,7 +282,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             return 1;
         }
 
-        if (!AgentsSkillsInstaller.Install(skillsSource, env.Paths.Agents.UserSkillsDir)) {
+        if (!AgentsSkillsInstaller.Install(skillsSource, env.Agents.UserSkillsDir)) {
             if (refreshOnly) return 0;
 
             await env.Stderr.WriteLineAsync("Could not install agent skills.");
@@ -291,23 +292,23 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         await env.Stdout.WriteLineAsync(
             refreshOnly
-                ? $"Agent skills refreshed (user: {env.Paths.Agents.UserSkillsDir})"
-                : $"Agent skills installed (user: {env.Paths.Agents.UserSkillsDir})"
+                ? $"Agent skills refreshed (user: {env.Agents.UserSkillsDir})"
+                : $"Agent skills installed (user: {env.Agents.UserSkillsDir})"
         );
 
-        AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Paths.Codex.SkillsDir);
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Harnesses.Of<CodexHarness>().Paths.SkillsDir);
 
         return 0;
     }
 
     async Task<int> RemoveSkills(string[] _) {
-        var agents = AgentsSkillsInstaller.Remove(env.Paths.Agents.UserSkillsDir);
+        var agents = AgentsSkillsInstaller.Remove(env.Agents.UserSkillsDir);
 
         if (agents.RemovedAny) {
-            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.Paths.Agents.UserSkillsDir})");
+            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.Agents.UserSkillsDir})");
         }
 
-        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Paths.Codex.SkillsDir);
+        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Harnesses.Of<CodexHarness>().Paths.SkillsDir);
 
         if (agents.HadErrors || legacy.HadErrors) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
@@ -323,11 +324,13 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     async Task<int> InstallCodex(string[] args) {
+        var codex = env.Harnesses.Of<CodexHarness>().Paths;
+
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
-            : env.Paths.Codex.UserHooksJson;
+            : codex.UserHooksJson;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook and
         // `kcap update`. Skip when the user never opted in. Skills are NOT touched
@@ -414,15 +417,15 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // Skills are user-scoped only. Written to ~/.agents/skills/ so they
         // work across Codex and other compatible agents.
-        if (!AgentsSkillsInstaller.Install(skillsSource, env.Paths.Agents.UserSkillsDir)) {
+        if (!AgentsSkillsInstaller.Install(skillsSource, env.Agents.UserSkillsDir)) {
             await env.Stderr.WriteLineAsync("Could not install agent skills.");
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync($"Agent skills installed (user: {env.Paths.Agents.UserSkillsDir})");
+        await env.Stdout.WriteLineAsync($"Agent skills installed (user: {env.Agents.UserSkillsDir})");
 
-        AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Paths.Codex.SkillsDir);
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
         // enable Codex sandbox network access so the skills just installed can
         // reach the Capacitor server. Opt out with --skip-codex-network-access. The
@@ -451,6 +454,8 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// server. Never fails the install: a write error is a warning, not an error code.
     /// </summary>
     async Task EnableCodexNetworkAccessAsync() {
+        var codex = env.Harnesses.Of<CodexHarness>().Paths;
+
         var domains = CodexConfigToml.BuildAllowDomains(env.Profiles.Profiles.Values.Select(p => p.ServerUrl));
 
         if (domains.Count == 0) {
@@ -460,16 +465,16 @@ public sealed class PluginCommand(PluginEnvironment env) {
             return;
         }
 
-        switch (CodexConfigToml.EnableNetworkAccess(domains, env.Paths.Codex.ConfigToml)) {
+        switch (CodexConfigToml.EnableNetworkAccess(domains, codex.ConfigToml)) {
             case CodexConfigToml.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Codex sandbox network access enabled for kcap ({env.Paths.Codex.ConfigToml}).");
+                await env.Stdout.WriteLineAsync($"Codex sandbox network access enabled for kcap ({codex.ConfigToml}).");
                 break;
             case CodexConfigToml.Change.Unchanged:
                 await env.Stdout.WriteLineAsync("Codex sandbox already allows network access — no change needed.");
                 break;
             default:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Codex.ConfigToml} — enable Codex sandbox network access manually (see README).");
+                    $"Warning: could not update {codex.ConfigToml} — enable Codex sandbox network access manually (see README).");
                 break;
         }
     }
@@ -480,26 +485,30 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// Never fails the install: a write error is a warning, not an error code.
     /// </summary>
     async Task RegisterCodexMcpServersAsync() {
-        switch (CodexConfigToml.RegisterKcapMcpServers(env.Paths.Codex.ConfigToml, env.ResolveMcpBinaryPath)) {
+        var codex = env.Harnesses.Of<CodexHarness>().Paths;
+
+        switch (CodexConfigToml.RegisterKcapMcpServers(codex.ConfigToml, env.ResolveMcpBinaryPath)) {
             case CodexConfigToml.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Codex MCP servers registered: {string.Join(", ", KcapMcpServers.ForCodex.Select(s => s.Name))} ({env.Paths.Codex.ConfigToml}).");
+                await env.Stdout.WriteLineAsync($"Codex MCP servers registered: {string.Join(", ", KcapMcpServers.ForCodex.Select(s => s.Name))} ({codex.ConfigToml}).");
                 break;
             case CodexConfigToml.Change.Unchanged:
                 await env.Stdout.WriteLineAsync("Codex MCP servers already registered — no change needed.");
                 break;
             default:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not register Codex MCP servers in {env.Paths.Codex.ConfigToml} — see README to add them manually.");
+                    $"Warning: could not register Codex MCP servers in {codex.ConfigToml} — see README to add them manually.");
                 break;
         }
     }
 
     async Task<int> RemoveCodex(string[] args) {
+        var codex = env.Harnesses.Of<CodexHarness>().Paths;
+
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
-            : env.Paths.Codex.UserHooksJson;
+            : codex.UserHooksJson;
 
         var hooksRemoved = false;
         var hooksFailed  = false;
@@ -523,7 +532,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         // relies on. (Mirrors the sandbox network policy, which is user-global and also
         // deliberately left in place on remove.)
         var mcpChange = scope == "user"
-            ? CodexConfigToml.UnregisterKcapMcpServers(env.Paths.Codex.ConfigToml)
+            ? CodexConfigToml.UnregisterKcapMcpServers(codex.ConfigToml)
             : CodexConfigToml.Change.Unchanged;
         var mcpFailed = mcpChange == CodexConfigToml.Change.Failed;
         var mcpChanged = mcpChange is CodexConfigToml.Change.Updated or
@@ -533,25 +542,25 @@ public sealed class PluginCommand(PluginEnvironment env) {
             CodexConfigToml.Change.PreservedOwnershipUnknown;
 
         if (mcpChanged) {
-            await env.Stdout.WriteLineAsync($"Codex MCP servers removed ({env.Paths.Codex.ConfigToml})");
+            await env.Stdout.WriteLineAsync($"Codex MCP servers removed ({codex.ConfigToml})");
         }
         if (mcpPreserved) {
             var reason = mcpChange == CodexConfigToml.Change.PreservedOwnershipUnknown
                 ? "the ownership ledger is missing or corrupt"
                 : "one or more entries are user-owned or were edited";
             await env.Stderr.WriteLineAsync(
-                $"Warning: some Codex MCP entries were preserved because {reason}. Review [mcp_servers] in {env.Paths.Codex.ConfigToml} and remove kcap-flows manually if you no longer want the paid flow surface.");
+                $"Warning: some Codex MCP entries were preserved because {reason}. Review [mcp_servers] in {codex.ConfigToml} and remove kcap-flows manually if you no longer want the paid flow surface.");
         } else if (mcpFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Codex.ConfigToml} to remove Codex MCP servers.");
+            await env.Stderr.WriteLineAsync($"Could not update {codex.ConfigToml} to remove Codex MCP servers.");
         }
 
-        var agents = AgentsSkillsInstaller.Remove(env.Paths.Agents.UserSkillsDir);
+        var agents = AgentsSkillsInstaller.Remove(env.Agents.UserSkillsDir);
 
         if (agents.RemovedAny) {
-            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.Paths.Agents.UserSkillsDir})");
+            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.Agents.UserSkillsDir})");
         }
 
-        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Paths.Codex.SkillsDir);
+        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
         if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
@@ -675,7 +684,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     async Task<int> InstallCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.Paths.Cursor.UserHooksJson;
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.Harnesses.Of<CursorHarness>().Paths.UserHooksJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -718,7 +727,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             await RegisterCursorMcpServersAsync();
 
         if (!args.Contains("--skip-cursor-skills"))
-            await InstallVendorSkillsAsync(env.Paths.Agents.UserSkillsDir, "Agent", refreshOnly);
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
         return 0;
     }
@@ -729,22 +738,26 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// not an error code.
     /// </summary>
     async Task RegisterCursorMcpServersAsync() {
-        var change = HarnessMcpProjections.Cursor.Register(env.Paths.Cursor.UserMcpJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
+        var cursor = env.Harnesses.Of<CursorHarness>().Paths;
+
+        var change = HarnessMcpProjections.Cursor.Register(cursor.UserMcpJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Cursor MCP servers registered ({env.Paths.Cursor.UserMcpJson}).");
+                await env.Stdout.WriteLineAsync($"Cursor MCP servers registered ({cursor.UserMcpJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Cursor.UserMcpJson} to register Cursor MCP servers.");
+                    $"Warning: could not update {cursor.UserMcpJson} to register Cursor MCP servers.");
                 break;
             // Unchanged: silent — same as Codex's already-registered case.
         }
     }
 
     async Task<int> RemoveCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.Paths.Cursor.UserHooksJson;
+        var cursor = env.Harnesses.Of<CursorHarness>().Paths;
+
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? cursor.UserHooksJson;
 
         var hooksFailed = false;
 
@@ -768,13 +781,13 @@ public sealed class PluginCommand(PluginEnvironment env) {
         // Cursor is user-scope only (no --project split like Codex), so the kcap MCP
         // entries are always unregistered here, independent of whether hooks.json
         // existed — the two files are unrelated on disk.
-        var mcpChange = HarnessMcpProjections.Cursor.Unregister(env.Paths.Cursor.UserMcpJson, env.Home);
+        var mcpChange = HarnessMcpProjections.Cursor.Unregister(cursor.UserMcpJson, env.Home);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Cursor MCP servers removed ({env.Paths.Cursor.UserMcpJson})");
+            await env.Stdout.WriteLineAsync($"Cursor MCP servers removed ({cursor.UserMcpJson})");
         } else if (mcpFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Cursor.UserMcpJson} to remove Cursor MCP servers.");
+            await env.Stderr.WriteLineAsync($"Could not update {cursor.UserMcpJson} to remove Cursor MCP servers.");
         }
 
         return hooksFailed || mcpFailed ? 1 : 0;
@@ -840,8 +853,10 @@ public sealed class PluginCommand(PluginEnvironment env) {
     // ── Pi (badlogic/pi-mono): a TypeScript extension, not a hooks.json ──────
 
     async Task<int> InstallPi(string[] args) {
-        var extensionPath    = GetArg(args, "--pi-extension-path") ?? env.Paths.Pi.KcapExtension;
-        var mcpExtensionPath = env.Paths.Pi.KcapMcpExtension;
+        var pi = env.Harnesses.Of<PiHarness>().Paths;
+
+        var extensionPath    = GetArg(args, "--pi-extension-path") ?? pi.KcapExtension;
+        var mcpExtensionPath = pi.KcapMcpExtension;
 
         var refreshOnly      = args.Contains("--if-installed");
         var skipMcp          = args.Contains("--skip-pi-mcp");
@@ -905,7 +920,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             await InstallPiInstructionsAsync();
 
         if (!args.Contains("--skip-pi-skills"))
-            await InstallVendorSkillsAsync(env.Paths.Agents.UserSkillsDir, "Agent", refreshOnly);
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
         // Non-zero only when a FRESH ingest install failed (the integration is incomplete) —
         // the independent MCP bridge + AGENTS.md steering above were still installed.
@@ -944,23 +959,27 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// tools. Non-destructive (only our block). Never fails the install: a write error is a warning.
     /// </summary>
     async Task InstallPiInstructionsAsync() {
-        var change = AgentInstructionsWriter.Write(env.Paths.Pi.AgentsMd, KcapAgentInstructions.Body);
+        var pi = env.Harnesses.Of<PiHarness>().Paths;
+
+        var change = AgentInstructionsWriter.Write(pi.AgentsMd, KcapAgentInstructions.Body);
 
         switch (change) {
             case AgentInstructionsWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Pi instructions installed ({env.Paths.Pi.AgentsMd}).");
+                await env.Stdout.WriteLineAsync($"Pi instructions installed ({pi.AgentsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Pi.AgentsMd} to install Pi instructions.");
+                    $"Warning: could not update {pi.AgentsMd} to install Pi instructions.");
                 break;
             // Unchanged: silent.
         }
     }
 
     async Task<int> RemovePi(string[] args) {
-        var extensionPath    = GetArg(args, "--pi-extension-path") ?? env.Paths.Pi.KcapExtension;
-        var mcpExtensionPath = env.Paths.Pi.KcapMcpExtension;
+        var pi = env.Harnesses.Of<PiHarness>().Paths;
+
+        var extensionPath    = GetArg(args, "--pi-extension-path") ?? pi.KcapExtension;
+        var mcpExtensionPath = pi.KcapMcpExtension;
 
         var failed = false;
 
@@ -988,11 +1007,11 @@ public sealed class PluginCommand(PluginEnvironment env) {
         }
 
         // 3. Instructions block in ~/.pi/agent/AGENTS.md — strip our block, preserving user content.
-        var instrChange = AgentInstructionsWriter.Remove(env.Paths.Pi.AgentsMd);
+        var instrChange = AgentInstructionsWriter.Remove(pi.AgentsMd);
         if (instrChange == AgentInstructionsWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Pi instructions removed ({env.Paths.Pi.AgentsMd}).");
+            await env.Stdout.WriteLineAsync($"Pi instructions removed ({pi.AgentsMd}).");
         } else if (instrChange == AgentInstructionsWriter.Change.Failed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Pi.AgentsMd} to remove Pi instructions.");
+            await env.Stderr.WriteLineAsync($"Could not update {pi.AgentsMd} to remove Pi instructions.");
             failed = true;
         }
 
@@ -1002,7 +1021,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
     // ── OpenCode (SST): a TypeScript plugin, not a hooks.json ───────
 
     async Task<int> InstallOpenCode(string[] args) {
-        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.Paths.OpenCode.KcapPlugin;
+        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.Harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -1060,7 +1079,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             await InstallOpenCodeInstructionsAsync();
 
         if (!args.Contains("--skip-opencode-skills"))
-            await InstallVendorSkillsAsync(env.Paths.Agents.UserSkillsDir, "Agent", refreshOnly);
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
         return 0;
     }
@@ -1071,15 +1090,17 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// loads them without a manual JSON edit. Never fails the install: a write error is a warning.
     /// </summary>
     async Task RegisterOpenCodeMcpServersAsync() {
-        var change = HarnessMcpProjections.OpenCode.Register(env.Paths.OpenCode.McpConfigJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
+        var opencode = env.Harnesses.Of<OpenCodeHarness>().Paths;
+
+        var change = HarnessMcpProjections.OpenCode.Register(opencode.McpConfigJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"OpenCode MCP servers registered ({env.Paths.OpenCode.McpConfigJson}).");
+                await env.Stdout.WriteLineAsync($"OpenCode MCP servers registered ({opencode.McpConfigJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.OpenCode.McpConfigJson} to register OpenCode MCP servers.");
+                    $"Warning: could not update {opencode.McpConfigJson} to register OpenCode MCP servers.");
                 break;
             // Unchanged: silent.
         }
@@ -1090,22 +1111,26 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// <c>~/.config/opencode/AGENTS.md</c>. Non-destructive (only our block). Never fails the install.
     /// </summary>
     async Task InstallOpenCodeInstructionsAsync() {
-        var change = AgentInstructionsWriter.Write(env.Paths.OpenCode.AgentsMd, KcapAgentInstructions.Body);
+        var opencode = env.Harnesses.Of<OpenCodeHarness>().Paths;
+
+        var change = AgentInstructionsWriter.Write(opencode.AgentsMd, KcapAgentInstructions.Body);
 
         switch (change) {
             case AgentInstructionsWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"OpenCode instructions installed ({env.Paths.OpenCode.AgentsMd}).");
+                await env.Stdout.WriteLineAsync($"OpenCode instructions installed ({opencode.AgentsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.OpenCode.AgentsMd} to install OpenCode instructions.");
+                    $"Warning: could not update {opencode.AgentsMd} to install OpenCode instructions.");
                 break;
             // Unchanged: silent.
         }
     }
 
     async Task<int> RemoveOpenCode(string[] args) {
-        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.Paths.OpenCode.KcapPlugin;
+        var opencode = env.Harnesses.Of<OpenCodeHarness>().Paths;
+
+        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? opencode.KcapPlugin;
 
         var pluginFailed = false;
 
@@ -1124,23 +1149,23 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // MCP servers live in a separate file (~/.config/opencode/opencode.json) — unregister
         // regardless (Unregister owns the ownership-marker cleanup and no-ops when the file is absent).
-        var mcpChange = HarnessMcpProjections.OpenCode.Unregister(env.Paths.OpenCode.McpConfigJson, env.Home);
+        var mcpChange = HarnessMcpProjections.OpenCode.Unregister(opencode.McpConfigJson, env.Home);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"OpenCode MCP servers removed ({env.Paths.OpenCode.McpConfigJson}).");
+            await env.Stdout.WriteLineAsync($"OpenCode MCP servers removed ({opencode.McpConfigJson}).");
         } else if (mcpFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.OpenCode.McpConfigJson} to remove OpenCode MCP servers.");
+            await env.Stderr.WriteLineAsync($"Could not update {opencode.McpConfigJson} to remove OpenCode MCP servers.");
         }
 
         // Strip kcap's instructions block from ~/.config/opencode/AGENTS.md, preserving user content.
-        var instrChange = AgentInstructionsWriter.Remove(env.Paths.OpenCode.AgentsMd);
+        var instrChange = AgentInstructionsWriter.Remove(opencode.AgentsMd);
         var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
 
         if (instrChange == AgentInstructionsWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"OpenCode instructions removed ({env.Paths.OpenCode.AgentsMd}).");
+            await env.Stdout.WriteLineAsync($"OpenCode instructions removed ({opencode.AgentsMd}).");
         } else if (instrFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.OpenCode.AgentsMd} to remove OpenCode instructions.");
+            await env.Stderr.WriteLineAsync($"Could not update {opencode.AgentsMd} to remove OpenCode instructions.");
         }
 
         return pluginFailed || mcpFailed || instrFailed ? 1 : 0;
@@ -1148,7 +1173,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
     // ── Antigravity — a named block in Antigravity's hooks.json ────────
     async Task<int> InstallAntigravity(string[] args) {
-        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.Paths.Antigravity.GlobalHooksJson;
+        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.Harnesses.Of<AntigravityHarness>().Paths.GlobalHooksJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -1209,15 +1234,17 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// <summary>Registers the kcap MCP servers in Antigravity's own <c>~/.gemini/config/mcp_config.json</c>
     /// (Standard shape). Never fails the install: a write error is a warning.</summary>
     async Task RegisterAntigravityMcpServersAsync() {
-        var change = HarnessMcpProjections.Antigravity.Register(env.Paths.Antigravity.McpConfigJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
+        var agy = env.Harnesses.Of<AntigravityHarness>().Paths;
+
+        var change = HarnessMcpProjections.Antigravity.Register(agy.McpConfigJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Antigravity MCP servers registered ({env.Paths.Antigravity.McpConfigJson}).");
+                await env.Stdout.WriteLineAsync($"Antigravity MCP servers registered ({agy.McpConfigJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Antigravity.McpConfigJson} to register Antigravity MCP servers.");
+                    $"Warning: could not update {agy.McpConfigJson} to register Antigravity MCP servers.");
                 break;
         }
     }
@@ -1225,15 +1252,17 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// <summary>Installs kcap's marker-delimited steering block into the shared <c>~/.gemini/GEMINI.md</c>.
     /// Non-destructive (only our block). Never fails the install: a write error is a warning.</summary>
     async Task InstallAntigravityInstructionsAsync() {
-        var change = AgentInstructionsWriter.Write(env.Paths.Antigravity.InstructionsMd, KcapAgentInstructions.Body);
+        var agy = env.Harnesses.Of<AntigravityHarness>().Paths;
+
+        var change = AgentInstructionsWriter.Write(agy.InstructionsMd, KcapAgentInstructions.Body);
 
         switch (change) {
             case AgentInstructionsWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Antigravity instructions installed ({env.Paths.Antigravity.InstructionsMd}).");
+                await env.Stdout.WriteLineAsync($"Antigravity instructions installed ({agy.InstructionsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Antigravity.InstructionsMd} to install Antigravity instructions.");
+                    $"Warning: could not update {agy.InstructionsMd} to install Antigravity instructions.");
                 break;
         }
     }
@@ -1257,8 +1286,8 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // The sweep runs even when the tree is already current: a Cursor-first install stamps the
         // marker, so gating it on the copy would mean the stale dir outlives every later install.
-        if (targetDir == env.Paths.Agents.UserSkillsDir)
-            AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Paths.Codex.SkillsDir);
+        if (targetDir == env.Agents.UserSkillsDir)
+            AgentsSkillsInstaller.CleanLegacyCodexSkills(env.Harnesses.Of<CodexHarness>().Paths.SkillsDir);
 
         if (AgentsSkillsInstaller.IsCurrent(targetDir)) return;
 
@@ -1278,7 +1307,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
     /// <summary>Antigravity reads <c>~/.gemini/skills</c>, not the agent-agnostic tree.</summary>
     Task InstallAntigravitySkillsAsync(bool refreshOnly) =>
-        InstallVendorSkillsAsync(env.Paths.Antigravity.SkillsDir, "Antigravity", refreshOnly);
+        InstallVendorSkillsAsync(env.Harnesses.Of<AntigravityHarness>().Paths.SkillsDir, "Antigravity", refreshOnly);
 
     /// <summary>
     /// Reports the sessions sampled before the install, once that install has actually landed. Saying
@@ -1295,7 +1324,9 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     async Task<int> RemoveAntigravity(string[] args) {
-        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.Paths.Antigravity.GlobalHooksJson;
+        var agy = env.Harnesses.Of<AntigravityHarness>().Paths;
+
+        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? agy.GlobalHooksJson;
 
         var hooksFailed = false;
 
@@ -1314,13 +1345,13 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // MCP servers live in a separate mcp_config.json — unregister regardless (Unregister owns the
         // ownership-marker cleanup and no-ops when the file is absent).
-        var mcpChange = HarnessMcpProjections.Antigravity.Unregister(env.Paths.Antigravity.McpConfigJson, env.Home);
+        var mcpChange = HarnessMcpProjections.Antigravity.Unregister(agy.McpConfigJson, env.Home);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Antigravity MCP servers removed ({env.Paths.Antigravity.McpConfigJson}).");
+            await env.Stdout.WriteLineAsync($"Antigravity MCP servers removed ({agy.McpConfigJson}).");
         } else if (mcpFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Antigravity.McpConfigJson} to remove Antigravity MCP servers.");
+            await env.Stderr.WriteLineAsync($"Could not update {agy.McpConfigJson} to remove Antigravity MCP servers.");
         }
 
         // kcap's steering block lives in ~/.gemini/GEMINI.md, which is SHARED with the Gemini CLI.
@@ -1330,26 +1361,26 @@ public sealed class PluginCommand(PluginEnvironment env) {
         // shared block in place for `remove --gemini` to handle.
         var instrFailed = false;
 
-        if (GeminiHooksInstaller.IsInstalled(env.Paths.Gemini.SettingsJson)) {
+        if (GeminiHooksInstaller.IsInstalled(env.Harnesses.Of<GeminiHarness>().Paths.SettingsJson)) {
             await env.Stdout.WriteLineAsync(
-                $"Antigravity instructions left in place ({env.Paths.Antigravity.InstructionsMd}) — shared with the still-installed Gemini CLI.");
+                $"Antigravity instructions left in place ({agy.InstructionsMd}) — shared with the still-installed Gemini CLI.");
         } else {
-            var instrChange = AgentInstructionsWriter.Remove(env.Paths.Antigravity.InstructionsMd);
+            var instrChange = AgentInstructionsWriter.Remove(agy.InstructionsMd);
             instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
 
             if (instrChange == AgentInstructionsWriter.Change.Updated) {
-                await env.Stdout.WriteLineAsync($"Antigravity instructions removed ({env.Paths.Antigravity.InstructionsMd}).");
+                await env.Stdout.WriteLineAsync($"Antigravity instructions removed ({agy.InstructionsMd}).");
             } else if (instrFailed) {
-                await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Antigravity.InstructionsMd} to remove Antigravity instructions.");
+                await env.Stderr.WriteLineAsync($"Could not update {agy.InstructionsMd} to remove Antigravity instructions.");
             }
         }
 
         // Remove the kcap skills kcap copied into ~/.gemini/skills.
-        var skills = AgentsSkillsInstaller.Remove(env.Paths.Antigravity.SkillsDir);
+        var skills = AgentsSkillsInstaller.Remove(agy.SkillsDir);
         if (skills.RemovedAny) {
-            await env.Stdout.WriteLineAsync($"Antigravity skills removed ({env.Paths.Antigravity.SkillsDir}).");
+            await env.Stdout.WriteLineAsync($"Antigravity skills removed ({agy.SkillsDir}).");
         } else if (skills.HadErrors) {
-            await env.Stderr.WriteLineAsync($"Could not fully remove Antigravity skills from {env.Paths.Antigravity.SkillsDir}.");
+            await env.Stderr.WriteLineAsync($"Could not fully remove Antigravity skills from {agy.SkillsDir}.");
         }
 
         return hooksFailed || mcpFailed || instrFailed || skills.HadErrors ? 1 : 0;
@@ -1372,7 +1403,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     async Task<int> InstallCopilot(string[] args) {
-        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.Paths.Copilot.KcapHooksJson;
+        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.Harnesses.Of<CopilotHarness>().Paths.KcapHooksJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -1426,7 +1457,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             await InstallCopilotInstructionsAsync();
 
         if (!args.Contains("--skip-copilot-skills"))
-            await InstallVendorSkillsAsync(env.Paths.Agents.UserSkillsDir, "Agent", refreshOnly);
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
         return 0;
     }
@@ -1437,15 +1468,17 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// not an error code.
     /// </summary>
     async Task RegisterCopilotMcpServersAsync() {
-        var change = HarnessMcpProjections.Copilot.Register(env.Paths.Copilot.McpConfigJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
+        var copilot = env.Harnesses.Of<CopilotHarness>().Paths;
+
+        var change = HarnessMcpProjections.Copilot.Register(copilot.McpConfigJson, env.Home, resolveBinaryPath: env.ResolveMcpBinaryPath);
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Copilot MCP servers registered ({env.Paths.Copilot.McpConfigJson}).");
+                await env.Stdout.WriteLineAsync($"Copilot MCP servers registered ({copilot.McpConfigJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Copilot.McpConfigJson} to register Copilot MCP servers.");
+                    $"Warning: could not update {copilot.McpConfigJson} to register Copilot MCP servers.");
                 break;
             // Unchanged: silent — same as Cursor's already-registered case.
         }
@@ -1457,22 +1490,26 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// tools. Non-destructive (only our block). Never fails the install: a write error is a warning.
     /// </summary>
     async Task InstallCopilotInstructionsAsync() {
-        var change = AgentInstructionsWriter.Write(env.Paths.Copilot.InstructionsMd, KcapAgentInstructions.Body);
+        var copilot = env.Harnesses.Of<CopilotHarness>().Paths;
+
+        var change = AgentInstructionsWriter.Write(copilot.InstructionsMd, KcapAgentInstructions.Body);
 
         switch (change) {
             case AgentInstructionsWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Copilot instructions installed ({env.Paths.Copilot.InstructionsMd}).");
+                await env.Stdout.WriteLineAsync($"Copilot instructions installed ({copilot.InstructionsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Copilot.InstructionsMd} to install Copilot instructions.");
+                    $"Warning: could not update {copilot.InstructionsMd} to install Copilot instructions.");
                 break;
             // Unchanged: silent.
         }
     }
 
     async Task<int> RemoveCopilot(string[] args) {
-        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.Paths.Copilot.KcapHooksJson;
+        var copilot = env.Harnesses.Of<CopilotHarness>().Paths;
+
+        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? copilot.KcapHooksJson;
 
         var hooksFailed = false;
 
@@ -1493,23 +1530,23 @@ public sealed class PluginCommand(PluginEnvironment env) {
         // unregister them independently of whether the hooks file existed. Unregister owns
         // the ownership-marker cleanup: it clears the marker on any non-Failed outcome and
         // retains it on Failed so a retry can still identify the kcap-owned entries.
-        var mcpChange = HarnessMcpProjections.Copilot.Unregister(env.Paths.Copilot.McpConfigJson, env.Home);
+        var mcpChange = HarnessMcpProjections.Copilot.Unregister(copilot.McpConfigJson, env.Home);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Copilot MCP servers removed ({env.Paths.Copilot.McpConfigJson}).");
+            await env.Stdout.WriteLineAsync($"Copilot MCP servers removed ({copilot.McpConfigJson}).");
         } else if (mcpFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Copilot.McpConfigJson} to remove Copilot MCP servers.");
+            await env.Stderr.WriteLineAsync($"Could not update {copilot.McpConfigJson} to remove Copilot MCP servers.");
         }
 
         // Strip kcap's instructions block, preserving any user-authored content in the file.
-        var instrChange = AgentInstructionsWriter.Remove(env.Paths.Copilot.InstructionsMd);
+        var instrChange = AgentInstructionsWriter.Remove(copilot.InstructionsMd);
         var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
 
         if (instrChange == AgentInstructionsWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Copilot instructions removed ({env.Paths.Copilot.InstructionsMd}).");
+            await env.Stdout.WriteLineAsync($"Copilot instructions removed ({copilot.InstructionsMd}).");
         } else if (instrFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Copilot.InstructionsMd} to remove Copilot instructions.");
+            await env.Stderr.WriteLineAsync($"Could not update {copilot.InstructionsMd} to remove Copilot instructions.");
         }
 
         return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
@@ -1569,11 +1606,12 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     const string KiroAgentName = "kcap";
-    const string KiroBinary    = "kiro-cli";
 
     async Task<int> InstallKiro(string[] args) {
-        var agentPath = GetArg(args, "--kiro-agent-path") ?? env.Paths.Kiro.KcapAgentJson;
-        var mcpPath   = GetArg(args, "--kiro-mcp-path")   ?? env.Paths.Kiro.SettingsMcpJson;
+        var kiro = env.Harnesses.Of<KiroHarness>().Paths;
+
+        var agentPath = GetArg(args, "--kiro-agent-path") ?? kiro.KcapAgentJson;
+        var mcpPath   = GetArg(args, "--kiro-mcp-path")   ?? kiro.SettingsMcpJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -1623,7 +1661,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var hooksFailed = false;
         var hooksCurrent = refreshOnly && File.Exists(agentPath) && KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current();
         if (!hooksCurrent) {
-            if (InstallKiroHooks(agentPath)) {
+            if (InstallKiroHooks(agentPath, env.Harnesses)) {
                 var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1637,7 +1675,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
                 // still register the independent MCP file below rather than bailing.
                 hooksFailed = true;
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not set up the Kiro '{KiroAgentName}' agent (is '{KiroBinary}' on PATH? "
+                    $"Warning: could not set up the Kiro '{KiroAgentName}' agent (is '{KiroHarness.CliBinary}' on PATH? "
                   + "it's needed to clone your current default agent so tool access is preserved). "
                   + "Continuing with MCP registration.");
             }
@@ -1669,7 +1707,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// install: a copy error is a warning.
     /// </summary>
     Task InstallKiroSkillsAsync(bool refreshOnly) =>
-        InstallVendorSkillsAsync(env.Paths.Kiro.SkillsDir, "Kiro", refreshOnly);
+        InstallVendorSkillsAsync(env.Harnesses.Of<KiroHarness>().Paths.SkillsDir, "Kiro", refreshOnly);
 
     /// <summary>
     /// Registers the kcap MCP servers in Kiro's <c>~/.kiro/settings/mcp.json</c> (<c>mcpServers</c>
@@ -1692,9 +1730,11 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     async Task<int> RemoveKiro(string[] args) {
-        var agentPath    = GetArg(args, "--kiro-agent-path")    ?? env.Paths.Kiro.KcapAgentJson;
+        var kiro = env.Harnesses.Of<KiroHarness>().Paths;
+
+        var agentPath    = GetArg(args, "--kiro-agent-path")    ?? kiro.KcapAgentJson;
         var settingsPath = GetArg(args, "--kiro-settings-path") ?? KiroSettingsPathFor(agentPath);
-        var mcpPath      = GetArg(args, "--kiro-mcp-path")      ?? env.Paths.Kiro.SettingsMcpJson;
+        var mcpPath      = GetArg(args, "--kiro-mcp-path")      ?? kiro.SettingsMcpJson;
 
         // MCP servers live in a separate settings/mcp.json — unregister independently of the agent
         // restore/removal (Unregister owns the ownership-marker cleanup and no-ops when absent).
@@ -1708,11 +1748,11 @@ public sealed class PluginCommand(PluginEnvironment env) {
         }
 
         // Remove kcap's skills from ~/.kiro/skills (independent of the agent restore).
-        var skills = AgentsSkillsInstaller.Remove(env.Paths.Kiro.SkillsDir);
+        var skills = AgentsSkillsInstaller.Remove(kiro.SkillsDir);
         if (skills.RemovedAny) {
-            await env.Stdout.WriteLineAsync($"Kiro skills removed ({env.Paths.Kiro.SkillsDir}).");
+            await env.Stdout.WriteLineAsync($"Kiro skills removed ({kiro.SkillsDir}).");
         } else if (skills.HadErrors) {
-            await env.Stderr.WriteLineAsync($"Could not fully remove Kiro skills from {env.Paths.Kiro.SkillsDir}.");
+            await env.Stderr.WriteLineAsync($"Could not fully remove Kiro skills from {kiro.SkillsDir}.");
         }
 
         try {
@@ -1759,7 +1799,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// <c>chat.defaultAgent</c> to kcap. The replaced default is recorded in the
     /// marker for <c>plugin remove --kiro</c> to restore. Idempotent.
     /// </summary>
-    public static bool InstallKiroHooks(string agentJsonPath) {
+    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses) {
         try {
             var settingsPath    = KiroSettingsPathFor(agentJsonPath);
             var currentDefault  = KiroSettings.ReadDefaultAgent(settingsPath) ?? "kiro_default";
@@ -1775,8 +1815,11 @@ public sealed class PluginCommand(PluginEnvironment env) {
             // Clone the current default into kcap's Kiro agent (kiro-cli writes it to
             // the global agents dir, preserving tools/prompt). Skipped if kcap exists.
             if (!File.Exists(agentJsonPath)) {
-                if (!BinaryProbe.OnPath(KiroBinary)) return false;
-                if (RunKiroCli("agent", "create", KiroAgentName, "--from", recordedDefault) != 0 || !File.Exists(agentJsonPath))
+                // The resolved path, not the bare name: CreateProcess appends only .exe, so a name
+                // the probe matched through PATHEXT would still fail to launch.
+                if (harnesses.ResolveExecutable(HarnessId.Kiro) is not { } kiroCli) return false;
+                if (RunKiroCli(kiroCli, "agent", "create", KiroAgentName, "--from", recordedDefault) != 0
+                 || !File.Exists(agentJsonPath))
                     return false;
             }
 
@@ -1845,12 +1888,12 @@ public sealed class PluginCommand(PluginEnvironment env) {
     static string KiroSettingsPathFor(string agentJsonPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(agentJsonPath)!)!, "settings", "cli.json");
 
-    static int RunKiroCli(params string[] arguments) {
+    static int RunKiroCli(string kiroCliPath, params string[] arguments) {
         try {
             // ArgumentList (not a concatenated string) so a default-agent name with
             // whitespace/quotes survives as ONE argument — `ProcessStartInfo(file,
             // string)` would split "My Agent" into two args and break the clone.
-            var psi = new ProcessStartInfo(KiroBinary) {
+            var psi = new ProcessStartInfo(kiroCliPath) {
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
@@ -1945,7 +1988,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
     }
 
     async Task<int> InstallGemini(string[] args) {
-        var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.Paths.Gemini.SettingsJson;
+        var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.Harnesses.Of<GeminiHarness>().Paths.SettingsJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -2012,7 +2055,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
             await InstallGeminiInstructionsAsync();
 
         if (!args.Contains("--skip-gemini-skills"))
-            await InstallVendorSkillsAsync(env.Paths.Agents.UserSkillsDir, "Agent", refreshOnly);
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
         // Non-zero only when a FRESH hook install failed (the integration is incomplete) — the
         // independent GEMINI.md steering above was still installed.
@@ -2046,22 +2089,26 @@ public sealed class PluginCommand(PluginEnvironment env) {
     /// our block). Never fails the install: a write error is a warning.
     /// </summary>
     async Task InstallGeminiInstructionsAsync() {
-        var change = AgentInstructionsWriter.Write(env.Paths.Gemini.GeminiMd, KcapAgentInstructions.Body);
+        var gemini = env.Harnesses.Of<GeminiHarness>().Paths;
+
+        var change = AgentInstructionsWriter.Write(gemini.GeminiMd, KcapAgentInstructions.Body);
 
         switch (change) {
             case AgentInstructionsWriter.Change.Updated:
-                await env.Stdout.WriteLineAsync($"Gemini instructions installed ({env.Paths.Gemini.GeminiMd}).");
+                await env.Stdout.WriteLineAsync($"Gemini instructions installed ({gemini.GeminiMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not update {env.Paths.Gemini.GeminiMd} to install Gemini instructions.");
+                    $"Warning: could not update {gemini.GeminiMd} to install Gemini instructions.");
                 break;
             // Unchanged: silent.
         }
     }
 
     async Task<int> RemoveGemini(string[] args) {
-        var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.Paths.Gemini.SettingsJson;
+        var gemini = env.Harnesses.Of<GeminiHarness>().Paths;
+
+        var settingsPath = GetArg(args, "--gemini-settings-path") ?? gemini.SettingsJson;
 
         var hooksFailed = false;
 
@@ -2100,13 +2147,13 @@ public sealed class PluginCommand(PluginEnvironment env) {
 
         // Instructions live in a SEPARATE ~/.gemini/GEMINI.md — strip our block independently of
         // whether settings.json exists, preserving any user-authored content in the file.
-        var instrChange = AgentInstructionsWriter.Remove(env.Paths.Gemini.GeminiMd);
+        var instrChange = AgentInstructionsWriter.Remove(gemini.GeminiMd);
         var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
 
         if (instrChange == AgentInstructionsWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Gemini instructions removed ({env.Paths.Gemini.GeminiMd}).");
+            await env.Stdout.WriteLineAsync($"Gemini instructions removed ({gemini.GeminiMd}).");
         } else if (instrFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.Paths.Gemini.GeminiMd} to remove Gemini instructions.");
+            await env.Stderr.WriteLineAsync($"Could not update {gemini.GeminiMd} to remove Gemini instructions.");
         }
 
         return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
