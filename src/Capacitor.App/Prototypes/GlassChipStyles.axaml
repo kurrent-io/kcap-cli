@@ -1,0 +1,69 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:glass="clr-namespace:LiquidGlassAvaloniaUI;assembly=LiquidGlassAvaloniaUI">
+    <!-- Prototype-only template on the existing Buttons: content, commands, picker handlers
+         and automation peers stay on their original controls. The glass is decorative. -->
+    <Style Selector="Button.glassPrototypeChip">
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid x:Name="ChipRoot" Background="Transparent">
+                    <glass:LiquidGlassSurface x:Name="ChipGlass" IsHitTestVisible="False"
+                                             CornerRadius="12" RefractionHeight="8" Vibrancy="1.05"
+                                             ShadowRadius="7" ShadowOffset="0,2" ShadowColor="#40040C16" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="{TemplateBinding Padding}">
+                        <ContentPresenter x:Name="PART_ContentPresenter"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Foreground="{TemplateBinding Foreground}"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          RecognizesAccessKey="True" />
+                        <Path Grid.Column="1" Data="M1,2 L4,5 L7,2" Width="8" Height="7"
+                              Stroke="{TemplateBinding Foreground}" StrokeThickness="1.3"
+                              StrokeLineCap="Round" StrokeJoin="Round" Opacity="0.6"
+                              VerticalAlignment="Center" IsHitTestVisible="False" />
+                    </Grid>
+                    <Border x:Name="FocusRing" CornerRadius="12" BorderThickness="2"
+                            BorderBrush="#B8E9F5" IsHitTestVisible="False" />
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <Style Selector="Button.glassPrototypeChip /template/ glass|LiquidGlassSurface#ChipGlass">
+        <Setter Property="BlurRadius" Value="8" />
+        <Setter Property="RefractionAmount" Value="6" />
+        <Setter Property="ChromaticAberration" Value="False" />
+        <Setter Property="TintColor" Value="#16DCEFFF" />
+        <Setter Property="SurfaceColor" Value="#302C3F52" />
+        <Setter Property="HighlightOpacity" Value="0.45" />
+        <Setter Property="HighlightWidth" Value="0.65" />
+        <Setter Property="ShadowEnabled" Value="True" />
+    </Style>
+    <Style Selector="Button.liquidPrototypeChip /template/ glass|LiquidGlassSurface#ChipGlass">
+        <Setter Property="BlurRadius" Value="3" />
+        <Setter Property="RefractionAmount" Value="12" />
+        <Setter Property="ChromaticAberration" Value="True" />
+        <Setter Property="HighlightOpacity" Value="0.7" />
+        <Setter Property="HighlightWidth" Value="0.9" />
+    </Style>
+    <Style Selector="Button.glassPrototypeChip:pointerover /template/ glass|LiquidGlassSurface#ChipGlass">
+        <Setter Property="TintColor" Value="#30DCEFFF" />
+        <Setter Property="HighlightOpacity" Value="0.85" />
+    </Style>
+    <Style Selector="Button.glassPrototypeChip:pressed /template/ glass|LiquidGlassSurface#ChipGlass">
+        <Setter Property="SurfaceColor" Value="#80172533" />
+        <Setter Property="HighlightOpacity" Value="0.4" />
+        <Setter Property="ShadowEnabled" Value="False" />
+    </Style>
+    <Style Selector="Button.glassPrototypeChip /template/ Border#FocusRing">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="Button.glassPrototypeChip:focus-visible /template/ Border#FocusRing">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="Button.glassPrototypeChip:disabled /template/ Grid#ChipRoot">
+        <Setter Property="Opacity" Value="0.45" />
+    </Style>
+</Styles>

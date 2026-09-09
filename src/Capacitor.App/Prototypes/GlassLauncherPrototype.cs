@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using Capacitor.App.Views;
@@ -12,8 +13,14 @@ namespace Capacitor.App.Prototypes;
 // Question: does a glass composer fit Capacitor? Same launcher, three materials; switch in
 // place without losing the goal or picker state. Only attached by --glass-prototype startup.
 static class GlassLauncherPrototype {
+    static readonly string[] ChipNames = ["RepositoryChip", "MachineChip", "AgentChip", "EffortChip", "PermissionChip"];
+
     public static void Attach(MainWindow window) {
         var launcher = window.GetVisualDescendants().OfType<LauncherPaneView>().Single();
+        window.Styles.Add(new StyleInclude(new Uri("avares://Kurrent Capacitor/")) {
+            Source = new Uri("avares://Kurrent Capacitor/Prototypes/GlassChipStyles.axaml"),
+        });
+        var chips = ChipNames.Select(name => launcher.FindControl<Button>(name)!).ToArray();
         var card = launcher.FindControl<Border>("ComposerCard")!;
         var cardParent = (StackPanel)card.Parent!;
         var cardIndex = cardParent.Children.IndexOf(card);
@@ -87,6 +94,12 @@ static class GlassLauncherPrototype {
                 glass.ShadowColor = Color.Parse("#60000000");
                 glass.ShadowRadius = 28;
                 glass.ShadowOffset = new Vector(0, 12);
+            }
+            foreach (var chip in chips) {
+                chip.Classes.Set("kcapChip", mode == 0);
+                chip.Classes.Set("glassPrototypeChip", mode != 0);
+                chip.Classes.Set("liquidPrototypeChip", mode == 2);
+                chip.Padding = mode == 0 ? new Thickness(11, 5) : new Thickness(12, 7);
             }
             for (var i = 0; i < buttons.Count; i++) {
                 buttons[i].Background = Brush(i == mode ? "#F1F3F7" : "#191D27");

@@ -20,6 +20,10 @@ server connection, updater or tray is started. Close the window to quit.
 - **Liquid glass:** 5 DIP blur, 32 DIP refraction, stronger highlights and colour separation.
 - **Backdrop glow:** compare each material over either a coloured glow or the original flat canvas.
 
+The repository, machine, harness, effort and permission chips follow the selected material.
+Glass chips have translucent surfaces, edge lighting, dropdown chevrons and explicit hover,
+pressed and keyboard-focus states. Current restores the original chip templates and spacing.
+
 Move the pointer inside the launcher to shift the glow slightly and see the live backdrop.
 Use the buttons or left/right arrows to switch; text fields retain their usual arrow-key behaviour.
 The entry point is available only in Debug builds with `--glass-prototype`.
@@ -41,6 +45,8 @@ The desktop project fully rebuilds with zero errors and zero warnings on macOS a
 Native visual checks covered all three materials, glow on/off, text preservation across
 material switches, and the preview-only Start response. The glass content needs an inner
 Border for padding: setting LiquidGlassSurface.Padding alone did not inset the controls.
+The chip check also covered keyboard focus, selecting an effort through its picker, and
+preserving that selection when restoring the original material.
 This is a visual experiment; cross-platform rendering, sustained scrolling performance,
 accessibility fallback and production integration remain unvalidated. The user's material
 choice is pending; nothing from this experiment has been promoted to main.
