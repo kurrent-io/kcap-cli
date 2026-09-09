@@ -16,11 +16,14 @@ its `kcap mcp` bridge children live in the daemon's own process group, and a lau
 launchd's session. So the first bridge to exit after Pi, reparented to launchd, orphaned the
 daemon's group while a sibling was still stopped, and the kernel answered with SIGHUP and SIGCONT
 to every member. Two changes, each sufficient on its own. The daemon's tree kill is now
-`ProcessTree.Kill`, a SIGKILL-only walk over descendants, with the runtime's tree kill banned in the
-daemon assembly so no member of the group is ever stopped. And a supervised or detached daemon
-ignores SIGHUP, since without a terminal there is nothing to hang up; a foreground run keeps
-treating it as the terminal closing. forkpty agents were never exposed: `login_tty` puts them in
-their own session.
+`ProcessTree.Kill`: SIGKILL only, children before parents, each pid signalled once and only while
+it still carries the start identity captured when it was listed, with the runtime's tree kill banned
+in the daemon assembly so no member of the group is ever stopped. Without a stop a parent can still
+fork between its last listing and its own death, and that child is reparented out of reach; the
+child-first order keeps that window to two syscalls. And a daemon with no terminal on any standard
+stream ignores SIGHUP, since there is nothing to hang up; a run attached to a terminal keeps
+treating it as the terminal closing, whether or not it logs to a file. forkpty agents were never
+exposed: `login_tty` puts them in their own session.
 
 ## The desktop app renders markdown through MarkView.Avalonia
 

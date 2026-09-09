@@ -75,10 +75,11 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
 - **The daemon never stops a process in its own process group.** Every `Process.Start` child (Pi,
   Antigravity, ACP agents, git) shares the daemon's group, and a launch agent shares launchd's
   session: a stopped member at the moment a reparented grandchild exits makes the kernel SIGHUP
-  the whole group, daemon included. Tree kills go through `ProcessTree.Kill` (SIGKILL only), the
-  runtime's `Process.Kill(bool)` is banned in the daemon assembly, and a supervised or detached
-  daemon ignores SIGHUP outright — there is no terminal to hang up, and exiting 0 on it is an exit
-  launchd never restarts.
+  the whole group, daemon included. Tree kills go through `ProcessTree.Kill` (SIGKILL only,
+  children before parents, each pid identity-checked and signalled once), the runtime's
+  `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
+  standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
+  exit launchd never restarts.
 
 ## Tech stack
 

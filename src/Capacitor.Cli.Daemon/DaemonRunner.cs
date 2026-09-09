@@ -565,7 +565,11 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<DetachedRespawnStrategy>();
         builder.Services.AddSingleton<ForegroundNoopStrategy>();
         builder.Services.AddSingleton<IRestartStrategy>(sp => {
-            return Supervision(sp.GetRequiredService<DaemonConfig>()) switch {
+            var cfg        = sp.GetRequiredService<DaemonConfig>();
+            var hasLogFile = cfg.OriginalArgs.Contains("--log-file");
+            var mode       = SupervisionDetector.DetectCurrent(DaemonStore.Sanitize(cfg.Name), hasLogFile);
+
+            return mode switch {
                 SupervisionMode.Supervised => sp.GetRequiredService<SupervisedExitStrategy>(),
                 SupervisionMode.Detached   => sp.GetRequiredService<DetachedRespawnStrategy>(),
                 _                          => sp.GetRequiredService<ForegroundNoopStrategy>(),
@@ -679,7 +683,7 @@ public static partial class DaemonRunner {
         // tears down the logging pipeline. Lifetime is captured so SIGHUP
         // (terminal closed) can be turned into a cooperative StopApplication
         // — without that, the host's finally-block cleanup never runs.
-        RegisterDeathRattle(logger, lifetime, Supervision(config));
+        RegisterDeathRattle(logger, lifetime, AttachedToTerminal());
 
         // Lifetime-driven log lines — pair with the AppDomain/signal hooks so
         // we can distinguish a cooperative StopApplication (e.g. NameInUse,
@@ -1101,11 +1105,6 @@ public static partial class DaemonRunner {
     internal static bool IsSupervised(string resolvedName) =>
         SupervisionDetector.DetectCurrent(DaemonStore.Sanitize(resolvedName), hasLogFile: false)
             == SupervisionMode.Supervised;
-
-    /// <summary>How this daemon was launched, with the log-file hint that tells a detached run from a
-    /// foreground one.</summary>
-    static SupervisionMode Supervision(DaemonConfig cfg) =>
-        SupervisionDetector.DetectCurrent(DaemonStore.Sanitize(cfg.Name), cfg.OriginalArgs.Contains("--log-file"));
 
     /// <summary>
     /// Exit code for the local name-lock refusal (another kcap-daemon already holds
@@ -1657,18 +1656,24 @@ public static partial class DaemonRunner {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Received POSIX signal {Signal} — requesting cooperative shutdown")]
     static partial void LogPosixSignal(ILogger logger, PosixSignal signal);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Received POSIX signal {Signal} — ignored: a {Mode} daemon has no terminal to hang up")]
-    static partial void LogPosixSignalIgnored(ILogger logger, PosixSignal signal, SupervisionMode mode);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Received POSIX signal {Signal} — ignored: no terminal is attached to hang up")]
+    static partial void LogPosixSignalIgnored(ILogger logger, PosixSignal signal);
 
     /// <summary>
-    /// Which POSIX signals become a cooperative shutdown. SIGHUP is a hangup only for a foreground
-    /// run, which has a terminal to lose. A supervised or detached daemon has none, and the kernel
-    /// still delivers SIGHUP to every member of the daemon's own process group when that group is
-    /// orphaned while one member is stopped. Shutting down on it exits 0, which launchd's
+    /// Which POSIX signals become a cooperative shutdown. SIGHUP is a hangup only when a standard
+    /// stream is a terminal. Under launchd or systemd none is, and the kernel still delivers SIGHUP
+    /// to every member of the daemon's own process group when that group is orphaned while one
+    /// member is stopped. Shutting down on it exits 0, which launchd's
     /// <c>KeepAlive SuccessfulExit=false</c> reads as deliberate and never restarts.
     /// </summary>
-    internal static bool SignalRequestsShutdown(PosixSignal signal, SupervisionMode mode) =>
-        signal != PosixSignal.SIGHUP || mode == SupervisionMode.Foreground;
+    internal static bool SignalRequestsShutdown(PosixSignal signal, bool attachedToTerminal) =>
+        signal != PosixSignal.SIGHUP || attachedToTerminal;
+
+    /// <summary>Whether any standard stream is a terminal. Read once at startup: a hangup does not
+    /// change what the descriptors are, and a foreground run keeps the CLI's terminal even when it
+    /// logs to a file.</summary>
+    static bool AttachedToTerminal() =>
+        !(Console.IsInputRedirected && Console.IsOutputRedirected && Console.IsErrorRedirected);
 
     /// <summary>
     /// Wires AppDomain, TaskScheduler and POSIX-signal hooks so a daemon that is going away leaves
@@ -1677,7 +1682,7 @@ public static partial class DaemonRunner {
     /// <see cref="SignalRequestsShutdown"/> accepts is routed through <paramref name="lifetime"/>
     /// so the host's cleanup runs instead of the OS default termination.
     /// </summary>
-    static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime, SupervisionMode supervision) {
+    static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime, bool attachedToTerminal) {
         AppDomain.CurrentDomain.UnhandledException += (_, args) => {
             if (args.ExceptionObject is Exception ex) {
                 DeathRattle($"AppDomain.UnhandledException (terminating={args.IsTerminating}): {ex.GetType().Name}: {ex.Message}");
@@ -1712,8 +1717,8 @@ public static partial class DaemonRunner {
                 _signalRegistrations.Add(PosixSignalRegistration.Create(signal, ctx => {
                     ctx.Cancel = true;
 
-                    if (!SignalRequestsShutdown(ctx.Signal, supervision)) {
-                        LogPosixSignalIgnored(logger, ctx.Signal, supervision);
+                    if (!SignalRequestsShutdown(ctx.Signal, attachedToTerminal)) {
+                        LogPosixSignalIgnored(logger, ctx.Signal);
                         return;
                     }
 
