@@ -251,7 +251,10 @@ projections and the retention budget stay as they are.
   `https://cli.github.com` as the install URL and `gh auth login` as the sign-in
   command. Present and absent are determined outcomes and carry no retry time. A
   `gh` whose `auth status` does not support `--json` probes as `Failed` with
-  reason `unsupported_version`.
+  reason `unsupported_version`; a `gh` that is found but fails to start probes
+  as `Failed` with reason `spawn_failed` instead of `ToolMissing`, so the
+  transient backoff applies and the forgotten binary path is relocated on the
+  next probe.
 - **Serves** is provider `github` and a signed-in host. **ParseLink** accepts
   `https://<host>/<owner>/<repo>/pull/<number>` where the host is `github.com`
   or a signed-in host.

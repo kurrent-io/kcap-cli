@@ -31,7 +31,8 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider? t
             if (_status is { } cached && !refresh && _time.GetElapsedTime(_probedAt) < _ttl) return cached;
             if (await cli.LocateAsync(refresh, ct).ConfigureAwait(false) is null) return Save(new(PullRequestReaderStatusKind.ToolMissing), []);
             var result = await cli.RunAsync(["auth", "status", "--json", "hosts"], ct: ct).ConfigureAwait(false);
-            if (result.Outcome == GitHubCliOutcome.NotStarted) return Save(new(PullRequestReaderStatusKind.ToolMissing), []);
+            // gh was found but failed to start: back off and relocate rather than telling the user it's missing.
+            if (result.Outcome == GitHubCliOutcome.NotStarted) return Save(new(PullRequestReaderStatusKind.Failed, "spawn_failed"), []);
             if (result.Outcome is GitHubCliOutcome.TimedOut or GitHubCliOutcome.Oversized)
                 return Save(new(PullRequestReaderStatusKind.Failed, result.Outcome == GitHubCliOutcome.TimedOut ? "timeout" : "oversized"), []);
             if (result.Outcome == GitHubCliOutcome.Failed && result.Stderr.Contains("unknown flag", StringComparison.OrdinalIgnoreCase))

@@ -79,6 +79,22 @@ public class GitHubCliReaderProviderTests {
     }
 
     [Test]
+    public async Task A_spawn_failure_backs_off_instead_of_reporting_the_tool_missing() {
+        var h = new GhHarness(Tmp);
+        h.Process.StartFailure = new InvalidOperationException("boom");
+        var status = await h.Provider.ProbeAsync(false, default);
+        await Assert.That(status.Kind).IsEqualTo(PullRequestReaderStatusKind.Failed);
+        await Assert.That(status.Reason).IsEqualTo("spawn_failed");
+        await h.Provider.ProbeAsync(false, default);
+        await Assert.That(h.Process.Calls.Count).IsEqualTo(1);
+        h.Time.Advance(TimeSpan.FromSeconds(31));
+        h.Process.StartFailure = null;
+        h.SignedIn("github.com");
+        var relocated = await h.Provider.ProbeAsync(false, default);
+        await Assert.That(relocated.Kind).IsEqualTo(PullRequestReaderStatusKind.Ready);
+    }
+
+    [Test]
     [Arguments("https://github.com/example/repo/pull/12", true)]
     [Arguments("https://github.com/example/repo/pull/12/files", true)]
     [Arguments("https://ghe.example/example/repo/pull/12", false)]
