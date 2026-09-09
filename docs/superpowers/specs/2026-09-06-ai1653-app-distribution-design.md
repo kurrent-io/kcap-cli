@@ -19,7 +19,7 @@ Every desktop-supervisor slice so far runs only from source behind the `KCAP_APP
 | 4 | **Self-hosted feed on Cloudflare R2, fronted by the kurrent.io Worker.** One bucket, prefix `desktop/osx-arm64/`; public URLs under `https://www.kurrent.io/download/desktop/osx-arm64/`. The website links to version-free alias DMGs on the same prefix. The Worker route and R2 binding are a kcap-web change (§8). Rejected: GitHub Releases as the store (downloads visibly from github.com, the `latest` alias skips prereleases); Velopack Flow (paid, vendor account). |
 | 5 | **One Velopack channel (`osx-arm64`) holding every release; stable-vs-beta is decided in the app.** A `PrereleaseFilteringSource` drops prerelease feed entries when the installed version is itself stable, and keeps them when the installed version is a prerelease. One pack, one notarization, one upload per tag. Rejected: two channels (a stable tag would need two packs and two notarizations so beta installs also receive it). |
 | 6 | **Everything in `Contents/MacOS`.** `kcap`, `kcap-daemon` and `libpty_shim.dylib` sit beside the app executable and its runtime, so the CLI finds the daemon and the daemon finds the shim as siblings exactly as in the npm layout. The stable path the shim symlink and the LaunchAgent bake is `/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap`. Rejected: `Contents/Helpers` (we would assemble the bundle ourselves for no functional gain). |
-| 7 | **Self-contained JIT publish of the app**, not trimmed, not AOT. Avalonia and ReactiveUI run under JIT today; AOT of the app is a separate investigation with its own trimming warnings. |
+| 7 | **Self-contained JIT publish of the app as a single file**, not trimmed, not AOT. codesign treats every file under `Contents/MacOS` as nested code that must carry its own signature, which a managed assembly cannot, so the assemblies and json ride inside the host executable and only Mach-O files sit beside it. Avalonia and ReactiveUI run under JIT today; AOT of the app is a separate investigation with its own trimming warnings. |
 | 8 | **The first app release is the first tag after `v0.12.0-beta.1`.** That tag is cut first (via kcap-server's `release.sh`, whose version regex accepts a prerelease suffix) so MinVer yields `0.12.0-beta.1.N` on every branch and PR-built bundles satisfy the floor without a synthetic version override. |
 | 9 | **Update UX: background download, one prompt when ready, the app restart is the user's.** Automatic checks are silent on failure. The daemon's restart is the daemon's own: its `RestartCoordinator` already polls its binary every 15 s and restarts itself the moment it is idle after the file changes — the path an npm upgrade takes today, and the bundle swap changes the same path. The lifecycle slice's skew dialog covers only a daemon that stays busy, after a short post-update grace (§7.4). The daemon gains no update logic beyond `--version`. |
 | 10 | **Install-location guard at startup.** A bundle outside `/Applications` or `~/Applications` (DMG volume, Downloads, App Translocation) gets a modal with Move-to-Applications or Quit before anything else runs, because the shim and the LaunchAgent bake the CLI path and Velopack cannot swap a bundle on a read-only volume. |
@@ -35,7 +35,7 @@ Every desktop-supervisor slice so far runs only from source behind the `KCAP_APP
 
 ### 3.2 Contents/MacOS
 
-The app's self-contained `osx-arm64` publish output (`dotnet publish src/Capacitor.App -c Release -r osx-arm64 --self-contained -p:MinVerVersionOverride=<version>`), plus three files copied verbatim from the release matrix's `release-osx-arm64` artifact: `kcap`, `kcap-daemon`, `libpty_shim.dylib`. Velopack adds `UpdateMac` and the `sq.version` manifest (in `Resources`, symlinked from `MacOS`). Executable bits are restored after the artifact round-trip (`actions/upload-artifact` drops them) before anything runs or is signed.
+The app's self-contained single-file `osx-arm64` publish output (the csproj turns on `PublishSingleFile` when publishing; `dotnet publish src/Capacitor.App -c Release -r osx-arm64 --self-contained -p:MinVerVersionOverride=<version>`), plus three files copied verbatim from the release matrix's `release-osx-arm64` artifact: `kcap`, `kcap-daemon`, `libpty_shim.dylib`. Velopack adds `UpdateMac` and the `sq.version` manifest (in `Resources`, symlinked from `MacOS`). Executable bits are restored after the artifact round-trip (`actions/upload-artifact` drops them) before anything runs or is signed.
 
 ### 3.3 Icons
 
@@ -73,11 +73,11 @@ Nothing else changes: hooks, MCP registrations, the LaunchAgent and the shim all
 
 Three committed plists under `src/Capacitor.App/Packaging/`:
 
-- `app.entitlements.plist` — the app executable and every runtime dylib: `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.cs.allow-dyld-environment-variables`, `com.apple.security.cs.disable-library-validation` (Microsoft's documented set for a JIT .NET app under hardened runtime).
-- `cli.entitlements.plist` — `kcap`: `com.apple.security.cs.disable-library-validation` only. The on-demand `e_sqlite3` it downloads for OpenCode import is not signed by our team, and library validation would refuse to load it.
-- `daemon.entitlements.plist` — `kcap-daemon` and `libpty_shim.dylib`: empty dictionary. The daemon's only native import is our own signed shim; vendor CLIs it spawns are separate processes.
+- `app.entitlements` — the app executable and every runtime dylib: `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.cs.allow-dyld-environment-variables`, `com.apple.security.cs.disable-library-validation` (Microsoft's documented set for a JIT .NET app under hardened runtime).
+- `cli.entitlements` — `kcap`: `com.apple.security.cs.disable-library-validation` only. The on-demand `e_sqlite3` it downloads for OpenCode import is not signed by our team, and library validation would refuse to load it.
+- `daemon.entitlements` — `kcap-daemon` and `libpty_shim.dylib`: empty dictionary. The daemon's only native import is our own signed shim; vendor CLIs it spawns are separate processes.
 
-The outer bundle is signed by Velopack with `app.entitlements.plist` (passed as `--signEntitlements`); `UpdateMac` gets Velopack's own default entitlements.
+The outer bundle is signed by Velopack with `app.entitlements` (passed as `--signEntitlements`); `UpdateMac` gets Velopack's own default entitlements.
 
 ### 4.3 Secrets and keychain
 
@@ -149,7 +149,7 @@ New job `app-bundle`, display name `App bundle (osx-arm64)`, on `macos-latest`, 
 vpk pack --packId KurrentCapacitor --packVersion "$VERSION" --packTitle "Kurrent Capacitor" --packAuthors Kurrent \
   --mainExe "Kurrent Capacitor" --packDir publish/app --plist Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns \
   --channel osx-arm64 --noInst --outputDir releases \
-  --signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements.plist \
+  --signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements \
   --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
 ```
 
