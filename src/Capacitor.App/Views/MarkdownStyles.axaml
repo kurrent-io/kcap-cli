@@ -1,0 +1,78 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mv="using:MarkView.Avalonia"
+        xmlns:mri="using:MarkView.Avalonia.Rendering.Inlines">
+    <!-- MarkView's own theme paints on `:is(TextBlock).markdown-*` classes and its paragraphs are a
+         TextBlock subclass, so a text selector here must use :is too or it silently matches nothing.
+         Every selector is scoped to the viewer so the theme's palette never leaks into the app. -->
+    <!-- The viewer's click and selection handlers sit on its content, which a pointer reaches only
+         through a hit-tested descendant, and a text block without a background hits on glyph
+         geometry alone: a click between words or past the line's end would go nowhere. -->
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-paragraph">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="LineHeight" Value="21.6" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-list-marker">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="LineHeight" Value="21.6" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h1, mv|MarkdownViewer :is(TextBlock).markdown-h2, mv|MarkdownViewer :is(TextBlock).markdown-h3, mv|MarkdownViewer :is(TextBlock).markdown-h4, mv|MarkdownViewer :is(TextBlock).markdown-h5, mv|MarkdownViewer :is(TextBlock).markdown-h6">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="Margin" Value="0,4,0,0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h1">
+        <Setter Property="FontSize" Value="18" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-h2">
+        <Setter Property="FontSize" Value="16" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Run.markdown-code-inline">
+        <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-code-block">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-code-block > TextBlock">
+        <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-blockquote">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="3,0,0,0" />
+        <Setter Property="Padding" Value="12,0,0,0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Grid.markdown-table">
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-table-cell">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="Padding" Value="8,5" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-table-header">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Separator.markdown-thematic-break">
+        <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer mri|MarkdownHyperlink.markdown-link">
+        <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
+        <Setter Property="TextDecorations" Value="{x:Null}" />
+    </Style>
+</Styles>

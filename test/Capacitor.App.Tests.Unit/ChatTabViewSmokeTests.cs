@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -315,8 +316,10 @@ public class ChatTabViewSmokeTests {
 
             await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
 
-            var link = host.View.GetVisualDescendants().OfType<HyperlinkButton>().Single();
-            var origin = link.TranslatePoint(new Point(2, 2), host.Window)!.Value;
+            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph"));
+            var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
+            var origin = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(origin);
             host.Window.MouseDown(origin, MouseButton.Left);
             host.Window.MouseUp(origin, MouseButton.Left);
             Dispatcher.UIThread.RunJobs();
@@ -469,6 +472,22 @@ public class ChatTabViewSmokeTests {
             await Assert.That(rows).Count().IsEqualTo(2);
             await Assert.That(Top(rows[1]) - Bottom(rows[0])).IsLessThan(10);
             await Assert.That(Top(text) - Bottom(rows[1])).IsGreaterThanOrEqualTo(18);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_user_turn_renders_as_markdown() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("user.jsonl",
+                ["""{"type":"user","message":{"role":"user","content":"say **hi** there"}}"""]));
+            host.Settle();
+            var view = host.View.GetVisualDescendants().OfType<MarkdownView>().Single();
+            var paragraph = view.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph"));
+            await Assert.That(paragraph.Inlines!.OfType<Bold>().Count()).IsEqualTo(1);
+            await Assert.That(paragraph.Inlines!.Text).IsEqualTo("say hi there");
             await host.CloseAsync();
         });
     }
@@ -759,7 +778,7 @@ public class ChatTabViewSmokeTests {
             ]));
 
             var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("systemNote"));
-            var text = card.GetVisualDescendants().OfType<SelectableTextBlock>().ToList();
+            var text = card.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("markdown-paragraph")).ToList();
             await Assert.That(text.Select(t => t.Inlines?.Text ?? t.Text ?? "")).IsEquivalentTo(new[] { "Agent finished", "All good." }, CollectionOrdering.Matching);
             await host.CloseAsync();
         });

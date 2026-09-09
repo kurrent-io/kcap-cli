@@ -6,6 +6,25 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop app renders markdown through MarkView.Avalonia
+
+The hand-written Markdig-to-controls renderer covered the constructs agents emit and nothing else,
+and carried its own layout workarounds. MarkView is the one Avalonia 12 markdown control built on
+Markdig: Markdown.Avalonia's Avalonia 12 build is an alpha on its own regex parser, and
+LiveMarkdown's append-only builder suits a streaming token feed, not the immutable text a chat item
+carries. The library's defaults are wrapped rather than trusted. A `KcapMarkdownExtension` replaces
+its link, autolink and HTML renderers so a link exists only where `LinkPolicy` would open it, a bare
+URL never becomes the self-navigating `HyperlinkButton` MarkView emits for autolinks, an image is
+its source text, and HTML is shown rather than silently dropped; its image loader list is emptied so
+nothing agent-authored is ever fetched. One `TextMateExtension` instance serves every view: the
+extension caches its TextMate highlighters per instance, and a per-view instance rebuilt them on
+every render, about 14 ms for a prose-only message against 0.05 ms shared. Its theme is included
+app-wide and overridden per style class under `mv|MarkdownViewer`, with `:is(TextBlock)` selectors
+because its paragraphs are a `TextBlock` subclass. Paragraphs and headings carry a transparent
+background: the viewer's click and selection handlers sit on its content, which a pointer reaches
+only through a hit-tested descendant, and a bare text block hits on glyph geometry alone. User
+turns now render through the same view as assistant text.
+
 ## Read pull requests through the local GitHub CLI
 
 The desktop reads a linked pull request through the user's own `gh` when it is
