@@ -159,11 +159,11 @@ public class CodexHostedAgentRuntimeFactoryTests {
     [Arguments(false, true)]
     [Arguments(true,  true)]
     public async Task Interactive_routing_and_the_advertised_interactive_transport_are_one_fact(bool active, bool optIn) {
-        using var wt = new TempDir();
         var config  = new DaemonConfig { CodexAppServerActive = active, CodexAppServerInteractive = optIn, Version = "0.146.0" };
         var factory = new CodexHostedAgentRuntimeFactory(NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, null);
 
-        var routed     = factory.UsesAppServer(Ctx(isReviewFlow: false, wt.Path));
+        // The routing decision never touches the worktree, so a path under the injected home is enough.
+        var routed     = factory.UsesAppServer(Ctx(isReviewFlow: false, Home.PathTo("interactive-routing")));
         var advertised = CodexTransportDecision.InteractiveTransport(config) == CodexTransportDecision.AppServer;
 
         await Assert.That(routed).IsEqualTo(advertised);
