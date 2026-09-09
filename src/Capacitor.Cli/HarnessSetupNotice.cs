@@ -33,8 +33,8 @@ internal static class HarnessSetupNotice {
             if (Console.IsErrorRedirected) return; // scripts/pipelines never see it
 
             var profile = profiles.Effective;
-            // Asked for only once the notice is going to happen: this runs on the way out of every
-            // invocation, and a throw outside this try would abort the process at exit.
+            // A delegate, so the guards above can return without the registry ever being built:
+            // this runs on the way out of every invocation, most of which want no notice.
             var notice = HarnessNudgeEmitter.ResolveNotice(
                 harnesses(), new HarnessOfferStore(config),
                 profile?.DisableHarnessNudge is true, DateTimeOffset.UtcNow);

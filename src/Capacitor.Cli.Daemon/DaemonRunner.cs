@@ -53,10 +53,9 @@ public static partial class DaemonRunner {
         // And the same for the home directory, which the two above fall back to.
         var userHome = UserHome.FromEnvironment();
 
-        // One probe for the daemon's lifetime; the registry below is built over it, so a harness
-        // binary and a configured vendor path search one PATH.
-        var binaries  = Core.Setup.BinaryProbe.FromEnvironment();
-        var harnesses = Core.Harness.HarnessRegistry.FromEnvironment(userHome, binaries);
+        // One probe for the daemon's lifetime; the registry built over it below shares it, so a
+        // harness binary and a configured vendor path search one PATH.
+        var binaries = Core.Setup.BinaryProbe.FromEnvironment();
 
         // OriginalArgs is captured for self-respawn (detached restart-after-update) and to detect
         // the successor's --await-lock handoff flag. Paths is set here, in the initializer, so the
@@ -76,6 +75,10 @@ public static partial class DaemonRunner {
         // ACP child, a self-respawned successor's own inheritance from OUR ambient env) can ever
         // observe them except through the explicit re-injection paths that need them.
         CaptureBootCarriers(config, Environment.GetEnvironmentVariable, k => Environment.SetEnvironmentVariable(k, null));
+
+        // Below the carrier scrub: this reads every vendor's override variable, and the scrub above
+        // must run before anything reads the environment.
+        var harnesses = Core.Harness.HarnessRegistry.FromEnvironment(userHome, binaries);
 
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
