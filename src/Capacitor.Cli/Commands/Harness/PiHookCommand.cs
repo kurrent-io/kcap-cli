@@ -36,7 +36,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class PiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager  _watchers = new(config, profiles, http);
     readonly AgentHookPoster _poster   = new(config, profiles, http);
 
@@ -135,7 +135,7 @@ sealed class PiHookCommand(
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
         if (startedAt is { } ts) forwarded["started_at"] = ts.ToString("O");
-        if (Environment.GetEnvironmentVariable("KCAP_AGENT_ID") is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
         // Stamp default visibility BEFORE enrichment so it survives the
         // JsonString round-trip (same rationale as the Codex/Copilot dispatchers).
@@ -220,7 +220,7 @@ sealed class PiHookCommand(
         };
 
         if (cwd is not null) forwarded["cwd"] = cwd;
-        if (Environment.GetEnvironmentVariable("KCAP_AGENT_ID") is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
         // AuthLapsed / Posted → clean exit (0); a real failure keeps the prior non-zero exit.
         return await PostHookAsync("session-end/pi", forwarded.ToJsonString()) == HookPostOutcome.Failed ? 1 : 0;

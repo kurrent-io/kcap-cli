@@ -23,7 +23,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager _watchers = new(config, profiles, http);
     readonly CursorMarkers  _markers  = new(config);
 
@@ -255,7 +255,7 @@ public sealed class CursorHookCommand(
 
             NormalizeGuidField(node, "session_id");
             node["home_dir"] = home.Path;
-            var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
+            var agentHostId = hosted.AgentId;
             if (agentHostId is not null) node["agent_host_id"] = agentHostId;
 
             // Surface 3: attach this machine's harness inventory, session-start only.

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Gemini;
 
@@ -185,7 +186,7 @@ public class GeminiHookOutputContractTests {
         // A URL no POST can reach: these paths must all return before any network call, and a test
         // that quietly started talking to a live server would be measuring something else.
         await new GeminiHookCommand(Config.Root, Resolutions.At("http://127.0.0.1:1", Config.Root),
-            new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+            new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
 
         return capture.GetCapturedOutput();
     }

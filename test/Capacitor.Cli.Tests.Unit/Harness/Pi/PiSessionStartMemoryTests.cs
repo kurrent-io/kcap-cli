@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Pi;
 
@@ -24,7 +25,7 @@ public class PiSessionStartMemoryTests {
     // here rather than as an argument.
     PiHookCommand Hook(string serverUrl = "http://localhost:5100") =>
         new(Config.Root, Resolutions.At(serverUrl, Config.Root), new HookClock(TimeProvider.System), Home,
-            TestHarnesses.Under(Home), new FixedCapacitorHttpClient());
+            TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient());
     static string Render(string? fragment) => PiHookCommand.RenderMemoryOutput(fragment);
 
     // Byte-identical to pre-feature behaviour on every no-index path (opt-out, failure, spent lease):

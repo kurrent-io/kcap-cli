@@ -5,86 +5,48 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-// Bare because KCAP_DAEMON_URL is read by more than one production command (also
-// CodexHookCommand) and inherited by spawned children, so no cohort of key-holders
-// can exclude its readers.
+// Bare because two tests below capture the console, which is process-global.
 [NotInParallel]
 public class PermissionRequestCommandTests {
-    const string EnvVar = "KCAP_DAEMON_URL";
-
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    [Test]
-    public async Task ReturnsFalseWhenEnvVarIsUnset() {
-        using var _ = EnvScope.Exclusive(EnvVar, null);
-
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
-
-        await Assert.That(ok).IsFalse();
-        await Assert.That(url).IsEqualTo("");
-    }
+    PermissionRequestCommand On(HostedAgent hosted) =>
+        new(Config.Root, Resolutions.None(Config.Root), hosted, new RecordingCapacitorHttpClient());
 
     [Test]
-    public async Task ReturnsFalseWhenEnvVarIsEmpty() {
-        using var _ = EnvScope.Exclusive(EnvVar, "");
-
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
-
-        await Assert.That(ok).IsFalse();
-        await Assert.That(url).IsEqualTo("");
-    }
-
-    [Test]
-    public async Task AcceptsLoopbackHttpAndTrimsTrailingSlash() {
-        using var _ = EnvScope.Exclusive(EnvVar, "http://127.0.0.1:51234/abc/");
-
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
+    public async Task A_loopback_bridge_is_the_address_the_hook_posts_to() {
+        var ok = On(new HostedAgent(null, IsRendered: false, new DaemonBridge.Loopback("http://127.0.0.1:51234/abc")))
+                    .TryGetLoopbackDaemonUrl(out var url);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(url).IsEqualTo("http://127.0.0.1:51234/abc");
     }
 
     [Test]
-    public async Task RejectsLocalhostDnsName() {
-        // We require literal 127.0.0.1 — "localhost" could resolve to non-loopback in a misconfigured env.
-        using var _ = EnvScope.Exclusive(EnvVar, "http://localhost:51234/tok");
+    public async Task No_bridge_falls_back_without_a_word() {
+        using var stderr = ConsoleOutput.StartErrorCapture();
 
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
+        var ok = On(HostedAgent.Terminal).TryGetLoopbackDaemonUrl(out var url);
 
         await Assert.That(ok).IsFalse();
         await Assert.That(url).IsEqualTo("");
+        await Assert.That(stderr.GetCapturedError()).IsEmpty();
     }
 
+    /// <summary>
+    /// The fallback to the server route is otherwise indistinguishable from a daemon that named no
+    /// bridge, which is what would let a misconfigured variable go unnoticed for a whole session.
+    /// </summary>
     [Test]
-    public async Task RejectsNonLoopbackHost() {
-        using var _ = EnvScope.Exclusive(EnvVar, "http://example.com:8080/tok");
+    public async Task A_refused_bridge_is_reported_before_the_fallback() {
+        using var stderr = ConsoleOutput.StartErrorCapture();
 
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
+        var ok = On(new HostedAgent(null, IsRendered: false, new DaemonBridge.NotLoopback("http://example.com:8080/tok")))
+                    .TryGetLoopbackDaemonUrl(out var url);
 
         await Assert.That(ok).IsFalse();
         await Assert.That(url).IsEqualTo("");
-    }
-
-    [Test]
-    public async Task RejectsHttpsLoopback() {
-        // The daemon bridge is plain http on loopback — https implies a different
-        // endpoint and shouldn't be accepted via this env var.
-        using var _ = EnvScope.Exclusive(EnvVar, "https://127.0.0.1:51234/tok");
-
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
-
-        await Assert.That(ok).IsFalse();
-        await Assert.That(url).IsEqualTo("");
-    }
-
-    [Test]
-    public async Task RejectsMalformedUrl() {
-        using var _ = EnvScope.Exclusive(EnvVar, "not-a-url");
-
-        var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
-
-        await Assert.That(ok).IsFalse();
-        await Assert.That(url).IsEqualTo("");
+        await Assert.That(stderr.GetCapturedError()).Contains("http://example.com:8080/tok");
     }
 
     [Test]
@@ -115,14 +77,13 @@ public class PermissionRequestCommandTests {
     /// </summary>
     [Test]
     public async Task The_bridge_post_draws_the_loopback_lane() {
-        using var bridgeUrl = EnvScope.Exclusive(EnvVar, "http://127.0.0.1:51234/bridge");
-        // The bridge is the rendered agent's route; a terminal one records the event and never posts.
-        using var rendered  = EnvScope.Exclusive("KCAP_RENDERED_AGENT", "1");
-        using var handler   = new Accepting();
-        var       http      = new RecordingCapacitorHttpClient(handler);
+        using var handler = new Accepting();
+        var       http     = new RecordingCapacitorHttpClient(handler);
 
         var command = new PermissionRequestCommand(
-            Config.Root, Resolutions.None(Config.Root), http);
+            Config.Root, Resolutions.None(Config.Root),
+            // The bridge is the rendered agent's route; a terminal one records the event and never posts.
+            new HostedAgent(null, IsRendered: true, new DaemonBridge.Loopback("http://127.0.0.1:51234/bridge")), http);
 
         await using var stdout = new StringWriter();
 
@@ -150,13 +111,11 @@ public class PermissionRequestCommandTests {
     /// </summary>
     [Test]
     public async Task A_lapsed_credential_records_nothing() {
-        using var noBridge = EnvScope.Exclusive(EnvVar, null);
-        using var terminal = EnvScope.Exclusive("KCAP_RENDERED_AGENT", null);
-        using var handler  = new Counting();
+        using var handler = new Counting();
         var       http     = new RecordingCapacitorHttpClient(handler, AuthStatus.NotAuthenticated);
 
         var command = new PermissionRequestCommand(
-            Config.Root, Resolutions.At("https://example.test", Config.Root), http);
+            Config.Root, Resolutions.At("https://example.test", Config.Root), HostedAgent.Terminal, http);
 
         var exit = await command.Handle(
             """{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}""",

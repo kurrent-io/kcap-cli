@@ -4,6 +4,7 @@ using Capacitor.Cli.Tests.Unit.Policy;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -13,9 +14,6 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// answered prompt is never also recorded, an excluded session is never evaluated, and a rendered
 /// session's prompt still goes to the bridge that owns it.
 /// </summary>
-/// <remarks>Bare <c>[NotInParallel]</c>: <c>KCAP_RENDERED_AGENT</c> and <c>KCAP_DAEMON_URL</c> steer
-/// the branch under test and are read outside any enumerable cohort.</remarks>
-[NotInParallel]
 public class PermissionRequestPolicySeamTests : IDisposable {
     [TempDir] public required TempDir Tmp { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -26,8 +24,9 @@ public class PermissionRequestPolicySeamTests : IDisposable {
 
     public void Dispose() => _server.Stop();
 
-    PermissionRequestCommand Command() =>
-        new(Config.Root, Resolutions.At(_server.Urls[0], Config.Root), new RecordingCapacitorHttpClient());
+    PermissionRequestCommand Command(bool rendered = false) =>
+        new(Config.Root, Resolutions.At(_server.Urls[0], Config.Root),
+            new HostedAgent(null, rendered, DaemonBridge.None), new RecordingCapacitorHttpClient());
 
     // No transcript_path: the watcher self-heal is a no-op, so selfHealWatcher carries only the
     // governance meaning this class is about.
@@ -53,7 +52,6 @@ public class PermissionRequestPolicySeamTests : IDisposable {
 
     [Test]
     public async Task Deny_rule_answers_the_prompt_and_the_answered_prompt_is_not_also_recorded() {
-        using var _ = EnvScope.Exclusive("KCAP_RENDERED_AGENT", null);
         WriteDenyPolicy();
         StubNoAuthDiscovery();
         StubRecord();
@@ -74,7 +72,6 @@ public class PermissionRequestPolicySeamTests : IDisposable {
     /// early rather than the post being unreachable.</summary>
     [Test]
     public async Task Excluded_session_is_ungoverned_and_falls_through_to_record_only() {
-        using var _ = EnvScope.Exclusive("KCAP_RENDERED_AGENT", null);
         WriteDenyPolicy();
         StubNoAuthDiscovery();
         StubRecord();
@@ -91,8 +88,6 @@ public class PermissionRequestPolicySeamTests : IDisposable {
 
     [Test]
     public async Task Rendered_session_skips_the_seam_and_forwards_the_prompt() {
-        using var rendered = EnvScope.Exclusive("KCAP_RENDERED_AGENT", "1");
-        using var daemon = EnvScope.Exclusive("KCAP_DAEMON_URL", null);
         WriteDenyPolicy();
         StubNoAuthDiscovery();
         _server.Given(Request.Create().WithPath("/hooks/permission-request").UsingPost())
@@ -100,7 +95,7 @@ public class PermissionRequestPolicySeamTests : IDisposable {
                 .WithHeader("Content-Type", "application/json").WithBody("""{"behavior":"allow"}"""));
 
         var stdout = new StringWriter();
-        var exit = await Command().Handle(Body("git push --force"), selfHealWatcher: true, stdout);
+        var exit = await Command(rendered: true).Handle(Body("git push --force"), selfHealWatcher: true, stdout);
 
         await Assert.That(exit).IsEqualTo(0);
         // The forwarded answer, not the deny the same policy would have produced here.

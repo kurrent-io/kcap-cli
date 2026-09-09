@@ -37,7 +37,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class KiroHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager  _watchers = new(config, profiles, http);
     readonly AgentHookPoster _poster   = new(config, profiles, http);
 
@@ -201,7 +201,7 @@ sealed class KiroHookCommand(
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
 
-        if (Environment.GetEnvironmentVariable("KCAP_AGENT_ID") is { } agentHostId) {
+        if (hosted.AgentId is { } agentHostId) {
             forwarded["agent_host_id"] = agentHostId;
         }
 

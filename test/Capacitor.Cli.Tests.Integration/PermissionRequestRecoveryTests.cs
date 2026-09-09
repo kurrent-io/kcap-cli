@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Auth;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -47,8 +48,6 @@ public class PermissionRequestRecoveryTests : IDisposable {
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"decision":"allow"}"""));
 
-        using var rendered = EnvScope.Exclusive("KCAP_RENDERED_AGENT", "1");
-        using var noDaemon = EnvScope.Exclusive("KCAP_DAEMON_URL", null);
 
         var stdout = new StringWriter();
         var exit   = await CommandAsync().Handle(Payload, selfHealWatcher: false, stdout);
@@ -81,7 +80,9 @@ public class PermissionRequestRecoveryTests : IDisposable {
         var sp = services.BuildServiceProvider();
         _containers.Add(sp);
 
-        return new(Config.Root, profiles, sp.GetRequiredService<ICapacitorHttpClient>());
+        // The rendered agent's route: its prompt is answered through the daemon, not the seam.
+        return new(Config.Root, profiles, new HostedAgent(null, IsRendered: true, DaemonBridge.None),
+                   sp.GetRequiredService<ICapacitorHttpClient>());
     }
 
     readonly List<ServiceProvider> _containers = [];

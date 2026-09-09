@@ -29,6 +29,7 @@ public static class CommandServices {
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.
         services.AddSingleton(_ => BinaryProbe.FromEnvironment());
+        services.AddSingleton(_ => HostedAgent.FromEnvironment());
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(

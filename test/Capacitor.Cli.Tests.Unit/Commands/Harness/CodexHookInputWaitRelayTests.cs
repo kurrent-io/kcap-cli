@@ -4,12 +4,13 @@ using Capacitor.Cli.Commands.Harness;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
-/// The input-wait relay a daemon-hosted Codex session sends its daemon. Every test here mutates
-/// process-wide environment and captures the console, hence the bare constraint on each and a
-/// class of its own — the command's main suite carries a keyed one, and a method may not shadow it.
+/// The input-wait relay a daemon-hosted Codex session sends its daemon. Capturing the console is
+/// process-global, hence the bare constraint on each test and a class of its own — the command's
+/// main suite carries a keyed one, and a method may not shadow it.
 public class CodexHookInputWaitRelayTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -23,11 +24,10 @@ public class CodexHookInputWaitRelayTests {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/codex/input-wait").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(204));
-        using var daemonUrl = EnvScope.Exclusive("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/tok");
-        using var agentId   = EnvScope.Exclusive("KCAP_AGENT_ID", "agent-1");
-        using var capture   = ConsoleOutput.StartCapture();
+        using var capture = ConsoleOutput.StartCapture();
+        var hosted = new HostedAgent("agent-1", IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient())
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
             .Handle(new StringReader($$"""{"hook_event_name":"{{eventName}}","session_id":"019e0322-05fc-7570-be65-75719c3ea861","cwd":"/tmp"}"""));
 
         await Assert.That(exit).IsEqualTo(0);

@@ -10,7 +10,8 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+class PermissionRequestCommand(
+        ConfigRoot config, ProfileContext profiles, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager _watchers = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -56,7 +57,7 @@ class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapa
             await TryEnsureWatcher(sessionId, node);
         }
 
-        var isRenderedAgent = Environment.GetEnvironmentVariable("KCAP_RENDERED_AGENT") is "1";
+        var isRenderedAgent = hosted.IsRendered;
 
         // A rendered session's prompt is the daemon bridge's to decide — one full evaluation per
         // raised prompt, off the same files — so evaluating it here too would decide it twice with
@@ -88,17 +89,12 @@ class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapa
             ["permission_suggestions"] = suggestions?.DeepClone()
         };
 
-        // Prefer the daemon's local SignalR bridge when present — that path runs the
-        // long-poll over the daemon's persistent SignalR connection, bypassing
-        // Cloudflare's HTTP-request timeout (~120s) that severs the equivalent route
-        // on the server. Older daemon builds don't set this env var, so we fall back
-        // to the original /hooks/permission-request HTTPS path.
-        //
-        // Validate the daemon URL is loopback before posting — the env var carries no
-        // auth, so an accidentally / maliciously set non-loopback value would leak the
-        // hook payload (tool name, raw tool input) to an arbitrary endpoint.
+        // Prefer the daemon's local bridge when present — that path runs the long-poll over the
+        // daemon's persistent SignalR connection, bypassing Cloudflare's ~120s HTTP-request timeout
+        // that severs the equivalent route on the server. A daemon that names no bridge falls back
+        // to the /hooks/permission-request HTTPS path.
         if (TryGetLoopbackDaemonUrl(out var daemonUrl)) {
-            var       bridgePayload = BuildBridgePayload(node, sessionId, HookAgentId.FromEnvironment());
+            var       bridgePayload = BuildBridgePayload(node, sessionId, hosted.AgentId);
             using var bridge        = http.Loopback();
 
             return await PostAsync(bridge, daemonUrl + "/claude/permission-request", bridgePayload, stdout);
@@ -147,17 +143,21 @@ class PermissionRequestCommand(ConfigRoot config, ProfileContext profiles, ICapa
     static string? GetString(JsonNode node, string field) =>
         node[field] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
-    internal static bool TryGetLoopbackDaemonUrl(out string daemonUrl) {
+    /// A named bridge this hook may not post to earns a line: the fallback to the server route is
+    /// otherwise indistinguishable from a daemon that named no bridge at all.
+    internal bool TryGetLoopbackDaemonUrl(out string daemonUrl) {
         daemonUrl = "";
-        var raw = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
-        if (string.IsNullOrEmpty(raw)) return false;
 
-        if (DaemonBridgeUrl.TryParseLoopback(raw, out daemonUrl)) {
-            return true;
+        switch (hosted.Bridge) {
+            case DaemonBridge.Loopback bridge:
+                daemonUrl = bridge.BaseUrl;
+                return true;
+            case DaemonBridge.NotLoopback bad:
+                Console.Error.WriteLine($"[kcap] Ignoring non-loopback {HostedAgent.BridgeUrlVar}: {bad.Value}");
+                return false;
+            default:
+                return false;
         }
-
-        Console.Error.WriteLine($"[kcap] Ignoring non-loopback KCAP_DAEMON_URL: {raw}");
-        return false;
     }
 
     /// The server payload plus what the daemon's attribution ladder reads: agent_id when this

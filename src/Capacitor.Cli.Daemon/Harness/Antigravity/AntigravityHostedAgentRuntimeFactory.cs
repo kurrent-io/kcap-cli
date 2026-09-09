@@ -578,7 +578,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // Without these a surviving turn child is invisible to OrphanReaper's env-marker pass — and
         // nothing fails visibly when they are omitted, which is exactly why they are stamped here
         // rather than left to the runtime.
-        psi.Environment["KCAP_AGENT_ID"] = ctx.AgentId;
+        psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 

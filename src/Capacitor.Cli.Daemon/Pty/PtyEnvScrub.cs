@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Daemon.Pty;
 
 internal static class PtyEnvScrub {
@@ -19,8 +20,8 @@ internal static class PtyEnvScrub {
     ];
 
     public static readonly string[] HostedAgentVars = [
-        "KCAP_AGENT_ID",
-        "KCAP_RENDERED_AGENT",
-        "KCAP_DAEMON_URL"
+        HostedAgent.AgentIdVar,
+        HostedAgent.RenderedVar,
+        HostedAgent.BridgeUrlVar
     ];
 }

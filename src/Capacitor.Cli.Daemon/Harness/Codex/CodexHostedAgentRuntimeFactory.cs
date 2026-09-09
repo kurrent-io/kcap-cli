@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -170,13 +171,13 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
-            ["KCAP_RENDERED_AGENT"] = "1",
-            ["KCAP_AGENT_ID"]       = ctx.AgentId,
+            [HostedAgent.RenderedVar] = HostedAgent.Rendered,
+            [HostedAgent.AgentIdVar]       = ctx.AgentId,
         };
         if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env["KCAP_URL"]          = ctx.ServerUrl;
-        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env["KCAP_DAEMON_URL"]   = ctx.DaemonBridgeUrl;
+        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar]   = ctx.DaemonBridgeUrl;
         // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
         // and stand down so the rollout is not double-ingested alongside the envelopes.
         if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";

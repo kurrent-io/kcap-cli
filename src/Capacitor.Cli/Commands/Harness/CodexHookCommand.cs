@@ -27,7 +27,7 @@ namespace Capacitor.Cli.Commands.Harness;
 ///                       emit the idle-wait marker that clears the chat
 ///                       "working" indicator. HandleStop also refreshes watcher
 ///                       liveness and emits {"continue":true} for Codex's parser.
-///   PermissionRequest → in a daemon-launched hosted agent (KCAP_DAEMON_URL set), bounce
+///   PermissionRequest → in a daemon-launched hosted agent (a loopback bridge named), bounce
 ///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
 ///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
 ///                       POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
@@ -38,7 +38,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager  _watchers = new(config, profiles, http);
     readonly AgentHookPoster _poster   = new(config, profiles, http);
 
@@ -237,7 +237,7 @@ sealed class CodexHookCommand(
 
         node["home_dir"] = home.Path;
 
-        var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
+        var agentHostId = hosted.AgentId;
         if (agentHostId is not null) {
             node["agent_host_id"] = agentHostId;
         }
@@ -245,7 +245,7 @@ sealed class CodexHookCommand(
         // Ahead of the disabled and exclusion gates: the hosting daemon's turn-boundary hint is
         // local display state, not recording.
         if (eventName switch { "Stop" => true, "UserPromptSubmit" or "PreToolUse" => false, _ => (bool?) null } is { } waiting)
-            await DaemonInputWaitRelay.NotifyAsync("codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
+            await DaemonInputWaitRelay.NotifyAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
 
         // Mirror the Claude path: if the user ran `kcap disable`, skip every
         // server POST and the watcher restart. Without this check the next Codex
@@ -486,12 +486,20 @@ sealed class CodexHookCommand(
         return 0;
     }
 
-    async Task<int> HandlePermissionRequest(JsonNode node) {
-        var daemonUrl = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+    async Task<int> HandlePermissionRequest(JsonNode node) =>
+        hosted.Bridge switch {
+            DaemonBridge.Loopback bridge => await HandlePermissionRequestViaBridge(bridge.BaseUrl, node),
+            DaemonBridge.NotLoopback bad => RefuseBridge(bad.Value),
+            _                            => await HandlePermissionRequestStub(node),
+        };
 
-        return daemonUrl is null
-            ? await HandlePermissionRequestStub(node)
-            : await HandlePermissionRequestViaBridge(daemonUrl, node);
+    /// A named bridge this hook may not post to is a misconfiguration, not a terminal session: the
+    /// stub's silent fallback to Codex's own prompt would hide it, and this hook fails closed.
+    static int RefuseBridge(string daemonUrl) {
+        Console.Error.WriteLine(
+            $"[kcap] codex-hook permission-request: {HostedAgent.BridgeUrlVar} must be http loopback, got: {daemonUrl}");
+
+        return EmitDenyAndExitNonzero();
     }
 
     async Task<int> HandlePermissionRequestStub(JsonNode node) {
@@ -522,20 +530,14 @@ sealed class CodexHookCommand(
         return 0;
     }
 
-    async Task<int> HandlePermissionRequestViaBridge(string daemonUrl, JsonNode node) {
-        if (!DaemonBridgeUrl.TryParseLoopback(daemonUrl, out var bridgeBase)) {
-            Console.Error.WriteLine(
-                $"[kcap] codex-hook permission-request: KCAP_DAEMON_URL must be http loopback, got: {daemonUrl}");
-            return EmitDenyAndExitNonzero();
-        }
-
+    async Task<int> HandlePermissionRequestViaBridge(string bridgeBase, JsonNode node) {
         using var client = http.Loopback();
         // The daemon holds the request open until the human decides, and Codex sets no timeout of
         // its own on this hook, so the wait is theirs to end rather than the client's.
         client.Timeout = Timeout.InfiniteTimeSpan;
 
         try {
-            var bridgePayload = BuildBridgePayload(node, HookAgentId.FromEnvironment());
+            var bridgePayload = BuildBridgePayload(node, hosted.AgentId);
             using var content = new StringContent(bridgePayload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp    = await client.PostAsync($"{bridgeBase}/codex/permission-request", content);
 

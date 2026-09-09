@@ -196,9 +196,9 @@ internal partial class AgentOrchestrator {
                 // Register like a UI-launched agent: hosted env so it's visible/drivable from the
                 // owner's web UI, the session links via KCAP_AGENT_ID, and permissions route
                 // through the daemon bridge. --private omits all of this.
-                env["KCAP_RENDERED_AGENT"] = "1";
-                env["KCAP_AGENT_ID"]       = agentId;
-                if (_permissionBridge.BaseUrl is { } bridgeUrl) env["KCAP_DAEMON_URL"] = bridgeUrl;
+                env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
+                env[HostedAgent.AgentIdVar]       = agentId;
+                if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
             spawnedAtUtc = DateTime.UtcNow;

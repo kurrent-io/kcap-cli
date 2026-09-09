@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Config;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -69,7 +70,7 @@ public class AntigravitySessionStartTests : IDisposable {
             }
             """;
 
-            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
+            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
             new StringWriter());
 
         await Assert.That(exit).IsEqualTo(0);
@@ -116,7 +117,7 @@ public class AntigravitySessionStartTests : IDisposable {
             }
             """;
 
-            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
+            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
             new StringWriter());
         await Assert.That(exit).IsEqualTo(0);
 
