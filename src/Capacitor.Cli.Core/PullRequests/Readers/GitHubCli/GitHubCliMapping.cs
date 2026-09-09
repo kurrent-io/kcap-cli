@@ -18,7 +18,11 @@ public static class GitHubCliMapping {
         var signedIn = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var host in hosts.EnumerateObject()) {
             if (!host.Value.IsArray || !GitHubCliRunner.ValidHost(host.Name)) continue;
-            if (host.Value.EnumerateArray().Any(entry => entry.IsObject && entry.Prop("state") is { } state && state.IsString && state.GetString() == "success"))
+            var entries = host.Value.EnumerateArray().Where(entry => entry.IsObject).ToArray();
+            // gh's active account decides the host; older output with no "active" field falls back to any entry.
+            var hasActive = entries.Any(entry => entry.Bool("active") is not null);
+            var candidates = hasActive ? entries.Where(entry => entry.Bool("active") == true) : entries;
+            if (candidates.Any(entry => entry.Prop("state") is { } state && state.IsString && state.GetString() == "success"))
                 signedIn.Add(host.Name);
         }
         return signedIn;

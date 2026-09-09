@@ -34,6 +34,15 @@ public class GitHubCliReaderProviderTests {
     }
 
     [Test]
+    public async Task Only_the_active_account_decides_whether_a_host_is_served() {
+        var h = new GhHarness(Tmp);
+        h.Process.When(["auth", "status"], GhHarness.Fixture("auth-status-inactive.json"));
+        await Assert.That((await h.Provider.ProbeAsync(false, default)).Kind).IsEqualTo(PullRequestReaderStatusKind.Ready);
+        await Assert.That(h.Provider.Serves("github", "github.com")).IsFalse();
+        await Assert.That(h.Provider.Serves("github", "ghe.example")).IsTrue();
+    }
+
+    [Test]
     public async Task Probe_results_are_cached_for_five_minutes_and_refresh_reprobes() {
         var h = new GhHarness(Tmp); h.SignedIn("github.com");
         await h.Provider.ProbeAsync(false, default);

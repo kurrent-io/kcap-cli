@@ -1,0 +1,1 @@
+{"hosts":{"github.com":[{"state":"error","active":true,"host":"github.com","login":"broken","error":"token invalid"},{"state":"success","active":false,"host":"github.com","login":"spare"}],"ghe.example":[{"state":"success","active":true,"host":"ghe.example","login":"octocat"}]}}
