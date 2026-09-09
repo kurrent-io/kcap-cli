@@ -26,6 +26,26 @@ The PR card carries a provider-generic note naming what to install or sign in
 to. A GitLab provider is one new type plus one registration line. See the
 [design](superpowers/specs/2026-09-08-local-pr-context-design.md).
 
+## The desktop app ships as a signed DMG that updates itself
+
+The app bundles `kcap`, `kcap-daemon` and the PTY shim in `Contents/MacOS`, so the CLI beside the
+app is the one the shim links and the LaunchAgent runs, at a path that survives updates. Velopack
+packs and updates the bundle; one Velopack channel carries every release, and the app itself drops
+prerelease entries when the installed version is stable.
+
+**The daemon is signed before its digest is computed, and never again.** The CLI embeds the
+daemon's SHA-256 and refuses a mismatch on app-managed starts; signing rewrites the bytes, so the
+order is fixed and Velopack runs with deep signing disabled. npm and the app receive the same signed
+trio, and the app is published only after its bytes are confirmed on the registry.
+
+**The daemon's restart is its own.** It already restarts itself when its binary changes and it is
+idle, which the bundle swap triggers; the app holds its skew dialog for 45 s after an update
+relaunch so that restart can land, and offers the dialog only to a daemon that stays busy.
+
+**Startup auto-apply is off.** A cached package is applied by the app after the install-location
+guard and the prerelease rule, and never on an update relaunch — a failed apply relaunches the old
+version with the same package still cached.
+
 ## An import batch closes on bytes as well as lines
 
 **#814** closes a transcript batch at 4 MiB of line content as well as at 100 lines, and reports
