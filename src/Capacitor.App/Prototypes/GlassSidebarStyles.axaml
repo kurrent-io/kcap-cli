@@ -1,0 +1,27 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views">
+    <!-- Added to the rail's own styles after its original styles, so the original opaque
+         Fluent hover fill does not cover the floating panel's material. -->
+    <Style Selector="views|SessionRailView.glassPrototypeRail Button#RailNewSessionButton /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#183E6470" />
+        <Setter Property="BorderBrush" Value="#44798A99" />
+        <Setter Property="CornerRadius" Value="10" />
+    </Style>
+    <Style Selector="views|SessionRailView.glassPrototypeRail Button#RailNewSessionButton:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView.glassPrototypeRail Button#RailNewSessionButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#303E6470" />
+        <Setter Property="BorderBrush" Value="#7E9BABBB" />
+    </Style>
+    <Style Selector="views|SessionRailView.glassPrototypeRail Button.railRow">
+        <Setter Property="CornerRadius" Value="9" />
+    </Style>
+    <Style Selector="views|SessionRailView.glassPrototypeRail Button.selected,
+                     views|SessionRailView.glassPrototypeRail Button.holdsSelected">
+        <Setter Property="Background" Value="#244ED6BA" />
+    </Style>
+    <Style Selector="views|SessionRailView.glassPrototypeRail Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     views|SessionRailView.glassPrototypeRail Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#244ED6BA" />
+    </Style>
+</Styles>

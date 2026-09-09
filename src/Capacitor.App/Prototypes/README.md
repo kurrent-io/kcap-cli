@@ -24,6 +24,10 @@ The repository, machine, harness, effort and permission chips follow the selecte
 Glass chips have translucent surfaces, edge lighting, dropdown chevrons and explicit hover,
 pressed and keyboard-focus states. Current restores the original chip templates and spacing.
 
+The sidebar also follows the material: glass modes use an inset panel with 22 DIP corners,
+frosted tint, a light rim and a shared backdrop extending behind the session tree. The panel
+starts below the macOS window controls. Current restores the original full-height sidebar.
+
 Move the pointer inside the launcher to shift the glow slightly and see the live backdrop.
 Use the buttons or left/right arrows to switch; text fields retain their usual arrow-key behaviour.
 The entry point is available only in Debug builds with `--glass-prototype`.
@@ -47,6 +51,8 @@ material switches, and the preview-only Start response. The glass content needs 
 Border for padding: setting LiquidGlassSurface.Padding alone did not inset the controls.
 The chip check also covered keyboard focus, selecting an effort through its picker, and
 preserving that selection when restoring the original material.
+The floating sidebar was visually checked with its footer visible; expanding/collapsing
+session groups works and the collapse state survives switching to Current and back.
 This is a visual experiment; cross-platform rendering, sustained scrolling performance,
 accessibility fallback and production integration remain unvalidated. The user's material
 choice is pending; nothing from this experiment has been promoted to main.

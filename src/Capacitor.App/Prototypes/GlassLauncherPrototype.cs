@@ -21,6 +21,7 @@ static class GlassLauncherPrototype {
             Source = new Uri("avares://Kurrent Capacitor/Prototypes/GlassChipStyles.axaml"),
         });
         var chips = ChipNames.Select(name => launcher.FindControl<Button>(name)!).ToArray();
+        var sidebar = new GlassSidebarPrototype(window.FindControl<SessionRailView>("SessionRail")!);
         var card = launcher.FindControl<Border>("ComposerCard")!;
         var cardParent = (StackPanel)card.Parent!;
         var cardIndex = cardParent.Children.IndexOf(card);
@@ -38,15 +39,18 @@ static class GlassLauncherPrototype {
         host.Children.Add(glass);
         cardParent.Children.Insert(cardIndex, host);
 
-        // The backdrop belongs to the whole right pane; the launcher's content margins
-        // should inset controls without cutting a dark gutter around the glow.
+        // One backdrop behind both panes lets the floating sidebar sample the same scene.
+        // Launcher content margins only inset controls, never the glow.
+        var sessions = window.FindControl<Grid>("SessionsSurface")!;
         var launcherPane = window.FindControl<Grid>("LauncherPane")!;
         var rightPane = (Panel)launcherPane.Parent!;
         var backdrop = new GlassPrototypeBackdrop { IsHitTestVisible = false };
         rightPane.ClipToBounds = true;
         rightPane.Background = Brushes.Transparent;
-        rightPane.Children.Insert(0, backdrop);
-        rightPane.PointerMoved += (_, e) => {
+        sessions.ClipToBounds = true;
+        Grid.SetColumnSpan(backdrop, 2);
+        sessions.Children.Insert(0, backdrop);
+        sessions.PointerMoved += (_, e) => {
             backdrop.LightPosition = e.GetPosition(backdrop);
             backdrop.InvalidateVisual();
         };
@@ -70,9 +74,17 @@ static class GlassLauncherPrototype {
             Foreground = Brush("#B0B7C6"), Margin = new Thickness(14, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
+        var switcher = new StackPanel();
 
         void Show(int mode) {
             current = mode;
+            var sidebarWidth = mode == 0 ? 310 : 334;
+            sessions.ColumnDefinitions[0].Width = new GridLength(sidebarWidth);
+            sidebar.Apply(mode);
+            backdrop.ContentLeft = sidebarWidth;
+            backdrop.ShowSidebarGlow = mode != 0;
+            backdrop.InvalidateVisual();
+            switcher.Margin = new Thickness(sidebarWidth, 0, 0, 25);
             card.Child = null;
             glassContent.Child = null;
             glass.Content = null;
@@ -108,9 +120,9 @@ static class GlassLauncherPrototype {
                 buttons[i].Classes.Set("kcapChip", i != mode);
             }
             description.Text = mode switch {
-                0 => "Current opaque composer · same layout and controls",
-                1 => "Soft glass · frosted backdrop, quiet edges · move the pointer to shift the light",
-                _ => "Liquid glass · stronger lens and colour separation · move the pointer to shift the light",
+                0 => "Current · full-height sidebar and opaque controls",
+                1 => "Soft glass · floating sidebar, frosted controls · move the pointer to shift the light",
+                _ => "Liquid glass · floating sidebar, stronger lenses · move the pointer to shift the light",
             };
             Console.WriteLine($"Glass prototype: material={mode}, glow={glow.IsChecked == true}, blur={glass.BlurRadius}, refraction={glass.RefractionAmount}");
         }
@@ -129,7 +141,6 @@ static class GlassLauncherPrototype {
             Show(current);
         };
         controls.Children.Add(glow);
-        var switcher = new StackPanel();
         switcher.Children.Add(new Border {
             Background = Brush("#12151D"), BorderBrush = Brush("#2A3040"), BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14), Padding = new Thickness(8), Child = controls,
@@ -137,7 +148,6 @@ static class GlassLauncherPrototype {
         switcher.Children.Add(description);
         switcher.HorizontalAlignment = HorizontalAlignment.Center;
         switcher.VerticalAlignment = VerticalAlignment.Bottom;
-        switcher.Margin = new Thickness(310, 0, 0, 25);
         ((Panel)window.Content!).Children.Add(switcher);
         window.KeyDown += (_, e) => {
             if (e.Source is TextBox || window.FocusManager?.GetFocusedElement() is TextBox) return;
@@ -153,18 +163,25 @@ static class GlassLauncherPrototype {
 
 sealed class GlassPrototypeBackdrop : Control {
     public Point? LightPosition { get; set; }
+    public double ContentLeft { get; set; } = 310;
+    public bool ShowSidebarGlow { get; set; }
 
     public override void Render(DrawingContext context) {
-        var w = Bounds.Width;
+        var left = ContentLeft;
+        var w = Bounds.Width - left;
         var h = Bounds.Height;
-        var pointer = LightPosition ?? new Point(w * 0.35, h * 0.52);
+        var pointer = LightPosition ?? new Point(left + w * 0.35, h * 0.52);
         // Pointer response is deliberately small: lets the live refraction be judged without
         // animating the reading surface or running a permanent render timer.
-        var dx = (pointer.X - w / 2) * 0.12;
+        var dx = (Math.Clamp(pointer.X, left, Bounds.Width) - left - w / 2) * 0.12;
         var dy = (pointer.Y - h / 2) * 0.08;
-        Glow(context, "#8023806C", new Point(w * 0.3 + dx, h * 0.55 + dy), w * 0.43, h * 0.46);
-        Glow(context, "#6851528F", new Point(w * 0.72 - dx, h * 0.59 - dy), w * 0.38, h * 0.4);
-        Glow(context, "#45226B85", new Point(w * 0.55, h * 0.35), w * 0.36, h * 0.33);
+        if (ShowSidebarGlow) {
+            Glow(context, "#553D7581", new Point(left * 0.35, h * 0.42), left * 1.25, h * 0.7);
+            Glow(context, "#344D4878", new Point(left * 0.5, h * 0.85), left, h * 0.45);
+        }
+        Glow(context, "#8023806C", new Point(left + w * 0.3 + dx, h * 0.55 + dy), w * 0.43, h * 0.46);
+        Glow(context, "#6851528F", new Point(left + w * 0.72 - dx, h * 0.59 - dy), w * 0.38, h * 0.4);
+        Glow(context, "#45226B85", new Point(left + w * 0.55, h * 0.35), w * 0.36, h * 0.33);
     }
 
     static void Glow(DrawingContext context, string color, Point center, double rx, double ry) {
