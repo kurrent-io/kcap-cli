@@ -78,8 +78,7 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var stamp = Stamp(provider);
         if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.OverviewAsync(sessionId, subject, ct).ConfigureAwait(false);
-        // The provider's own identity can drift while this read is in flight even when nothing else touched the session's stamp.
-        return stamp != Stamp(provider) || Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return Stale(subject, stamp, sessionId) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
     }
 
     public async Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
@@ -91,7 +90,7 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var stamp = Stamp(provider);
         if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.PageAsync<T>(sessionId, subject, section, cursor, resolved, threadId, ct).ConfigureAwait(false);
-        return stamp != Stamp(provider) || Superseded(sessionId, subject, stamp) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return Stale(subject, stamp, sessionId) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
     }
 
     public PullRequestReaderNote? NoteFor(string provider, string host) {
@@ -126,6 +125,17 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         return providers.Where((_, i) => statuses[i].IsReady);
     }
     IPullRequestReaderProvider? Route(PullRequestSubjectDto subject) => Ready().FirstOrDefault(provider => provider.Serves(subject.Provider, subject.Host));
+    // A completed read is stale when routing this subject now, from scratch, disagrees with the stamp it was dispatched
+    // under: no route at all, a different or re-identified provider, or a session stamp another call already moved on.
+    // Discovering the former also fast-forwards the session's stamp, so the very next read isn't forced through its
+    // own separate restart to learn what this completion just found out.
+    bool Stale(PullRequestSubjectDto subject, string stamp, string sessionId) {
+        if (Route(subject) is not { } current) return true;
+        var currentStamp = Stamp(current);
+        if (currentStamp == stamp) return Superseded(sessionId, subject, stamp);
+        lock (_lock) Stamp(sessionId, SubjectKey(subject), currentStamp);
+        return true;
+    }
     // Captured once per read: the provider's own Identity can change while a read is in flight, and the stale value must still be rejected on completion.
     static string Stamp(IPullRequestReaderProvider provider) => provider.Name + "|" + provider.Identity;
     static string SubjectKey(PullRequestSubjectDto s) => $"{s.Provider}|{s.Host}|{s.Owner}|{s.RepoName}|{s.Number}".ToLowerInvariant();

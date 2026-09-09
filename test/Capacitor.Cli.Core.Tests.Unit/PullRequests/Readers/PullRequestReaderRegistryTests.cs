@@ -182,6 +182,24 @@ public class PullRequestReaderRegistryTests {
     }
 
     [Test]
+    public async Task A_read_dispatched_before_a_higher_precedence_provider_became_ready_returns_restart() {
+        var gh = new StubProvider("gh", ready: false, hosts: []);
+        var server = new StubProvider("server", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        await registry.DiscoverAsync(false, default);
+        var pending = registry.OverviewAsync("session", Subject(), default);
+        gh.Ready = true; gh.Hosts = ["github.com"];
+        await registry.DiscoverAsync(true, default);
+        server.PendingOverview!.SetResult(new(PullRequestReadKind.Ready, new() { Title = "server" }, Subject(), DateTime.UtcNow, AccessValidForSeconds: 30));
+        var restart = await pending;
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+        var ready = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(ready.Kind).IsEqualTo(PullRequestReadKind.Ready);
+        await Assert.That(ready.Data!.Title).IsEqualTo("gh");
+    }
+
+    [Test]
     public async Task Losing_the_last_reader_for_a_subject_rejects_a_pending_read() {
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
         var registry = new PullRequestReaderRegistry(new StubLinks(), [gh]);
