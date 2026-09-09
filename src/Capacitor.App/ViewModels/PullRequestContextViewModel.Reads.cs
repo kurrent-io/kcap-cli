@@ -180,7 +180,10 @@ public sealed partial class PullRequestContextViewModel {
     }
     void Fail<T>(PullRequestRead<T> read) where T : class {
         _retryAt = read.RetryAt;
-        if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
+        // A superseded provider or identity outlives its own request: cancel the in-flight reads it left
+        // behind and advance the generation, or a stale completion would still land and restore old state.
+        if (read.Kind == PullRequestReadKind.Restart && read.Reason is "identity_changed" or "integration_changed") { CancelReads(); ClearProtected(); }
+        else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
             || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") EnterGrace();
         else ClearProtected();
         SetNotice(Reason(read));

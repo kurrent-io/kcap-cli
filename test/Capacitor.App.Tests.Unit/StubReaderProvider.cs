@@ -10,6 +10,8 @@ internal sealed class StubReaderProvider(FakeTimeProvider time, params string[] 
     public PullRequestLinkDto[] Discovered = [];
     public int Probes;
     public readonly List<bool> RefreshFlags = [];
+    public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
+    public TaskCompletionSource<object>? PendingPage;
     public string Name => "stub";
     public string ProviderKind => "github";
     public PullRequestReaderTool? Tool => new("GitHub CLI", "https://cli.github.com", host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
@@ -22,12 +24,16 @@ internal sealed class StubReaderProvider(FakeTimeProvider time, params string[] 
         Discoveries.Add((repository, branch));
         return Task.FromResult<IReadOnlyList<PullRequestLinkDto>>(Discovered);
     }
-    public Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct)
-        => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Ready,
+    public Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
+        if (OverviewResponses.TryDequeue(out var response)) return response(subject, ct);
+        return Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Ready,
             new() { Title = "Local PR", Description = "Local description", HeadSha = new string('a', 40), Lifecycle = "open" },
             subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp()));
+    }
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
-        string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class
-        => Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient"));
+        string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
+        if (PendingPage is { } pending) return pending.Task.ContinueWith(t => (PullRequestRead<PullRequestPageDto<T>>)t.Result, TaskScheduler.Default);
+        return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient"));
+    }
     public void ResetSession(string sessionId) { }
 }

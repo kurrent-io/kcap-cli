@@ -116,6 +116,26 @@ public class PullRequestReaderRegistryTests {
     }
 
     [Test]
+    public async Task A_read_from_a_superseded_provider_returns_restart() {
+        var gh = new StubProvider("gh", ready: false, hosts: ["github.com"]);
+        var server = new StubProvider("server", ready: true, hosts: ["github.com"]) { PendingOverview = new() };
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, server]);
+        await registry.DiscoverAsync(false, default);
+        var pending = registry.OverviewAsync("session", Subject(), default);
+        gh.Ready = true;
+        await registry.DiscoverAsync(true, default);
+        var rerouted = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(rerouted.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        server.PendingOverview!.SetResult(new(PullRequestReadKind.Ready, new() { Title = "server" }, Subject(), DateTime.UtcNow, AccessValidForSeconds: 30));
+        var restart = await pending;
+        await Assert.That(restart.Kind).IsEqualTo(PullRequestReadKind.Restart);
+        await Assert.That(restart.Reason).IsEqualTo("integration_changed");
+        var ready = await registry.OverviewAsync("session", Subject(), default);
+        await Assert.That(ready.Kind).IsEqualTo(PullRequestReadKind.Ready);
+        await Assert.That(ready.Data!.Title).IsEqualTo("gh");
+    }
+
+    [Test]
     public async Task A_host_sign_in_that_reroutes_the_same_subject_restarts_once() {
         var gh = new StubProvider("gh", ready: true, hosts: []);
         var server = new StubProvider("server", ready: true, hosts: ["github.com"]);
@@ -212,6 +232,7 @@ public class PullRequestReaderRegistryTests {
         public string? Reason;
         public int Overviews, DiscoverCalls;
         public PullRequestLinkDto[] Discovered = [];
+        public TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>? PendingOverview;
         public string Name => name;
         public string ProviderKind => kind;
         public PullRequestReaderTool? Tool => kind == "github"
@@ -234,6 +255,7 @@ public class PullRequestReaderRegistryTests {
         }
         public Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
             Overviews++;
+            if (PendingOverview is { } pending) return pending.Task;
             return Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Ready, new() { Title = name }, subject, DateTime.UtcNow, AccessValidForSeconds: 30));
         }
         public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section, string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class
