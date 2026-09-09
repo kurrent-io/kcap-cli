@@ -5,41 +5,42 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>
-/// <see cref="ProcessTree"/>: the daemon's tree kill. It has to reach grandchildren (a hosted agent's
-/// bridge children, a shell's jobs) through a parent that is killed first, and it does so with SIGKILL
-/// alone. The tree here is <c>sh -c 'sleep &amp; sleep &amp; wait'</c>; the grandchildren are located
-/// through <c>ps</c> so the walk under test is checked against an independent view.
+/// <see cref="ProcessTree"/>: the daemon's tree kill has to reach every level below a parent that is
+/// killed after its children, with SIGKILL alone. The trees are shells with backgrounded
+/// <c>sleep</c>s; their descendants are located through <c>ps</c>, so the walk under test is checked
+/// against an independent view, and each is pinned by <see cref="PidIdentity"/> so a recycled pid can
+/// fake neither survival nor death.
 /// </summary>
 [ParallelLimiter<SubprocessLimit>]
 public class ProcessTreeTests {
     [Test]
-    public async Task Descendants_include_the_grandchildren() {
+    public async Task Kill_ends_children_and_grandchildren() {
         if (OperatingSystem.IsWindows()) return;
 
-        using var root = StartTree();
-        var grandchildren = await WaitForChildrenAsync(root.Id, 2);
-
-        var found = ProcessTree.Descendants(root.Id);
-
-        await Assert.That(found).Contains(grandchildren[0]);
-        await Assert.That(found).Contains(grandchildren[1]);
-        await Assert.That(found).DoesNotContain(root.Id);
-
-        ProcessTree.Kill(root);
-        root.WaitForExit(5000);
-    }
-
-    [Test]
-    public async Task Kill_ends_the_whole_tree() {
-        if (OperatingSystem.IsWindows()) return;
-
-        using var root = StartTree();
-        var grandchildren = await WaitForChildrenAsync(root.Id, 2);
+        using var root = StartTree("sleep 300 & sleep 300 & wait");
+        var grandchildren = await PinChildrenAsync(root.Id, 2);
 
         ProcessTree.Kill(root);
 
         await Assert.That(root.WaitForExit(5000)).IsTrue();
-        await Assert.That(await WaitUntilGoneAsync(grandchildren)).IsTrue();
+        foreach (var (pid, identity) in grandchildren)
+            await PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
+    }
+
+    [Test]
+    public async Task Kill_reaches_the_third_level() {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var root = StartTree("sh -c 'sleep 300 & sleep 300 & wait' & wait");
+        var (shell, shellIdentity) = (await PinChildrenAsync(root.Id, 1)).Single();
+        var leaves = await PinChildrenAsync(shell, 2);
+
+        ProcessTree.Kill(root);
+
+        await Assert.That(root.WaitForExit(5000)).IsTrue();
+        await PidIdentity.WaitUntilGoneAsync(shell, shellIdentity, TimeSpan.FromSeconds(5));
+        foreach (var (pid, identity) in leaves)
+            await PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
     }
 
     [Test]
@@ -52,17 +53,17 @@ public class ProcessTreeTests {
         await Assert.That(done.HasExited).IsTrue();
     }
 
-    static Process StartTree() =>
-        Process.Start(new ProcessStartInfo("sh", ["-c", "sleep 300 & sleep 300 & wait"]) { UseShellExecute = false })!;
+    static Process StartTree(string script) =>
+        Process.Start(new ProcessStartInfo("sh", ["-c", script]) { UseShellExecute = false })!;
 
-    /// <summary>Children of <paramref name="parent"/> as <c>ps</c> sees them, once at least
-    /// <paramref name="count"/> exist.</summary>
-    static async Task<List<int>> WaitForChildrenAsync(int parent, int count) {
+    /// <summary>The children of <paramref name="parent"/> as <c>ps</c> sees them, once at least
+    /// <paramref name="count"/> exist, each pinned to its incarnation while it is known alive.</summary>
+    static async Task<List<(int Pid, string Identity)>> PinChildrenAsync(int parent, int count) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
 
         while (true) {
             var children = ChildrenViaPs(parent);
-            if (children.Count >= count) return children;
+            if (children.Count >= count) return children.Select(pid => (pid, PidIdentity.Capture(pid))).ToList();
             if (DateTime.UtcNow > deadline) throw new TimeoutException($"pid {parent} never showed {count} children; saw {children.Count}");
             await Task.Delay(50);
         }
@@ -83,16 +84,5 @@ public class ProcessTreeTests {
         }
 
         return children;
-    }
-
-    static async Task<bool> WaitUntilGoneAsync(IEnumerable<int> pids) {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-
-        while (pids.Any(ProcessIdentity.IsAlive)) {
-            if (DateTime.UtcNow > deadline) return false;
-            await Task.Delay(50);
-        }
-
-        return true;
     }
 }

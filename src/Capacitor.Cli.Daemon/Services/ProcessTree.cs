@@ -6,16 +6,25 @@ using Capacitor.Cli.Daemon.Pty.Unix;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// SIGKILLs a process and every descendant without stopping any of them first.
-/// <para><c>Process.Kill(entireProcessTree: true)</c> SIGSTOPs each process before it looks for children. A stopped
-/// member of the daemon's own process group is what makes the kernel hang up the whole group, the daemon
-/// included, the moment that group becomes orphaned. On macOS a launch agent shares launchd's session, so
-/// the exit of a grandchild that was reparented to launchd orphans the daemon's group, and every
-/// <c>Process.Start</c> child (Pi, Antigravity, ACP agents, git) lives in that group. The runtime's tree
-/// kill is banned in this assembly for that reason; Windows has neither process groups nor SIGSTOP, so it
-/// still uses it.</para>
+/// SIGKILLs a process and every descendant, children before parents, each verified by start identity.
+/// <para><c>Process.Kill(entireProcessTree: true)</c> SIGSTOPs each process before it looks for children.
+/// A stopped member of the daemon's own process group is what makes the kernel hang up the whole
+/// group, the daemon included, the moment that group becomes orphaned: on macOS a launch agent shares
+/// launchd's session, so the exit of a grandchild that was reparented to launchd orphans the daemon's
+/// group, and every <c>Process.Start</c> child (Pi, Antigravity, ACP agents, git) lives in that group.
+/// The runtime's tree kill is banned in this assembly for that reason; Windows has neither process
+/// groups nor SIGSTOP, so it still uses it.</para>
+/// <para>Nothing is stopped here, so a parent can fork between a listing and its own death, and that
+/// child is reparented out of reach. Killing children first and re-listing the parent until it shows
+/// nothing new keeps the window to the two syscalls between the last listing and the parent's
+/// SIGKILL. A pid is signalled only while it still carries the identity captured when it was listed,
+/// and never twice, so a recycled pid is never a target.</para>
 /// </summary>
 internal static partial class ProcessTree {
+    /// <summary>Re-listings of a parent after its known children are dead, before it is killed
+    /// regardless; bounds a parent that keeps forking.</summary>
+    const int MaxRescans = 3;
+
     public static void Kill(Process process) {
         try { if (process.HasExited) return; } catch (InvalidOperationException) { return; }
 
@@ -38,42 +47,30 @@ internal static partial class ProcessTree {
             return;
         }
 
-        var doomed = new HashSet<int> { pid };
+        if (ProcessIdentity.Capture(pid) is { } identity) KillSubtree(pid, identity);
+    }
 
-        // A process can fork between the walk and its kill, and its children are reparented away the
-        // moment it dies, so walk again after killing until a pass finds nothing new.
-        for (var pass = 0; pass < 3; pass++) {
-            var grew = doomed.UnionWithCount(DescendantsOf(doomed)) > 0;
+    static void KillSubtree(int pid, string identity) {
+        var seen = new HashSet<int>();
 
-            foreach (var p in doomed) UnixPtyInterop.kill(p, UnixPtyInterop.SIGKILL);
+        for (var rescan = 0; rescan <= MaxRescans; rescan++) {
+            var fresh = false;
 
-            if (!grew && pass > 0) break;
+            foreach (var child in Children(pid)) {
+                if (!seen.Add(child)) continue; // handled on an earlier pass; a zombie stays listed until its parent dies
+
+                fresh = true;
+                if (ProcessIdentity.Capture(child) is { } childIdentity) KillSubtree(child, childIdentity);
+            }
+
+            if (!fresh) break;
         }
+
+        if (ProcessIdentity.Matches(pid, identity)) UnixPtyInterop.kill(pid, UnixPtyInterop.SIGKILL);
     }
 
-    /// <summary>Every descendant of <paramref name="pid"/>: children, grandchildren and so on, never
-    /// <paramref name="pid"/> itself.</summary>
-    internal static IReadOnlySet<int> Descendants(int pid) => DescendantsOf([pid]);
-
-    static HashSet<int> DescendantsOf(IReadOnlyCollection<int> roots) {
-        var found = new HashSet<int>();
-        if (roots.Count == 0) return found;
-
-        var childrenOf = OperatingSystem.IsMacOS() ? MacChildren : LinuxChildrenSnapshot();
-        var queue      = new Queue<int>(roots);
-
-        while (queue.TryDequeue(out var parent))
-            foreach (var child in childrenOf(parent))
-                if (!roots.Contains(child) && found.Add(child)) queue.Enqueue(child);
-
-        return found;
-    }
-
-    static int UnionWithCount(this HashSet<int> set, IEnumerable<int> items) {
-        var added = 0;
-        foreach (var item in items) if (set.Add(item)) added++;
-        return added;
-    }
+    static IEnumerable<int> Children(int parent) =>
+        OperatingSystem.IsMacOS() ? MacChildren(parent) : LinuxChildren(parent);
 
     // ── macOS: libproc lists a process's children directly ───────────────────────────────────────
 
@@ -82,7 +79,7 @@ internal static partial class ProcessTree {
 
     /// <summary>Returns a count of pids, not bytes; a count equal to the capacity means the buffer
     /// was too small.</summary>
-    static unsafe IEnumerable<int> MacChildren(int parent) {
+    static unsafe int[] MacChildren(int parent) {
         var buffer = new int[256];
 
         while (true) {
@@ -96,24 +93,17 @@ internal static partial class ProcessTree {
         }
     }
 
-    // ── Linux: one /proc scan, then a parent → children map ───────────────────────────────────────
+    // ── Linux: the ppid field of every /proc/{pid}/stat ───────────────────────────────────────────
 
-    static Func<int, IEnumerable<int>> LinuxChildrenSnapshot() {
-        var childrenOf = new Dictionary<int, List<int>>();
-
+    static IEnumerable<int> LinuxChildren(int parent) {
         foreach (var dir in Directory.EnumerateDirectories("/proc")) {
             if (!int.TryParse(Path.GetFileName(dir), NumberStyles.None, CultureInfo.InvariantCulture, out var pid)) continue;
-            if (LinuxParentOf(pid) is not { } parent) continue;
-
-            if (!childrenOf.TryGetValue(parent, out var list)) childrenOf[parent] = list = [];
-            list.Add(pid);
+            if (LinuxParentOf(pid) == parent) yield return pid;
         }
-
-        return parent => childrenOf.TryGetValue(parent, out var list) ? list : [];
     }
 
-    /// <summary>The ppid field of <c>/proc/{pid}/stat</c>: the token after the state, which follows
-    /// the last <c>)</c> because the command name can contain spaces and parentheses.</summary>
+    /// <summary>The token after the state, which follows the last <c>)</c> because the command name
+    /// can contain spaces and parentheses.</summary>
     static int? LinuxParentOf(int pid) {
         try {
             var stat      = File.ReadAllText($"/proc/{pid}/stat");
