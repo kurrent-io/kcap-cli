@@ -122,6 +122,19 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task A_team_slug_equal_to_a_user_login_keeps_both_reviewer_rows() {
+        var json = GhHarness.Fixture("pr-view.json").Replace("\"slug\":\"core\"", "\"slug\":\"alice\"");
+        using var h = await Ready(Tmp, json);
+        var reviewers = (await h.Provider.PageAsync<PullRequestReviewerDto>("session", Subject, "reviewers", null, null, null, default)).Data!;
+        var team = reviewers.Items.Single(item => item.Actor!.Kind == "team");
+        var user = reviewers.Items.Single(item => item.Actor!.Kind == "user" && item.Actor.Login == "alice");
+        await Assert.That(team.Requested).IsTrue();
+        await Assert.That(user.ReviewState).IsEqualTo("approved");
+        await Assert.That(user.Requested).IsFalse();
+        await Assert.That(team.Id).IsNotEqualTo(user.Id);
+    }
+
+    [Test]
     public async Task An_active_account_switch_changes_the_identity_and_drops_cached_views() {
         using var h = await Ready(Tmp);
         await h.Provider.OverviewAsync("session", Subject, default);

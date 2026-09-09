@@ -128,6 +128,7 @@ public static class GitHubCliMapping {
         "TIMED_OUT" => "timed_out", "ACTION_REQUIRED" => "action_required", "STALE" => "stale", _ => "unknown" };
     static string StatusOutcome(string? state) => state switch { "SUCCESS" => "success", "FAILURE" or "ERROR" => "failure", "PENDING" or "EXPECTED" => "pending", _ => "unknown" };
 
+    // Keyed by actor kind as well as slug/login: a team slug equal to some user's login must not collide with that user's row.
     static PullRequestReviewerDto[] Reviewers(JsonElement? requests, JsonElement? latest) {
         var reviewers = new List<PullRequestReviewerDto>();
         var index = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -137,17 +138,19 @@ public static class GitHubCliMapping {
                 var team = Text(request, "__typename") == "Team";
                 var id = team ? Text(request, "slug") ?? Text(request, "name") : Text(request, "login");
                 if (id is null) continue;
-                index[id] = reviewers.Count;
-                reviewers.Add(new() { Id = "reviewer:" + id, Availability = "available", Requested = true,
+                var reviewerId = (team ? "reviewer:team:" : "reviewer:user:") + id;
+                index[reviewerId] = reviewers.Count;
+                reviewers.Add(new() { Id = reviewerId, Availability = "available", Requested = true,
                     Actor = new() { Id = id, Kind = team ? "team" : "user", Login = team ? null : id, Name = team ? Text(request, "name") ?? id : null } });
             }
         if (latest is { } reviews && reviews.IsArray)
             foreach (var review in reviews.EnumerateArray()) {
                 if (!review.IsObject || review.Prop("author") is not { } author || Text(author, "login") is not { } login) continue;
-                var mapped = new PullRequestReviewerDto { Id = "reviewer:" + login, Availability = "available", Requested = false,
+                var reviewerId = "reviewer:user:" + login;
+                var mapped = new PullRequestReviewerDto { Id = reviewerId, Availability = "available", Requested = false,
                     Actor = new() { Id = login, Kind = "user", Login = login }, ReviewState = ReviewState(Text(review, "state")), SubmittedAt = Time(review, "submittedAt") };
-                if (index.TryGetValue(login, out var at)) reviewers[at] = mapped with { Requested = true };
-                else { index[login] = reviewers.Count; reviewers.Add(mapped); }
+                if (index.TryGetValue(reviewerId, out var at)) reviewers[at] = mapped with { Requested = true };
+                else { index[reviewerId] = reviewers.Count; reviewers.Add(mapped); }
             }
         return [.. reviewers];
     }
