@@ -1022,8 +1022,8 @@ public partial class App : Application {
         var surface = new LifecycleSurface(setLifecycleStatus, setLifecycleAttention, ConfirmLifecyclePromptAsync);
 
         var lifecycle = new DaemonLifecycleController(
-            service, cli, probe, store, surface, () => Task.FromResult(ValidProfileName(profile)), TimeProvider.System,
-            canonicalServer, runMutation, autoActionsPermanentlyClosed, holdSkewForUpdate: Program.UpdateRelaunch);
+            service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), TimeProvider.System,
+            canonicalServer, runMutation, autoActionsPermanentlyClosed);
 
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off
@@ -1312,7 +1312,7 @@ public partial class App : Application {
         return tcs.Task;
     }
 
-    // ConfirmAndTakeoverAsync holds the operation gate across the whole ConfirmAsync await — a
+    // ConfirmAndReplaceAsync holds the operation gate across the whole ConfirmAsync await — a
     // dialog left open through a lifetime-cancel (app shutdown or DisposeAsync) must not leave the
     // gate (and therefore QuiescedAsync) blocked on a human who may never come back. Cancellation
     // can arrive on any thread, so the close is posted rather than called inline; the registration

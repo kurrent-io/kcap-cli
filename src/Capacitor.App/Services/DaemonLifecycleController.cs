@@ -1,5 +1,4 @@
 using Capacitor.App.Services.Mutation;
-using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.App.Services;
@@ -44,8 +43,7 @@ internal static class VerifyExitCodes {
 public sealed class DaemonLifecycleController : IAsyncDisposable {
     const string IncompatibleReason = "daemon_incompatible";
 
-    /// Decision 3: every unit rewrite this controller offers — same-binary or not — carries this
-    /// disclosure. Path equality is not installer provenance.
+    /// Every unit rewrite the app offers carries this disclosure.
     internal const string TakeoverDisclosure =
         "This replaces the existing daemon service and re-captures its settings; a failed replacement leaves it uninstalled rather than restored.";
 
@@ -56,15 +54,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
-    /// After an app update relaunch, the daemon's own restart coordinator replaces its binary
-    /// within a poll interval once idle — a skew offer inside this window would ask for
-    /// something already under way.
-    internal static readonly TimeSpan SkewHoldAfterUpdate = TimeSpan.FromSeconds(45);
-
     readonly IDaemonClientService _client;
     readonly IKcapCli _cli;
     readonly ILoginShellProbe _probe;
-    readonly IAppStateStore _store;
     readonly ILifecycleSurface _surface;
     readonly Func<Task<string?>> _resolveProfileName;
     readonly TimeProvider _time;
@@ -83,43 +75,33 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly Lock _lock = new();
 
     IDisposable? _subscription;
-    IDisposable? _snapshotSubscription;
     bool _armClaimed;
     bool _disposed;
     int _generation;
     (AttachState State, string? Reason) _lastObserved = (AttachState.Connecting, null);
-    string? _latestSnapshotVersion;
-    bool _skewDialogShownThisRun;
-    Task _versionCached = Task.CompletedTask;
-    DateTimeOffset? _skewHoldUntil;
-    string? _heldSkewVersion;
-    bool _holdRecheckScheduled;
 
     public DaemonLifecycleController(
-            IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe, IAppStateStore store,
+            IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe,
             ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time,
             string? canonicalServer, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            bool autoActionsPermanentlyClosed = false, bool holdSkewForUpdate = false) {
+            bool autoActionsPermanentlyClosed = false) {
         _client                        = client;
         _cli                           = cli;
         _probe                         = probe;
-        _store                         = store;
         _surface                       = surface;
         _resolveProfileName            = resolveProfileName;
         _time                          = time;
         _canonicalServer               = canonicalServer;
         _runMutation                   = runMutation;
         _autoActionsPermanentlyClosed  = autoActionsPermanentlyClosed;
-        _skewHoldUntil = holdSkewForUpdate ? time.GetUtcNow() + SkewHoldAfterUpdate : null;
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
     /// daemon_incompatible / a completed daemon_unreachable startup branch). Consumed by later
-    /// tasks (shim offer timing, skew dialogs never stacking with startup work).
+    /// tasks (shim offer timing).
     public Task PhaseClosed => _phaseClosed.Task;
 
-    /// Cached once at Start(); null when the CLI is missing or --version failed. Consumed by the
-    /// skew classification below.
+    /// Cached once at Start(); null when the CLI is missing or --version failed.
     public string? CliVersion { get; private set; }
 
     /// Subscribes to the attach stream. MUST be called before the host calls
@@ -127,19 +109,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// starts after the pump has begun could miss the first terminal outcome the startup phase
     /// hinges on.
     public void Start() {
-        // DaemonClientService publishes a Connected snapshot to Snapshots BEFORE the matching
-        // Connected AttachStatus (no-stale-pin) — subscribing here first means OnAttachStatus's
-        // Connected case always reads an already-current _latestSnapshotVersion (spec §4.3).
-        _snapshotSubscription = _client.Snapshots.Subscribe(OnSnapshot);
-        _subscription         = _client.Status.Subscribe(OnAttachStatus);
-        // Held, not fire-and-forget: RunSkewCheckAsync awaits this — VersionAsync is a process
-        // spawn (tens of ms), the attach cycle a sub-ms local-socket dial, so the daemon path can
-        // plausibly win the race and reach the skew check before CliVersion is cached.
-        _versionCached = CacheVersionAsync();
-    }
-
-    void OnSnapshot(DaemonStatusDto snapshot) {
-        lock (_lock) _latestSnapshotVersion = snapshot.Daemon.Version;
+        _subscription = _client.Status.Subscribe(OnAttachStatus);
+        _ = CacheVersionAsync(); // never faults
     }
 
     async Task CacheVersionAsync() {
@@ -152,12 +123,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    // Every AttachStatus transition bumps the generation and records the last-observed outcome —
-    // this ALWAYS happens, regardless of the once-per-run arm below. Only a TERMINAL outcome
-    // (never Connecting) can claim that arm, and only the FIRST one ever does — but the switch
-    // itself still runs for every later event: the arm gates startup AUTO-ACTION eligibility
-    // only, never event admission, so a later daemon_incompatible still reaches its
-    // skew/takeover case below unconditionally.
+    // Every AttachStatus transition bumps the generation and records the last-observed outcome;
+    // only the FIRST terminal outcome (never Connecting) claims the once-per-run arm and acts.
     void OnAttachStatus(AttachStatus status) {
         bool isFirstTerminalOutcome;
 
@@ -169,31 +136,21 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (isFirstTerminalOutcome) _armClaimed = true;
         }
 
-        if (status.State == AttachState.Connecting) return;
+        if (!isFirstTerminalOutcome) return;
 
         switch (status.State) {
             case AttachState.Connected:
-                if (isFirstTerminalOutcome) {
-                    ClosePhase();
-                    _ = RunReconciliationAsync(attached: true);
-                }
-                // §4.3: every Connected, not just the first — the once-per-run dialog flag (not
-                // this arm) is what keeps a later Connected from stacking a second offer.
-                _ = RunSkewCheckAsync(LatestSnapshotVersion());
+                ClosePhase();
+                _ = RunReconciliationAsync(attached: true);
                 break;
             case AttachState.Unreachable when status.Reason == IncompatibleReason:
-                if (isFirstTerminalOutcome) {
-                    ClosePhase();
-                    _ = RunReconciliationAsync(attached: false);
-                }
-                _ = RunSkewCheckAsync(status.DaemonVersion); // every incompatible event, same reason as above
+                ClosePhase();
+                _ = RunReconciliationAsync(attached: false);
                 break;
             case AttachState.Unreachable:
                 // Closed: PhaseClosed still resolves here — only the startup matrix itself never admits.
-                if (isFirstTerminalOutcome) {
-                    if (_autoActionsPermanentlyClosed) ClosePhase();
-                    else _ = RunStartupBranchAsync((status.State, status.Reason));
-                }
+                if (_autoActionsPermanentlyClosed) ClosePhase();
+                else _ = RunStartupBranchAsync((status.State, status.Reason));
                 break;
         }
     }
@@ -211,8 +168,6 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// a racing Connected arriving mid-query) and silently disable the attached-only checks for
     /// the run's only reconciliation pass.
     bool IsCurrentlyAttached() { lock (_lock) return _lastObserved.State == AttachState.Connected; }
-
-    string? LatestSnapshotVersion() { lock (_lock) return _latestSnapshotVersion; }
 
     async Task<bool> TryAcquireGateAsync(CancellationToken ct) {
         try {
@@ -413,206 +368,37 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
     }
 
-    /// §4.3: runs on every Connected (paired with the latest known snapshot version) and every
-    /// daemon_incompatible (paired with the hello DaemonVersion, spec decision 6) — never on a
-    /// plain daemon_unreachable, which doesn't call this at all. Equal/null versions, a null
-    /// cached CliVersion (§6: the version probe failed), an already-declined pair, and the
-    /// once-per-run dialog flag are all silent no-ops.
-    async Task RunSkewCheckAsync(string? daemonVersion) {
-        if (daemonVersion is null) return; // nothing to compare regardless of the cached CLI version
-        if (_cli.CliPath is null) return;
-        if (TryHoldSkew(daemonVersion)) return;
-
-        lock (_lock) {
-            if (_skewDialogShownThisRun) return;
-        }
-
-        // The attach cycle is a sub-ms local-socket dial; VersionAsync is a process spawn (tens
-        // of ms) — the first Connected/daemon_incompatible of a run can plausibly arrive before
-        // CliVersion is cached. CacheVersionAsync never faults, so this never throws.
-        await _versionCached.ConfigureAwait(false);
-        if (CliVersion is null || daemonVersion == CliVersion) return;
-
-        var pairKey = $"{daemonVersion}|{CliVersion}";
-        var state   = await _store.LoadAsync().ConfigureAwait(false);
-        if (state.DeclinedTakeoverPairs?.Contains(pairKey) == true) return;
-
-        if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
-        try {
-            lock (_lock) {
-                if (_skewDialogShownThisRun) return; // a concurrent trigger already claimed this run's one dialog
-            }
-
-            var snap = await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false);
-            if (snap is null) return; // already surfaced by QueryStatusForActionAsync
-
-            var missing = await FailingSkewPreconditionAsync(snap, _lifetime.Token).ConfigureAwait(false);
-            if (missing is not null) {
-                _surface.Status(missing);
-                return;
-            }
-
-            var kind         = ClassifyTakeover(snap);
-            var terminalPath = await _probe.TerminalPathAsync(_lifetime.Token).ConfigureAwait(false);
-            var prompt       = new LifecyclePrompt(kind, daemonVersion, CliVersion, terminalPath is null, TakeoverDisclosure);
-
-            // §3.5 claim-before-show: persisted before ConfirmAsync so a crash while the dialog is
-            // open still suppresses a re-offer of this exact pair on the next run.
-            await PersistDeclineAsync(pairKey).ConfigureAwait(false);
-            lock (_lock) _skewDialogShownThisRun = true;
-
-            // The retract runs BEFORE the mutation (acceptance itself invalidates the decline
-            // claim), not after: RunLaneMutationAsync doesn't catch around the lane call, so an
-            // install that throws (shutdown mid-spawn, a process/IO fault, or a lane-lifetime
-            // cancellation) would skip a post-mutation retract entirely and leave an accepted pair
-            // mislabeled "declined" on disk. "Declined" must mean the user declined, full stop.
-            var (outcome, succeeded) = await ConfirmAndTakeoverAsync(
-                prompt, revalidate: fresh => ClassifyTakeover(fresh) == kind && !VersionsNowEqual(),
-                onAcceptedNotStale: () => RetractDeclineAsync(pairKey), _lifetime.Token).ConfigureAwait(false);
-
-            switch (outcome) {
-                case ConfirmOutcome.Declined:
-                    return; // the claim persisted above IS the decline memory
-                case ConfirmOutcome.Stale:
-                    // Never actually declined — retract the claim and let the next trigger re-offer.
-                    await RetractDeclineAsync(pairKey).ConfigureAwait(false);
-                    lock (_lock) _skewDialogShownThisRun = false;
-                    return;
-                case ConfirmOutcome.Attempted:
-                    if (!succeeded) lock (_lock) _skewDialogShownThisRun = false; // no resolution — re-offer
-                    return;
-            }
-        } catch (OperationCanceledException) {
-            // shutdown mid-check
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: daemon lifecycle skew check failed unexpectedly: {ex.Message}");
-        } finally {
-            _gate.Release();
-        }
-    }
-
-    /// During the post-update hold every trigger is retained rather than dropped — an incompatible
-    /// daemon never produces a snapshot, and the attach client will not repeat an identical event.
-    bool TryHoldSkew(string? daemonVersion) {
-        lock (_lock) {
-            if (_skewHoldUntil is not { } until || _time.GetUtcNow() >= until) return false;
-
-            _heldSkewVersion = daemonVersion;
-            if (_holdRecheckScheduled) return true;
-
-            _holdRecheckScheduled = true;
-            _ = RunHeldSkewRecheckAsync(until - _time.GetUtcNow());
-            return true;
-        }
-    }
-
-    async Task RunHeldSkewRecheckAsync(TimeSpan delay) {
-        try {
-            await Task.Delay(delay, _time, _lifetime.Token).ConfigureAwait(false);
-        } catch (OperationCanceledException) {
-            return;
-        }
-
-        string? held;
-        lock (_lock) {
-            _skewHoldUntil = null;
-            held = _heldSkewVersion;
-        }
-
-        // A snapshot that arrived during the hold is fresher than the held evidence: an idle
-        // daemon has restarted by now and its new version ends the matter without a dialog.
-        await RunSkewCheckAsync(LatestSnapshotVersion() ?? held).ConfigureAwait(false);
-    }
-
-    enum ConfirmOutcome { Declined, Stale, Attempted }
-
-    /// The ONE accept path every unit rewrite in this controller goes through — skew's takeover
-    /// (§4.3) and Start's repair affordance (§4.4) both funnel here, so a future kind can never
-    /// grow a second `MutationVerb.Replace` call site. `onAcceptedNotStale`,
-    /// when given, runs after acceptance is confirmed fresh but BEFORE the mutation itself (skew's
-    /// decline-claim retract — see its own comment above).
-    ///
-    /// `revalidate`, when given, re-queries a FRESH status right before mutating and rejects a
-    /// classification that no longer matches what the dialog disclosed (spec §3.2: "evidence is
-    /// revalidated inside the gate immediately before mutating"). The generation-token check above
-    /// only catches changes that produced an attach event — a terminal replacing the plist/unit
-    /// directly (no attach event, generation unchanged) needs this second, disk-fresh check. Null
-    /// for the repair affordance, which discloses no classification to go stale.
-    async Task<(ConfirmOutcome Outcome, bool MutationSucceeded)> ConfirmAndTakeoverAsync(
-            LifecyclePrompt prompt, Func<ServiceSnapshot, bool>? revalidate, Func<Task>? onAcceptedNotStale,
-            CancellationToken ct) {
+    /// The ONE accept path for a unit rewrite this controller offers, so a future dialog can never
+    /// grow a second `MutationVerb.Replace` call site. A consent that outlived an attach transition
+    /// is discarded: the evidence the dialog disclosed may no longer hold.
+    async Task ConfirmAndReplaceAsync(LifecyclePrompt prompt, CancellationToken ct) {
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
-        if (!accepted) return (ConfirmOutcome.Declined, false);
+        if (!accepted) return;
 
         if (CurrentGeneration() != gen0) {
             _surface.Status("The daemon changed while the prompt was open — canceled, nothing changed.");
-            return (ConfirmOutcome.Stale, false);
+            return;
         }
 
-        if (revalidate is not null) {
-            var fresh = await QueryStatusForActionAsync(ct).ConfigureAwait(false);
-            if (fresh is null) return (ConfirmOutcome.Stale, false); // already surfaced by QueryStatusForActionAsync
-            if (!revalidate(fresh)) {
-                _surface.Status("The daemon service changed while the prompt was open — canceled, nothing changed.");
-                return (ConfirmOutcome.Stale, false);
-            }
-        }
-
-        if (onAcceptedNotStale is not null) await onAcceptedNotStale().ConfigureAwait(false);
-
-        var succeeded = await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
-        return (ConfirmOutcome.Attempted, succeeded);
+        await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
     }
 
-    Task PersistDeclineAsync(string pairKey) =>
-        _store.UpdateAsync(s => s.DeclinedTakeoverPairs?.Contains(pairKey) == true
-            ? s
-            : s with { DeclinedTakeoverPairs = [.. s.DeclinedTakeoverPairs ?? [], pairKey] });
-
-    Task RetractDeclineAsync(string pairKey) =>
-        _store.UpdateAsync(s => s.DeclinedTakeoverPairs is null || !s.DeclinedTakeoverPairs.Contains(pairKey)
-            ? s
-            : s with { DeclinedTakeoverPairs = s.DeclinedTakeoverPairs.Where(p => p != pairKey).ToList() });
-
-    /// §4.1 preconditions the skew/takeover DIALOG itself needs — unlike FailingPreconditionAsync
-    /// (the silent-install row), an unknown terminal PATH is NOT one of them: decision 7 lets a
-    /// DIALOGED install proceed on disclosure (the prompt's PathDegraded) rather than block. A
-    /// missing install binary or an unresolvable profile, though, would make accept a guaranteed
-    /// coded viability failure — those still gate the offer itself.
-    async Task<string?> FailingSkewPreconditionAsync(ServiceSnapshot snap, CancellationToken ct) {
+    /// Preconditions the repair dialog needs — unlike FailingPreconditionAsync (the silent-install
+    /// row), an unknown terminal PATH is not one of them: a dialoged install proceeds on disclosure
+    /// (the prompt's PathDegraded) rather than blocking. A missing install binary or an
+    /// unresolvable profile would make accept a guaranteed coded viability failure, so those still
+    /// gate the offer itself.
+    async Task<string?> FailingRepairPreconditionAsync(ServiceSnapshot snap) {
         if (snap.InstallBinaryPath is null)
-            return "kcap can't resolve its own daemon binary — skipping the takeover offer.";
+            return "kcap can't resolve its own daemon binary — skipping the repair offer.";
 
         var profile = await _resolveProfileName().ConfigureAwait(false);
         if (profile is null)
-            return "No profile with a valid server URL is configured — skipping the takeover offer.";
+            return "No profile with a valid server URL is configured — skipping the repair offer.";
 
         return null;
     }
-
-    /// Classification (spec §4.3): unit_present &amp;&amp; canonical binary_path == canonical
-    /// install_binary_path is the ONLY same-binary case — path equality is not installer
-    /// provenance, so both kinds carry TakeoverDisclosure. A blank/whitespace path (e.g. a
-    /// foreign/hand-edited plist) is never treated as a match.
-    static string ClassifyTakeover(ServiceSnapshot snap) =>
-        snap.UnitPresent && !string.IsNullOrWhiteSpace(snap.BinaryPath) && !string.IsNullOrWhiteSpace(snap.InstallBinaryPath)
-            && CanonicalPath(snap.BinaryPath) == CanonicalPath(snap.InstallBinaryPath)
-            ? LifecyclePrompt.KindRestartUpdate
-            : LifecyclePrompt.KindTakeover;
-
-    static string CanonicalPath(string path) {
-        try {
-            var fullPath = Path.GetFullPath(path);
-            return new FileInfo(fullPath).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? fullPath;
-        } catch {
-            return path; // empty/invalid path, missing file, permission error, etc. — raw string compare
-        }
-    }
-
-    // The daemon may have restarted itself onto the new binary while the dialog was open — an
-    // accept then has nothing to do, and must not replace a unit that is already current.
-    bool VersionsNowEqual() => LatestSnapshotVersion() is { } current && current == CliVersion;
 
     /// Reconciliation (spec §3.2): surfaces every inconsistent combination found in one
     /// ServiceStatusAsync snapshot — never mutates. The attached-only checks only make sense (or
@@ -759,12 +545,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             : "Daemon start did not finish. Press Retry.");
     }
 
-    /// §4.4 repair affordance: the SAME dialoged operation as skew's takeover
-    /// (ConfirmAndTakeoverAsync), entered from Start instead of a version mismatch — a plist/pid
-    /// combination Start refuses to silently mutate into. No daemon/CLI version pair applies here,
-    /// so the prompt carries neither.
+    /// The Start button's repair affordance: a plist/pid combination Start refuses to silently
+    /// mutate into is offered as a dialoged replace instead.
     async Task OfferRepairAsync(ServiceSnapshot snap, CancellationToken ct) {
-        var missing = await FailingSkewPreconditionAsync(snap, ct).ConfigureAwait(false);
+        var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
         if (missing is not null) {
             _surface.Status(missing);
             return;
@@ -773,7 +557,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         var terminalPath = await _probe.TerminalPathAsync(ct).ConfigureAwait(false);
         var prompt = new LifecyclePrompt(LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure);
 
-        await ConfirmAndTakeoverAsync(prompt, revalidate: null, onAcceptedNotStale: null, ct).ConfigureAwait(false);
+        await ConfirmAndReplaceAsync(prompt, ct).ConfigureAwait(false);
     }
 
     /// App shutdown awaits this: completes once no mutation child is in flight. Does not itself
@@ -789,7 +573,6 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _disposed = true;
 
         _subscription?.Dispose();
-        _snapshotSubscription?.Dispose();
         _lifetime.Cancel();
         await QuiescedAsync().ConfigureAwait(false);
         _lifetime.Dispose();

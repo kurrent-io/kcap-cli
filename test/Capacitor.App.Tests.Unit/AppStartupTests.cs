@@ -172,7 +172,7 @@ public class AppStartupTests {
     /// Fix-round-1 regression coverage (Task 21), carried forward against Task 22's REAL
     /// LifecyclePromptWindow/LifecyclePromptViewModel: the interim lifecycle prompt dialog used to
     /// ignore its ConfirmAsync CancellationToken entirely — the tcs only ever resolved on a button
-    /// click or the window's own Closed event. Since ConfirmAndTakeoverAsync holds the operation
+    /// click or the window's own Closed event. Since ConfirmAndReplaceAsync holds the operation
     /// gate across the whole ConfirmAsync await, a dialog left open through a lifetime-cancel (app
     /// shutdown) would hold that gate forever, and QuiescedAsync (the very backstop shutdown
     /// relies on) would never complete. WireDialogCancellation is the fix: a cancelled token

@@ -203,6 +203,11 @@ Owns the schedule and the UX; runs only when `IsAvailable`.
 
 The app now carries a newer CLI than the running daemon, and two mechanisms already exist for that:
 
+> **Amended.** The skew dialog, the post-update grace and the version revalidation described below
+> were removed together with the app's version-skew check: the daemon's own idle restart is the
+> only mechanism, for a busy daemon too. See `docs/CHANGES.md`. The text below is the original
+> design.
+
 - **The daemon restarts itself when idle.** Its `RestartCoordinator` polls `Environment.ProcessPath` every 15 s; the bundle swap changes the size and mtime of the file at that path, which queues a restart-after-update that fires as soon as no hosted agent or eval is running. An app-managed daemon is supervised, so it exits and launchd's `KeepAlive` respawns it on the new binary. This is the same path an npm upgrade takes today, so headless behaviour is untouched. Agents survive the app's own restart by construction (the daemon is a LaunchAgent).
 - **The skew dialog covers a daemon that stays busy.** AI-1654's skew detection (`Connected` with a differing daemon version) classifies the unit as **same-binary** (the plist's path equals the new install path) and offers "Restart daemon to update"; declining is remembered per `(daemonVersion, cliVersion)` as today. A decline governs only the forced restart: the daemon's own idle restart still applies later, which is what a headless daemon does too.
 

@@ -122,6 +122,11 @@ The CLI transaction owns verification and rollback. The app layers the UX confir
 
 ### 4.3 Skew → restart/takeover
 
+> **Removed.** The daemon restarts itself after a binary update (`RestartCoordinator`, idle-gated),
+> so the app no longer compares versions or offers a restart/takeover; the different-binary case
+> stays with `kcap setup` and the onboarding wizard. See `docs/CHANGES.md`. The text below is the
+> original design.
+
 **Triggers** (one code path): on every `Connected`, snapshot `Daemon.Version` ≠ cached CLI version; on `Unreachable(daemon_incompatible)` carrying a differing hello `DaemonVersion` (decision 6, deduped on `(reason, daemonVersion)` so null→v1/v1→v2 re-emit). `daemon_unreachable` never triggers offers.
 
 **Classification** (fresh status inside the gate): `unit_present` && canonical `binary_path` == canonical `install_binary_path` → **same-binary target** ("Restart daemon to update"); anything else → **different-binary** ("Take over management"). Path equality is *not* installer provenance; **both** copies carry the decision-3 replacement/recapture disclosure.

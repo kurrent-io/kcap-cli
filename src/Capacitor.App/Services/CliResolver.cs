@@ -1,12 +1,8 @@
 namespace Capacitor.App.Services;
 
-/// One resolved CLI's identity: null Version disables skew detection for the run (multiline,
-/// malformed, or "unknown" `--version` output, or the query itself failing).
-public sealed record CliInfo(string? Path, string? Version);
-
-/// Where the app finds `kcap` to shell out to (spec §3.1, decision 1: everything through the
-/// CLI). Pure given its env/filesystem seams, so the lifecycle graph, the wizard and every later
-/// feature resolve through the same logic.
+/// Where the app finds `kcap` to shell out to (everything goes through the CLI). Pure given its
+/// env/filesystem seams, so the lifecycle graph, the wizard and every later feature resolve
+/// through the same logic.
 public static class CliResolver {
     /// KCAP_APP_CLI_PATH → the `kcap` beside this executable (the app bundle's Contents/MacOS) →
     /// "kcap" on PATH.
@@ -25,8 +21,9 @@ public static class CliResolver {
     }
 
     /// Strict: stdout must be exactly one non-empty line "kcap &lt;version&gt;"; multiline, a
-    /// missing "kcap " prefix, or a bare/"unknown" version all disable skew detection (null)
-    /// rather than let a malformed value flow into a version comparison.
+    /// missing "kcap " prefix, or a bare/"unknown" version all read as null (which the
+    /// compatibility floor treats as too old) rather than let a malformed value flow into a
+    /// version comparison.
     public static string? ParseVersion(string stdout) {
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (lines.Length != 1) return null;
