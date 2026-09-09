@@ -648,8 +648,6 @@ public class AppMutationLaneWiringTests {
             InstallVerifiedBehavior = (_, _) => Task.FromResult(new ProcessResult(28, "", "start_gate_reason=foreign_binary", false)),
         };
         var probe = new FakeLoginShellProbe();
-        using var tmp = new TempDir();
-        var store = new AppStateStore(tmp.PathTo("app-state.json"));
         var surface = new FakeLifecycleSurface { ConfirmBehavior = (_, _) => Task.FromResult(false) }; // decline
 
         {
@@ -660,7 +658,7 @@ public class AppMutationLaneWiringTests {
                 TimeProvider.System);
 
             await using var controller = new DaemonLifecycleController(
-                client, cli, probe, store, surface, () => Task.FromResult<string?>("default"), TimeProvider.System,
+                client, cli, probe, surface, () => Task.FromResult<string?>("default"), TimeProvider.System,
                 "https://kcap.example.com:443", lane.RunAsync);
 
             using var consumerCts = new CancellationTokenSource();

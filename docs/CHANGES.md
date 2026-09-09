@@ -6,6 +6,24 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop app no longer offers to restart or take over the daemon on a version mismatch
+
+The daemon already handles a CLI update by itself: it stats its own binary every 15 seconds, queues
+a restart-after-update when the size or mtime changes, and fires it the moment it is idle, through a
+launchd relaunch for a supervised unit or a self-respawn for a detached one. The app's dialog compared
+the daemon's version against the `kcap --version` it cached at launch, so after an npm update it
+fired *after* the daemon had already relaunched onto the new binary and offered to "update" it again.
+Accepting ran a full service replace, which boots out the launchd label and so kills the agents the
+idle gate was deliberately waiting for. And a failed accept cleared the once-per-run flag and kicked
+a reattach, whose Connected re-entered the check with the same pair and the decline claim already
+retracted: an accept that could not succeed (the CLI below the app's floor, say) re-opened the same
+dialog until the user declined. The 45 s hold after an update relaunch goes with it: it only ever
+narrowed the same false positive. The different-binary case, a unit pointing at a path the CLI no
+longer lives at, only arises from a manual or legacy install and stays with `kcap setup` and
+`kcap daemon service install --replace`; the onboarding wizard still offers that takeover when it
+finds a foreign unit. What remains in the controller is the startup matrix, reconciliation, and the
+Start button's dialoged repair.
+
 ## The desktop app ships as a signed DMG that updates itself
 
 The app bundles `kcap`, `kcap-daemon` and the PTY shim in `Contents/MacOS`, so the CLI beside the

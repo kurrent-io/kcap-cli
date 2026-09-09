@@ -15,7 +15,6 @@ public class LifecyclePromptViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    [Arguments(LifecyclePrompt.KindRestartUpdate, "Restart daemon to update")]
     [Arguments(LifecyclePrompt.KindTakeover, "Take over daemon management")]
     [Arguments(LifecyclePrompt.KindRepair, "Repair daemon service")]
     [Arguments(LifecyclePrompt.KindQuarantine, "Corrupted consent claims file")]
@@ -65,7 +64,7 @@ public class LifecyclePromptViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task PathDegraded_false_renders_no_degraded_path_sentence() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var vm = new LifecyclePromptViewModel(Prompt(LifecyclePrompt.KindRestartUpdate, pathDegraded: false), new TaskCompletionSource<bool>());
+            var vm = new LifecyclePromptViewModel(Prompt(LifecyclePrompt.KindRepair, pathDegraded: false), new TaskCompletionSource<bool>());
 
             await Assert.That(vm.PathDegraded).IsFalse();
             await Assert.That(vm.DegradedPathText).IsNull();
