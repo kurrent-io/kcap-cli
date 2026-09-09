@@ -106,6 +106,18 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Dispose();
     });
 
+    [Test]
+    public Task Returning_to_the_foreground_reprobes_the_readers() => RunOnUiAsync(async () => {
+        var h = new Harness("github.com", Primary);
+        h.Push(); await h.Show();
+        var before = h.Provider.Probes;
+        h.Vm.SetForeground(false);
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "reprobed after returning to the foreground");
+        await Assert.That(h.Provider.Probes - before).IsEqualTo(1);
+        await h.Dispose();
+    });
+
     sealed class Harness {
         internal BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);
         internal FakeTimeProvider Time { get; } = new();

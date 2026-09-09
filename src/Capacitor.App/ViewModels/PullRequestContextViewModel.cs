@@ -169,7 +169,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _grace = false;
         _graceSection = null;
         Notify();
-        if (foreground) { _lastRefresh = null; RequestRefresh(); }
+        if (foreground) { _lastRefresh = null; _refreshDiscovery = true; RequestRefresh(); }
     }
     public void Reconnected() {
         if (_disposed) return;

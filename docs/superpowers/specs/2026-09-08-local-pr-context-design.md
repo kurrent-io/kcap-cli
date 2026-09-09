@@ -66,8 +66,9 @@ and sign-in command with its status, and the card renders the note for the
 providers whose hosts match the session's repositories, primary first. A GitHub
 session never sees a GitLab note, and a session with no repository shows none.
 
-**Recheck** is the existing manual refresh. Foreground return and profile change
-also re-probe, as they already re-run discovery.
+**Recheck** is the existing manual refresh. Foreground return forces a fresh
+probe, subject to the server client's 15-second floor; profile change also
+re-probes, since it already re-runs discovery.
 
 ### Live discovery
 
