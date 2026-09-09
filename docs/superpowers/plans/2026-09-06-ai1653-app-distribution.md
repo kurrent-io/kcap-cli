@@ -3151,7 +3151,7 @@ echo "KEYCHAIN=$KEYCHAIN" >> "${GITHUB_ENV:?GITHUB_ENV is required}"
 #!/usr/bin/env bash
 # Signs each file with hardened runtime, a secure timestamp and the given entitlements — the same
 # flags Velopack uses, so pre-signed binaries and the outer bundle agree.
-# Usage: sign-macos.sh <identity> <keychain> <entitlements.plist> <file...>
+# Usage: sign-macos.sh <identity> <keychain> <entitlements> <file...>
 set -euo pipefail
 identity="${1:?usage: sign-macos.sh <identity> <keychain> <entitlements> <file...>}"
 keychain="${2:?usage: sign-macos.sh <identity> <keychain> <entitlements> <file...>}"
