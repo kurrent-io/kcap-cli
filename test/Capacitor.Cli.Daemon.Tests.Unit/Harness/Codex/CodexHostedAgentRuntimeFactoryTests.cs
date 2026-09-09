@@ -149,6 +149,26 @@ public class CodexHostedAgentRuntimeFactoryTests {
     public async Task Interactive_opt_in_accepts_only_affirmative_spellings(string? value, bool expected) =>
         await Assert.That(CodexTransportDecision.IsInteractiveOptIn(value)).IsEqualTo(expected);
 
+    /// <summary>Routing and advertisement are two halves of one fact. The server records the advertised
+    /// interactive transport as the launch's expected transport and refuses a registration that claims
+    /// otherwise, so if the router ever disagreed with <see cref="CodexTransportDecision.InteractiveTransport"/>
+    /// every interactive launch on that daemon would be stopped at registration.</summary>
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true,  false)]
+    [Arguments(false, true)]
+    [Arguments(true,  true)]
+    public async Task Interactive_routing_and_the_advertised_interactive_transport_are_one_fact(bool active, bool optIn) {
+        using var wt = new TempDir();
+        var config  = new DaemonConfig { CodexAppServerActive = active, CodexAppServerInteractive = optIn, Version = "0.146.0" };
+        var factory = new CodexHostedAgentRuntimeFactory(NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, null);
+
+        var routed     = factory.UsesAppServer(Ctx(isReviewFlow: false, wt.Path));
+        var advertised = CodexTransportDecision.InteractiveTransport(config) == CodexTransportDecision.AppServer;
+
+        await Assert.That(routed).IsEqualTo(advertised);
+    }
+
     [Test]
     public async Task Pty_transport_delegates_a_review_flow_to_the_pty_factory() {
         using var wt = new TempDir();

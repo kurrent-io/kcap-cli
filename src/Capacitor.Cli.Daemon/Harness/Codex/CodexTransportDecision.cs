@@ -37,6 +37,14 @@ internal static class CodexTransportDecision {
             config.CodexAppServerInteractive = IsInteractiveOptIn(interactive);
     }
 
+    /// <summary>The transport this daemon hosts an INTERACTIVE Codex launch on. The launch router
+    /// (<see cref="CodexHostedAgentRuntimeFactory.UsesAppServer"/>) and the capability advertisement
+    /// (<c>DaemonRunner.ComputeUnattendedVendorCapabilities</c>) both read this one function: the server
+    /// records the advertised value as the launch's expected transport and refuses a registration that
+    /// claims anything else, so routing and advertisement cannot be allowed to diverge.</summary>
+    public static string InteractiveTransport(Capacitor.Cli.Daemon.DaemonConfig config) =>
+        config.CodexAppServerActive && config.CodexAppServerInteractive ? AppServer : Pty;
+
     /// <summary>Resolves the effective transport: app-server only when selected AND the installed
     /// build meets <see cref="VersionFloor"/>. An unknown/unparseable version fails toward PTY.</summary>
     public static bool UsesAppServer(string? transport, string? cliVersion) =>

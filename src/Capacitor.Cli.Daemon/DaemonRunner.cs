@@ -1443,7 +1443,10 @@ public static partial class DaemonRunner {
                 ReviewerModelPolicyVersion: modelResolver?.PolicyVersion,
                 // Caller-selected launch posture, advertised per vendor rather than per platform —
                 // the seam is platform-neutral, and only the Codex launcher honours a posture block.
-                SupportsLaunchPosture: string.Equals(vendor, "codex", StringComparison.Ordinal)));
+                SupportsLaunchPosture: string.Equals(vendor, "codex", StringComparison.Ordinal),
+                InteractiveTransport: string.Equals(vendor, "codex", StringComparison.Ordinal)
+                    ? Harness.Codex.CodexTransportDecision.InteractiveTransport(config)
+                    : null));
         }
         return capabilities;
     }

@@ -72,10 +72,14 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     ///
     /// <para>Interactive is stated positively — neither a review flow nor a PR review — rather than as
     /// "not a review flow": the launch classes here are review-flow, PR review and interactive, so the
-    /// negative form would sweep PR review along with it and widen the opt-in past what it names.</para></summary>
+    /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
+    /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
+    /// function the daemon advertises to the server — which refuses a registration whose transport
+    /// differs from the advertisement.</para></summary>
     internal bool UsesAppServer(RuntimeStartContext ctx) =>
         _config.CodexAppServerActive
-     && (ctx.IsReviewFlow || (_config.CodexAppServerInteractive && !ctx.IsReview));
+     && (ctx.IsReviewFlow
+         || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         // §2.7 B4: resume is app-server-only (thread/resume). A resume request routed to the PTY path can't

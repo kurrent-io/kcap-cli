@@ -2092,7 +2092,12 @@ public sealed record UnattendedVendorCapability(
     // (CodexLaunchPosture on LaunchAgentCommand). Defaults false — a legacy or mid-rollout daemon is
     // never widened to "supported" by any fallback, so the server refuses posture selection rather
     // than sending a block that would be silently ignored.
-    bool SupportsLaunchPosture = false
+    bool SupportsLaunchPosture = false,
+    // The transport this daemon hosts an INTERACTIVE launch of this vendor on ("pty" | "app-server").
+    // The server records it as the launch's expected runtime transport and refuses a registration
+    // that claims anything else, so it must come from the same decision the launch router uses.
+    // Null from a daemon that does not advertise it, which the server reads as pty. Codex only.
+    string? InteractiveTransport = null
 );
 
 public readonly record struct AgentRegistered(
