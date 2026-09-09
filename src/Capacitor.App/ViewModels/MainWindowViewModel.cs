@@ -94,6 +94,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "—";
 
+    internal const string RestartPendingMessage = "Daemon update pending — it restarts once no agents are running.";
+
+    // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
+    // attached to it: a passive marker only, the restart is the daemon's own.
+    ObservableAsPropertyHelper<bool>? _restartPending;
+    public bool RestartPending => _restartPending?.Value ?? false;
+
+    ObservableAsPropertyHelper<string?>? _restartPendingText;
+    public string? RestartPendingText => _restartPendingText?.Value;
+
     ObservableAsPropertyHelper<AttachState>? _state;
     public AttachState State => _state?.Value ?? AttachState.Connecting;
 
@@ -229,6 +239,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic.
     /// Null means the tip never sets — every existing caller without a live lane.
     /// </param>
+    /// <param name="restartPending">
+    /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
+    /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
             CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
@@ -236,7 +249,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
-            IObservable<ServerLaneStatus>? laneStatus = null) {
+            IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null) {
         _service = service;
         _time = time ?? TimeProvider.System;
         Activity = activity;
@@ -335,6 +348,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                     ? $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents"
                     : "—")
                 .ToProperty(this, x => x.AgentCountText, "—")
+                .DisposeWith(disposables);
+
+            // Only while attached: a marker left by a daemon we cannot reach says nothing about
+            // what the user is looking at.
+            var pendingWhileConnected = status
+                .CombineLatest(restartPending ?? Observable.Return(false), (st, pending) => pending && st.State == AttachState.Connected)
+                .DistinctUntilChanged();
+
+            _restartPending = pendingWhileConnected
+                .ToProperty(this, x => x.RestartPending, false)
+                .DisposeWith(disposables);
+
+            _restartPendingText = pendingWhileConnected.Select(p => p ? RestartPendingMessage : null)
+                .ToProperty(this, x => x.RestartPendingText, (string?)null)
                 .DisposeWith(disposables);
 
             _state = status.Select(s => s.State)

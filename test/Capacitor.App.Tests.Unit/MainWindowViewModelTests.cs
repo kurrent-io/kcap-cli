@@ -63,6 +63,50 @@ public class MainWindowViewModelTests {
         });
     }
 
+    // ---- daemon restart pending (the daemon's own queued restart-after-update) ----
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Restart_pending_marks_the_indicator_while_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var restartPending = new BehaviorSubject<bool>(false);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), restartPending: restartPending);
+            using var activation = vm.Activator.Activate();
+
+            service.SnapshotsSubject.OnNext(Snap());
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await Assert.That(vm.RestartPending).IsFalse();
+            await Assert.That(vm.RestartPendingText).IsNull();
+
+            restartPending.OnNext(true);
+
+            await Assert.That(vm.RestartPending).IsTrue();
+            await Assert.That(vm.RestartPendingText).IsEqualTo(MainWindowViewModel.RestartPendingMessage);
+
+            restartPending.OnNext(false);
+
+            await Assert.That(vm.RestartPending).IsFalse();
+            await Assert.That(vm.RestartPendingText).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Restart_pending_is_hidden_while_not_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var restartPending = new BehaviorSubject<bool>(true);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), restartPending: restartPending);
+            using var activation = vm.Activator.Activate();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+
+            await Assert.That(vm.RestartPending).IsFalse();
+            await Assert.That(vm.RestartPendingText).IsNull();
+        });
+    }
+
     // ---- VersionDisplay (spec: SEMVER only, everything from the first '+' is build metadata) ----
 
     [Test]

@@ -39,6 +39,43 @@ public class TrayViewModelTests {
     static AgentActionService NewActions(FakeDaemonClientService service, ScriptedLocalControlOps? ops = null) =>
         new(ops ?? new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
 
+    // ---- daemon restart pending (the daemon's own queued restart-after-update) ----
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Restart_pending_suffixes_the_header_while_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var restartPending = new BehaviorSubject<bool>(false);
+            using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(), restartPending: restartPending);
+
+            service.SnapshotsSubject.OnNext(Snap("connected", 2));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: connected — 2 agent(s) running");
+
+            restartPending.OnNext(true);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: connected — 2 agent(s) running · update pending");
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Running);
+
+            restartPending.OnNext(false);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: connected — 2 agent(s) running");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Restart_pending_leaves_the_header_alone_while_not_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var restartPending = new BehaviorSubject<bool>(true);
+            using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(), restartPending: restartPending);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: not running");
+        });
+    }
+
     // ---- §4 state matrix ----
 
     [Test]

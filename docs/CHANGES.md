@@ -6,6 +6,19 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop app shows when the daemon has a restart queued
+
+After a CLI update a busy daemon keeps running the old binary until it is idle, and the app said
+nothing about it. The session rail's daemon indicator and the tray header now carry "update pending"
+while the daemon's own restart-pending marker exists and the app is attached to that daemon, with the
+rail tooltip spelling out that the restart happens once no agents are running. The signal is the
+marker file the daemon writes when it queues the restart and its successor deletes at startup, read
+the same way `kcap daemon status` reads it: nothing about a queued restart travels over the status
+socket, so the app re-reads the file on every attach transition and on a 15-second poll matching the
+daemon's own binary poll. It is a passive marker only. There is no button and no forced restart,
+because forcing one would take the running agents down with it, which is exactly what the daemon's
+idle gate exists to avoid.
+
 ## The desktop app no longer offers to restart or take over the daemon on a version mismatch
 
 The daemon already handles a CLI update by itself: it stats its own binary every 15 seconds, queues
