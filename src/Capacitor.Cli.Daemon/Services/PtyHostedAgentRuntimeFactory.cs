@@ -89,7 +89,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         var env = new Dictionary<string, string> {
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
-            [HostedAgent.AgentIdVar]       = ctx.AgentId
+            [HostedAgent.AgentIdVar]  = ctx.AgentId
         };
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's

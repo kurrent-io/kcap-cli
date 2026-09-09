@@ -48,7 +48,6 @@ public class PermissionRequestRecoveryTests : IDisposable {
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"decision":"allow"}"""));
 
-
         var stdout = new StringWriter();
         var exit   = await CommandAsync().Handle(Payload, selfHealWatcher: false, stdout);
 

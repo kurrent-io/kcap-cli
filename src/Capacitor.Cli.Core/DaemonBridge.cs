@@ -14,7 +14,9 @@ namespace Capacitor.Cli.Core;
 public abstract record DaemonBridge {
     DaemonBridge() { }
 
-    /// <summary>No bridge named — a terminal session the user started themselves.</summary>
+    /// <summary>No bridge named — a terminal session the user started themselves. Only an unset or
+    /// empty variable: a value made of blanks was set by someone, and reporting it is what tells
+    /// them why their bridge is being ignored.</summary>
     public static readonly DaemonBridge None = new NotNamed();
 
     public sealed record NotNamed : DaemonBridge;
@@ -31,7 +33,7 @@ public abstract record DaemonBridge {
     /// endpoint this variable does not name.
     /// </summary>
     public static DaemonBridge Parse(string? daemonUrl) {
-        if (string.IsNullOrWhiteSpace(daemonUrl)) return None;
+        if (string.IsNullOrEmpty(daemonUrl)) return None;
 
         return Uri.TryCreate(daemonUrl, UriKind.Absolute, out var uri)
             && uri.Scheme is "http"

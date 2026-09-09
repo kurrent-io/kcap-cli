@@ -172,12 +172,12 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
-            [HostedAgent.AgentIdVar]       = ctx.AgentId,
+            [HostedAgent.AgentIdVar]  = ctx.AgentId,
         };
         if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env["KCAP_URL"]          = ctx.ServerUrl;
-        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar]   = ctx.DaemonBridgeUrl;
+        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
         // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
         // and stand down so the rollout is not double-ingested alongside the envelopes.
         if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";

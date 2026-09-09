@@ -70,7 +70,10 @@ public class PermissionRequestPolicySeamTests : IDisposable {
     /// <summary>The control for the test above — the same payload the seam answered reaches
     /// record-only when the policy does not answer it, so "no record post" means the seam returned
     /// early rather than the post being unreachable.</summary>
-    [Test]
+    /// <remarks>Bare <c>[NotInParallel]</c>: the record POST runs on a two-second budget and its
+    /// own timeout is swallowed, so on a saturated runner the post this asserts simply never
+    /// lands.</remarks>
+    [Test, NotInParallel]
     public async Task Excluded_session_is_ungoverned_and_falls_through_to_record_only() {
         WriteDenyPolicy();
         StubNoAuthDiscovery();

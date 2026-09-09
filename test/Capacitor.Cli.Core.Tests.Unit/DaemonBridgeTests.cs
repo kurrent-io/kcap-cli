@@ -19,9 +19,19 @@ public class DaemonBridgeTests {
     [Test]
     [Arguments(null)]
     [Arguments("")]
-    [Arguments("   ")]
     public async Task Nothing_named_is_not_a_refusal(string? raw) =>
         await Assert.That(DaemonBridge.Parse(raw)).IsEqualTo(DaemonBridge.None);
+
+    /// <summary>
+    /// Blanks were typed by someone, so they are a refusal rather than an absence — the caller that
+    /// reports a refused address is what tells them why their bridge is ignored, and a caller that
+    /// fails closed on one keeps doing so.
+    /// </summary>
+    [Test]
+    [Arguments("   ")]
+    [Arguments("\t")]
+    public async Task A_blank_address_is_refused_rather_than_unnamed(string raw) =>
+        await Assert.That(DaemonBridge.Parse(raw)).IsEqualTo(new DaemonBridge.NotLoopback(raw));
 
     [Test]
     [Arguments("https://127.0.0.1:54321/abc123")]

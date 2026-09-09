@@ -197,7 +197,7 @@ internal partial class AgentOrchestrator {
                 // owner's web UI, the session links via KCAP_AGENT_ID, and permissions route
                 // through the daemon bridge. --private omits all of this.
                 env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
-                env[HostedAgent.AgentIdVar]       = agentId;
+                env[HostedAgent.AgentIdVar]  = agentId;
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
