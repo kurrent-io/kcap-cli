@@ -37,4 +37,15 @@
     <ItemGroup>
         <Using Include="Capacitor.Models.Transcripts" />
     </ItemGroup>
+    <!-- codesign treats every file under the bundle's Contents/MacOS as nested code that must
+         carry its own signature, and a managed assembly cannot. The assemblies and json therefore
+         travel inside the host executable, and symbols and doc files stay out of the publish. -->
+    <PropertyGroup Condition="'$(_IsPublishing)' == 'true'">
+        <PublishSingleFile>true</PublishSingleFile>
+    </PropertyGroup>
+    <Target Name="DropSymbolsAndDocsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+        <ItemGroup>
+            <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb' Or '%(Extension)' == '.xml'" />
+        </ItemGroup>
+    </Target>
 </Project>
