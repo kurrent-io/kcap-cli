@@ -838,11 +838,12 @@ the transcript's tool name (Codex's rollout says `shell`, its hook says `Bash`),
 commands classified by `CodexCommandClassifier`, ported verbatim from the server into Core so the
 server can delete its copy on the next submodule bump. A row waiting on a permission shows an accent
 `?` in the outcome slot: `PermissionPendingDto` gains an optional `tool_use_id` the daemon reads from
-the hook body (Claude's PermissionRequest hook carries it; Codex's deliberately does not), and the
-view-model recomputes the marks from pending requests and running calls on every change, diffing
-against the last marks so a call that settles while its request is still pending is cleared rather
-than masked by its `✓`. A request without an id marks the agent's sole running call and abstains
-when two or more are running.
+the body posted to its bridge (Claude's PermissionRequest hook carries it, and the hook command's
+bridge payload — an allow-list, not the hook body — has to forward it; Codex's deliberately does
+not), and the view-model recomputes the marks from pending requests and running calls on every
+change, diffing against the last marks so a call that settles while its request is still pending is
+cleared rather than masked by its `✓`. A request without an id marks the agent's sole running call
+and abstains when two or more are running.
 
 ## Launch and stop command routing
 

@@ -101,6 +101,20 @@ public class PermissionRequestCommandTests {
         await Assert.That(withoutAgent["cwd"]!.GetValue<string>()).IsEqualTo("/repo");
     }
 
+    /// <summary>
+    /// The Chat tab retires a card once the transcript shows a result for the request's tool_use_id,
+    /// and the daemon reads the id from this payload — an allow-list, so a card built without it
+    /// outlives the prompt it stood for until the agent exits.
+    /// </summary>
+    [Test]
+    public async Task Bridge_payload_forwards_the_hooks_tool_use_id() {
+        var node = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_01X","cwd":"/repo"}""")!;
+        await Assert.That(PermissionRequestCommand.BuildBridgePayload(node, "abc", "agent-1")["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_01X");
+
+        var withoutId = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"}}""")!;
+        await Assert.That(PermissionRequestCommand.BuildBridgePayload(withoutId, "abc", "agent-1")["tool_use_id"]).IsNull();
+    }
+
     sealed class Accepting : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {
