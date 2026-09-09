@@ -31,14 +31,15 @@ static class GlassLauncherPrototype {
         host.Children.Add(glass);
         cardParent.Children.Insert(cardIndex, host);
 
-        var oldContent = (Control)launcher.Content!;
-        launcher.Content = null;
+        // The backdrop belongs to the whole right pane; the launcher's content margins
+        // should inset controls without cutting a dark gutter around the glow.
+        var launcherPane = window.FindControl<Grid>("LauncherPane")!;
+        var rightPane = (Panel)launcherPane.Parent!;
         var backdrop = new GlassPrototypeBackdrop { IsHitTestVisible = false };
-        var scene = new Panel();
-        scene.Children.Add(backdrop);
-        scene.Children.Add(oldContent);
-        launcher.Content = scene;
-        launcher.PointerMoved += (_, e) => {
+        rightPane.ClipToBounds = true;
+        rightPane.Background = Brushes.Transparent;
+        rightPane.Children.Insert(0, backdrop);
+        rightPane.PointerMoved += (_, e) => {
             backdrop.LightPosition = e.GetPosition(backdrop);
             backdrop.InvalidateVisual();
         };
