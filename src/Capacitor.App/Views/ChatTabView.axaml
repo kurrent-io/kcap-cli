@@ -27,8 +27,8 @@
                 <DataTemplate x:DataType="vm:UserTurnItem">
                     <Border HorizontalAlignment="Right" MaxWidth="520" Margin="0,8,0,12" Padding="14,11" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceRaisedBrush}">
-                        <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="13.5" LineHeight="20"
-                                             Foreground="{StaticResource KcapTextBrush}" />
+                        <views:MarkdownView Text="{Binding Text}"
+                                            OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}" />
                     </Border>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:AssistantTextItem">
