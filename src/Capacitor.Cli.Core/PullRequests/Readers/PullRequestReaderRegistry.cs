@@ -56,10 +56,12 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         }
 
         var items = links.Data.Items.Select(Resolve).ToList();
+        var live = new List<PullRequestLinkDto>();
         if (context is { Repository: { } repository, Branch: { Length: > 0 } branch })
             foreach (var provider in Ready().Where(provider => provider.Serves(repository.Provider, repository.Host)))
-                items.AddRange(await provider.DiscoverAsync(repository, branch, ct).ConfigureAwait(false));
-        return links with { Data = MergeAndOrder(items) };
+                live.AddRange(await provider.DiscoverAsync(repository, branch, ct).ConfigureAwait(false));
+        // Live rows first: DistinctBy keeps the first occurrence, and a live row's HeadRef is never stale.
+        return links with { Data = MergeAndOrder(live.Concat(items)) };
     }
 
     static PullRequestLinkListDto MergeAndOrder(IEnumerable<PullRequestLinkDto> items) {

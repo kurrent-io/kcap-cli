@@ -74,6 +74,18 @@ public class PullRequestReaderRegistryTests {
     }
 
     [Test]
+    public async Task Live_discovery_rows_win_over_stale_session_links() {
+        var links = new StubLinks { Links = [Link("github.com", 5) with { HeadRef = null }] };
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Discovered = [Link("github.com", 5)] };
+        var registry = new PullRequestReaderRegistry(links, [gh]);
+        await registry.DiscoverAsync(false, default);
+        registry.DescribeSession("session", new("github", "github.com", "example", "repo", "hash"), "feature");
+        var list = await registry.ListAsync("session", default);
+        await Assert.That(list.Data!.Items.Length).IsEqualTo(1);
+        await Assert.That(list.Data.Items[0].HeadRef).IsEqualTo("feature");
+    }
+
+    [Test]
     public async Task Local_discovery_serves_the_list_when_the_server_links_are_unavailable() {
         var links = new StubLinks { ListKind = PullRequestReadKind.Unavailable };
         var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) { Discovered = [Link("github.com", 9)] };
