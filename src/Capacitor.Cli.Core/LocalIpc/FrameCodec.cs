@@ -57,7 +57,8 @@ public static class FrameCodec {
             or FrameType.ConsentPending or FrameType.ConsentRules
             or FrameType.ConsentAck or FrameType.DaemonStatus
             or FrameType.PermissionSubscribe or FrameType.PermissionResolve
-            or FrameType.PermissionPending or FrameType.PermissionResolved or FrameType.PermissionAck => Encoding.UTF8.GetBytes(f.Text),
+            or FrameType.PermissionPending or FrameType.PermissionResolved or FrameType.PermissionAck
+            or FrameType.SendText or FrameType.SendTextAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => f.Bytes, // pre-encoded by the helpers below
         _ => throw new InvalidDataException($"unencodable frame {f.Type}"),
@@ -78,7 +79,8 @@ public static class FrameCodec {
             or FrameType.ConsentPending or FrameType.ConsentRules
             or FrameType.ConsentAck or FrameType.DaemonStatus
             or FrameType.PermissionSubscribe or FrameType.PermissionResolve
-            or FrameType.PermissionPending or FrameType.PermissionResolved or FrameType.PermissionAck => new(t) { Text = Encoding.UTF8.GetString(p) },
+            or FrameType.PermissionPending or FrameType.PermissionResolved or FrameType.PermissionAck
+            or FrameType.SendText or FrameType.SendTextAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => new(t) { Bytes = p },
         _ => throw new InvalidDataException($"undecodable frame {t}"),
