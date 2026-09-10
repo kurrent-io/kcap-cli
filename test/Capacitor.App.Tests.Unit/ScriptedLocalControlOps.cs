@@ -18,6 +18,7 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     readonly Queue<TaskCompletionSource<ConsentAckDto>> _resolves = new();
     readonly Queue<TaskCompletionSource<PermissionAckDto>> _permissionResolves = new();
     readonly Queue<TaskCompletionSource<SendTextResult>> _sendTexts = new();
+    readonly Queue<TaskCompletionSource<DaemonSettingsAckDto>> _settingsPuts = new();
 
     public int GetCalls;
     public int PutCalls;
@@ -26,12 +27,14 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public int ResolveCalls;
     public int PermissionResolveCalls;
     public int SendTextCalls;
+    public int PutSettingsCalls;
     public readonly List<ConsentPolicyDto> PutPayloads = [];
     public readonly List<ConsentPolicyPutV2Dto> PutV2Payloads = [];
     public readonly List<(string AgentId, bool Force)> StopPayloads = [];
     public readonly List<ConsentResolveDto> ResolvePayloads = [];
     public readonly List<PermissionResolveDto> PermissionResolvePayloads = [];
     public readonly List<(string AgentId, string Text)> SendTextPayloads = [];
+    public readonly List<DaemonSettingsPutDto> PutSettingsPayloads = [];
 
     public TaskCompletionSource<ConsentPolicyDto> ArmGet() {
         var tcs = new TaskCompletionSource<ConsentPolicyDto>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -98,6 +101,15 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
 
     public void QueueSendText(SendTextResult result) => ArmSendText().SetResult(result);
 
+    public TaskCompletionSource<DaemonSettingsAckDto> ArmPutSettings() {
+        var tcs = new TaskCompletionSource<DaemonSettingsAckDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _settingsPuts.Enqueue(tcs);
+        return tcs;
+    }
+
+    public void QueuePutSettings(bool ok, string? reason, int? maxAgents) => ArmPutSettings().SetResult(new DaemonSettingsAckDto(ok, reason, maxAgents));
+    public void QueuePutSettingsFailure(string reason) => ArmPutSettings().SetException(new LocalControlOpsException(reason, reason));
+
     public Task<ConsentPolicyDto> GetConsentPolicyAsync(CancellationToken ct) {
         Interlocked.Increment(ref GetCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentPolicyDto>(ct);
@@ -163,5 +175,15 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
         if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
         var tcs = _sendTexts.Count > 0 ? _sendTexts.Dequeue() : throw new InvalidOperationException("arm SendText first");
         return tcs.Task.WaitAsync(ct);
+    }
+
+    public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
+        Interlocked.Increment(ref PutSettingsCalls);
+        PutSettingsPayloads.Add(put);
+        if (ct.IsCancellationRequested) return Task.FromCanceled<DaemonSettingsAckDto>(ct);
+        if (_settingsPuts.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted PutDaemonSettings call");
+        var tcs = _settingsPuts.Dequeue();
+        ct.Register(() => tcs.TrySetCanceled(ct));
+        return tcs.Task;
     }
 }

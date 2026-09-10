@@ -72,6 +72,13 @@ public class LocalControlOpsTests {
         if (f?.Type == FrameType.ConsentRulesPut)
             await FrameCodec.WriteAsync(s, LocalFrame.ConsentJson(FrameType.ConsentAck, json), ct);
     };
+    static ConnScript SettingsAckThen(string json, Action<string>? capture = null) => async (_, s, ct) => {
+        var f = await FrameCodec.ReadAsync(s, ct);                       // expect DaemonSettingsPut
+        if (f?.Type == FrameType.DaemonSettingsPut) {
+            capture?.Invoke(f.Text);
+            await FrameCodec.WriteAsync(s, LocalFrame.SettingsJson(FrameType.DaemonSettingsAck, json), ct);
+        }
+    };
     static ConnScript ConsentResolveV2Ack(string json) => async (_, s, ct) => {
         var f = await FrameCodec.ReadAsync(s, ct);                       // expect ConsentResolveV2
         if (f?.Type == FrameType.ConsentResolveV2)
@@ -352,6 +359,55 @@ public class LocalControlOpsTests {
                 async () => await ops.PutConsentPolicyAsync(new ConsentPolicyDto("allow", 45, []), CancellationToken.None));
             await Assert.That(ex!.Reason).IsEqualTo("daemon_rejected");
             await Assert.That(ex.Message).IsEqualTo("not authorized");
+        });
+    }
+
+    // ---- PutDaemonSettingsAsync ----
+
+    [Test]
+    public async Task Put_settings_ack_ok_and_sends_snake_case() {
+        if (OperatingSystem.IsWindows()) return;
+
+        string? sent = null;
+        await WithOpsAsync([SettingsAckThen("""{"ok":true,"reason":null,"max_agents":3}""", t => sent = t)], async ops => {
+            var ack = await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(3), CancellationToken.None);
+            await Assert.That(ack.Ok).IsTrue();
+            await Assert.That(ack.MaxAgents).IsEqualTo(3);
+        });
+        await Assert.That(sent).IsEqualTo("""{"max_agents":3}""");
+    }
+
+    [Test] // a refusal is an ack, not an exception — presentation is the caller's job
+    public async Task Put_settings_refusal_is_returned_as_is() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([SettingsAckThen("""{"ok":false,"reason":"invalid_max_agents","max_agents":5}""")], async ops => {
+            var ack = await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(0), CancellationToken.None);
+            await Assert.That(ack.Ok).IsFalse();
+            await Assert.That(ack.Reason).IsEqualTo(DaemonSettingsReasons.InvalidMaxAgents);
+            await Assert.That(ack.MaxAgents).IsEqualTo(5);
+        });
+    }
+
+    [Test]
+    public async Task Put_settings_malformed_ack_is_unexpected_reply() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([SettingsAckThen("not json")], async ops => {
+            var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
+                async () => await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(3), CancellationToken.None));
+            await Assert.That(ex!.Reason).IsEqualTo("unexpected_reply");
+        });
+    }
+
+    [Test]
+    public async Task Put_settings_error_frame_is_daemon_rejected() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([ErrorThen("expected Spawn/Attach")], async ops => {
+            var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
+                async () => await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(3), CancellationToken.None));
+            await Assert.That(ex!.Reason).IsEqualTo("daemon_rejected");
         });
     }
 
