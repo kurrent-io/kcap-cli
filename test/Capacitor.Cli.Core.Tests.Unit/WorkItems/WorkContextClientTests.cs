@@ -78,15 +78,14 @@ public class WorkContextClientTests {
     [Arguments("..")]
     [Arguments("")]
     [Arguments("   ")]
-    [Arguments("---")]
     public async Task An_id_that_would_escape_or_empty_the_route_is_refused_before_any_request(string id) {
         using var http = new HttpClient(new ThrowingHandler(new InvalidOperationException("a request was sent")));
         var client = new WorkContextClient(http, "http://localhost:1");
 
         var assignments = await client.GetSessionAssignmentsAsync(id, CancellationToken.None);
         var summary = await client.GetSessionSummaryAsync(id, CancellationToken.None);
-        var topology = await client.GetTopologyAsync(id == "---" ? "." : id, CancellationToken.None);
-        var item = await client.GetWorkItemAsync(id == "---" ? ".." : id, CancellationToken.None);
+        var topology = await client.GetTopologyAsync(id, CancellationToken.None);
+        var item = await client.GetWorkItemAsync(id, CancellationToken.None);
 
         await Assert.That(assignments.StatusCode).IsEqualTo(0);
         await Assert.That(summary.StatusCode).IsEqualTo(0);

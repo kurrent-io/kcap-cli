@@ -4,8 +4,8 @@ namespace Capacitor.Cli.Core.WorkItems;
 /// escape: `.` is unreserved, so escaping leaves a dot segment intact and URI normalization would
 /// walk it out of the route.
 public static class WorkContextIds {
-    /// Trimmed, dashes stripped — the key the server files a session under; null when nothing usable survives.
-    public static string? CanonicalSessionId(string? raw) => Validate(raw?.Trim().Replace("-", ""));
+    /// The key the server files a session under; null when nothing usable survives.
+    public static string? CanonicalSessionId(string? raw) => Validate(SessionIds.Canonical(raw));
 
     public static string? ValidWorkItemId(string? raw) => Validate(raw?.Trim());
 
