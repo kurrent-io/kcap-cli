@@ -163,19 +163,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
     IBrush _statusDot = SessionStatusDots.For("");
     public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
 
-    /// The hint is built from the terminal's own availability, so it is true in the windows
-    /// where State alone would lie (a reattach or detach under way while State reads Attached).
-    /// Ready omits the harness name — the workspace chip already names it.
-    internal static string HintFor(SendAvailability availability, TerminalSessionState state) => availability switch {
-        SendAvailability.Ready         => "Enter sends · Shift+Enter for a new line",
-        SendAvailability.Sending       => "Sending…",
-        SendAvailability.Transitioning => "Updating the terminal connection…",
-        SendAvailability.ReadOnly      => $"Read-only: {state.Detail}",
-        SendAvailability.Connecting    => "Connecting to the terminal…",
-        SendAvailability.Reattach      => "Reattach the terminal to send",
-        SendAvailability.Ended         => "This session has ended",
-        _                              => "No terminal to send to",
-    };
+    internal static string HintFor(SendAvailability availability, TerminalSessionState state) =>
+        TerminalChatInput.HintFor(availability, state);
 
     /// Test-only seam: the read in flight, or the last one started. A switch that loses the
     /// in-flight CAS starts no read of its own, so this still points at the previous file's read —
