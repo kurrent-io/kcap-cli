@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Antigravity;
@@ -126,9 +127,11 @@ internal static class AntigravityRuntimeFakes {
     /// directly with its own spawn closure instead.
     /// </summary>
     public static AntigravityHostedAgentRuntime FakeRuntime(
-            FakeTurn        turn     = FakeTurn.Normal,
-            Action<string>? onSpawn  = null,
-            int             queueCap = 64) {
+            FakeTurn           turn     = FakeTurn.Normal,
+            Action<string>?    onSpawn  = null,
+            int                queueCap = 64,
+            TimeProvider?      time     = null,
+            TranscriptJournal? journal  = null) {
         Func<string, string?, CancellationToken, Task<IAgyTurnProcess>> spawn = (prompt, _, _) => {
             onSpawn?.Invoke(prompt);
             return Task.FromResult<IAgyTurnProcess>(new FakeAgyTurnProcess(turn, FixedConversationId));
@@ -137,6 +140,8 @@ internal static class AntigravityRuntimeFakes {
         return new AntigravityHostedAgentRuntime(
             spawnTurn: spawn,
             logger: NullLogger.Instance,
-            pendingTurnsCapacity: queueCap);
+            pendingTurnsCapacity: queueCap,
+            timeProvider: time,
+            journal: journal);
     }
 }

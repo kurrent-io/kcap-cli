@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
@@ -242,6 +243,17 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// </summary>
     readonly Action? _onDisposed;
 
+    readonly TimeProvider _time;
+
+    readonly TranscriptJournal? _journal;
+
+    /// <summary>Guards <see cref="Write"/>'s TryWrite + journal Record as one unit — the same shape
+    /// <c>PiRpcHostedAgentRuntime.Write</c> uses, for the same reason: this channel has two writers
+    /// (the turn worker's synthesized <c>user_message</c> and its own forwarded output), so without
+    /// this a Record could interleave in an order that disagrees with the channel's own FIFO write
+    /// order.</summary>
+    readonly Lock _writeLock = new();
+
     /// <summary>
     /// Whether the LAST turn's child was OBSERVED exited while it was still observable — read inside
     /// <see cref="ProcessTurnAsync"/>'s outer <c>finally</c>, immediately before this runtime lets go
@@ -330,7 +342,9 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             TimeSpan?                                                      turnDeadline = null,
             int?                                                           transcriptCapacity = null,
             int?                                                           pendingTurnsCapacity = null,
-            Action?                                                        onDisposed = null
+            Action?                                                        onDisposed = null,
+            TimeProvider?                                                  timeProvider = null,
+            TranscriptJournal?                                             journal = null
         ) {
         _spawnTurn            = spawnTurn;
         _logger               = logger;
@@ -341,6 +355,8 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _turnDeadline         = turnDeadline;
         _pendingTurnsCapacity = pendingTurnsCapacity ?? DefaultPendingTurnsCapacity;
         _onDisposed           = onDisposed;
+        _time                 = timeProvider ?? TimeProvider.System;
+        _journal              = journal;
 
         // DropOldest: the turn worker is the only writer that matters for ordering, but
         // SingleWriter=false — EnterTerminal's TryComplete() can run concurrently with an in-flight
@@ -396,6 +412,10 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     public string  Cwd           => _cwd ?? "";
     public string? ResolvedModel => _model;
     public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
+
+    /// <summary>Defaults to <see cref="TimeProvider.System"/>, overridable in tests for a deterministic
+    /// <c>user_message</c> timestamp.</summary>
+    string NowIso() => _time.GetUtcNow().ToString("o");
 
     /// <summary>Rule (c): parks on the single constructor-owned <see cref="_terminalTcs"/> and nothing
     /// else. Yields no bytes ever — agy's stdout is NDJSON protocol traffic, never terminal output
@@ -553,6 +573,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     }
 
                     await _turnGate.WaitAsync(ownerCt).ConfigureAwait(false);
+
+                    // Synthesized here, not in EnqueueTurn: ACP's session/prompt never round-trips
+                    // through session/update, so there is no natural agent-sourced envelope for the
+                    // prompt itself, and only the single worker (holding the gate) can order it ahead
+                    // of this turn's own output without racing the child's first line.
+                    Write(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text), agentActivity: false);
 
                     // The turn is in flight from here — set BEFORE the spawn, because a turn whose
                     // process is still being created is legitimately not idle. The finally is what
@@ -925,12 +951,17 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // path below: the content was genuinely produced.
         if (agentActivity) ActivityClock?.Advance();
 
+        // _writeLock covers TryWrite + Record as one unit: this channel has two writers (the
+        // synthesized user_message and the agent's own forwarded output), so without it a Record could
+        // interleave in an order that disagrees with the channel's own FIFO write order.
+        lock (_writeLock) {
+            if (_transcript.Writer.TryWrite(env)) { _journal?.Record(env); return true; }
+        }
+
         // Debug, not Warning, and deliberately: an envelope arriving after the channel closed is the
         // ORDINARY shape of teardown — the turn worker is still draining agy's last lines while
         // TerminateAsync completes the writer — so warning here would fire on every clean stop. A
         // caller for whom the drop is actually meaningful escalates it itself, off this return value.
-        if (_transcript.Writer.TryWrite(env)) return true;
-
         _logger.LogDebug("Antigravity: dropped a transcript envelope — the transcript channel is already completed.");
         return false;
     }

@@ -300,6 +300,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
         var model = ResolveModel(config, ctx);
 
+        ctx.Journal?.Open(ctx.Worktree.Path, model);
+
         // Recorded so a failed launch can explain ITSELF — an unauthenticated agy produces no `init`,
         // and "the conversation id never arrived" is not a reason anyone can act on.
         IAgyTurnProcess? firstTurnProcess = null;
@@ -324,7 +326,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
             // Disposal, not disk hygiene: the home holds the reviewer's own conversation JSONL — the
             // caller's diff, source excerpts and findings. The daemon-epoch sweep is the crash
             // backstop, not the disposal path.
-            onDisposed: () => AntigravityReviewerHome.Delete(home, stateDir, _logger));
+            onDisposed: () => AntigravityReviewerHome.Delete(home, stateDir, _logger),
+            journal: ctx.Journal);
 
         // MUST precede the first turn: a clock assigned later makes every stamp inside the launch a
         // silent no-op, and the reaper then judges this reviewer from an empty record.
