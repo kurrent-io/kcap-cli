@@ -133,15 +133,21 @@ public class TranscriptJournalTests {
         public void Dispose() => Release.Dispose();
     }
 
+    /// Held until a test has enqueued everything it means to: the writer's first read is what the
+    /// gap assertions race, and completing a TaskCompletionSource inline would run that read here.
+    static TaskCompletionSource WriterGate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     [Test]
     public async Task Gap_note_lands_between_the_last_kept_and_the_first_after_the_loss() {
         using var tmp = new TempDir();
         var sink = new GatedSink();
-        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 2);
+        var gate = WriterGate();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 2, writerStartGate: gate.Task);
         journal.Open(null, null);
-        journal.Record(Text("a")); journal.Record(Text("b")); // fill the queue (writer is blocked)
+        journal.Record(Text("a")); journal.Record(Text("b")); // fill the queue (the writer has not read yet)
         journal.Record(Text("lost-1")); journal.Record(Text("lost-2"));
         await Assert.That(journal.PendingGap).IsEqualTo(2);
+        gate.SetResult();
         sink.Release.Release(); // the writer takes "a": one slot frees
         await Task.Delay(100);
         journal.Record(Text("c")); // exactly one slot free: this item carries the gap
@@ -159,9 +165,11 @@ public class TranscriptJournalTests {
     public async Task Gap_pending_at_completion_is_written_last() {
         using var tmp = new TempDir();
         var sink = new GatedSink();
-        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 1);
+        var gate = WriterGate();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 1, writerStartGate: gate.Task);
         journal.Open(null, null);
         journal.Record(Text("a")); journal.Record(Text("lost"));
+        gate.SetResult();
         sink.Release.Release(10);
         await Assert.That(await journal.CompleteAsync()).IsTrue();
         var last = Lines(journal.Path).Last();
@@ -174,9 +182,11 @@ public class TranscriptJournalTests {
         using var tmp = new TempDir();
         var sink = new GatedSink();
         var log = new CapturingLogger();
-        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), log, Time, sink.Append, capacity: 2, completeGrace: TimeSpan.FromMilliseconds(200));
+        var gate = WriterGate();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), log, Time, sink.Append, capacity: 2, completeGrace: TimeSpan.FromMilliseconds(200), writerStartGate: gate.Task);
         journal.Open(null, null);
         journal.Record(Text("a")); journal.Record(Text("b")); journal.Record(Text("lost"));
+        gate.SetResult();
         await Task.Delay(50);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -227,14 +237,16 @@ public class TranscriptJournalTests {
     public async Task Torn_gap_item_renders_the_note_and_drops_the_torn_envelope() {
         using var tmp = new TempDir();
         var path = tmp.PathTo("j.jsonl");
+        var gate = WriterGate();
         // The crash model: a buffer cut after its note line.
         var journal = new TranscriptJournal(path, NullLogger.Instance, Time, append: (p, bytes) => {
             var text = System.Text.Encoding.UTF8.GetString(bytes);
             var cut = text.IndexOf('\n', StringComparison.Ordinal) + 1 + 5;
             File.AppendAllText(p, text[..Math.Min(cut, text.Length)]);
-        }, capacity: 1);
+        }, capacity: 1, writerStartGate: gate.Task);
         journal.Open(null, null);
         journal.Record(Text("a")); journal.Record(Text("lost")); // "a" carries no gap
+        gate.SetResult();
         await Task.Delay(50);
         journal.Record(Text("c")); // carries gap 1: note + torn "c"
         await journal.CompleteAsync();

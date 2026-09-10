@@ -13,8 +13,13 @@ internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time,
     readonly JournalPathLocks _locks = locks ?? JournalPathLocks.Shared;
     int _running;
     int _started;
+    int _finished;
 
     public int SweepsStarted => Volatile.Read(ref _started);
+
+    /// Rises only after the single-flight flag is released, so a caller that waits on it can drive
+    /// the next tick without it being skipped.
+    public int SweepsCompleted => Volatile.Read(ref _finished);
 
     protected override async Task ExecuteAsync(CancellationToken ct) {
         using var timer = new PeriodicTimer(Interval, time);
@@ -39,16 +44,21 @@ internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time,
             logger.LogWarning(ex, "Transcript journal sweep: enumeration failed");
         } finally {
             Interlocked.Exchange(ref _running, 0);
+            Interlocked.Increment(ref _finished);
         }
     }
 
     async Task TrySweepAsync(string path, DateTimeOffset cutoff) {
         try {
+            using var lease = await _locks.AcquireAsync(path, TranscriptJournal.LockBound, CancellationToken.None).ConfigureAwait(false);
+            if (lease is null) return;
+
+            // A same-id relaunch reopens the journal under this lock, so everything the delete turns
+            // on is read after it is held: a check made while waiting would be about a stale file.
+            if (!File.Exists(path)) return;
             if (File.GetLastWriteTimeUtc(path) >= cutoff.UtcDateTime) return;
             var record = Path.Combine(stateDir, "agents", Path.GetFileNameWithoutExtension(path) + ".json");
             if (File.Exists(record)) return;
-            using var lease = await _locks.AcquireAsync(path, TranscriptJournal.LockBound, CancellationToken.None).ConfigureAwait(false);
-            if (lease is null) return;
             File.Delete(path);
         } catch (Exception ex) {
             logger.LogWarning(ex, "Transcript journal sweep: skipped {Path}", path);

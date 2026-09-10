@@ -24,6 +24,9 @@ internal sealed class TranscriptJournal : IDisposable {
     readonly Channel<JournalItem>    _queue;
     readonly CancellationTokenSource _writerCts = new();
 
+    /// Test-only: the writer waits on it before its first read, pinning what is queued when it starts.
+    readonly Task? _writerStartGate;
+
     Task?            _writer;
     int              _pendingGap;
     int              _completed;
@@ -33,20 +36,22 @@ internal sealed class TranscriptJournal : IDisposable {
     public TranscriptJournal(
             string                   path,
             ILogger                  logger,
-            TimeProvider?            time          = null,
-            Action<string, byte[]>?  append        = null,
-            JournalPathLocks?        locks         = null,
-            int                      capacity      = Capacity,
-            TimeSpan?                completeGrace = null,
-            TimeSpan?                lockBound     = null) {
-        Path       = path;
-        _logger    = logger;
-        _time      = time ?? TimeProvider.System;
-        _append    = append ?? AppendToFile;
-        _locks     = locks ?? JournalPathLocks.Shared;
-        _grace     = completeGrace ?? CompleteGrace;
-        _lockBound = lockBound ?? LockBound;
-        _queue     = Channel.CreateBounded<JournalItem>(new BoundedChannelOptions(capacity) {
+            TimeProvider?            time            = null,
+            Action<string, byte[]>?  append          = null,
+            JournalPathLocks?        locks           = null,
+            int                      capacity        = Capacity,
+            TimeSpan?                completeGrace   = null,
+            TimeSpan?                lockBound       = null,
+            Task?                    writerStartGate = null) {
+        Path             = path;
+        _logger          = logger;
+        _time            = time ?? TimeProvider.System;
+        _append          = append ?? AppendToFile;
+        _locks           = locks ?? JournalPathLocks.Shared;
+        _grace           = completeGrace ?? CompleteGrace;
+        _lockBound       = lockBound ?? LockBound;
+        _writerStartGate = writerStartGate;
+        _queue           = Channel.CreateBounded<JournalItem>(new BoundedChannelOptions(capacity) {
             FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
     }
 
@@ -101,30 +106,38 @@ internal sealed class TranscriptJournal : IDisposable {
 
     public async Task<bool> CompleteAsync() {
         if (Interlocked.Exchange(ref _completed, 1) != 0) return Drained;
-        _queue.Writer.TryComplete();
-        if (_writer is null) { Drained = true; return true; }
+        try {
+            _queue.Writer.TryComplete();
+            if (_writer is null) { Drained = true; return true; }
 
-        // Wall-clock, not the injected TimeProvider: the grace bounds a shutdown against a hung
-        // disk, and a caller's test clock advancing is not evidence the disk came back.
-        if (await Task.WhenAny(_writer, Task.Delay(_grace)).ConfigureAwait(false) == _writer) {
-            Drained = true;
-            return true;
+            // Wall-clock, not the injected TimeProvider: the grace bounds a shutdown against a hung
+            // disk, and a caller's test clock advancing is not evidence the disk came back.
+            if (await Task.WhenAny(_writer, Task.Delay(_grace)).ConfigureAwait(false) == _writer) {
+                Drained = true;
+                return true;
+            }
+
+            // Not awaited: the writer is by definition stuck inside an append the cancellation cannot
+            // reach, so waiting on it here would spend the grace twice.
+            _writerCts.Cancel();
+            _latched = true;
+            _logger.LogWarning(
+                "Transcript journal {Path}: abandoning the writer — item {Kind} in flight, {Queued} queued, {Gap} unrecorded",
+                Path, _inFlightKind ?? "(none)", _queue.Reader.Count, PendingGap);
+            return false;
+        } finally {
+            // Safe under an abandoned writer: it holds its token, and a cancelled token needs no source.
+            _writerCts.Dispose();
         }
-
-        // Not awaited: the writer is by definition stuck inside an append the cancellation cannot
-        // reach, so waiting on it here would spend the grace twice.
-        _writerCts.Cancel();
-        _latched = true;
-        _logger.LogWarning(
-            "Transcript journal {Path}: abandoning the writer — item {Kind} in flight, {Queued} queued, {Gap} unrecorded",
-            Path, _inFlightKind ?? "(none)", _queue.Reader.Count, PendingGap);
-        return false;
     }
 
+    /// CompleteAsync is the lifecycle call and disposes the source itself; this covers a journal
+    /// dropped without one.
     public void Dispose() => _writerCts.Dispose();
 
     async Task RunWriterAsync(CancellationToken ct) {
         try {
+            if (_writerStartGate is not null) await _writerStartGate.WaitAsync(ct).ConfigureAwait(false);
             await foreach (var item in _queue.Reader.ReadAllAsync(ct).ConfigureAwait(false)) {
                 // ReadAllAsync drains what is already buffered without consulting the token again,
                 // so an abandoned writer would keep appending past the grace it was given.
