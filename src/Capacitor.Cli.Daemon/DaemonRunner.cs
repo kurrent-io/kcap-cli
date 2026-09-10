@@ -9,6 +9,7 @@ using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -181,11 +182,8 @@ public static partial class DaemonRunner {
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
         }
 
-        if (Environment.GetEnvironmentVariable("KCAP_CLAUDE_PATH") is { Length: > 0 } envClaudePath)
-            config.ClaudePath = envClaudePath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_CODEX_PATH") is { Length: > 0 } envCodexPath)
-            config.CodexPath = envCodexPath;
+        // Before the transport decision below, which probes whatever CodexPath ends up naming.
+        BindVendorOverrides(config, harnesses.Select(h => h.Id), Environment.GetEnvironmentVariable);
 
         if (Environment.GetEnvironmentVariable("KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS") is { Length: > 0 } envApprovalTimeout
          && int.TryParse(envApprovalTimeout, out var approvalTimeoutSeconds) && approvalTimeoutSeconds > 0)
@@ -197,40 +195,6 @@ public static partial class DaemonRunner {
         config.CodexAppServerActive = Harness.Codex.CodexTransportDecision.ResolveActive(
             config.CodexTransport, () => ProbeCliVersion(config.CodexPath));
 
-        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_PATH") is { Length: > 0 } envCursorPath)
-            config.CursorPath = envCursorPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_MODEL") is { Length: > 0 } envCursorModel)
-            config.CursorModel = envCursorModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_COPILOT_PATH") is { Length: > 0 } envCopilotPath)
-            config.CopilotPath = envCopilotPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_KIRO_PATH") is { Length: > 0 } envKiroPath)
-            config.KiroPath = envKiroPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_KIRO_MODEL") is { Length: > 0 } envKiroModel)
-            config.KiroModel = envKiroModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_PATH") is { Length: > 0 } envOpenCodePath)
-            config.OpenCodePath = envOpenCodePath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_MODEL") is { Length: > 0 } envOpenCodeModel)
-            config.OpenCodeModel = envOpenCodeModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_PI_PATH") is { Length: > 0 } envPiPath)
-            config.PiPath = envPiPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_PI_MODEL") is { Length: > 0 } envPiModel)
-            config.PiModel = envPiModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
-            config.GeminiPath = envGeminiPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_PATH") is { Length: > 0 } agyPath)
-            config.AntigravityPath = agyPath;
-        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_MODEL") is { Length: > 0 } agyModel)
-            config.AntigravityModel = agyModel;
         // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
         // Claude/Codex/Cursor/Copilot, which have never been gated. See ParseConsentFlag for the full
         // argument and its three precisions — in short, the reviewer vendor is a caller-chosen
@@ -1196,6 +1160,57 @@ public static partial class DaemonRunner {
     /// production callers.</para>
     /// </summary>
     internal static bool ParseConsentFlag(string? value) => ReviewerConsent.IsEnabled(value);
+
+    /// <summary>
+    /// Applies every vendor's path and model override, over whatever the profile and the harness
+    /// defaults have already put in <paramref name="config"/>.
+    ///
+    /// <para>Ranges over the vendors rather than naming each variable, so a vendor cannot arrive with
+    /// an override <see cref="HarnessOverrides"/> declares and nothing applies: the
+    /// appliers below switch over the same closed set, and a new member of it fails the build
+    /// here.</para>
+    /// </summary>
+    internal static void BindVendorOverrides(
+            DaemonConfig config, IEnumerable<HarnessId> vendors, Func<string, string?> read) {
+        foreach (var vendor in vendors) {
+            if (read(vendor.PathEnvVar) is { Length: > 0 } path)
+                PathApplier(config, vendor)(path);
+
+            if (vendor.ModelEnvVar is { } modelVar && read(modelVar) is { Length: > 0 } model)
+                ModelApplier(config, vendor)(model);
+        }
+    }
+
+    internal static Action<string> PathApplier(DaemonConfig config, HarnessId vendor) => vendor switch {
+        HarnessId.Claude      => v => config.ClaudePath      = v,
+        HarnessId.Codex       => v => config.CodexPath       = v,
+        HarnessId.Cursor      => v => config.CursorPath      = v,
+        HarnessId.Copilot     => v => config.CopilotPath     = v,
+        HarnessId.Gemini      => v => config.GeminiPath      = v,
+        HarnessId.Kiro        => v => config.KiroPath        = v,
+        HarnessId.Pi          => v => config.PiPath          = v,
+        HarnessId.OpenCode    => v => config.OpenCodePath    = v,
+        HarnessId.Antigravity => v => config.AntigravityPath = v,
+    };
+
+    /// <summary>
+    /// The four vendors that pick their own model throw rather than being absent: the binder reaches
+    /// one only once <see cref="HarnessOverrides"/> names a variable for it, so arriving
+    /// here means a knob was declared without an accessor to receive it.
+    /// </summary>
+    internal static Action<string> ModelApplier(DaemonConfig config, HarnessId vendor) => vendor switch {
+        HarnessId.Cursor      => v => config.CursorModel      = v,
+        HarnessId.Kiro        => v => config.KiroModel        = v,
+        HarnessId.Pi          => v => config.PiModel          = v,
+        HarnessId.OpenCode    => v => config.OpenCodeModel    = v,
+        HarnessId.Antigravity => v => config.AntigravityModel = v,
+
+        HarnessId.Claude or HarnessId.Codex
+            or HarnessId.Copilot or HarnessId.Gemini =>
+            throw new NotSupportedException(
+                $"{vendor} declares a model override variable but no DaemonConfig accessor is wired to "
+              + "it, so setting it would silently do nothing. Add the accessor here."),
+    };
 
     /// <summary>
     /// Where a gated reviewer's opt-out lands on <see cref="DaemonConfig"/>.
