@@ -103,7 +103,7 @@ public class HarnessRequesterContextTests {
             }),
             directoryExists: _ => true);
 
-        await Assert.That(resolved.SessionId).IsEqualTo("abcdef");
+        await Assert.That(resolved.SessionId).IsEqualTo("abc-def"); // opaque: canonicalization keeps it
         await Assert.That(resolved.ProjectDir).IsNull();
     }
 

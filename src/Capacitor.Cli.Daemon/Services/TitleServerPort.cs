@@ -44,9 +44,9 @@ internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl)
     }
 
     public async Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) {
-        // The server files sessions under the canonical (trimmed, dashless) key — the raw id
-        // must not ride the payload or a dashed runtime id would update a different key than
-        // the one the summary read used.
+        // The server files sessions under the canonical key (a GUID as its 32-hex form, an opaque
+        // vendor id unchanged) — the raw id must not ride the payload or it would update a
+        // different key than the one the summary read used.
         if (WorkContextIds.CanonicalSessionId(sessionId) is not { } canonical) return true; // nothing to converge with
 
         var (client, status) = await http.ForHookAsync(ct);

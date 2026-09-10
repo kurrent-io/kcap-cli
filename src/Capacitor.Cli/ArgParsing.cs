@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+
 namespace Capacitor.Cli;
 
 static class ArgParsing {
@@ -32,7 +34,9 @@ static class ArgParsing {
     /// <summary>
     /// Resolves a sessionId purely from environment variables. Prefers
     /// <c>KCAP_SESSION_ID</c> and falls back to <c>CODEX_THREAD_ID</c>.
-    /// Dashes are stripped from the returned value so callers don't have to.
+    /// The value is canonicalized as the server files sessions
+    /// (<see cref="SessionIds.Canonical"/>): a GUID collapses to its 32-hex form and an opaque
+    /// vendor id keeps its dashes, so an ambient id resolves exactly as an explicit one does.
     /// </summary>
     internal static string? ResolveSessionIdFromEnv() =>
         ResolveSessionIdFromEnv(Environment.GetEnvironmentVariable);
@@ -45,10 +49,9 @@ static class ArgParsing {
     internal static string? ResolveSessionIdFromEnv(Func<string, string?> getEnv) {
         var kcapId = getEnv("KCAP_SESSION_ID");
         if (!string.IsNullOrWhiteSpace(kcapId))
-            return kcapId.Replace("-", "");
+            return SessionIds.Canonical(kcapId);
 
-        var codex = getEnv("CODEX_THREAD_ID");
-        return !string.IsNullOrWhiteSpace(codex) ? codex.Replace("-", "") : null;
+        return SessionIds.Canonical(getEnv("CODEX_THREAD_ID"));
     }
 
     /// <summary>

@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+
 namespace Capacitor.Cli;
 
 /// <summary>
@@ -51,8 +53,8 @@ static class HarnessRequesterContext {
     internal const string CodexThreadIdVar = "CODEX_THREAD_ID";
 
     /// <param name="SessionId">
-    /// The requesting session, dash-stripped to the canonical form the server expects (matching
-    /// the session-start hook's own normalization). Null when no harness signal is available.
+    /// The requesting session in the canonical form the server files it under (a GUID as its
+    /// 32-hex form, an opaque vendor id unchanged). Null when no harness signal is available.
     /// </param>
     /// <param name="ProjectDir">
     /// The running harness's project directory, or null when the harness did not report one (or
@@ -85,6 +87,6 @@ static class HarnessRequesterContext {
             ? projectDir
             : null;
 
-        return new(harnessSessionId.Trim().Replace("-", ""), usableProjectDir);
+        return new(SessionIds.Canonical(harnessSessionId), usableProjectDir);
     }
 }

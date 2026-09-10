@@ -223,10 +223,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// else the ambient <c>KCAP_SESSION_ID</c> (or <c>CODEX_THREAD_ID</c>) env var via
     /// <see cref="ArgParsing.ResolveSessionIdFromEnv()"/>. Throws when neither is available, so
     /// the caller (via <see cref="HandleToolCallAsync"/>) surfaces a clean tool error instead
-    /// of sending a request with a missing/blank session id. Dashes are stripped from the
-    /// explicit argument too — matching <see cref="ArgParsing.ResolveSessionIdFromEnv()"/> — so a
-    /// caller passing a dashed GUID (e.g. copy-pasted from a UI) still resolves to the same
-    /// dashless key the server expects, instead of silently missing the intended session.
+    /// of sending a request with a missing/blank session id. Either source is canonicalized the
+    /// same way — a GUID to its 32-hex form, an opaque vendor id unchanged — so a caller passing a
+    /// dashed GUID (e.g. copy-pasted from a UI) resolves to the key the server expects instead of
+    /// silently missing the intended session.
     /// </summary>
     internal static string ResolveSessionId(JsonObject? args) {
         if (args?["session_id"] is { } node) {
