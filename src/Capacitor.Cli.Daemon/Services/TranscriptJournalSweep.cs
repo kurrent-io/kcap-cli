@@ -37,7 +37,7 @@ internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time,
             var cutoff = time.GetUtcNow() - Retention;
             foreach (var path in Directory.EnumerateFiles(dir, "*.jsonl")) {
                 ct.ThrowIfCancellationRequested();
-                await TrySweepAsync(path, cutoff).ConfigureAwait(false);
+                await TrySweepAsync(path, cutoff, ct).ConfigureAwait(false);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
         } catch (Exception ex) {
@@ -48,9 +48,9 @@ internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time,
         }
     }
 
-    async Task TrySweepAsync(string path, DateTimeOffset cutoff) {
+    async Task TrySweepAsync(string path, DateTimeOffset cutoff, CancellationToken ct) {
         try {
-            using var lease = await _locks.AcquireAsync(path, TranscriptJournal.LockBound, CancellationToken.None).ConfigureAwait(false);
+            using var lease = await _locks.AcquireAsync(path, TranscriptJournal.LockBound, ct).ConfigureAwait(false);
             if (lease is null) return;
 
             // A same-id relaunch reopens the journal under this lock, so everything the delete turns
@@ -60,6 +60,9 @@ internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time,
             var record = Path.Combine(stateDir, "agents", Path.GetFileNameWithoutExtension(path) + ".json");
             if (File.Exists(record)) return;
             File.Delete(path);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            // Shutdown ends the sweep quietly; the caller swallows it rather than logging a skip.
+            throw;
         } catch (Exception ex) {
             logger.LogWarning(ex, "Transcript journal sweep: skipped {Path}", path);
         }

@@ -9,5 +9,7 @@ public sealed class EnvelopeJournalProjection : IChatTranscriptProjection {
     public IReadOnlyList<AcpEventEnvelope> Project(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) =>
         EnvelopeJournalFormat.TryRead(line, out var envelope)
             ? [envelope]
-            : throw new FormatException($"line {lineNumber} is not a v{EnvelopeJournalFormat.SupportedContractVersion} envelope");
+            // No line number in the message: the reader logs one failure per distinct message, so a
+            // per-line message would log a corrupt journal once per line.
+            : throw new FormatException($"not a v{EnvelopeJournalFormat.SupportedContractVersion} envelope");
 }

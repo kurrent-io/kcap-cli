@@ -72,8 +72,15 @@ internal sealed class TranscriptJournal : IDisposable {
 
     public bool Open(string? cwd, string? model) {
         try {
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-            CreatedFile = !File.Exists(Path);
+            var dir = System.IO.Path.GetDirectoryName(Path)!;
+            Directory.CreateDirectory(dir);
+
+            // A journal is the whole conversation: owner-only, and 0700 on the directory stops
+            // another local user traversing in to the files.
+            if (!OperatingSystem.IsWindows()) {
+                try { File.SetUnixFileMode(dir, DirMode); } catch { /* best-effort */ }
+            }
+
             // The launch path is synchronous by design, and the bound is what keeps a journal held
             // by an abandoned writer from stalling it.
             using var lease = _locks.AcquireAsync(Path, _lockBound, CancellationToken.None).GetAwaiter().GetResult();
@@ -82,11 +89,19 @@ internal sealed class TranscriptJournal : IDisposable {
                 return false;
             }
 
+            // Under the lock, immediately before the open: sampled earlier, two same-id opens can
+            // both claim authorship and a failed launch then deletes the other's file.
+            CreatedFile = !File.Exists(Path);
+
             var header = Encode(AcpEventTranslator.BuildSessionStarted(0, NowIso(), cwd, model));
             using (var fs = new FileStream(Path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) {
                 fs.Seek(0, SeekOrigin.End);
                 fs.Write(header);
                 fs.Flush(true);
+            }
+
+            if (!OperatingSystem.IsWindows()) {
+                try { File.SetUnixFileMode(Path, FileMode0600); } catch { /* best-effort */ }
             }
 
             IsOpen  = true;
@@ -132,8 +147,13 @@ internal sealed class TranscriptJournal : IDisposable {
     }
 
     /// CompleteAsync is the lifecycle call and disposes the source itself; this covers a journal
-    /// dropped without one.
-    public void Dispose() => _writerCts.Dispose();
+    /// dropped without one, where the writer would otherwise keep draining a queue nobody closed.
+    public void Dispose() {
+        if (Interlocked.Exchange(ref _completed, 1) != 0) return;
+        _queue.Writer.TryComplete();
+        _writerCts.Cancel();
+        _writerCts.Dispose();
+    }
 
     async Task RunWriterAsync(CancellationToken ct) {
         try {
@@ -181,6 +201,9 @@ internal sealed class TranscriptJournal : IDisposable {
     static byte[] Encode(AcpEventEnvelope e) => Encoding.UTF8.GetBytes(EnvelopeJournalFormat.Write(e) + "\n");
 
     string NowIso() => _time.GetUtcNow().ToString("o");
+
+    const UnixFileMode FileMode0600 = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    const UnixFileMode DirMode      = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     static void AppendToFile(string path, byte[] bytes) {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);

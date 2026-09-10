@@ -16,10 +16,11 @@ public static class EnvelopeJournalFormat {
         try {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return false;
-            if (!root.TryGetProperty("kind", out var kind) || kind.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(kind.GetString())) return false;
-            if (root.TryGetProperty("contract_version", out var version)
-             && (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v != SupportedContractVersion)) return false;
+            if (!root.IsObject) return false;
+            if (string.IsNullOrEmpty(root.Str("kind"))) return false;
+            // Absent reads as v1; present must be the supported number, so a null or a string fails
+            // rather than reading as the default the deserializer would hand back.
+            if (root.Prop("contract_version") is not null && root.Num("contract_version") != SupportedContractVersion) return false;
             envelope = JsonSerializer.Deserialize(line, CapacitorJsonContext.Default.AcpEventEnvelope);
             return true;
         } catch (JsonException) {
