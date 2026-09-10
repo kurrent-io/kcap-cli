@@ -55,4 +55,13 @@ public abstract class PendingCardViewModel : ReactiveObject, IDisposable {
         Disposables.Dispose();
         GC.SuppressFinalize(this);
     }
+
+    /// The copy a failed answer shows; null for a conclusive outcome or one that needs no card text.
+    protected static string? ErrorTextFor(PermissionResolveOutcome outcome) => outcome.Kind != PermissionResolveKind.TransportFailure ? null : outcome.Error switch {
+        "daemon_unreachable" => "Daemon unreachable — try again",
+        "server_unreachable" => "Server unreachable — try again",
+        "not_signed_in" => "Sign in to answer",
+        "withdraw_unsupported" => null,
+        var reason => $"Could not answer ({reason}) — try again",
+    };
 }

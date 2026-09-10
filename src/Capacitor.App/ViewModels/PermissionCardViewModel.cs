@@ -17,6 +17,8 @@ public sealed class PermissionCardViewModel : PendingCardViewModel {
     public string ToolName { get; }
     public string Detail => _detail.Value;
     public bool ShowsAllowAlways { get; }
+    public IReadOnlyList<AcpOptionViewModel> Options { get; }
+    public bool HasOptions => Options.Count > 0;
 
     public ReactiveCommand<Unit, Unit> AllowCommand { get; }
     public ReactiveCommand<Unit, Unit> AllowAlwaysCommand { get; }
@@ -26,7 +28,10 @@ public sealed class PermissionCardViewModel : PendingCardViewModel {
         _entry = entry;
         _permissions = permissions;
         ToolName = entry.ToolName.Length == 0 ? "Tool call" : entry.ToolName;
-        ShowsAllowAlways = entry.Vendor == "claude" && entry.ToolName != ClaudeElicitation.ToolName;
+
+        var idle = Busy.Select(b => !b);
+        Options = entry.Options?.Select(o => new AcpOptionViewModel(o.OptionId, o.Label, o.Description, PickAsync, idle, () => { })).ToList() ?? [];
+        ShowsAllowAlways = entry.Vendor == "claude" && entry.ToolName != ClaudeElicitation.ToolName && !HasOptions;
 
         _detail = root
             .Select(r => entry.ToolInputOmitted ? "Input too large to show" : ToolDetail.From(entry.ToolInputJson, r))
@@ -34,7 +39,6 @@ public sealed class PermissionCardViewModel : PendingCardViewModel {
             .ToProperty(this, x => x.Detail, entry.ToolInputOmitted ? "Input too large to show" : ToolDetail.From(entry.ToolInputJson, null))
             .DisposeWith(Disposables);
 
-        var idle = Busy.Select(b => !b);
         AllowCommand       = ReactiveCommand.CreateFromTask(() => AnswerAsync(PermissionAnswer.Allow), idle);
         AllowAlwaysCommand = ReactiveCommand.CreateFromTask(() => AnswerAsync(PermissionAnswer.AllowAlways), idle);
         DenyCommand        = ReactiveCommand.CreateFromTask(() => AnswerAsync(PermissionAnswer.Deny), idle);
@@ -48,10 +52,16 @@ public sealed class PermissionCardViewModel : PendingCardViewModel {
         ErrorText = null;
         try {
             var outcome = await _permissions.ResolveAsync(_entry, answer, CancellationToken.None);
-            if (outcome.Kind == PermissionResolveKind.TransportFailure)
-                ErrorText = outcome.Error == "daemon_unreachable" ? "Daemon unreachable — try again" : $"Could not answer ({outcome.Error}) — try again";
+            ErrorText = ErrorTextFor(outcome);
         } finally {
             IsBusy = false;
         }
+    }
+
+    async Task PickAsync(AcpOptionViewModel option) {
+        IsBusy = true;
+        ErrorText = null;
+        try { ErrorText = ErrorTextFor(await _permissions.PickOptionAsync(_entry, option.OptionId, CancellationToken.None)); }
+        finally { IsBusy = false; }
     }
 }

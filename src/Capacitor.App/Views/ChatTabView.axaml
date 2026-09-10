@@ -145,7 +145,17 @@
                                         <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
                                         <TextBlock Text="{Binding ErrorText}" FontSize="11" Foreground="{StaticResource KcapDangerBrush}"
                                                    IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                                        <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding HasOptions}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:AcpOptionViewModel">
+                                                    <Button Content="{Binding Label}" Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
+                                                            Margin="0,0,6,6" Padding="10,4" FontSize="12" CornerRadius="7"
+                                                            Background="{StaticResource KcapSurfaceRaisedBrush}" Foreground="{StaticResource KcapTextBrush}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" IsVisible="{Binding !HasOptions}">
                                             <Button Content="Deny" Command="{Binding DenyCommand}" Background="Transparent" BorderBrush="Transparent"
                                                     Foreground="{StaticResource KcapDangerBrush}" Padding="10,4" FontSize="12" CornerRadius="7" />
                                             <Button Content="Allow always" Command="{Binding AllowAlwaysCommand}" IsVisible="{Binding ShowsAllowAlways}"
@@ -343,6 +353,58 @@
                                             </StackPanel>
                                             <TextBlock Text="{Binding StepLabel}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                                         </DockPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                            <DataTemplate x:DataType="vm:AcpQuestionCardViewModel">
+                                <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapSuccessBrush}"
+                                        BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
+                                    <Border.Styles>
+                                        <Style Selector="Button.acpOption, ToggleButton.acpOption">
+                                            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Setter Property="CornerRadius" Value="8" />
+                                            <Setter Property="Padding" Value="12,9" />
+                                            <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                            <Setter Property="HorizontalContentAlignment" Value="Left" />
+                                            <Setter Property="Cursor" Value="Hand" />
+                                        </Style>
+                                        <Style Selector="ToggleButton.acpOption:checked">
+                                            <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource KcapSuccessBrush}" />
+                                        </Style>
+                                    </Border.Styles>
+                                    <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
+                                        <TextBlock Text="{Binding Prompt}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource KcapTextBrush}" />
+                                        <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding IsMultiSelect}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:AcpOptionViewModel">
+                                                    <ToggleButton Classes="acpOption" Content="{Binding Label}" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                                  ToolTip.Tip="{Binding Description}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding !IsMultiSelect}">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:AcpOptionViewModel">
+                                                    <Button Classes="acpOption" Content="{Binding Label}" Command="{Binding PickCommand}"
+                                                            ToolTip.Tip="{Binding Description}" />
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBox Text="{Binding FreeText}" PlaceholderText="Type your answer…" IsVisible="{Binding !HasOptions}"
+                                                 AcceptsReturn="False" FontSize="13" MinHeight="34" />
+                                        <TextBlock Text="{Binding ErrorText}" FontSize="12" Foreground="{StaticResource KcapDangerBrush}"
+                                                   IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" IsVisible="{Binding ShowsSubmit}">
+                                            <Button Content="Submit" Command="{Binding SubmitCommand}"
+                                                    Padding="14,5" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
+                                                    Classes="kcapPrimary" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
