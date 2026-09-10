@@ -20,7 +20,9 @@ namespace Capacitor.App.Tests.Unit;
 public class WorkContextViewSmokeTests {
     const string SessionA = "0123456789abcdef0123456789abcdef";
 
-    sealed class Host {
+    /// Disposal closes the window and tears the view model down, so a failed assertion leaves
+    /// neither behind in the shared headless session.
+    sealed class Host : IAsyncDisposable {
         public BehaviorSubject<AgentStatusDto?> Presence { get; } = new(null);
         public FakeWorkContextSource Source { get; } = new();
         public WorkContextViewModel Vm { get; }
@@ -44,7 +46,7 @@ public class WorkContextViewSmokeTests {
         public T Find<T>(string name) where T : Control =>
             Window.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
 
-        public async Task CloseAsync() {
+        public async ValueTask DisposeAsync() {
             Window.Close();
             Dispatcher.UIThread.RunJobs();
             await Vm.TeardownAsync();
@@ -80,7 +82,7 @@ public class WorkContextViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task A_key_only_item_and_an_untitled_issue_each_show_their_key_once() {
         await RunOnUiAsync(async () => {
-            var host = new Host();
+            await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
             var key = host.Find<TextBlock>("WorkContextKey");
@@ -94,8 +96,6 @@ public class WorkContextViewSmokeTests {
             await Assert.That(linkKey.Text).IsEqualTo("WK-2198");
             await Assert.That(linkKey.IsEffectivelyVisible).IsTrue();
             await Assert.That(linkTitle.IsEffectivelyVisible).IsFalse();
-
-            await host.CloseAsync();
         });
     }
 
@@ -105,7 +105,7 @@ public class WorkContextViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Hovering_a_link_card_paints_no_chrome_outside_its_rounded_border() {
         await RunOnUiAsync(async () => {
-            var host = new Host();
+            await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
             var button = host.Find<ContentControl>("IssueCard").GetVisualDescendants().OfType<Button>().First();
@@ -121,8 +121,6 @@ public class WorkContextViewSmokeTests {
             await Assert.That(presenter.CornerRadius).IsEqualTo(card.CornerRadius);
             await Assert.That(ReferenceEquals(card.BorderBrush, host.Window.FindResource("KcapFaintBrush"))).IsTrue()
                 .Because("the hover cue is the card's own border, inside its rounded outline");
-
-            await host.CloseAsync();
         });
     }
 
@@ -130,14 +128,12 @@ public class WorkContextViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task The_who_row_counts_people_before_sessions() {
         await RunOnUiAsync(async () => {
-            var host = new Host();
+            await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
 
             var count = host.Find<TextBlock>("WhoCountText");
             await Assert.That(count.Text).IsEqualTo("1 person · 2 sessions");
             await Assert.That(count.IsEffectivelyVisible).IsTrue();
-
-            await host.CloseAsync();
         });
     }
 }
