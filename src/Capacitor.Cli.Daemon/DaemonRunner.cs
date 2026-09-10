@@ -1582,9 +1582,23 @@ public static partial class DaemonRunner {
         } catch { return null; }
     }
 
+    /// Enough for any real vendor <c>--version</c> (a line or two); a version that needed more would
+    /// fail the parser anyway. Past the cap the stream is still read to EOF so the child never blocks
+    /// on a full pipe, but nothing more is retained — a noisy or runaway CLI cannot grow this buffer
+    /// for the whole probe budget.
+    const int ProbeOutputCap = 8 * 1024;
+
     static async Task<string> DrainToEndAsync(System.IO.StreamReader reader) {
-        try { return await reader.ReadToEndAsync().ConfigureAwait(false); }
-        catch { return ""; }
+        try {
+            var buffer = new char[4096];
+            var kept   = new System.Text.StringBuilder();
+            int read;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0) {
+                var room = ProbeOutputCap - kept.Length;
+                if (room > 0) kept.Append(buffer, 0, Math.Min(read, room));
+            }
+            return kept.ToString();
+        } catch { return ""; }
     }
 
     /// <summary>

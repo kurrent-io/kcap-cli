@@ -69,4 +69,20 @@ public class DaemonRunnerVersionProbeTests {
 
         await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
     }
+
+    /// <summary>The version sits at the front and a flood follows on the same stream: the probe keeps
+    /// only a bounded prefix (so a noisy CLI cannot grow the buffer without limit) yet must keep
+    /// draining past the cap, or the child blocks on the full pipe and the probe stalls to its
+    /// timeout. Guards both halves — a drain that stopped at the cap would fail this.</summary>
+    [Test]
+    public async Task A_version_at_the_front_survives_a_trailing_flood_on_the_same_stream() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary is a POSIX shell script.");
+        using var tmp = new TempDir();
+        var cli = tmp.CreateFile(
+            "faketool", "#!/bin/sh\necho 'faketool 9.9.9'\nyes 0123456789ABCDEFGHIJ | head -c 500000\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
+    }
 }
