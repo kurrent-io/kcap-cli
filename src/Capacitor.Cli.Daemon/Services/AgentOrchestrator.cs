@@ -2329,6 +2329,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     }
                 }
 
+                // No AgentInstance was created here either, so the journal is otherwise never
+                // completed or deleted — this arm returns before the outer catch below.
+                await DiscardFailedLaunchJournalAsync(journal, agentId);
+
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
@@ -2535,18 +2539,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
-            // No AgentInstance owns the journal, so complete it here. Only a file THIS launch
-            // created is removed, and only once the writer is proven gone: a rebind's failed launch
-            // must leave the prior incarnation's records where the app is already reading them.
-            if (journal is { IsOpen: true }) {
-                var drained = await journal.CompleteAsync();
-                if (journal.CreatedFile && drained) {
-                    using var lease = await JournalPathLocks.Shared.AcquireAsync(journal.Path, TranscriptJournal.LockBound, CancellationToken.None);
-                    if (lease is not null) {
-                        try { File.Delete(journal.Path); } catch (Exception deleteEx) { LogCleanupStepFailed(deleteEx, "deleting transcript journal (failed-launch)", agentId); }
-                    }
-                }
-            }
+            // No AgentInstance owns the journal, so complete it here.
+            await DiscardFailedLaunchJournalAsync(journal, agentId);
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
@@ -2596,6 +2590,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // was torn down and no agent was ever registered; terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         }
+    }
+
+    /// <summary>
+    /// Completes and, only when safe, deletes a journal from a launch that never produced an
+    /// <see cref="AgentInstance"/> to own it — every pre-insert failure arm of
+    /// <see cref="HandleLaunchAgentCore"/> routes here so none can drift from another. Only a
+    /// file THIS launch created is removed, and only once the writer is proven gone: a rebind's
+    /// failed launch must leave the prior incarnation's records where the app is already reading
+    /// them.
+    /// </summary>
+    async Task DiscardFailedLaunchJournalAsync(TranscriptJournal? journal, string agentId) {
+        if (journal is not { IsOpen: true }) return;
+        var drained = await journal.CompleteAsync();
+        if (!journal.CreatedFile || !drained) return;
+
+        using var lease = await JournalPathLocks.Shared.AcquireAsync(journal.Path, TranscriptJournal.LockBound, CancellationToken.None);
+        if (lease is null) return;
+        try { File.Delete(journal.Path); } catch (Exception deleteEx) { LogCleanupStepFailed(deleteEx, "deleting transcript journal (failed-launch)", agentId); }
     }
 
     /// <summary>

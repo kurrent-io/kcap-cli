@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -92,6 +93,35 @@ public class AgentOrchestratorJournalTests {
             LastJournal = ctx.Journal;
             ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
             throw new InvalidOperationException("boom");
+        }
+    }
+
+    [Test]
+    public async Task Codex_preflight_failure_after_open_discards_the_journal() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var server = new CaptureServerConnection();
+        var factory = new FailingWithCodexPreflightFactory();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
+
+        await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("agent-codex-preflight", repoPath));
+
+        var journal = factory.LastJournal!;
+        await Assert.That(File.Exists(journal.Path)).IsFalse();
+        await Assert.That(journal.Drained).IsTrue();
+    }
+
+    /// The inner Codex-preflight catch has its own return, before the outer catch's journal
+    /// cleanup — this pins that arm discards the journal too. Vendor "cursor" is fine here: the
+    /// catch filters on exception type, not vendor.
+    sealed class FailingWithCodexPreflightFactory : IHostedAgentRuntimeFactory {
+        public string CliPath => "x"; public string Vendor => "cursor"; public bool SupportsUnattended => false;
+        public TranscriptJournal? LastJournal { get; private set; }
+        public bool IsAvailable() => true;
+        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+            LastJournal = ctx.Journal;
+            ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
+            throw new CodexHooksNotInstalledException("Run plugin install --codex");
         }
     }
 
