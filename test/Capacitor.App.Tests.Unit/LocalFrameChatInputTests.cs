@@ -91,6 +91,30 @@ public class LocalFrameChatInputTests {
     }
 
     [Test]
+    public async Task Session_ending_after_a_refusal_clears_the_notice() {
+        var rig = new Rig(); rig.Connected("input/1"); rig.Running();
+        rig.Ops.QueueSendText(new SendTextResult(false, "queue_full", null, null));
+        await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsFalse();
+        await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
+
+        rig.Presence.OnNext(new AgentPresence(rig.Presence.Value.Dto, true));
+        await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ended);
+        await Assert.That(rig.Input.Hint).IsEqualTo("This session has ended");
+    }
+
+    [Test]
+    public async Task A_status_reemission_that_does_not_change_availability_keeps_the_notice() {
+        var rig = new Rig(); rig.Connected("input/1"); rig.Running();
+        rig.Ops.QueueSendText(new SendTextResult(false, "queue_full", null, null));
+        await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsFalse();
+        await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
+
+        rig.Connected("input/1");
+        await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ready);
+        await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
+    }
+
+    [Test]
     public async Task Completion_after_dispose_mutates_nothing_and_dispose_detaches_subscriptions() {
         var rig = new Rig(); rig.Connected("input/1"); rig.Running();
         var gate = rig.Ops.ArmSendText();

@@ -23,8 +23,22 @@ internal sealed class LocalFrameChatInput : ChatInput {
     public LocalFrameChatInput(string agentId, IDaemonClientService daemon, ILocalControlOps ops, IObservable<AgentPresence> presence) {
         _agentId = agentId;
         _ops = ops;
-        _subscriptions.Add(daemon.Status.Subscribe(s => { _status = s; _notice = null; Raise(); }));
-        _subscriptions.Add(presence.Subscribe(p => { _presence = p; Raise(); }));
+        _subscriptions.Add(daemon.Status.Subscribe(ApplyStatus));
+        _subscriptions.Add(presence.Subscribe(ApplyPresence));
+    }
+
+    void ApplyStatus(AttachStatus s) {
+        var before = Availability;
+        _status = s;
+        if (Availability != before) _notice = null;
+        Raise();
+    }
+
+    void ApplyPresence(AgentPresence p) {
+        var before = Availability;
+        _presence = p;
+        if (Availability != before) _notice = null;
+        Raise();
     }
 
     public override SendAvailability Availability =>
