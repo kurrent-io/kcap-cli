@@ -20,6 +20,19 @@ internal sealed class NoServerLane : IServerLane {
     public IObservable<Unit> AgentInstancesChanged => Observable.Never<Unit>();
     public IObservable<Unit> DaemonsChanged => Observable.Never<Unit>();
     public IObservable<LaunchFailure> LaunchFailures => Observable.Never<LaunchFailure>();
+    public IObservable<string> PermissionPending => Observable.Never<string>();
+    public IObservable<PermissionRespondedPing> PermissionResponded => Observable.Never<PermissionRespondedPing>();
+    public IObservable<ServerPermissionRequest> PermissionRequests => Observable.Never<ServerPermissionRequest>();
+    public IObservable<ServerElicitationRequest> ElicitationRequests => Observable.Never<ServerElicitationRequest>();
+    public IObservable<string> SessionAccessChanged => Observable.Never<string>();
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DaemonInfo>?>(null);
+    public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) =>
+        Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) =>
+        Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) =>
+        Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) =>
+        Task.FromResult(HubCallOutcome.NotConnected);
 }

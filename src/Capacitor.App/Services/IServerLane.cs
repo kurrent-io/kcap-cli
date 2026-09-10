@@ -19,6 +19,15 @@ public interface IServerLane {
     IObservable<System.Reactive.Unit> AgentInstancesChanged { get; }
     IObservable<System.Reactive.Unit> DaemonsChanged { get; }
     IObservable<LaunchFailure> LaunchFailures { get; }
+    IObservable<string> PermissionPending { get; }
+    IObservable<PermissionRespondedPing> PermissionResponded { get; }
+    IObservable<ServerPermissionRequest> PermissionRequests { get; }
+    IObservable<ServerElicitationRequest> ElicitationRequests { get; }
+    IObservable<string> SessionAccessChanged { get; }
     /// Null when the lane has no live connection right now.
     Task<IReadOnlyList<Capacitor.Remote.Models.DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct);
+    Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct);
+    Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct);
+    Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct);
+    Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct);
 }

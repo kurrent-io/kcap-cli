@@ -21,10 +21,25 @@ public sealed class HubTestHost : IAsyncDisposable {
     static int _launchCalls;
     public static int LaunchCalls => _launchCalls;
 
+    public static Func<string, bool> ChatSubscribeHandler { get; set; } = _ => true;
+    // Defaults to the chat visibility check: a session hidden from the caller is hidden the same
+    // way for both, unless a test scripts the two apart.
+    public static Func<string, bool> AccessWatchHandler { get; set; } = sid => ChatSubscribeHandler(sid);
+    public static List<string> StopCalls { get; } = [];
+    public static List<string> ChatSubscribes { get; } = [];
+    public static List<string> ChatUnsubscribes { get; } = [];
+    public static List<string> AccessWatches { get; } = [];
+
     public static async Task<HubTestHost> StartAsync(bool requireAuth = false) {
         DaemonsHandler = () => [];
         LaunchHandler = _ => "agent-1";
         _launchCalls = 0;
+        ChatSubscribeHandler = _ => true;
+        AccessWatchHandler = sid => ChatSubscribeHandler(sid);
+        StopCalls.Clear();
+        ChatSubscribes.Clear();
+        ChatUnsubscribes.Clear();
+        AccessWatches.Clear();
 
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
@@ -72,6 +87,22 @@ public sealed class HubTestHost : IAsyncDisposable {
         public string RequestLaunchAgentV2(JsonElement payload) {
             Interlocked.Increment(ref _launchCalls);
             return LaunchHandler(payload);
+        }
+
+        public Task RequestStopAgent(string agentId) { StopCalls.Add(agentId); return Task.CompletedTask; }
+
+        public JsonElement[] SubscribeToChat(string sessionId) {
+            if (!ChatSubscribeHandler(sessionId)) throw new HubException(WireTokens.SessionNotVisible);
+            ChatSubscribes.Add(sessionId);
+            return [];
+        }
+
+        public Task UnsubscribeFromChat(string sessionId) { ChatUnsubscribes.Add(sessionId); return Task.CompletedTask; }
+
+        public Task RegisterSessionAccessWatch(string sessionId) {
+            if (!AccessWatchHandler(sessionId)) throw new HubException(WireTokens.SessionNotVisible);
+            AccessWatches.Add(sessionId);
+            return Task.CompletedTask;
         }
     }
 }
