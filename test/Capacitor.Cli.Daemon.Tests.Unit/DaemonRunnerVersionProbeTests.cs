@@ -50,4 +50,23 @@ public class DaemonRunnerVersionProbeTests {
     public async Task Output_with_no_version_token_resolves_to_null(string observed) {
         await Assert.That(DaemonRunner.ParseProbedVersion(observed)).IsNull();
     }
+
+    /// <summary>A vendor whose <c>--version</c> writes more than the OS pipe buffer — some print a
+    /// banner or an "update available" notice — must not deadlock the probe. Its redirected streams
+    /// are drained while it runs, so it can finish writing and exit and the version is read; reading
+    /// only after the wait would park the child on a full pipe and hang the probe until its timeout
+    /// killed it, the silent multi-minute daemon startup this guards against. POSIX stub, so Windows
+    /// is skipped like the other real-binary probe checks.</summary>
+    [Test]
+    public async Task A_version_whose_output_exceeds_the_pipe_buffer_is_drained_not_deadlocked() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary is a POSIX shell script.");
+        using var tmp = new TempDir();
+        // ~500 KB to stderr — past every platform's pipe buffer — before the version line on stdout.
+        var cli = tmp.CreateFile(
+            "faketool", "#!/bin/sh\nyes 0123456789ABCDEFGHIJ | head -c 500000 1>&2\necho 'faketool 9.9.9'\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
+    }
 }
