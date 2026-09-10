@@ -41,7 +41,7 @@
         <Setter Property="Padding" Value="8,5" />
     </Style>
     <Style Selector="Button.prButton:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.prButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
     </Style>
@@ -53,6 +53,15 @@
     <Style Selector="Button.prButton.prPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.prButton.prPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.prButton:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        <Setter Property="Opacity" Value="0.45" />
+    </Style>
+    <Style Selector="Button.prButton.prPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
     </Style>
     <Style Selector="Button.prStatusRow">
         <Setter Property="HorizontalAlignment" Value="Stretch" />

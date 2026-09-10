@@ -35,8 +35,12 @@ public sealed partial class WorkContextViewModel {
         get => _title;
         private set { this.RaiseAndSetIfChanged(ref _title, value); NotifyIdentity(); }
     }
-    public string DisplayTitle => string.Equals(Title, Key, StringComparison.OrdinalIgnoreCase) ? "" : Title;
-    public bool HasInlineIssue => Issue is not null && string.Equals(Issue.Key, Key, StringComparison.OrdinalIgnoreCase);
+    bool IsPrimaryIssue => Issue is not null && string.Equals(Issue.Key, Key, StringComparison.OrdinalIgnoreCase);
+    bool IsFallbackIssueTitle => Issue is not null && (string.Equals(Issue.Title, Issue.Key, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(Issue.Title, $"Issue {Issue.Key}", StringComparison.OrdinalIgnoreCase));
+    public string DisplayTitle => !string.Equals(Title, Key, StringComparison.OrdinalIgnoreCase) ? Title
+        : IsPrimaryIssue && !IsFallbackIssueTitle ? Issue!.Title : "";
+    public bool HasInlineIssue => IsPrimaryIssue && (IsFallbackIssueTitle || string.Equals(Issue!.Title, DisplayTitle, StringComparison.OrdinalIgnoreCase));
     public bool HasSeparateIssue => HasIssue && !HasInlineIssue;
 
     void NotifyIdentity() {

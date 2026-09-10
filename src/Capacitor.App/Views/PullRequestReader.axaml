@@ -26,16 +26,17 @@
                 <WrapPanel IsVisible="{Binding CanDisplay}">
                     <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
                             Classes.danger="{Binding ChecksStatus.IsDanger}" Classes.warning="{Binding ChecksStatus.IsWarning}" Classes.success="{Binding ChecksStatus.IsSuccess}"
-                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Open checks">
+                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
                     </Button>
                     <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
                             Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.warning="{Binding ReviewStatus.IsWarning}" Classes.success="{Binding ReviewStatus.IsSuccess}"
-                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Open reviews">
+                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
                     </Button>
                 </WrapPanel>
             </DockPanel>
+            <TextBlock Text="{Binding OverviewFreshnessLabel}" IsVisible="{Binding HasStaleOverview}" Classes="prNote" />
             <Border IsVisible="{Binding HasNotice}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="6" Padding="10,8">
                 <TextBlock Text="{Binding Notice}" Classes="prNote" Foreground="{StaticResource KcapWarningBrush}" />
             </Border>
@@ -58,6 +59,7 @@
                 <TabStripItem Content="Reviewers" />
                 <TabStripItem Content="Published reviews" />
                 <TabStripItem Content="Threads" />
+                <TabStripItem Content="Replies" IsVisible="{Binding IsThreadComments}" />
             </TabStrip>
         </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">

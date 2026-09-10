@@ -29,20 +29,21 @@
                        TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
             <StackPanel IsVisible="{Binding CanDisplay}">
                 <Button x:Name="SidebarChecksButton" Classes="prButton prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
-                        IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Open pull request checks">
+                        IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
                         <Path Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
                 <Button x:Name="SidebarReviewsButton" Classes="prButton prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
-                        IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Open pull request reviews">
+                        IsEnabled="{Binding CanReveal}" AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
                         <Path Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
             </StackPanel>
+            <TextBlock x:Name="OverviewFreshness" Text="{Binding OverviewFreshnessLabel}" IsVisible="{Binding HasStaleOverview}" Classes="prNote" />
             <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" Classes="prNote" />
             <TextBlock Text="{Binding ReaderNote}" IsVisible="{Binding HasReaderNote}" Classes="prNote" />
             <WrapPanel IsVisible="{Binding HasReaderNote}">
@@ -53,7 +54,7 @@
                 <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
                     <Button Content="View PR" Command="{Binding OpenReaderCommand}" IsVisible="{Binding HasChoice}"
                             IsEnabled="{Binding !IsLegacy}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-                    <Button Grid.Column="1" Command="{Binding RefreshCommand}" Classes="prButton" ToolTip.Tip="Refresh pull request"
+                    <Button Grid.Column="1" Command="{Binding RefreshCommand}" Classes="prButton" ToolTip.Tip="{Binding OverviewFreshnessLabel, StringFormat='Refresh pull request · {0}'}"
                             AutomationProperties.Name="Refresh pull request">
                         <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round"
                               Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />

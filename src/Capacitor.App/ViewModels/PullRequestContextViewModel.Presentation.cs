@@ -1,4 +1,5 @@
 using System.Globalization;
+using Capacitor.Cli.Core.PullRequests;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -17,6 +18,8 @@ public sealed partial class PullRequestContextViewModel {
     public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? Rows : [];
     public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? Rows : [];
     public string FreshnessLabel => IsOverview ? FetchedLabel : SnapshotLabel;
+    public bool HasStaleOverview => CanDisplay && (_grace || _overviewRead?.Kind == PullRequestReadKind.Stale);
+    public string OverviewFreshnessLabel => HasStaleOverview ? "Earlier snapshot" + (FetchedLabel.Length > 0 ? " · " + FetchedLabel : "") : FetchedLabel;
 
     public int SelectedTabIndex {
         get => _section switch { "checks" => 1, "reviewers" or "reviews" or "threads" or "thread_comments" => 2, "conversation" => 3, _ => 0 };
@@ -27,7 +30,7 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
     public int SelectedReviewTabIndex {
-        get => _section switch { "reviews" => 1, "threads" or "thread_comments" => 2, _ => 0 };
+        get => _section switch { "reviews" => 1, "threads" => 2, "thread_comments" => 3, _ => 0 };
         set {
             if (value is < 0 or > 2 || !IsReviewSection || value == SelectedReviewTabIndex) return;
             ShowSection(value switch { 0 => "reviewers", 1 => "reviews", 2 => "threads", _ => _section });
@@ -71,6 +74,7 @@ public sealed partial class PullRequestContextViewModel {
     void NotifyPresentation() {
         foreach (var property in new[] { nameof(HasMultipleChoices), nameof(RepositoryLabel), nameof(NumberLabel), nameof(ProviderLabel),
             nameof(CanOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
+            nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
             nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),
             nameof(ReviewerRows), nameof(CheckRows), nameof(DiscussionRows) })
             this.RaisePropertyChanged(property);

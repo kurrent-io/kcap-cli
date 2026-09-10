@@ -1,9 +1,13 @@
 using System.Reactive.Linq;
+using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Path = Avalonia.Controls.Shapes.Path;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Views;
@@ -27,6 +31,9 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.Rows.Single().IsCheck).IsTrue();
         await Assert.That(h.Model.ChecksStatus.IsDanger).IsTrue();
         await Assert.That(h.Model.ChecksStatus.Detail).Contains("1 failed");
+        await Assert.That(AutomationProperties.GetName(checks)).IsEqualTo("Open checks: 1 failed");
+        var headerChecks = h.Reader.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.CommandParameter, "checks"));
+        await Assert.That(AutomationProperties.GetName(headerChecks)).IsEqualTo("Open checks: 1 failed");
 
         var review = h.Card.FindControl<Button>("SidebarReviewsButton")!;
         review.Command!.Execute(review.CommandParameter);
@@ -48,8 +55,15 @@ public class PullRequestPresentationTests {
         await h.SettleAsync();
         await Assert.That(h.Model.Section).IsEqualTo("thread_comments");
         await Assert.That(tabs.SelectedIndex).IsEqualTo(2);
-        await Assert.That(reviews.SelectedIndex).IsEqualTo(2);
+        await Assert.That(reviews.SelectedIndex).IsEqualTo(3);
         await Assert.That(h.Model.Rows.Single().Body).IsEqualTo("Private comment");
+        var replies = reviews.GetVisualDescendants().OfType<TabStripItem>().Single(tab => Equals(tab.Content, "Replies"));
+        replies.Focus();
+        h.Window.KeyPressQwerty(PhysicalKey.ArrowLeft, RawInputModifiers.None);
+        await h.SettleAsync();
+        await Assert.That(h.Model.Section).IsEqualTo("threads");
+        await Assert.That(reviews.SelectedIndex).IsEqualTo(2);
+        await Assert.That(replies.IsEffectivelyVisible).IsFalse();
 
         tabs.SelectedIndex = 3;
         await h.SettleAsync();
@@ -134,6 +148,42 @@ public class PullRequestPresentationTests {
         await Assert.That(h.Model.DiscussionRows).IsEmpty();
         await Assert.That(h.Model.LifecycleStatus.Text).IsEmpty();
         await Assert.That(h.Model.ChecksStatus.Text).IsEmpty();
+    });
+
+    [Test]
+    public Task A_ready_page_cannot_hide_the_age_of_a_stale_overview() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(h.Source.Overview(subject) with {
+            Kind = PullRequestReadKind.Stale, FetchedAt = h.Time.GetUtcNow().UtcDateTime.AddMinutes(-5),
+        }));
+        await h.ShowAsync();
+        h.Model.SelectedTabIndex = 2;
+        await h.SettleAsync();
+        await Assert.That(h.Model.HasNotice).IsFalse();
+        var freshness = h.Card.FindControl<TextBlock>("OverviewFreshness")!;
+        await Assert.That(freshness.IsEffectivelyVisible).IsTrue();
+        await Assert.That(freshness.Text).Contains("Earlier snapshot");
+        await Assert.That(freshness.Text).Contains(h.Model.FetchedLabel);
+    });
+
+    [Test]
+    public Task Sidebar_status_buttons_have_hover_feedback_and_remain_subdued_when_access_expires() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        await h.ShowAsync();
+        var checks = h.Card.FindControl<Button>("SidebarChecksButton")!;
+        var presenter = checks.GetVisualDescendants().OfType<ContentPresenter>().Single(item => item.Name == "PART_ContentPresenter" && item.TemplatedParent == checks);
+        h.Window.MouseMove(checks.TranslatePoint(new Point(checks.Bounds.Width / 2, checks.Bounds.Height / 2), h.Window)!.Value);
+        Dispatcher.UIThread.RunJobs();
+        await Assert.That(((ISolidColorBrush)presenter.Background!).Color).IsEqualTo(Color.Parse("#2A3040"));
+
+        h.Source.Failure = "transient";
+        h.Time.Advance(TimeSpan.FromSeconds(21));
+        await h.Model.RefreshCommand.Execute();
+        await WorkspaceFixtures.WaitUntilAsync(() => !h.Model.IsReading, what: "access refresh fails");
+        await Assert.That(checks.IsEnabled).IsFalse();
+        await Assert.That(h.Model.CanDisplay).IsTrue();
+        await Assert.That(((ISolidColorBrush)presenter.Background!).Color.A).IsEqualTo((byte)0);
+        await Assert.That(presenter.Opacity).IsEqualTo(0.45);
     });
 
     [Test]
