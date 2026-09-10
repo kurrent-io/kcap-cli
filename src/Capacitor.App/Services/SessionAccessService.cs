@@ -37,7 +37,12 @@ public sealed class SessionAccessService : IDisposable {
             .Select(s => s.State == ServerLaneState.Connected)
             .DistinctUntilChanged()
             .Subscribe(OnLane);
-        var changed = lane.SessionAccessChanged.Subscribe(sid => { lock (_lock) { if (_entries.TryGetValue(sid, out var e)) Begin(e); } });
+        var changed = lane.SessionAccessChanged.Subscribe(sid => {
+            lock (_lock) {
+                if (_disposed) return;
+                if (_entries.TryGetValue(sid, out var e)) Begin(e);
+            }
+        });
         _subscriptions = new CompositeDisposable(status, changed);
     }
 
@@ -58,6 +63,7 @@ public sealed class SessionAccessService : IDisposable {
     void Release(SessionAccessLease lease) {
         Entry gone;
         lock (_lock) {
+            if (_disposed) return; // Dispose already completed and cleared every entry
             if (!_entries.TryGetValue(lease.SessionId, out var entry)) return;
             if (--entry.Leases > 0) return;
             _entries.Remove(lease.SessionId);
@@ -72,6 +78,7 @@ public sealed class SessionAccessService : IDisposable {
     void OnLane(bool connected) {
         List<Entry> entries;
         lock (_lock) {
+            if (_disposed) return;
             _connected = connected;
             entries = [.. _entries.Values];
             foreach (var e in entries) {
@@ -96,11 +103,13 @@ public sealed class SessionAccessService : IDisposable {
 
     async Task EstablishAsync(Entry entry, int attempt) {
         SessionAccessState verdict;
+        var subscribed = false;
         try {
             var watch = await _lane.RegisterSessionAccessWatchAsync(entry.SessionId, CancellationToken.None).ConfigureAwait(false);
             if (watch.Result == HubCallResult.Ok) {
                 var chat = await _lane.SubscribeToChatAsync(entry.SessionId, CancellationToken.None).ConfigureAwait(false);
                 verdict = Classify(chat);
+                subscribed = chat.Result == HubCallResult.Ok;
             } else {
                 verdict = Classify(watch);
             }
@@ -108,13 +117,25 @@ public sealed class SessionAccessService : IDisposable {
             verdict = SessionAccessState.Unavailable;
         }
 
+        // A lease released (or the service disposed) while the chat subscribe above was still in
+        // flight already fired its own cleanup unsubscribe, which can reach the server before
+        // this subscribe does. Firing a second one here, strictly after the subscribe resolved,
+        // is what guarantees the group membership ends up dropped regardless of that ordering.
+        var unsubscribeStale = false;
         lock (_lock) {
-            if (_disposed || entry.Attempt != attempt) return; // superseded by a newer attempt: drop
-            Publish(entry, verdict);
-            if (verdict != SessionAccessState.Unavailable || !_connected) { entry.Failures = 0; return; }
-            var delay = Retry[Math.Min(entry.Failures++, Retry.Length - 1)];
-            entry.RetryTimer = _time.CreateTimer(_ => { lock (_lock) { if (entry.Attempt == attempt) Begin(entry); } }, null, delay, Timeout.InfiniteTimeSpan);
+            if (_disposed || entry.Attempt != attempt) {
+                unsubscribeStale = subscribed;
+            } else {
+                Publish(entry, verdict);
+                if (verdict != SessionAccessState.Unavailable || !_connected) {
+                    entry.Failures = 0;
+                } else {
+                    var delay = Retry[Math.Min(entry.Failures++, Retry.Length - 1)];
+                    entry.RetryTimer = _time.CreateTimer(_ => { lock (_lock) { if (entry.Attempt == attempt) Begin(entry); } }, null, delay, Timeout.InfiniteTimeSpan);
+                }
+            }
         }
+        if (unsubscribeStale) _ = _lane.UnsubscribeFromChatAsync(entry.SessionId, CancellationToken.None);
     }
 
     static SessionAccessState Classify(HubCallOutcome outcome) => outcome.Result switch {
@@ -131,11 +152,15 @@ public sealed class SessionAccessService : IDisposable {
     }
 
     public void Dispose() {
+        List<Entry> entries;
         lock (_lock) {
             if (_disposed) return;
             _disposed = true;
-            foreach (var e in _entries.Values) { e.Attempt++; e.RetryTimer?.Dispose(); }
+            entries = [.. _entries.Values];
+            foreach (var e in entries) { e.Attempt++; e.RetryTimer?.Dispose(); }
+            _entries.Clear();
         }
+        foreach (var e in entries) e.State.OnCompleted();
         _subscriptions.Dispose();
         _transitions.Dispose();
     }

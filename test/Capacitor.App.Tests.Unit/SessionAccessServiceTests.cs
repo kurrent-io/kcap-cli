@@ -93,4 +93,37 @@ public class SessionAccessServiceTests {
         b.Dispose();
         await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "unsubscribe on last release");
     }
+
+    [Test]
+    public async Task Lease_disposed_while_chat_subscribe_in_flight_still_unsubscribes() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource<HubCallOutcome>();
+        h.Lane.SubscribeChatHandler = _ => gate.Task;
+        h.Connect();
+        var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s1"), what: "chat subscribe started");
+        lease.Dispose();
+        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "release fires its own unsubscribe");
+        gate.SetResult(HubCallOutcome.Ok);
+        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Count(s => s == "s1") == 2, what: "late subscribe triggers a follow-up unsubscribe");
+    }
+
+    [Test]
+    public async Task Dispose_ignores_late_lane_notifications_and_completes_leases() {
+        using var h = new Harness();
+        h.Connect();
+        var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established");
+        var callsBeforeDispose = h.Lane.Calls.Count;
+        h.Service.Dispose();
+
+        var completed = false;
+        using (lease.State.Subscribe(_ => { }, () => completed = true)) { }
+        await Assert.That(completed).IsTrue();
+
+        h.Connect(epoch: 2);
+        h.Lane.SessionAccessChangedSubject.OnNext("s1");
+        await Task.Delay(50);
+        await Assert.That(h.Lane.Calls.Count).IsEqualTo(callsBeforeDispose);
+    }
 }
