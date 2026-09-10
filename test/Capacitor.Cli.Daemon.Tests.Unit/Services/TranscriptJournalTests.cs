@@ -211,7 +211,7 @@ public class TranscriptJournalTests {
         var complete = journal.CompleteAsync(); // expires while the sink still blocks on "a"
         await Assert.That(await complete).IsFalse();
         sink.Release.Release(10);
-        await Task.Delay(200);
+        await WaitUntil(() => sink.Appends >= 1);
 
         // The abandoned writer finished "a" (one item, whole) and then observed cancellation: no torn note.
         var lines = JournalFiles.ReadLines(journal.Path);

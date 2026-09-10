@@ -839,9 +839,9 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(result).IsEqualTo("…");
     }
 
-    static async Task<List<AcpEventEnvelope>> JournalEnvelopes(string path) {
+    static List<AcpEventEnvelope> JournalEnvelopes(string path) {
         var list = new List<AcpEventEnvelope>();
-        foreach (var line in await File.ReadAllLinesAsync(path)) if (EnvelopeJournalFormat.TryRead(line, out var e)) list.Add(e);
+        foreach (var line in JournalFiles.ReadLines(path)) if (EnvelopeJournalFormat.TryRead(line, out var e)) list.Add(e);
         return list;
     }
 
@@ -858,7 +858,7 @@ public class AcpHostedAgentRuntimeTests {
         while (fromChannel.Count < 2) fromChannel.Add(await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard));
 
         await journal.CompleteAsync();
-        var fromJournal = (await JournalEnvelopes(journal.Path)).Skip(1).ToList(); // header first
+        var fromJournal = JournalEnvelopes(journal.Path).Skip(1).ToList(); // header first
 
         await Assert.That(fromJournal.Select(e => (e.Kind, e.Text))).IsEquivalentTo(fromChannel.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
         await Assert.That(fromJournal[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
@@ -885,7 +885,7 @@ public class AcpHostedAgentRuntimeTests {
         await Task.Delay(100);
         await journal.CompleteAsync();
 
-        var joined = string.Join("\n", (await JournalEnvelopes(journal.Path)).Select(e => e.Text));
+        var joined = string.Join("\n", JournalEnvelopes(journal.Path).Select(e => e.Text));
         await Assert.That(joined).Contains("marker-a");
         await Assert.That(joined).Contains("marker-b");
         await Assert.That(joined).DoesNotContain("marker-late");

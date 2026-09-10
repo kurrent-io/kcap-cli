@@ -248,6 +248,7 @@ public class CodexTurnInputDispatcherTests {
             await Task.WhenAny(ack, Task.Delay(TimeSpan.FromSeconds(2)));
             await Assert.That(ack.IsCompleted).IsTrue();
             await Assert.That(ack.IsFaulted).IsTrue();
+            _ = ack.Exception; // observed: 50 faulted tasks must not raise UnobservedTaskException on GC
         }
     }
 

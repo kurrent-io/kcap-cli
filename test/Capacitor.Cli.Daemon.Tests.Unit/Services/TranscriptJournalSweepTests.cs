@@ -101,6 +101,7 @@ public class TranscriptJournalSweepTests {
     [Test]
     public async Task An_unreadable_transcripts_directory_never_throws() {
         if (OperatingSystem.IsWindows()) return; // no mode bits to take away
+        if (Environment.UserName == "root") return; // root ignores the missing read bit: the directory would stay readable
         using var tmp = new TempDir();
         var time = new FakeTimeProvider(Now);
         var dir = tmp.CreateDir("transcripts");
