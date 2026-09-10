@@ -3,6 +3,7 @@ using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Antigravity;
 
@@ -32,7 +33,7 @@ public class AntigravityUserTurnTests {
         // init never re-emits session_started, so it contributes only its own user_message.
         var envelopes = await Drain(rt, 3);
         var users = envelopes.Where(e => e.Kind == AcpEventKind.UserMessage).ToList();
-        await Assert.That(users.Select(u => u.Text!)).IsEquivalentTo(new[] { "first", "second" });
+        await Assert.That(users.Select(u => u.Text!)).IsEquivalentTo(new[] { "first", "second" }, CollectionOrdering.Matching);
         await Assert.That(users.All(u => u.TimestampIso == "2026-09-09T10:00:00.0000000+00:00")).IsTrue();
         await Assert.That(envelopes[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
         var secondIndex = envelopes.FindIndex(e => e.Kind == AcpEventKind.UserMessage && e.Text == "second");
@@ -75,6 +76,6 @@ public class AntigravityUserTurnTests {
         await journal.CompleteAsync();
 
         var journaled = File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
-        await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)));
+        await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
     }
 }

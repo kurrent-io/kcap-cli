@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 
@@ -117,7 +118,7 @@ public class CodexForwardBufferTests {
         buf.Emit(Canonical("a"));
         buf.Emit(Ephemeral("live"));  // full: dropped
         await Assert.That(buf.DroppedEphemeralCount).IsEqualTo(1);
-        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" });
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" }, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -131,7 +132,7 @@ public class CodexForwardBufferTests {
         await Assert.That(File.ReadAllText(journal.Path)).DoesNotContain("\"b\"");
         await buf.Reader.ReadAsync(); // frees the slot
         await blocked.WaitAsync(TimeSpan.FromSeconds(5));
-        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a", "b" });
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a", "b" }, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -144,7 +145,7 @@ public class CodexForwardBufferTests {
         buf.Emit(Canonical("after"));
         await Assert.That(stalls).IsEqualTo(1);
         await Assert.That(buf.Stalled).IsTrue();
-        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" });
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" }, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -159,6 +160,6 @@ public class CodexForwardBufferTests {
         await blocked.WaitAsync(TimeSpan.FromSeconds(5)); // returned, no throw
         buf.Complete();
         buf.Emit(Canonical("after-complete")); // no throw
-        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" });
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" }, CollectionOrdering.Matching);
     }
 }

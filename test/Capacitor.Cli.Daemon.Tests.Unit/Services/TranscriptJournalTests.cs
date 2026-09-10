@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -52,7 +53,7 @@ public class TranscriptJournalTests {
         await second.CompleteAsync();
 
         var after = Lines(second.Path);
-        await Assert.That(after.Take(before.Length)).IsEquivalentTo(before);
+        await Assert.That(after.Take(before.Length)).IsEquivalentTo(before, CollectionOrdering.Matching);
         await Assert.That(after).Count().IsEqualTo(before.Length + 1);
     }
 
@@ -68,7 +69,7 @@ public class TranscriptJournalTests {
         await Assert.That(await journal.CompleteAsync()).IsTrue();
 
         var texts = Lines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return e.Text; });
-        await Assert.That(texts).IsEquivalentTo(new string?[] { "a", "b" });
+        await Assert.That(texts).IsEquivalentTo(new string?[] { "a", "b" }, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -158,7 +159,8 @@ public class TranscriptJournalTests {
         var texts = Lines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); }).ToList();
         await Assert.That(texts).IsEquivalentTo(new (string, string?)[] {
             (AcpEventKind.AssistantText, "a"), (AcpEventKind.AssistantText, "b"),
-            (AcpEventKind.SystemNote, "2 envelopes were not recorded to this journal"), (AcpEventKind.AssistantText, "c") });
+            (AcpEventKind.SystemNote, "2 envelopes were not recorded to this journal"), (AcpEventKind.AssistantText, "c") },
+            CollectionOrdering.Matching);
     }
 
     [Test]
@@ -279,7 +281,7 @@ public class TranscriptJournalTests {
         await third.CompleteAsync();
 
         var texts = Lines(first.Path).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return e.Kind == AcpEventKind.SessionStarted ? "header" : e.Text; });
-        await Assert.That(texts).IsEquivalentTo(new string?[] { "header", "late", "header" });
+        await Assert.That(texts).IsEquivalentTo(new string?[] { "header", "late", "header" }, CollectionOrdering.Matching);
     }
 
     [Test]

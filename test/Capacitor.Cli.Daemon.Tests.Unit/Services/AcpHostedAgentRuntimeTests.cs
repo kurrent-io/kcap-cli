@@ -3,6 +3,7 @@ using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Acp;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -859,7 +860,7 @@ public class AcpHostedAgentRuntimeTests {
         await journal.CompleteAsync();
         var fromJournal = (await JournalEnvelopes(journal.Path)).Skip(1).ToList(); // header first
 
-        await Assert.That(fromJournal.Select(e => (e.Kind, e.Text))).IsEquivalentTo(fromChannel.Select(e => (e.Kind, e.Text)));
+        await Assert.That(fromJournal.Select(e => (e.Kind, e.Text))).IsEquivalentTo(fromChannel.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
         await Assert.That(fromJournal[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
     }
 

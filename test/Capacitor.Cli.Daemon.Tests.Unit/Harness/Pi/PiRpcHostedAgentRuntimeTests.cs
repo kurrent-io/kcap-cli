@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 using static Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi.PiRpcRuntimeFakes;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
@@ -553,7 +554,7 @@ public class PiRpcHostedAgentRuntimeTests {
         await journal.CompleteAsync();
 
         var journaled = File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
-        await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)));
+        await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
     }
 
     /// <summary>

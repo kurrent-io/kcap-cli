@@ -248,10 +248,10 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     readonly TranscriptJournal? _journal;
 
     /// <summary>Guards <see cref="Write"/>'s TryWrite + journal Record as one unit — the same shape
-    /// <c>PiRpcHostedAgentRuntime.Write</c> uses, for the same reason: this channel has two writers
-    /// (the turn worker's synthesized <c>user_message</c> and its own forwarded output), so without
-    /// this a Record could interleave in an order that disagrees with the channel's own FIFO write
-    /// order.</summary>
+    /// <c>PiRpcHostedAgentRuntime.Write</c> uses: the turn worker and a caller thread whose
+    /// <see cref="EnqueueTurn"/> hit a full queue (via <see cref="EmitDaemonNotice"/>) can call
+    /// <see cref="Write"/> concurrently, so without this a Record could interleave out of the
+    /// channel's own FIFO write order.</summary>
     readonly Lock _writeLock = new();
 
     /// <summary>
@@ -953,9 +953,9 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // path below: the content was genuinely produced.
         if (agentActivity) ActivityClock?.Advance();
 
-        // _writeLock covers TryWrite + Record as one unit: this channel has two writers (the
-        // synthesized user_message and the agent's own forwarded output), so without it a Record could
-        // interleave in an order that disagrees with the channel's own FIFO write order.
+        // _writeLock covers TryWrite + Record as one unit: the turn worker and a caller thread whose
+        // EnqueueTurn hit a full queue (EmitDaemonNotice) can call this concurrently, so without it a
+        // Record could interleave out of the channel's own FIFO write order.
         lock (_writeLock) {
             if (_transcript.Writer.TryWrite(env)) { _journal?.Record(env); return true; }
         }
