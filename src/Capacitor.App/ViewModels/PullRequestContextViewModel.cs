@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
@@ -27,6 +28,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly Dictionary<PullRequestSubjectDto, Position> _positions = [];
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
+    // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedAgentId.
+    readonly BehaviorSubject<bool> _hasPullRequest = new(false);
     readonly ITimer _timer;
     CancellationTokenSource _cancel = new();
     long _generation;
@@ -73,6 +76,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
     public bool IsReading => _refreshing || _overviewPending || _pageRequests.Count > 0;
     public bool HasChoice => _selected is not null;
+    public bool HasPullRequest => _choices.Count > 0;
+    public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
     public bool IsLegacy => _legacy;
     public string Section => _section;
     public double ScrollOffset { get; set; }
@@ -286,5 +291,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         try { await Task.WhenAll(_tasks.ToArray()); } catch (OperationCanceledException) { }
         _cancel.Dispose(); foreach (var retired in _retired) retired.Dispose();
         _tasks.Clear(); _retired.Clear(); _positions.Clear(); _choices.Clear(); ClearProtected();
+        _hasPullRequest.Dispose();
     }
 }

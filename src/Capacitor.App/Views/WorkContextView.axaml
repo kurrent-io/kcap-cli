@@ -248,7 +248,7 @@
                 </Border>
 
                 <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}" IsVisible="{Binding ShowsLegacyLinks}" />
-                <views:PullRequestCard DataContext="{Binding PullRequests}"
+                <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}"
                     IsVisible="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).HasPullRequestContext}" />
                 <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}" IsVisible="{Binding HasIssue}" />
 
