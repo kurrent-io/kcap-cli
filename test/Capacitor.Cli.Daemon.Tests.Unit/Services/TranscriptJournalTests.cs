@@ -115,4 +115,184 @@ public class TranscriptJournalTests {
         hang.Set();
         await journal.CompleteAsync();
     }
+
+    /// A sink that blocks every append until released, then writes for real.
+    sealed class GatedSink : IDisposable {
+        public readonly SemaphoreSlim Release = new(0);
+        public int Appends;
+
+        public void Append(string path, byte[] bytes) {
+            Release.Wait();
+            Interlocked.Increment(ref Appends);
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            fs.Seek(0, SeekOrigin.End);
+            fs.Write(bytes);
+            fs.Flush(true);
+        }
+
+        public void Dispose() => Release.Dispose();
+    }
+
+    [Test]
+    public async Task Gap_note_lands_between_the_last_kept_and_the_first_after_the_loss() {
+        using var tmp = new TempDir();
+        var sink = new GatedSink();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 2);
+        journal.Open(null, null);
+        journal.Record(Text("a")); journal.Record(Text("b")); // fill the queue (writer is blocked)
+        journal.Record(Text("lost-1")); journal.Record(Text("lost-2"));
+        await Assert.That(journal.PendingGap).IsEqualTo(2);
+        sink.Release.Release(); // the writer takes "a": one slot frees
+        await Task.Delay(100);
+        journal.Record(Text("c")); // exactly one slot free: this item carries the gap
+        await Assert.That(journal.PendingGap).IsEqualTo(0);
+        sink.Release.Release(10);
+        await Assert.That(await journal.CompleteAsync()).IsTrue();
+
+        var texts = Lines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); }).ToList();
+        await Assert.That(texts).IsEquivalentTo(new (string, string?)[] {
+            (AcpEventKind.AssistantText, "a"), (AcpEventKind.AssistantText, "b"),
+            (AcpEventKind.SystemNote, "2 envelopes were not recorded to this journal"), (AcpEventKind.AssistantText, "c") });
+    }
+
+    [Test]
+    public async Task Gap_pending_at_completion_is_written_last() {
+        using var tmp = new TempDir();
+        var sink = new GatedSink();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 1);
+        journal.Open(null, null);
+        journal.Record(Text("a")); journal.Record(Text("lost"));
+        sink.Release.Release(10);
+        await Assert.That(await journal.CompleteAsync()).IsTrue();
+        var last = Lines(journal.Path).Last();
+        EnvelopeJournalFormat.TryRead(last, out var e);
+        await Assert.That(e.Text).IsEqualTo("1 envelopes were not recorded to this journal");
+    }
+
+    [Test]
+    public async Task Complete_against_a_hung_sink_returns_within_the_grace_and_reports_not_drained() {
+        using var tmp = new TempDir();
+        var sink = new GatedSink();
+        var log = new CapturingLogger();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), log, Time, sink.Append, capacity: 2, completeGrace: TimeSpan.FromMilliseconds(200));
+        journal.Open(null, null);
+        journal.Record(Text("a")); journal.Record(Text("b")); journal.Record(Text("lost"));
+        await Task.Delay(50);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var drained = await journal.CompleteAsync();
+
+        await Assert.That(drained).IsFalse();
+        await Assert.That(journal.Drained).IsFalse();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+        await Assert.That(log.Warnings.Single()).Contains("assistant_text").And.Contains("1 queued").And.Contains("1 unrecorded");
+        journal.Record(Text("after")); // latched: silently ignored
+        sink.Release.Release(10);
+    }
+
+    [Test]
+    public async Task Cancellation_never_splits_a_gap_bearing_item() {
+        using var tmp = new TempDir();
+        var sink = new GatedSink();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 1, completeGrace: TimeSpan.FromMilliseconds(100));
+        journal.Open(null, null);
+        journal.Record(Text("a")); journal.Record(Text("lost"));
+        await Task.Delay(50);
+        journal.Record(Text("c")); // still full: counted
+        var complete = journal.CompleteAsync(); // expires while the sink still blocks on "a"
+        await Assert.That(await complete).IsFalse();
+        sink.Release.Release(10);
+        await Task.Delay(200);
+
+        // The abandoned writer finished "a" (one item, whole) and then observed cancellation: no torn note.
+        var lines = Lines(journal.Path);
+        foreach (var line in lines) await Assert.That(EnvelopeJournalFormat.TryRead(line, out _)).IsTrue();
+        await Assert.That(sink.Appends).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task First_append_failure_latches_after_one_warning_and_counts_the_queue() {
+        using var tmp = new TempDir();
+        var log = new CapturingLogger();
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), log, Time, append: (_, _) => throw new IOException("disk gone"));
+        journal.Open(null, null);
+        journal.Record(Text("a")); journal.Record(Text("b"));
+        await Assert.That(await journal.CompleteAsync()).IsTrue(); // the writer exited (by faulting), so it drained
+        await Assert.That(log.Warnings).Count().IsEqualTo(1);
+        await Assert.That(log.Warnings[0]).Contains("write failed");
+        await Assert.That(Lines(journal.Path)).Count().IsEqualTo(1); // header only
+    }
+
+    [Test]
+    public async Task Torn_gap_item_renders_the_note_and_drops_the_torn_envelope() {
+        using var tmp = new TempDir();
+        var path = tmp.PathTo("j.jsonl");
+        // The crash model: a buffer cut after its note line.
+        var journal = new TranscriptJournal(path, NullLogger.Instance, Time, append: (p, bytes) => {
+            var text = System.Text.Encoding.UTF8.GetString(bytes);
+            var cut = text.IndexOf('\n', StringComparison.Ordinal) + 1 + 5;
+            File.AppendAllText(p, text[..Math.Min(cut, text.Length)]);
+        }, capacity: 1);
+        journal.Open(null, null);
+        journal.Record(Text("a")); journal.Record(Text("lost")); // "a" carries no gap
+        await Task.Delay(50);
+        journal.Record(Text("c")); // carries gap 1: note + torn "c"
+        await journal.CompleteAsync();
+
+        var tail = new JsonlTail(path).ReadAppended();
+        await Assert.That(tail.Lines.Count(l => l.Contains("not recorded", StringComparison.Ordinal))).IsEqualTo(1);
+        await Assert.That(tail.Lines.Any(l => l.Contains("\"c\"", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    public async Task Same_id_open_waits_out_an_abandoned_writer_and_appends_after_its_line() {
+        if (OperatingSystem.IsWindows()) return;
+        using var tmp = new TempDir();
+        var locks = new JournalPathLocks();
+        var sink = new GatedSink();
+        var first = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, locks, capacity: 1, completeGrace: TimeSpan.FromMilliseconds(100), lockBound: TimeSpan.FromMilliseconds(100));
+        first.Open(null, null);
+        first.Record(Text("late"));
+        await Task.Delay(50);
+        await Assert.That(await first.CompleteAsync()).IsFalse(); // writer abandoned inside the (gated) append, holding the path lock
+
+        var second = new TranscriptJournal(first.Path, NullLogger.Instance, Time, locks: locks, lockBound: TimeSpan.FromMilliseconds(100));
+        await Assert.That(second.Open(null, null)).IsFalse(); // the lock is held by the abandoned call
+        await Assert.That(second.IsOpen).IsFalse();
+
+        sink.Release.Release(10);
+        await Task.Delay(200);
+        var third = new TranscriptJournal(first.Path, NullLogger.Instance, Time, locks: locks, lockBound: TimeSpan.FromMilliseconds(100));
+        await Assert.That(third.Open(null, null)).IsTrue();
+        await third.CompleteAsync();
+
+        var texts = Lines(first.Path).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return e.Kind == AcpEventKind.SessionStarted ? "header" : e.Text; });
+        await Assert.That(texts).IsEquivalentTo(new string?[] { "header", "late", "header" });
+    }
+
+    [Test]
+    public async Task Same_agent_id_under_two_state_dirs_takes_two_locks() {
+        using var a = new TempDir(); using var b = new TempDir();
+        var locks = new JournalPathLocks();
+        var sink = new GatedSink();
+        var hung = new TranscriptJournal(TranscriptJournal.ForAgent(a.Path, "agent-1", NullLogger.Instance).Path, NullLogger.Instance, Time, sink.Append, locks, capacity: 1, completeGrace: TimeSpan.FromMilliseconds(100));
+        hung.Open(null, null); hung.Record(Text("x"));
+        await Task.Delay(50);
+        await hung.CompleteAsync();
+
+        var other = new TranscriptJournal(TranscriptJournal.ForAgent(b.Path, "agent-1", NullLogger.Instance).Path, NullLogger.Instance, Time, locks: locks, lockBound: TimeSpan.FromMilliseconds(100));
+        await Assert.That(other.Open(null, null)).IsTrue();
+        await other.CompleteAsync();
+        sink.Release.Release(10);
+    }
+
+    [Test]
+    public async Task Abrupt_disposal_leaves_exactly_the_lines_the_writer_reached() {
+        using var tmp = new TempDir();
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        journal.Open(null, null);
+        for (var i = 0; i < 50; i++) journal.Record(Text(i.ToString(CultureInfo.InvariantCulture)));
+        await Task.Delay(300); // no CompleteAsync: the process "dies"
+        foreach (var line in Lines(journal.Path)) await Assert.That(EnvelopeJournalFormat.TryRead(line, out _)).IsTrue();
+    }
 }

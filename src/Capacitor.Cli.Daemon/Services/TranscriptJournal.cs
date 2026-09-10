@@ -24,11 +24,11 @@ internal sealed class TranscriptJournal : IDisposable {
     readonly Channel<JournalItem>    _queue;
     readonly CancellationTokenSource _writerCts = new();
 
-    Task?           _writer;
-    int             _pendingGap;
-    volatile bool   _latched;
+    Task?            _writer;
+    int              _pendingGap;
+    int              _completed;
+    volatile bool    _latched;
     volatile string? _inFlightKind;
-    int             _completed;
 
     public TranscriptJournal(
             string                   path,
@@ -126,6 +126,9 @@ internal sealed class TranscriptJournal : IDisposable {
     async Task RunWriterAsync(CancellationToken ct) {
         try {
             await foreach (var item in _queue.Reader.ReadAllAsync(ct).ConfigureAwait(false)) {
+                // ReadAllAsync drains what is already buffered without consulting the token again,
+                // so an abandoned writer would keep appending past the grace it was given.
+                ct.ThrowIfCancellationRequested();
                 _inFlightKind = item.Envelope.Kind;
                 await WriteItemAsync(item).ConfigureAwait(false);
                 _inFlightKind = null;
