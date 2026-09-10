@@ -1,0 +1,24 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             x:Class="Capacitor.App.Views.PullRequestStatusLabel"
+             x:DataType="vm:PullRequestStatus">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.statusText">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="TextBlock.statusText.success"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
+        <Style Selector="TextBlock.statusText.warning"><Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" /></Style>
+        <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
+        <Style Selector="TextBlock.statusText.purple"><Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" /></Style>
+    </UserControl.Styles>
+    <Grid ColumnDefinitions="16,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}">
+        <Path Width="14" Height="14" Stretch="Uniform" Data="{Binding IconData}"
+              Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
+              VerticalAlignment="Center" />
+        <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
+                   Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
+                   Classes.danger="{Binding IsDanger}" Classes.purple="{Binding IsPurple}" VerticalAlignment="Center" />
+    </Grid>
+</UserControl>

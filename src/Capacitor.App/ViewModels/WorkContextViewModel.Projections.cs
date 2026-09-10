@@ -26,9 +26,24 @@ public sealed partial class WorkContextViewModel {
     public IAvaloniaReadOnlyList<WorkContextPersonViewModel> Contributors => _contributors;
 
     string? _key;
-    public string? Key { get => _key; private set => this.RaiseAndSetIfChanged(ref _key, value); }
+    public string? Key {
+        get => _key;
+        private set { this.RaiseAndSetIfChanged(ref _key, value); NotifyIdentity(); }
+    }
     string _title = "";
-    public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
+    public string Title {
+        get => _title;
+        private set { this.RaiseAndSetIfChanged(ref _title, value); NotifyIdentity(); }
+    }
+    public string DisplayTitle => string.Equals(Title, Key, StringComparison.OrdinalIgnoreCase) ? "" : Title;
+    public bool HasInlineIssue => Issue is not null && string.Equals(Issue.Key, Key, StringComparison.OrdinalIgnoreCase);
+    public bool HasSeparateIssue => HasIssue && !HasInlineIssue;
+
+    void NotifyIdentity() {
+        this.RaisePropertyChanged(nameof(DisplayTitle));
+        this.RaisePropertyChanged(nameof(HasInlineIssue));
+        this.RaisePropertyChanged(nameof(HasSeparateIssue));
+    }
     string? _overview;
     public string? Overview { get => _overview; private set => this.RaiseAndSetIfChanged(ref _overview, value); }
     string? _stateLabel;
@@ -49,6 +64,7 @@ public sealed partial class WorkContextViewModel {
             if (ReferenceEquals(_issue, value)) return;
             this.RaiseAndSetIfChanged(ref _issue, value);
             this.RaisePropertyChanged(nameof(HasIssue));
+            NotifyIdentity();
         }
     }
 

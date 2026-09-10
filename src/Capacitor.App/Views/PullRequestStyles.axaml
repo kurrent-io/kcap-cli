@@ -1,0 +1,113 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <ControlTheme x:Key="PullRequestTabTheme" TargetType="TabStripItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="3,10" />
+            <Setter Property="Margin" Value="0,0,14,0" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                        <Border x:Name="FocusBorder" BorderThickness="1" BorderBrush="Transparent" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center" />
+                        </Border>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:selected">
+                <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+            </Style>
+            <Style Selector="^:pointerover"><Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" /></Style>
+            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" /></Style>
+            <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
+        </ControlTheme>
+        <ControlTheme x:Key="PullRequestReviewTabTheme" TargetType="TabStripItem" BasedOn="{StaticResource PullRequestTabTheme}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="3,6" />
+        </ControlTheme>
+    </Styles.Resources>
+    <Style Selector="Button.prButton">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="5" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Padding" Value="8,5" />
+    </Style>
+    <Style Selector="Button.prButton:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.prButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.prButton.prPrimary">
+        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+        <Setter Property="Padding" Value="11,6" />
+    </Style>
+    <Style Selector="Button.prButton.prPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.prButton.prPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.prStatusRow">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Padding" Value="2,6" />
+    </Style>
+    <Style Selector="Button.prStatusButton">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+        <Setter Property="Margin" Value="0,0,8,6" />
+    </Style>
+    <Style Selector="Button.prStatusButton.danger"><Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" /></Style>
+    <Style Selector="Button.prStatusButton.warning"><Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" /></Style>
+    <Style Selector="Button.prStatusButton.success"><Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" /></Style>
+    <Style Selector="TextBlock.prMuted">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="TextBlock.prNote">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.prSectionTitle">
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.prRow">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+        <Setter Property="Padding" Value="0,11" />
+    </Style>
+    <Style Selector="Border.prDiscussion">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+        <Setter Property="Padding" Value="0,14" />
+    </Style>
+    <Style Selector="Border.prDiscussion.thread">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="12" />
+        <Setter Property="Margin" Value="0,0,0,12" />
+    </Style>
+    <Style Selector="Path.prExternal">
+        <Setter Property="Width" Value="13" /><Setter Property="Height" Value="13" /><Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
+        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Data" Value="M9,2 H14 V7 M14,2 L7,9 M6,3 H3 Q2,3 2,4 V13 Q2,14 3,14 H12 Q13,14 13,13 V10" />
+    </Style>
+    <Style Selector="Path.prChevron">
+        <Setter Property="Width" Value="10" /><Setter Property="Height" Value="10" />
+        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
+        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
+        <Setter Property="VerticalAlignment" Value="Center" /><Setter Property="Data" Value="M3,1 L7,5 L3,9" />
+    </Style>
+</Styles>

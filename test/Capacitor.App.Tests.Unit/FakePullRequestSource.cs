@@ -12,6 +12,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public int TotalPages = 3;
     public string? Failure;
     public string OverviewTitle = "Private PR";
+    public Func<string, object?>? PageItem;
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public readonly List<CancellationToken> OverviewTokens = [];
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(PullRequestCapabilityKind.Supported, 1));
@@ -36,14 +37,14 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         Pages++;
         var page = cursor is null ? 0 : int.Parse(cursor[^8..], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
         var id = "item-" + page.ToString(CultureInfo.InvariantCulture);
-        object item = section switch {
+        object item = PageItem?.Invoke(section) ?? (section switch {
             "checks" => new PullRequestCheckDto { Id = id, Availability = "available", Name = "test", Outcome = "failure", HeadSha = new string('a', 40) },
             "reviewers" => new PullRequestReviewerDto { Id = id, Availability = "available" },
             "reviews" => new PullRequestReviewDto { Id = id, Availability = "available", Body = "Private review", State = "commented" },
             "threads" => new PullRequestThreadDto { Id = id, Availability = "available", Path = "source.cs", DiffHunk = "+private code",
                 RootComment = new() { Id = "comment", Availability = "available", Body = "Private thread" } },
             _ => new PullRequestCommentDto { Id = id, Availability = "available", Body = "Private comment" }
-        };
+        });
         var next = page + 1 < TotalPages ? (page + 1).ToString("x64", CultureInfo.InvariantCulture) : null;
         return Task.FromResult(new PullRequestRead<PullRequestPageDto<T>>(PullRequestReadKind.Ready, new() {
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,

@@ -158,24 +158,29 @@
                 </Grid>
 
                 <!-- Work item card. -->
-                <Border Classes="card" Margin="0,12,0,0">
+                <Border Classes="card" Margin="0,12,0,4" Background="Transparent" BorderThickness="0" Padding="0">
                     <StackPanel Spacing="0">
-                        <DockPanel>
-                            <Border x:Name="StatePill" DockPanel.Dock="Right" Classes="pill"
-                                    Classes.shipped="{Binding IsShipped}" Classes.closed="{Binding IsClosed}"
-                                    IsVisible="{Binding StateLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                <TextBlock Text="{Binding StateLabel}" />
-                            </Border>
-                            <TextBlock Text="WORK ITEM" Classes="cardEyebrow" />
-                        </DockPanel>
-
                         <!-- Ready body. -->
                         <StackPanel IsVisible="{Binding IsReady}">
-                            <TextBlock x:Name="WorkContextKey" Text="{Binding Key}" FontSize="12" FontWeight="Bold"
-                                       Foreground="{StaticResource KcapSuccessBrush}" Margin="0,8,0,0"
-                                       IsVisible="{Binding Key, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <TextBlock x:Name="WorkContextTitle" Text="{Binding Title}" FontSize="12.5" LineHeight="18"
-                                       Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock x:Name="WorkContextKey" Text="{Binding Key}" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center"
+                                               IsVisible="{Binding Key, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    <Button x:Name="InlineIssueButton" Classes="prButton" Command="{Binding Issue.OpenCommand}" IsVisible="{Binding HasInlineIssue}"
+                                            AutomationProperties.Name="Open work item issue" ToolTip.Tip="Open issue in browser" Padding="4">
+                                        <Path Classes="prExternal" />
+                                    </Button>
+                                </StackPanel>
+                                <Border x:Name="StatePill" Grid.Column="1" Classes="pill" VerticalAlignment="Center"
+                                        Classes.shipped="{Binding IsShipped}" Classes.closed="{Binding IsClosed}"
+                                        IsVisible="{Binding StateLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                    <TextBlock Text="{Binding StateLabel}" />
+                                </Border>
+                            </Grid>
+                            <TextBlock x:Name="WorkContextTitle" Text="{Binding DisplayTitle}" FontSize="12.5" LineHeight="18"
+                                       Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       IsVisible="{Binding DisplayTitle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="OverviewText" Text="{Binding Overview}" FontSize="11" LineHeight="16"
                                        Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0"
                                        IsVisible="{Binding Overview, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -183,35 +188,37 @@
                                        Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
                                        IsVisible="{Binding PartOfTitle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-                            <Button x:Name="PartsToggle" Command="{Binding TogglePartsCommand}" Classes="sectionHeader" Margin="-8,8,-8,0">
-                                <StackPanel Orientation="Horizontal" Spacing="7">
-                                    <!-- Stroked chevron, not a text glyph — the 9px ▸ rendered as a dot. -->
-                                    <Panel Width="12" Height="12" VerticalAlignment="Center">
-                                        <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PartsExpanded}" />
-                                        <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PartsExpanded}" />
-                                    </Panel>
-                                    <TextBlock Text="{Binding PartsHeader}" FontSize="10.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-                            <ItemsControl x:Name="PartsList" ItemsSource="{Binding Parts}" Margin="0,8,0,0" IsVisible="{Binding PartsExpanded}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:WorkContextPartViewModel">
-                                        <StackPanel Orientation="Horizontal" Spacing="9" Margin="0,0,0,7">
-                                            <!-- Settled: filled with a check. This session: a green ring with a dot. Else: an empty ring. -->
-                                            <Panel Width="12" Height="12" VerticalAlignment="Center">
-                                                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5" IsVisible="{Binding !IsSettled}" />
-                                                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="1.5" IsVisible="{Binding IsThisSession}" />
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsThisSession}" />
-                                                <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsSettled}" />
-                                                <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
-                                                      Data="M3,6 L5.2,8.2 L9,4" IsVisible="{Binding IsSettled}" />
-                                            </Panel>
-                                            <TextBlock Text="{Binding Title}" FontSize="11.5" TextWrapping="Wrap" VerticalAlignment="Center"
-                                                       Foreground="{StaticResource KcapTextBrush}" Classes.settled="{Binding IsSettled}" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                            <StackPanel IsVisible="{Binding HasParts}">
+                                <Button x:Name="PartsToggle" Command="{Binding TogglePartsCommand}" Classes="sectionHeader" Margin="-8,8,-8,0">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <!-- Stroked chevron, not a text glyph — the 9px ▸ rendered as a dot. -->
+                                        <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                            <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PartsExpanded}" />
+                                            <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PartsExpanded}" />
+                                        </Panel>
+                                        <TextBlock Text="{Binding PartsHeader}" FontSize="10.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <ItemsControl x:Name="PartsList" ItemsSource="{Binding Parts}" Margin="0,8,0,0" IsVisible="{Binding PartsExpanded}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WorkContextPartViewModel">
+                                            <StackPanel Orientation="Horizontal" Spacing="9" Margin="0,0,0,7">
+                                                <!-- Settled: filled with a check. This session: a green ring with a dot. Else: an empty ring. -->
+                                                <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5" IsVisible="{Binding !IsSettled}" />
+                                                    <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="1.5" IsVisible="{Binding IsThisSession}" />
+                                                    <Ellipse Width="5" Height="5" Fill="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsThisSession}" />
+                                                    <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsSettled}" />
+                                                    <Path Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
+                                                          Data="M3,6 L5.2,8.2 L9,4" IsVisible="{Binding IsSettled}" />
+                                                </Panel>
+                                                <TextBlock Text="{Binding Title}" FontSize="11.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource KcapTextBrush}" Classes.settled="{Binding IsSettled}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
 
                             <!-- Blocked by. -->
                             <Border x:Name="BlockedByBlock" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="7" Padding="10,8" Margin="0,11,0,0"
@@ -250,7 +257,7 @@
                 <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}" IsVisible="{Binding ShowsLegacyLinks}" />
                 <views:PullRequestCard DataContext="{Binding PullRequests}"
                     IsVisible="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).HasPullRequestContext}" />
-                <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}" IsVisible="{Binding HasIssue}" />
+                <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}" IsVisible="{Binding HasSeparateIssue}" />
 
                 <!-- Who's on it: the item's contributors, or this session's requester until an item has any. -->
                 <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader" Margin="-8,16,-8,0">

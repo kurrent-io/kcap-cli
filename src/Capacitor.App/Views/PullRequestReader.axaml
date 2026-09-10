@@ -5,76 +5,185 @@
              x:Class="Capacitor.App.Views.PullRequestReader"
              x:DataType="vm:PullRequestContextViewModel"
              Background="{StaticResource KcapCanvasBrush}">
-    <Grid RowDefinitions="Auto,Auto,*">
-        <StackPanel Margin="22,18,22,12" Spacing="8">
-            <Grid ColumnDefinitions="*,Auto,Auto">
-                <TextBlock Text="{Binding Title}" FontSize="19" FontWeight="SemiBold" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapTextBrush}" Margin="0,0,16,0" />
-                <Button Grid.Column="1" Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,8,0" VerticalAlignment="Top" />
-                <Button Grid.Column="2" Content="Open on GitHub" Command="{Binding OpenGitHubCommand}" VerticalAlignment="Top" />
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
+        <StackPanel Margin="24,20,24,0" Spacing="10">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" IsVisible="{Binding HasChoice}">
+                <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}"
+                    IsVisible="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanDisplay}" />
+                <TextBlock Grid.Column="1" Text="{Binding RepositoryLabel}" Classes="prMuted" TextTrimming="CharacterEllipsis"
+                           ToolTip.Tip="{Binding RepositoryLabel}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding NumberLabel}" Classes="prMuted" VerticalAlignment="Center" />
             </Grid>
-            <TextBlock Text="{Binding Branches}" Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
-            <TextBlock Text="{Binding AccessLabel}" Foreground="{StaticResource KcapFaintBrush}" FontSize="11" />
-            <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" Foreground="{StaticResource KcapWarningBrush}"
-                       TextWrapping="Wrap" FontSize="12" />
-            <TextBlock Text="Read here. Reply, resolve, review, or view the full diff on GitHub."
-                       Foreground="{StaticResource KcapMutedBrush}" FontSize="11.5" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding Title}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"
+                       MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock Text="{Binding Branches}" Classes="prMuted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Branches}"
+                       IsVisible="{Binding CanDisplay}" />
+            <DockPanel Margin="0,3,0,0" LastChildFill="True">
+                <Button DockPanel.Dock="Right" Command="{Binding OpenGitHubCommand}" Classes="prButton" IsEnabled="{Binding CanOpenSource}"
+                        AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Top">
+                    <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="{Binding ProviderLabel}" /><Path Classes="prExternal" /></StackPanel>
+                </Button>
+                <WrapPanel IsVisible="{Binding CanDisplay}">
+                    <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
+                            Classes.danger="{Binding ChecksStatus.IsDanger}" Classes.warning="{Binding ChecksStatus.IsWarning}" Classes.success="{Binding ChecksStatus.IsSuccess}"
+                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Open checks">
+                        <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
+                    </Button>
+                    <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
+                            Classes.danger="{Binding ReviewStatus.IsDanger}" Classes.warning="{Binding ReviewStatus.IsWarning}" Classes.success="{Binding ReviewStatus.IsSuccess}"
+                            IsEnabled="{Binding CanReveal}" AutomationProperties.Name="Open reviews">
+                        <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
+                    </Button>
+                </WrapPanel>
+            </DockPanel>
+            <Border IsVisible="{Binding HasNotice}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="6" Padding="10,8">
+                <TextBlock Text="{Binding Notice}" Classes="prNote" Foreground="{StaticResource KcapWarningBrush}" />
+            </Border>
         </StackPanel>
-        <WrapPanel Grid.Row="1" Margin="22,0,22,10" IsEnabled="{Binding CanReveal}">
-            <Button Content="Description" Command="{Binding ShowSectionCommand}" CommandParameter="overview" Margin="0,0,6,6" />
-            <Button Content="Checks" Command="{Binding ShowSectionCommand}" CommandParameter="checks" Margin="0,0,6,6" />
-            <Button Content="Reviewers" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers" Margin="0,0,6,6" />
-            <Button Content="Reviews" Command="{Binding ShowSectionCommand}" CommandParameter="reviews" Margin="0,0,6,6" />
-            <Button Content="Threads" Command="{Binding ShowSectionCommand}" CommandParameter="threads" Margin="0,0,6,6" />
-            <Button Content="Conversation" Command="{Binding ShowSectionCommand}" CommandParameter="conversation" Margin="0,0,6,6" />
-        </WrapPanel>
+        <StackPanel Grid.Row="1" Margin="24,8,24,0">
+            <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1">
+                <TabStrip x:Name="ReaderTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" IsEnabled="{Binding CanReveal}"
+                          ItemContainerTheme="{StaticResource PullRequestTabTheme}" AutomationProperties.Name="Pull request sections">
+                    <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
+                    <TabStripItem Content="Overview" />
+                    <TabStripItem Content="Checks" />
+                    <TabStripItem Content="Reviews" />
+                    <TabStripItem Content="Activity" />
+                </TabStrip>
+            </Border>
+            <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}" IsVisible="{Binding IsReviewSection}"
+                      IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}" Margin="0,8,0,0"
+                      AutomationProperties.Name="Review sections">
+                <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
+                <TabStripItem Content="Reviewers" />
+                <TabStripItem Content="Published reviews" />
+                <TabStripItem Content="Threads" />
+            </TabStrip>
+        </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Margin="22,0,22,24" Spacing="12">
-                <TextBlock Text="{Binding SectionTitle}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}" />
+            <StackPanel Margin="24,18,24,24" Spacing="10">
+                <TextBlock Text="{Binding SectionTitle}" Classes="prSectionTitle" />
                 <StackPanel IsVisible="{Binding IsOverview}" Spacing="10">
-                    <TextBlock Text="{Binding DescriptionNote}" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding DescriptionNote}" Classes="prNote" IsVisible="{Binding DescriptionNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" />
-                    <TextBlock Text="Description preview truncated. Open on GitHub for the full text."
-                               IsVisible="{Binding DescriptionTruncated}" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" />
+                    <TextBlock Text="Description preview truncated. Open the pull request in your browser for the full text."
+                               IsVisible="{Binding DescriptionTruncated}" Classes="prNote" />
                 </StackPanel>
                 <CheckBox Content="Include resolved threads" IsChecked="{Binding IncludeResolved, Mode=TwoWay}"
-                          IsVisible="{Binding IsThreads}" IsEnabled="{Binding CanReveal}" />
-                <Button Content="Back to threads" Command="{Binding ShowSectionCommand}" CommandParameter="threads"
+                          IsVisible="{Binding IsThreads}" IsEnabled="{Binding CanReveal}" FontSize="12" />
+                <Button Content="Back to threads" Command="{Binding ShowSectionCommand}" CommandParameter="threads" Classes="prButton"
                         IsVisible="{Binding IsThreadComments}" IsEnabled="{Binding CanReveal}" HorizontalAlignment="Left" />
-                <TextBlock Text="{Binding SnapshotLabel}" Foreground="{StaticResource KcapFaintBrush}" FontSize="11" />
-                <TextBlock Text="{Binding PageNote}" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" />
-                <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" />
-                <ItemsControl ItemsSource="{Binding Rows}">
+                <TextBlock Text="{Binding PageNote}" Classes="prNote" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" Classes="prButton" />
+                <ItemsControl x:Name="ReviewerRows" ItemsSource="{Binding ReviewerRows}" IsVisible="{Binding IsReviewers}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:PullRequestRow">
-                            <Border Padding="15" Margin="0,0,0,12" CornerRadius="9" BorderThickness="1"
-                                    Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
-                                <StackPanel Spacing="9">
-                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" />
-                                    <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" />
+                            <Border Classes="prRow">
+                                <Grid ColumnDefinitions="30,*,Auto,Auto" ColumnSpacing="10" RowDefinitions="Auto,Auto">
+                                    <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource KcapSurfaceRaisedBrush}" VerticalAlignment="Center">
+                                        <Panel>
+                                            <TextBlock Text="{Binding Initial}" IsVisible="{Binding !IsBot}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
+                                            <Path Width="16" Height="16" Stretch="Uniform" IsVisible="{Binding IsBot}" Stroke="{StaticResource KcapMutedBrush}"
+                                                  StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
+                                                  Data="M3,5 H13 V13 H3 Z M8,5 V2 H6 M5.5,8 V10 M10.5,8 V10 M3,8 H1 M13,8 H15" />
+                                        </Panel>
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" FontSize="13" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                                        <TextBlock Text="Review requested" Classes="prNote" IsVisible="{Binding ReviewRequested}" />
+                                    </StackPanel>
+                                    <views:PullRequestStatusLabel Grid.Column="2" DataContext="{Binding Status}" MaxWidth="150" VerticalAlignment="Center" />
+                                    <Button Grid.Column="3" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
+                                            Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
+                                            CommandParameter="{Binding}" AutomationProperties.Name="Open review in browser" ToolTip.Tip="Open review in browser">
+                                        <Path Classes="prExternal" />
+                                    </Button>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <ItemsControl x:Name="CheckRows" ItemsSource="{Binding CheckRows}" IsVisible="{Binding IsChecks}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PullRequestRow">
+                            <Border Classes="prRow">
+                                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+                                    <StackPanel VerticalAlignment="Center" Spacing="3">
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" FontSize="13" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding Detail}" Classes="prNote" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
+                                    </StackPanel>
+                                    <views:PullRequestStatusLabel Grid.Column="1" DataContext="{Binding Status}" MaxWidth="110" VerticalAlignment="Center" />
+                                    <Button Grid.Column="2" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
+                                            Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
+                                            CommandParameter="{Binding}" AutomationProperties.Name="Open check in browser" ToolTip.Tip="Open check in browser">
+                                        <Path Classes="prExternal" />
+                                    </Button>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <ItemsControl x:Name="DiscussionRows" ItemsSource="{Binding DiscussionRows}" IsVisible="{Binding IsDiscussion}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PullRequestRow">
+                            <Border Classes="prDiscussion" Classes.thread="{Binding IsThread}">
+                                <StackPanel Spacing="8">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Detail}" Classes="prNote" IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Classes="prButton" IsVisible="{Binding HasLink}" VerticalAlignment="Top"
+                                                Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
+                                                CommandParameter="{Binding}" AutomationProperties.Name="Open comment in browser" ToolTip.Tip="Open in browser">
+                                            <Path Classes="prExternal" />
+                                        </Button>
+                                    </Grid>
                                     <Border IsVisible="{Binding HasHunk}" Background="{StaticResource KcapSurfaceRaisedBrush}" Padding="10" CornerRadius="5">
                                         <SelectableTextBlock Text="{Binding Hunk}" FontFamily="Menlo,Monaco,Consolas,monospace"
-                                                             FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
+                                                             FontSize="11.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
                                     </Border>
                                     <views:MarkdownView Text="{Binding Body}" IsVisible="{Binding HasBody}"
                                         OpenLink="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenBodyLinkCommand}" />
-                                    <TextBlock Text="{Binding ItemNote}" FontSize="11.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <Button Content="Open source" IsVisible="{Binding HasLink}"
-                                                Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
-                                                CommandParameter="{Binding}" />
-                                        <Button Content="View replies" IsVisible="{Binding IsThread}"
-                                                IsEnabled="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanReveal}"
-                                                Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).ExpandThreadCommand}"
-                                                CommandParameter="{Binding}" />
-                                    </StackPanel>
+                                    <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
+                                    <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="prButton" HorizontalAlignment="Left"
+                                            IsEnabled="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanReveal}"
+                                            Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).ExpandThreadCommand}"
+                                            CommandParameter="{Binding}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <Button Content="Load more" Command="{Binding LoadMoreCommand}" IsVisible="{Binding HasMore}" HorizontalAlignment="Left" />
+                <Button Content="Load more" Command="{Binding LoadMoreCommand}" IsVisible="{Binding HasMore}" HorizontalAlignment="Left" Classes="prButton" />
             </StackPanel>
         </ScrollViewer>
+        <Border Grid.Row="3" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="16,6">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
+                <Button Classes="prButton" Command="{Binding RefreshCommand}" ToolTip.Tip="Refresh pull request" AutomationProperties.Name="Refresh pull request">
+                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round"
+                          Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                </Button>
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding FreshnessLabel}" Classes="prNote" IsVisible="{Binding !IsReading}" />
+                    <TextBlock Text="Refreshing…" Classes="prNote" IsVisible="{Binding IsReading}" />
+                </Grid>
+                <Button Grid.Column="2" Classes="prButton" AutomationProperties.Name="Pull request access details" ToolTip.Tip="Access and reading details">
+                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
+                          Data="M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M8,7 V12 M8,4 V5" />
+                    <Button.Flyout>
+                        <Flyout>
+                            <StackPanel Spacing="8" MaxWidth="280">
+                                <TextBlock Text="{Binding AccessLabel}" Classes="prNote" />
+                                <TextBlock Text="Read descriptions, reviews and threads here. Reply, resolve, review, or view the full diff in your browser." Classes="prNote" />
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>
