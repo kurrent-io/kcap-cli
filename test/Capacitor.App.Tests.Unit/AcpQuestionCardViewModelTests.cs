@@ -74,4 +74,16 @@ public class AcpQuestionCardViewModelTests {
             await Assert.That(card.IsBusy).IsFalse();
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Edits_that_land_after_disposal_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var permissions = new FakePermissionService();
+            var card = new AcpQuestionCardViewModel(Question(true, Opt("a", "A"), Opt("b", "B")), permissions);
+            card.Dispose();
+            await Assert.That(() => card.Options[0].IsSelected = true).ThrowsNothing();
+            await Assert.That(() => card.FreeText = "late").ThrowsNothing();
+        });
+    }
 }

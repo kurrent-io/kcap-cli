@@ -27,7 +27,11 @@ public sealed class AcpQuestionCardViewModel : PendingCardViewModel {
 
     public string FreeText {
         get => _freeText;
-        set { this.RaiseAndSetIfChanged(ref _freeText, value); Refresh(); }
+        set {
+            if (IsDisposed) return;
+            this.RaiseAndSetIfChanged(ref _freeText, value);
+            Refresh();
+        }
     }
 
     public bool IsAnswered {
@@ -65,6 +69,7 @@ public sealed class AcpQuestionCardViewModel : PendingCardViewModel {
     }
 
     void Refresh() {
+        if (IsDisposed) return;
         _answered.OnNext(IsAnswered);
         this.RaisePropertyChanged(nameof(IsAnswered));
     }
