@@ -190,18 +190,17 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             var reconnect = descriptor.SupportsReconnectResume && !ctx.IsReviewFlow && config.AcpReconnectEnabled
                 ? new AcpReconnectSupport { Spawn = () => _connectionSource(ctx) }
                 : null;
-            // PidCallbacks defaults to AcpPidRecordCallbacks.Unwired — FAIL-CLOSED (code-review r1/r2):
-            // a crash landing in the orchestrator's wiring window fails its attempts (§6.2's
-            // record-before-any-handshake MUST) rather than proceeding with an unrecorded candidate,
-            // and the orchestrator replaces recorder+clearer in ONE atomic reference assignment so no
-            // partially-wired state is ever observable.
+            // PidCallbacks defaults to AcpPidRecordCallbacks.Unwired — fail-closed: a crash during the
+            // orchestrator's wiring window fails its attempts rather than proceeding with an unrecorded
+            // candidate. The orchestrator replaces recorder+clearer in one atomic reference assignment,
+            // so no partially-wired state is ever observable.
 
             // Unopened until now — the orchestrator hands the factory an unopened journal
-            // (RuntimeStartContext's remarks) so the header's cwd/model are this launch's own.
+            // (<see cref="RuntimeStartContext"/>) so the header's cwd/model are this launch's own.
             ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
 
-            // Spec-review Finding 4: real production wiring — every launch now gets the
-            // permission/elicitation bridge, not the default MethodNotFound/decline.
+            // requestInteraction wires the real permission/elicitation bridge — omitting it
+            // silently reverts every launch to the default MethodNotFound/decline.
             runtime = new AcpHostedAgentRuntime(
                 acpConnection,
                 acpProcess,
