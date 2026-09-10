@@ -3769,8 +3769,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // A quit command typed into chat: a runtime with no TUI has nothing that interprets it, so
         // forwarding would hand the text to the model as an ordinary prompt — at best role-played
         // ("Quitting"), never a stop. PTY runtimes keep receiving the text verbatim: their TUI owns
-        // the command's meaning.
-        if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) return InputDeliveryOutcome.QuitRequested;
+        // the command's meaning. The runtime is what journals a delivered prompt, so the one text it
+        // never sees is recorded here: the chat renders the journal alone.
+        if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) {
+            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, DateTimeOffset.UtcNow.ToString("O"), text));
+
+            return InputDeliveryOutcome.QuitRequested;
+        }
 
         // Codex turn diagnostic: whether to run the post-send rollout probe, plus this round's
         // generation and the rollout length sampled just BEFORE delivery. The probe reads a rollout

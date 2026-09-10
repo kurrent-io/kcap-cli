@@ -115,6 +115,28 @@ public class InputDeliveryCoreTests {
         await WaitForExit(rt);
     }
 
+    /// <summary>The quit is the user's own message, so the transcript carries it like any other:
+    /// the chat renders only the journal, and a text the runtime never receives would otherwise
+    /// leave the session ending with no row saying why.</summary>
+    [Test]
+    public async Task Quit_on_a_non_pty_runtime_is_journaled_as_the_users_message() {
+        var server = new CaptureServerConnection();
+        await using var orch = Build(server);
+        var journal = TranscriptJournal.ForAgent(
+            orch.PidRecordRootForTest, "acp-quit-row", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        await Assert.That(journal.Open("/repo", "default")).IsTrue();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "acp-quit-row", new FakeAcpRuntime(), journal: journal);
+
+        var outcome = await orch.DeliverInputAsync(agent, "/quit", null);
+        await journal.CompleteAsync();
+
+        await Assert.That(outcome.Kind).IsEqualTo(InputDeliveryKind.QuitRequested);
+        var userRows = JournalFiles.ReadLines(journal.Path)
+            .Where(l => l.Contains("\"kind\":\"user_message\"", StringComparison.Ordinal)).ToArray();
+        await Assert.That(userRows).Count().IsEqualTo(1);
+        await Assert.That(userRows[0]).Contains("\"text\":\"/quit\"");
+    }
+
     [Test]
     public async Task A_runtime_fault_maps_to_delivery_failed_with_the_runtimes_own_message() {
         var server = new CaptureServerConnection();
