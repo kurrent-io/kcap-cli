@@ -13,9 +13,10 @@ public class AgentActionServiceTests {
     static AgentActionService NewService(
             ScriptedLocalControlOps ops, RecordingNotifier notifier, RecordingOpener opener,
             IObservable<DaemonStatusDto>? snapshots = null, CancellationToken shutdownToken = default,
-            Func<string, Task<bool>>? confirmForceStop = null, string? fallbackServerUrl = null) =>
+            Func<string, Task<bool>>? confirmForceStop = null, string? fallbackServerUrl = null,
+            IServerLane? lane = null) =>
         new(ops, notifier, opener, snapshots ?? new ReplaySubject<DaemonStatusDto>(1), shutdownToken,
-            confirmForceStop ?? NeverConfirm.Confirm, fallbackServerUrl);
+            confirmForceStop ?? NeverConfirm.Confirm, fallbackServerUrl, lane);
 
     static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
@@ -368,6 +369,93 @@ public class AgentActionServiceTests {
         await WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued after confirm");
         await Assert.That(confirmer.Prompted).IsEquivalentTo(["agent-a"], CollectionOrdering.Matching);
         await Assert.That(ops.StopPayloads).IsEquivalentTo([("a", true)], CollectionOrdering.Matching);
+    }
+
+    // ---- remote stop (origin routing) ----
+
+    [Test]
+    public async Task A_remote_stop_goes_to_the_hub_and_never_touches_the_socket() {
+        var lane = new FakeServerLane();
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: lane);
+
+        service.RequestStop("r1", "gemini · repo", "agent", AgentOrigin.Remote);
+
+        await WaitUntilAsync(() => lane.Stops.Contains("r1"), what: "hub stop");
+        await Assert.That(ops.StopCalls).IsEqualTo(0);
+        await Assert.That(notifier.Notified).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_remote_stop_without_a_connected_lane_toasts() {
+        var lane = new FakeServerLane { StopHandler = _ => Task.FromResult(HubCallOutcome.NotConnected) };
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: lane);
+
+        service.RequestStop("r1", "gemini · repo", "agent", AgentOrigin.Remote);
+
+        await WaitUntilAsync(() => notifier.Notified.Count == 1, what: "toast");
+        await Assert.That(notifier.Notified).IsEquivalentTo(["Not connected to the server"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_remote_stop_denied_toasts_with_label() {
+        var lane = new FakeServerLane { StopHandler = _ => Task.FromResult(HubCallOutcome.Denied("nope")) };
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: lane);
+
+        service.RequestStop("r1", "gemini · repo", "agent", AgentOrigin.Remote);
+
+        await WaitUntilAsync(() => notifier.Notified.Count == 1, what: "toast");
+        await Assert.That(notifier.Notified).IsEquivalentTo(
+            ["The server declined to stop gemini · repo"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_remote_stop_failed_toasts_with_reason() {
+        var lane = new FakeServerLane { StopHandler = _ => Task.FromResult(HubCallOutcome.Failed("boom")) };
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: lane);
+
+        service.RequestStop("r1", "gemini · repo", "agent", AgentOrigin.Remote);
+
+        await WaitUntilAsync(() => notifier.Notified.Count == 1, what: "toast");
+        await Assert.That(notifier.Notified).IsEquivalentTo(
+            ["Couldn't stop gemini · repo: boom"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_remote_stop_with_no_lane_toasts_not_signed_in() {
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: null);
+
+        service.RequestStop("r1", "gemini · repo", "agent", AgentOrigin.Remote);
+
+        await WaitUntilAsync(() => notifier.Notified.Count == 1, what: "toast");
+        await Assert.That(notifier.Notified).IsEquivalentTo(["Not signed in to a server"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_second_remote_stop_for_the_same_id_is_ignored_while_one_is_in_flight() {
+        var gate = new TaskCompletionSource<HubCallOutcome>();
+        var lane = new FakeServerLane { StopHandler = _ => gate.Task };
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: lane);
+        var states = new StopStateRecorder();
+        using var sub = service.StopsInFlight.Subscribe(states.Add);
+
+        service.RequestStop("r1", "x", "agent", AgentOrigin.Remote);
+        service.RequestStop("r1", "x", "agent", AgentOrigin.Remote);
+
+        await WaitUntilAsync(() => lane.Stops.Count == 1, what: "one hub call");
+        gate.SetResult(HubCallOutcome.Ok);
+        await WaitUntilAsync(() => states[^1].Count == 0, what: "cleared");
     }
 
     // A second RequestStop for the same id while the confirmation dialog is still open (the

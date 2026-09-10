@@ -8,8 +8,13 @@ namespace Capacitor.App.Tests.Unit;
 public class AgentDirectoryTests {
     const string Server = "http://localhost:9999"; // FakeDaemonClientService.Snap's default ServerUrl
 
-    static AgentInstanceDto Remote(string id, string daemon = "work-mac", string owner = "u1", string status = "Running") =>
-        new() { AgentId = id, Status = status, DaemonName = daemon, OwnerUserId = owner, Vendor = "claude", RepoOwner = "o", RepoName = "r" };
+    static AgentInstanceDto Remote(
+            string id, string daemon = "work-mac", string owner = "u1", string status = "Running",
+            string? sessionId = null) =>
+        new() {
+            AgentId = id, Status = status, DaemonName = daemon, OwnerUserId = owner, Vendor = "claude",
+            RepoOwner = "o", RepoName = "r", SessionId = sessionId,
+        };
 
     static (FakeDaemonClientService Local, FakeRemoteAgents Remote, FakeServerLane Lane, AgentDirectory Dir) Build(
             string? machineId = "m1") {
@@ -22,10 +27,10 @@ public class AgentDirectoryTests {
         return (local, remote, lane, dir);
     }
 
-    static AgentStatusDto LocalAgent(string id) => new(
+    static AgentStatusDto LocalAgent(string id, string? sessionId = null) => new(
         Id: id, Kind: "agent", Vendor: "claude", RepoPath: "/r", Status: "Running",
         FlowRunId: null, FlowRole: null, Requester: null, CreatedAt: DateTime.UtcNow, Model: null,
-        RequesterDisplay: null);
+        RequesterDisplay: null, SessionId: sessionId);
 
     [Test]
     public async Task LocalAndRemoteRowsMerge() {
@@ -199,5 +204,23 @@ public class AgentDirectoryTests {
         await Assert.That(stale).IsTrue();
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
         await Assert.That(stale).IsFalse();
+    }
+
+    /// The twin row (id "z9", same session) is unproven — no matching DaemonInfo/local-connected
+    /// state — so both rows stand; SessionAgents must still resolve the tie to the LOCAL row's id.
+    [Test]
+    public async Task Session_agents_maps_every_row_with_a_session_and_prefers_the_local_row_on_a_tie() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "s1"));
+        remote.Cache.AddOrUpdate(Remote("z9", daemon: "elsewhere", owner: "u2", sessionId: "s1"));
+        remote.Cache.AddOrUpdate(Remote("r2", daemon: "elsewhere", owner: "u2", sessionId: "s2"));
+
+        IReadOnlyDictionary<string, string>? map = null;
+        using var sub = dir.SessionAgents.Subscribe(m => map = m);
+
+        await Assert.That(map!["s1"]).IsEqualTo("a1");
+        await Assert.That(map["s2"]).IsEqualTo("r2");
+        await Assert.That(dir.VendorOfSession("s2")).IsNotNull();
     }
 }

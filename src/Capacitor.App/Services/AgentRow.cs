@@ -8,7 +8,7 @@ public enum AgentOrigin { Local, Remote }
 /// One merged row. Key is SOURCE-scoped ("local:{id}" / "remote:{id}") so the lanes can never
 /// clobber each other; Id is the logical agent id workspaces bind to.
 public sealed record AgentRow(
-        string Key, AgentOrigin Origin, string Id, string Kind, string Vendor, string Status,
+        string Key, AgentOrigin Origin, string Id, string? SessionId, string Kind, string Vendor, string Status,
         DateTime CreatedAt, string? RepoPath, string? Title, string? Model, string? RequesterDisplay,
         string? WorktreePath, string? WorkLocation, string? BorrowedFrom,
         string? MachineBadge, // remote rows: the daemon name; local rows: null
@@ -17,7 +17,7 @@ public sealed record AgentRow(
         bool? AwaitingInput = null) {
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
-        Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, Kind: dto.Kind,
+        Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
         Vendor: dto.Vendor, Status: dto.Status, CreatedAt: dto.CreatedAt, RepoPath: dto.RepoPath,
         Title: dto.Title, Model: dto.Model, RequesterDisplay: dto.RequesterDisplay,
         WorktreePath: dto.WorktreePath, WorkLocation: dto.WorkLocation, BorrowedFrom: dto.BorrowedFrom,
@@ -29,9 +29,9 @@ public sealed record AgentRow(
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";
         var repo = RepoIdentityResolver.ForRemote(dto.RepoOwner, dto.RepoName, dto.RepoPath, daemonKey);
         return new(
-            Key: $"remote:{dto.AgentId}", Origin: AgentOrigin.Remote, Id: dto.AgentId, Kind: "agent",
-            Vendor: dto.Vendor ?? "", Status: dto.Status, CreatedAt: dto.RegisteredAt, RepoPath: dto.RepoPath,
-            Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
+            Key: $"remote:{dto.AgentId}", Origin: AgentOrigin.Remote, Id: dto.AgentId, SessionId: dto.SessionId,
+            Kind: "agent", Vendor: dto.Vendor ?? "", Status: dto.Status, CreatedAt: dto.RegisteredAt,
+            RepoPath: dto.RepoPath, Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}");

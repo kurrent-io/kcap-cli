@@ -12,6 +12,10 @@ public interface IAgentDirectory {
     IObservableCache<AgentRow, string> Rows { get; }
     /// True while the server lane is not Connected — rail rows grey out on it.
     IObservable<bool> RemoteStale { get; }
+    /// Session id -> logical agent id, over the current rows. Replay-1, distinct by content.
+    IObservable<IReadOnlyDictionary<string, string>> SessionAgents { get; }
+    /// The vendor of the row whose SessionId matches, or null.
+    string? VendorOfSession(string sessionId);
 }
 
 /// Merges the local daemon's agents with the server registry's into source-scoped rows.
@@ -73,6 +77,30 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
 
     public IObservableCache<AgentRow, string> Rows => _rows.AsObservableCache();
     public IObservable<bool> RemoteStale { get; }
+
+    public IObservable<IReadOnlyDictionary<string, string>> SessionAgents => _rows.Connect()
+        .QueryWhenChanged(q => (IReadOnlyDictionary<string, string>)SessionMap(q.Items))
+        .StartWith((IReadOnlyDictionary<string, string>)SessionMap(_rows.Items))
+        .DistinctUntilChanged(new DictionaryEquality());
+
+    public string? VendorOfSession(string sessionId) =>
+        _rows.Items.Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
+
+    // Local sorts before Remote in AgentOrigin, so the ordered pass's TryAdd lets a local row win
+    // a session claimed by both an unproven twin pair — proven suppression already keeps a twin's
+    // remote row out of _rows entirely, so this tie only ever arises while the pairing is unproven.
+    static Dictionary<string, string> SessionMap(IEnumerable<AgentRow> rows) {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var row in rows.OrderBy(r => r.Origin))
+            if (row.SessionId is { Length: > 0 } sid) map.TryAdd(sid, row.Id);
+        return map;
+    }
+
+    sealed class DictionaryEquality : IEqualityComparer<IReadOnlyDictionary<string, string>> {
+        public bool Equals(IReadOnlyDictionary<string, string>? x, IReadOnlyDictionary<string, string>? y) =>
+            x is not null && y is not null && x.Count == y.Count && x.All(kv => y.TryGetValue(kv.Key, out var v) && v == kv.Value);
+        public int GetHashCode(IReadOnlyDictionary<string, string> obj) => obj.Count;
+    }
 
     AgentRow ProjectLocal(AgentStatusDto dto) {
         var repo = dto.RepoPath is { Length: > 0 } path
