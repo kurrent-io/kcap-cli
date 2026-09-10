@@ -37,6 +37,7 @@ public sealed partial class PullRequestContextViewModel {
                 _legacy = capability.Kind is PullRequestCapabilityKind.Legacy or PullRequestCapabilityKind.Unsupported;
                 if (links is null) {
                     _retryAt = capability.RetryAt;
+                    if (capability.Kind == PullRequestCapabilityKind.SignedOut) ForgetChoices();
                     ClearProtected();
                     SetNotice(capability.Kind == PullRequestCapabilityKind.SignedOut ? "Sign in to see pull requests."
                         : "Couldn't discover pull request support. Retry when the server is reachable.");
@@ -44,7 +45,7 @@ public sealed partial class PullRequestContextViewModel {
                 }
                 if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
                     if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") {
-                        CancelReads(); _choices.Clear(); _selected = null; ClearProtected();
+                        ForgetChoices(); ClearProtected();
                         _stopped = links.Reason == "retries_stopped";
                     } else EnterGrace();
                     SetNotice(_stopped ? "This session's pull requests are unavailable. Use Retry to check again."
@@ -188,5 +189,6 @@ public sealed partial class PullRequestContextViewModel {
         else ClearProtected();
         SetNotice(Reason(read));
     }
+    void ForgetChoices() { CancelReads(); _choices.Clear(); _selected = null; }
     void FailProtocol() { ClearProtected(); SetNotice("The server returned an inconsistent PR response. Retry after updating the server and app."); }
 }
