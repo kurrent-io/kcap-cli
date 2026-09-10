@@ -28,7 +28,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly Dictionary<PullRequestSubjectDto, Position> _positions = [];
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
-    // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedAgentId.
+    // A subject, not WhenAnyValue: that needs ReactiveUI's global init, which a headless test run does not reliably prime first.
     readonly BehaviorSubject<bool> _hasPullRequest = new(false);
     readonly ITimer _timer;
     CancellationTokenSource _cancel = new();
@@ -76,7 +76,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
     public bool IsReading => _refreshing || _overviewPending || _pageRequests.Count > 0;
     public bool HasChoice => _selected is not null;
-    public bool HasPullRequest => _choices.Count > 0;
+    public bool HasPullRequest => _choices.Any(choice => choice.IsAvailable);
     public IObservable<bool> HasPullRequestChanges => _hasPullRequest;
     public bool IsLegacy => _legacy;
     public string Section => _section;

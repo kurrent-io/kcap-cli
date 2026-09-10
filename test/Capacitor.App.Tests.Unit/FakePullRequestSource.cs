@@ -14,7 +14,8 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public string OverviewTitle = "Private PR";
     public readonly Queue<Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>>> OverviewResponses = new();
     public readonly List<CancellationToken> OverviewTokens = [];
-    public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(PullRequestCapabilityKind.Supported, 1));
+    public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
+    public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(Capability, 1));
     public void ResetSession(string sessionId) { }
     public Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
         Lists++;
