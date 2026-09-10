@@ -1,10 +1,14 @@
 using ReactiveUnit = System.Reactive.Unit;
+using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
 
+/// The call logs are appended from whatever thread the service under test dispatched its hub call
+/// on and read from the test thread, so each is an immutable snapshot swapped atomically — a plain
+/// List drops entries and throws mid-enumeration.
 sealed class FakeServerLane : IServerLane {
     public readonly BehaviorSubject<ServerLaneStatus> StatusSubject = new(new(ServerLaneState.Dormant));
     public readonly Subject<ReactiveUnit> AgentsChangedSubject = new();
@@ -20,8 +24,16 @@ sealed class FakeServerLane : IServerLane {
     public Func<string, Task<HubCallOutcome>> SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> UnsubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
-    public readonly List<string> Stops = [], ChatSubscribes = [], ChatUnsubscribes = [], AccessWatches = [];
-    public readonly List<string> Calls = [];
+    ImmutableList<string> _stops = [], _chatSubscribes = [], _chatUnsubscribes = [], _accessWatches = [], _calls = [];
+
+    public ImmutableList<string> Stops => Volatile.Read(ref _stops);
+    public ImmutableList<string> ChatSubscribes => Volatile.Read(ref _chatSubscribes);
+    public ImmutableList<string> ChatUnsubscribes => Volatile.Read(ref _chatUnsubscribes);
+    public ImmutableList<string> AccessWatches => Volatile.Read(ref _accessWatches);
+    public ImmutableList<string> Calls => Volatile.Read(ref _calls);
+
+    static void Append(ref ImmutableList<string> log, string entry) =>
+        ImmutableInterlocked.Update(ref log, static (l, e) => l.Add(e), entry);
 
     public IObservable<ServerLaneStatus> Status => StatusSubject;
     public IObservable<ReactiveUnit> AgentInstancesChanged => AgentsChangedSubject;
@@ -35,26 +47,26 @@ sealed class FakeServerLane : IServerLane {
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) => DaemonsHandler();
 
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) {
-        Calls.Add($"stop:{agentId}");
-        Stops.Add(agentId);
+        Append(ref _calls, $"stop:{agentId}");
+        Append(ref _stops, agentId);
         return StopHandler(agentId);
     }
 
     public Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) {
-        Calls.Add($"chat:{sessionId}");
-        ChatSubscribes.Add(sessionId);
+        Append(ref _calls, $"chat:{sessionId}");
+        Append(ref _chatSubscribes, sessionId);
         return SubscribeChatHandler(sessionId);
     }
 
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) {
-        Calls.Add($"unchat:{sessionId}");
-        ChatUnsubscribes.Add(sessionId);
+        Append(ref _calls, $"unchat:{sessionId}");
+        Append(ref _chatUnsubscribes, sessionId);
         return UnsubscribeChatHandler(sessionId);
     }
 
     public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) {
-        Calls.Add($"watch:{sessionId}");
-        AccessWatches.Add(sessionId);
+        Append(ref _calls, $"watch:{sessionId}");
+        Append(ref _accessWatches, sessionId);
         return AccessWatchHandler(sessionId);
     }
 }
