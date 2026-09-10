@@ -1,7 +1,9 @@
 using ReactiveUnit = System.Reactive.Unit;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Avalonia.Controls;
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
@@ -680,6 +682,78 @@ public class WorkContextViewModelTests {
             await h.Vm.TeardownAsync();
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task The_sidebar_hides_empty_parts_and_repeated_identity_but_keeps_the_issue_action() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var view = new WorkContextView { DataContext = h.Vm };
+        var window = new Window { Content = view, Width = 320, Height = 800 };
+        var item = Item(title: "WK-2198", enriched: null) with {
+            Links = [Link("issue", "WK-2198", "https://linear.app/example/issue/WK-2198")],
+        };
+        h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), item),
+            ReadyWith(Row("w1", "WK-2198"), item with {
+                EnrichedTitle = "A useful title", Parts = [Part("p1", "First part", 0)],
+                Links = [Link("issue", "#860", "https://github.com/example/repo/issues/860")],
+            }));
+        try {
+            window.Show();
+            await h.PushAsync(Dto());
+            window.UpdateLayout();
+            await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsFalse();
+            var issue = view.FindControl<Button>("InlineIssueButton")!;
+            await Assert.That(issue.IsEffectivelyVisible).IsTrue();
+            issue.Command!.Execute(issue.CommandParameter);
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://linear.app/example/issue/WK-2198" });
+
+            await h.TickAsync();
+            window.UpdateLayout();
+            await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.Text).IsEqualTo("A useful title");
+            await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(issue.IsEffectivelyVisible).IsFalse();
+        } finally {
+            window.Close();
+            await h.Vm.TeardownAsync();
+            h.Presence.Dispose();
+            h.SignIn.Dispose();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(null, "Tracker title", "Tracker title", true)]
+    [Arguments("Tracker title", "Tracker title", "Tracker title", true)]
+    [Arguments("Work item title", "Tracker title", "Work item title", false)]
+    [Arguments(null, "WK-2198", "", true)]
+    public Task A_primary_issue_keeps_its_unique_title(string? enriched, string issueTitle, string displayTitle, bool inline) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var view = new WorkContextView { DataContext = h.Vm };
+        var window = new Window { Content = view, Width = 320, Height = 800 };
+        h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), Item(enriched: enriched) with {
+            Links = [Link("issue", "WK-2198", "https://linear.app/example/issue/WK-2198", issueTitle)],
+        }));
+        try {
+            window.Show();
+            await h.PushAsync(Dto());
+            window.UpdateLayout();
+            var title = view.FindControl<TextBlock>("WorkContextTitle")!;
+            await Assert.That(title.IsEffectivelyVisible).IsEqualTo(displayTitle.Length > 0);
+            await Assert.That(title.Text).IsEqualTo(displayTitle);
+            await Assert.That(view.FindControl<Button>("InlineIssueButton")!.IsEffectivelyVisible).IsEqualTo(inline);
+            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsEqualTo(!inline);
+            await Assert.That(h.Vm.Issue!.Title).IsEqualTo(issueTitle);
+        } finally {
+            window.Close();
+            await h.Vm.TeardownAsync();
+            h.Presence.Dispose();
+            h.SignIn.Dispose();
+        }
+    });
 
     [Test]
     [NotInParallel("AvaloniaSession")]

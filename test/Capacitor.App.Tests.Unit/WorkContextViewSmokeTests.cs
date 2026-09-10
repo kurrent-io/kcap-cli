@@ -30,7 +30,7 @@ public class WorkContextViewSmokeTests {
 
         public Host() {
             Vm = new WorkContextViewModel(Presence, Source, new FakeTimeProvider(), new RecordingOpener());
-            Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 400, Height = 900 };
+            Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
         public async Task ShowAsync(WorkContextRead read) {
@@ -55,7 +55,7 @@ public class WorkContextViewSmokeTests {
 
     /// A key-titled item with no tracker title, its seed issue untitled too, one contributor
     /// holding two sessions: the shape the server serves for a fresh key-only declaration.
-    static WorkContextRead KeyOnlyRead() {
+    static WorkContextRead KeyOnlyRead(string issueKey = "WK-2198") {
         var row = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "WK-2198", Source = "mcp", Confidence = 1, IsPrimary = true };
         var item = new WorkItemDto {
             WorkItemId = "w1",
@@ -63,8 +63,8 @@ public class WorkContextViewSmokeTests {
             Key = new WorkItemKeyDto { ShortKey = "WK-2198", Provider = "linear", Kind = "issue", Value = "WK-2198" },
             State = new WorkItemStateDto { Kind = "in_flight" },
             Links = [new WorkItemLinkDto {
-                Kind = "issue", Provider = "linear", Value = "WK-2198", ShortKey = "WK-2198",
-                Url = "https://linear.app/x/issue/WK-2198", LinkClass = "link", IsSeed = true,
+                Kind = "issue", Provider = "linear", Value = issueKey, ShortKey = issueKey,
+                Url = $"https://linear.app/x/issue/{issueKey}", LinkClass = "link", IsSeed = true,
             }],
             Contributors = [new WorkItemContributorDto { UserId = "u1", DisplayName = "Ada" }],
             SessionCount = 2,
@@ -80,10 +80,12 @@ public class WorkContextViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_key_only_item_and_an_untitled_issue_each_show_their_key_once() {
+    [Arguments("WK-2198", true)]
+    [Arguments("WK-2199", false)]
+    public async Task Key_only_items_and_untitled_issues_keep_each_distinct_key_visible(string issueKey, bool inline) {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
-            await host.ShowAsync(KeyOnlyRead());
+            await host.ShowAsync(KeyOnlyRead(issueKey));
 
             var key = host.Find<TextBlock>("WorkContextKey");
             await Assert.That(key.Text).IsEqualTo("WK-2198");
@@ -91,11 +93,15 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("WorkContextTitle").IsEffectivelyVisible).IsFalse();
 
             var issueCard = host.Find<ContentControl>("IssueCard");
-            var linkKey = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkKey");
-            var linkTitle = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkTitle");
-            await Assert.That(linkKey.Text).IsEqualTo("WK-2198");
-            await Assert.That(linkKey.IsEffectivelyVisible).IsTrue();
-            await Assert.That(linkTitle.IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<Button>("InlineIssueButton").IsEffectivelyVisible).IsEqualTo(inline);
+            await Assert.That(issueCard.IsEffectivelyVisible).IsEqualTo(!inline);
+            if (!inline) {
+                var linkKey = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkKey");
+                var linkTitle = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkTitle");
+                await Assert.That(linkKey.Text).IsEqualTo(issueKey);
+                await Assert.That(linkKey.IsEffectivelyVisible).IsTrue();
+                await Assert.That(linkTitle.IsEffectivelyVisible).IsFalse();
+            }
         });
     }
 
@@ -106,7 +112,7 @@ public class WorkContextViewSmokeTests {
     public async Task Hovering_a_link_card_paints_no_chrome_outside_its_rounded_border() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
-            await host.ShowAsync(KeyOnlyRead());
+            await host.ShowAsync(KeyOnlyRead("WK-2199"));
 
             var button = host.Find<ContentControl>("IssueCard").GetVisualDescendants().OfType<Button>().First();
             var card = button.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("card"));

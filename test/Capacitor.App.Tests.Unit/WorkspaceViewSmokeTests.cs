@@ -126,22 +126,24 @@ public class WorkspaceViewSmokeTests {
         });
     }
 
-    /// The pane takes its fixed 400 and the terminal the rest, so the PTY size the terminal
+    /// The pane takes its fixed 320 and the terminal the rest, so the PTY size the terminal
     /// reports is the real center-pane width.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_is_400_wide_and_the_terminal_takes_the_remainder() {
+    public async Task The_pane_is_320_wide_and_the_terminal_takes_the_remainder() {
         await RunOnUiAsync(async () => {
             var (window, vm, _, _) = await ShowPtyAsync();
 
-            var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-            var terminal = Find<TerminalControl>(window, "TerminalHost")!;
-            await Assert.That(pane.Bounds.Width).IsEqualTo(400);
-            await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 400);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            await vm.TeardownAsync();
+            try {
+                var pane = Find<WorkContextView>(window, "WorkContextHost")!;
+                var terminal = Find<TerminalControl>(window, "TerminalHost")!;
+                await Assert.That(pane.Bounds.Width).IsEqualTo(320);
+                await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 320);
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                await vm.TeardownAsync();
+            }
         });
     }
 
