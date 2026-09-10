@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -8,6 +9,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Models.Transcripts.Harness.Claude;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using ReactiveUI.Reactive;
 using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
@@ -43,10 +45,12 @@ public class ChatTabViewModelTests {
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
 
-        public Harness(TranscriptChatProjection? projection, Action<FakePermissionService>? seed = null) {
+        public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
+                       ChatInput? input = null, string? unavailableNote = null) {
             seed?.Invoke(Permissions);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
-            Chat = new ChatTabViewModel("a1", Daemon, Terminal, projection, Opener, Time, Permissions);
+            Chat = new ChatTabViewModel(
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal), projection, Opener, Time, Permissions, unavailableNote);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -664,6 +668,113 @@ public class ChatTabViewModelTests {
             await Assert.That(counting.LineNumbers).IsEquivalentTo(new[] { 1, 2, 1 });
             await Assert.That(counting.ContextsCreated).IsEqualTo(2);
             await h.TeardownAsync();
+        });
+    }
+
+    /// A scripted ChatInput for composer tests: SendAsync completes when the test says so.
+    sealed class ScriptedInput : ChatInput {
+        public TaskCompletionSource<bool>? Pending;
+        public int Disposals;
+        public List<(string Text, CancellationToken Ct)> Sends { get; } = [];
+        public override SendAvailability Availability => Pending is null ? SendAvailability.Ready : SendAvailability.Sending;
+        public override bool CanAcceptText => Pending is null;
+        public override string Hint => "scripted";
+        public override Task<bool> SendAsync(string text, CancellationToken ct) {
+            Sends.Add((text, ct));
+            Pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.RaisePropertyChanged(nameof(CanAcceptText));
+            return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        public override void Dispose() => Disposals++;
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Journal_file_renders_user_assistant_note_and_tool_rows() {
+        await RunOnUiAsync(async () => {
+            var path = Tmp.CreateFile("j.jsonl", [
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.SessionStarted, Cwd: "/w")),
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")),
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "hello")),
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.SystemNote, Text: "note")),
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.ToolCall, ToolCallId: "c1", ToolName: "Read", ToolInputJson: """{"file_path":"/w/a.cs"}""")),
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1", ToolResult: "ok")),
+            ]);
+            var h = new Harness(TranscriptChat.Journal);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { TranscriptPath = path, TranscriptFormat = TranscriptFormats.Envelopes });
+            await h.TickAsync();
+
+            await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(h.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(
+                new[] { nameof(UserTurnItem), nameof(AssistantTextItem), nameof(SystemNoteItem), nameof(ToolGroupItem) },
+                CollectionOrdering.Matching);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unavailable_note_words_the_older_and_newer_daemon_cases() {
+        await RunOnUiAsync(async () => {
+            var older = new Harness(null, unavailableNote: "Update the daemon to view this session");
+            await Assert.That(older.Chat.Phase).IsEqualTo(ChatTabPhase.Unavailable);
+            await Assert.That(older.Chat.PhaseNote).IsEqualTo("Update the daemon to view this session");
+            await older.TeardownAsync();
+            var plain = new Harness(null);
+            await Assert.That(plain.Chat.PhaseNote).IsEqualTo("No chat view for this harness");
+            await plain.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Send_clears_only_when_committed_and_the_text_is_unchanged() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
+
+            h.Chat.ComposerText = "hello";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(input.Sends.Single().Text).IsEqualTo("hello");
+            h.Chat.ComposerText = "hello edited";
+            input.Pending!.SetResult(true);
+            await send;
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("hello edited");
+
+            h.Chat.ComposerText = "two";
+            send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(false);
+            await send;
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("two");
+
+            h.Chat.ComposerText = "three";
+            send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(true);
+            await send;
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Teardown_cancels_an_in_flight_send_before_disposing_the_input_once() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
+            h.Chat.ComposerText = "hello";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            var ct = input.Sends.Single().Ct;
+            await Assert.That(ct.IsCancellationRequested).IsFalse();
+
+            await h.TeardownAsync();
+
+            await Assert.That(ct.IsCancellationRequested).IsTrue();
+            await Assert.That(input.Disposals).IsEqualTo(1);
+            input.Pending?.TrySetCanceled(ct);
+            try { await send; } catch (OperationCanceledException) { }
         });
     }
 

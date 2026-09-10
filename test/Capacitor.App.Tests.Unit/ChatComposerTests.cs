@@ -19,7 +19,8 @@ public class ChatComposerTests {
         var time = new FakeTimeProvider();
         var opener = new RecordingOpener();
         var terminal = new TerminalTabViewModel("a1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
-        var chat = new ChatTabViewModel("a1", daemon, terminal, TranscriptChat.For("claude"), opener, time, new FakePermissionService());
+        var chat = new ChatTabViewModel(
+            "a1", daemon, new TerminalChatInput(terminal), TranscriptChat.For("claude"), opener, time, new FakePermissionService());
         daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude", "codex"]));
         daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo", model: "claude-opus-5") with { Status = "Running" });
         // The Avalonia scheduler always posts, even when the caller is already on the UI thread,
@@ -74,11 +75,11 @@ public class ChatComposerTests {
             await Assert.That(chat.ShowsComposer).IsFalse();
 
             var attached = TerminalSessionState.Attached(null);
-            await Assert.That(ChatTabViewModel.HintFor(SendAvailability.Transitioning, attached)).IsEqualTo("Updating the terminal connection…");
-            await Assert.That(ChatTabViewModel.HintFor(SendAvailability.ReadOnly, TerminalSessionState.Attached("review"))).IsEqualTo("Read-only: review");
-            await Assert.That(ChatTabViewModel.HintFor(SendAvailability.Connecting, TerminalSessionState.Connecting)).IsEqualTo("Connecting to the terminal…");
-            await Assert.That(ChatTabViewModel.HintFor(SendAvailability.Ended, TerminalSessionState.SessionEnded)).IsEqualTo("This session has ended");
-            await Assert.That(ChatTabViewModel.HintFor(SendAvailability.NoTerminal, TerminalSessionState.NotFound)).IsEqualTo("No terminal to send to");
+            await Assert.That(TerminalChatInput.HintFor(SendAvailability.Transitioning, attached)).IsEqualTo("Updating the terminal connection…");
+            await Assert.That(TerminalChatInput.HintFor(SendAvailability.ReadOnly, TerminalSessionState.Attached("review"))).IsEqualTo("Read-only: review");
+            await Assert.That(TerminalChatInput.HintFor(SendAvailability.Connecting, TerminalSessionState.Connecting)).IsEqualTo("Connecting to the terminal…");
+            await Assert.That(TerminalChatInput.HintFor(SendAvailability.Ended, TerminalSessionState.SessionEnded)).IsEqualTo("This session has ended");
+            await Assert.That(TerminalChatInput.HintFor(SendAvailability.NoTerminal, TerminalSessionState.NotFound)).IsEqualTo("No terminal to send to");
             await chat.TeardownAsync();
         });
     }
@@ -149,7 +150,8 @@ public class ChatComposerTests {
             var time = new FakeTimeProvider();
             var terminal = new TerminalTabViewModel("r1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
             var chat = new ChatTabViewModel(
-                "r1", daemon, terminal, TranscriptChat.For("claude"), new RecordingOpener(), time, new FakePermissionService());
+                "r1", daemon, new TerminalChatInput(terminal), TranscriptChat.For("claude"), new RecordingOpener(), time,
+                new FakePermissionService());
             daemon.Agents.AddOrUpdate(
                 Agent("r1", "claude", hasTerminal: true, kind: "review-flow") with { FlowRunId = "f1", FlowRole = "reviewer" });
             await (terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
