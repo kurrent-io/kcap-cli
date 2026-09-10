@@ -6,6 +6,21 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The desktop app has Window, Help and About menus
+
+Every window carries its own Window and Help menus rather than the app carrying one set. On macOS
+Avalonia makes the key window's menu the menu bar, and with no key window it shows the
+Application's menu with the app menu item appended last, so top-level menus set on the Application
+would lose their order. The cost is that the bar shows only the app menu while no window of ours is
+key, as when the main window is hidden to the tray. Avalonia also never hands its menus to AppKit's
+`windowsMenu` and `helpMenu` slots, and only a registered Window menu gets Move to a display, the
+tiling items and the window list, only a registered Help menu the search field; `AppKitMenus`
+registers the key window's copies each time it activates. The full-screen item keeps one label,
+because renaming an exported item rebuilds the native menu and drops that registration until the
+window next activates. The app menu is our own, set in `Initialize` before Avalonia exports it, so
+its fallback "About Avalonia" never appears. About opens the standard macOS panel, which reads the
+bundle's `Info.plist`, so a build run outside the bundle shows no version.
+
 ## A hosted agent's teardown cannot hang up the daemon
 
 Stopping a Pi agent that outlived its grace period took the whole daemon down: the log showed

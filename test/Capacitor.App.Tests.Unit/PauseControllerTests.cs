@@ -145,8 +145,11 @@ public class PauseControllerTests {
         ops.QueueAck(true, null);
         ops.QueueGet(new ConsentPolicyDto("prompt", 45, [PauseRule, narrower]));
 
+        var beforeToggle = states.Count;
         controller.RequestToggle(true);
-        await Assert.That(states[^1].Busy).IsTrue(); // pushed synchronously before RequestToggle returns
+        // Read at the index RequestToggle pushed under its own lock, not at the end: every op here is
+        // queued in advance, so the toggle can settle before this line and leave a non-busy state last.
+        await Assert.That(states[beforeToggle].Busy).IsTrue();
         await WaitUntilAsync(() => states.Count >= 3, what: "toggle to settle");
 
         await Assert.That(ops.PutCalls).IsEqualTo(1);
