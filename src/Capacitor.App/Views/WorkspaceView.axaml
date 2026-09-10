@@ -90,9 +90,8 @@
                                        CaretBrush="{StaticResource KcapTextBrush}"
                                        Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
 
-            <!-- A session with no PTY has no Terminal tab to activate, so these banners are the
-                 only place its terminal state — the end of the session included — is announced;
-                 they stay up whenever the strip offers no Terminal tab. -->
+            <!-- Terminal-tab-only: a session with no PTY reports its own end through the chat
+                 composer's hint instead, so this layer never overlaps the live ChatHost. -->
             <Panel x:Name="TerminalBanners" IsVisible="{Binding ShowsTerminalBanners}">
 
                 <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Connecting}"

@@ -64,7 +64,7 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     public bool IsChatActive => ActiveTab == WorkspaceTab.Chat;
     public bool IsTerminalActive => ActiveTab == WorkspaceTab.Terminal;
     public bool IsPullRequestActive => ActiveTab == WorkspaceTab.PullRequest;
-    public bool ShowsTerminalBanners => !IsPullRequestActive && (IsTerminalActive || !ShowsTerminalTab);
+    public bool ShowsTerminalBanners => !IsPullRequestActive && IsTerminalActive;
 
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }

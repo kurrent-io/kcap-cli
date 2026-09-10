@@ -150,6 +150,32 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// The banner layer (session-ended card, detach/reattach controls) is Terminal-tab-only: a
+    /// non-PTY session's chat surface owns the pane on every other tab, so it must never render
+    /// underneath ChatHost.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ShowsTerminalBanners_is_true_only_on_the_Terminal_tab_pty_or_not() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: false));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsTerminalBanners).IsFalse();
+            await vm.ShowTerminalCommand.Execute();
+            await Assert.That(vm.ShowsTerminalBanners).IsTrue();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsTerminalBanners).IsTrue();
+            await vm.ShowChatCommand.Execute();
+            await Assert.That(vm.ShowsTerminalBanners).IsFalse();
+
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Chat_is_built_on_the_first_dto_of_any_vendor_with_the_reader_the_format_names() {

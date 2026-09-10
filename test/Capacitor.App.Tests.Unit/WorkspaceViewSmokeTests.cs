@@ -338,11 +338,11 @@ public class WorkspaceViewSmokeTests {
     }
 
     /// A session with no PTY gets the whole chat surface — host, composer and Send, focused as the
-    /// active tab — and keeps the banner layer it has no Terminal tab to reach, so its end is
-    /// still announced.
+    /// active tab — and its own end is announced through the composer hint, not the terminal
+    /// banner layer, which stays off the Chat tab entirely.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_session_without_a_terminal_shows_the_chat_surface_and_still_banners_its_end() {
+    public async Task A_session_without_a_terminal_shows_the_chat_surface_and_ends_in_the_composer() {
         await RunOnUiAsync(async () => {
             var (view, vm, daemon, _) = Build();
             var window = new Window { Content = view, Width = 900, Height = 600 };
@@ -366,7 +366,10 @@ public class WorkspaceViewSmokeTests {
             window.UpdateLayout();
 
             await Assert.That(vm.Terminal.State.Phase).IsEqualTo(TerminalSessionPhase.SessionEnded);
-            await Assert.That(Find<Control>(window, "SessionEndedNote")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<Control>(window, "TerminalBanners")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(Find<Control>(window, "SessionEndedNote")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(chatHost.IsEffectivelyVisible).IsTrue();
+            await Assert.That(vm.Chat!.ComposerHint).IsEqualTo("This session has ended");
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
