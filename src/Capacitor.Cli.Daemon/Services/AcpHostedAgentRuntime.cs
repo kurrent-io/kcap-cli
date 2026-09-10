@@ -1448,9 +1448,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>
     /// Sends a follow-up <c>session/prompt</c> for hosted-UI text input (server <c>SendInput</c>).
     /// Returns as soon as the text is enqueued (see <see cref="EnqueueTurn"/>) — it does NOT await the
-    /// turn's <c>stopReason</c> response: a real turn can run arbitrarily long, and the
-    /// pre-fix behavior (awaiting the full round trip) blocked this call — and therefore the
-    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. If a prior turn is still in
+    /// turn's <c>stopReason</c> response: a real turn can run arbitrarily long, and awaiting the
+    /// full round trip would block this call — and therefore the orchestrator's
+    /// <c>DeliverInputAsync</c> — for the whole turn. If a prior turn is still in
     /// flight, this text is queued FIFO and the worker sends it only once that turn's own
     /// <c>stopReason</c> has been received and its buffer flushed — turn completion is
     /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.

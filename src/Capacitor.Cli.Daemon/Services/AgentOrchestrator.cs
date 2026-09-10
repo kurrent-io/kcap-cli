@@ -3546,7 +3546,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Claude CLI requires the slash-command text and the Enter key to arrive
             // as separate PTY writes (with a small delay between them) — sending them
             // in a single write makes Claude treat the carriage return as part of the
-            // command buffer instead of a submit. HandleSendInput uses the same split
+            // command buffer instead of a submit. DeliverInputAsync uses the same split
             // pattern; matching it here makes the graceful path actually fire.
             // BOTH steps are bounded, and bounding the SEND is the load-bearing half. Asking for the
             // graceful stop is not free work: for a PTY runtime it writes "/exit" to the same master fd

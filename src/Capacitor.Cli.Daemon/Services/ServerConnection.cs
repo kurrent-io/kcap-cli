@@ -260,7 +260,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // mutation, so it invokes inline and returns a completed task.
         _hub.On<StopAgentV2>("StopAgentV2", cmd => SafeInvoke("StopAgentV2", () => OnStopAgentV2?.Invoke(cmd)));
         _hub.On<AckProcessedPrefix>("AckProcessedPrefix", ack => { OnAckProcessedPrefix?.Invoke(ack); return Task.CompletedTask; });
-        // Offloaded via Task.Run, same as the delivery site's report in AgentOrchestrator.HandleSendInput:
+        // Offloaded via Task.Run, same as the delivery site's report in AgentOrchestrator.DeliverInputAsync:
         // OnRequestStatusReport ends in the same gated SendDaemonStatusReportOnceAsync, and awaiting it
         // inline here would park this receive loop behind another emission's whole hub send.
         _hub.On("RequestStatusReport", () => { _ = Task.Run(() => SafeInvoke("RequestStatusReport", () => OnRequestStatusReport?.Invoke())); return Task.CompletedTask; });

@@ -341,7 +341,10 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         launchDeadline.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, config.AntigravityReviewerLaunchTimeoutSeconds)));
 
         try {
-            await runtime.SendUserInputAsync(ctx.Prompt ?? "").ConfigureAwait(false);
+            // A dispose racing this launch can already have closed the turn queue; the launch still
+            // proceeds to the barrier below, which is where that shows up as a real failure.
+            try { await runtime.SendUserInputAsync(ctx.Prompt ?? "").ConfigureAwait(false); }
+            catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "Antigravity: initial prompt not queued — the runtime is already being torn down."); }
 
             // The ordering guarantee. SendUserInputAsync returns as soon as the turn is enqueued, and
             // WaitForTurnIdleAsync is not a substitute (its enqueue→gate hand-off is itself async), so
