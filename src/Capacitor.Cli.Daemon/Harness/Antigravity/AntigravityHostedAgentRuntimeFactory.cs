@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
@@ -205,7 +206,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         if (!IsAvailable())
             return $"antigravity_reviewer_binary_missing: '{config.AntigravityPath}' does not resolve to "
                  + "an executable. Install the Antigravity CLI (the `agy` binary — the IDE alone is not "
-                 + "enough), or set KCAP_ANTIGRAVITY_PATH to its location.";
+                 + $"enough), or set {HarnessId.Antigravity.PathEnvVar} to its location.";
 
         // ONCE: the verdict and its explanation both need the version, and resolving it per consumer
         // spawns the vendor binary twice to produce one refusal.
