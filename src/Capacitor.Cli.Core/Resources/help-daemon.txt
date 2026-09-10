@@ -50,7 +50,7 @@ Options for doctor:
                           --clean, doctor reports state without modifying.
 
 Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at login):
-  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify]
+  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]
                           Register the daemon as an OS service and start it.
                           Pins the profile via KCAP_PROFILE and captures PATH so
                           claude/codex resolve as they do in your shell. --verify
@@ -62,6 +62,11 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           the poll budget. --replace (requires --verify) takes
                           over an existing label/unit — clears a foreign/loaded
                           label, stops a validated live owner, then installs.
+                          --retire ID (requires --replace --verify) also removes
+                          the unit ID in the same transaction — the one a rename
+                          leaves behind. Refused unless that unit is pinned to
+                          the same profile; a live daemon under the NEW name is
+                          contended, never taken over.
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
   uninstall [--name N]    Stop and remove the service unit.

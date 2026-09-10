@@ -35,6 +35,19 @@ public class DaemonCommandsServiceInstallTests {
         await Assert.That(exit).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task Retire_without_replace_and_verify_is_rejected() {
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--verify", "--retire", "old"], true);
+        await Assert.That(exit).IsEqualTo(1);
+    }
+
+    /// The comparison is on sanitized ids, so a differently-cased spelling of the target is still the target.
+    [Test]
+    public async Task Retire_naming_the_target_itself_is_rejected() {
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "Test-ID"], true);
+        await Assert.That(exit).IsEqualTo(1);
+    }
+
     /// <summary>--no-start withholds the start; --verify's job is to prove the started daemon is
     /// ready. The two contradict and are rejected before anything runs (startNow=false models
     /// --no-start).</summary>

@@ -107,6 +107,19 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
+        var retire   = DaemonCommands.ExtractFlagValue(args, "--retire");
+        var retireId = retire is null ? null : DaemonStore.Sanitize(retire);
+
+        if (retireId is not null && !(replace && verify)) {
+            await Console.Error.WriteLineAsync("install --retire requires --replace --verify.");
+            return 1;
+        }
+
+        if (retireId is not null && retireId == id) {
+            await Console.Error.WriteLineAsync("--retire names the service being installed; nothing to retire.");
+            return 1;
+        }
+
         // --verify is a launchd-only slice for now: the engine's readiness/version check needs a
         // manager that actually implements a verify-aware WriteAndBootstrap, and the on-disk
         // recheck needs GenerateFiles to return exactly one file (Windows returns two). Reject
@@ -144,7 +157,7 @@ sealed class DaemonServiceCommands(
             var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
                 n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, t),
                 TimeProvider.System, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable);
-            var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current());
+            var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
             if (exit != VerifyExit.Ok) return exit;
         } else {
             // Plain (non-verify) install serializes on the same per-label lock every other mutating
@@ -631,7 +644,7 @@ sealed class DaemonServiceCommands(
     static int Usage() {
         Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|ensure|status> [--name N]");
         Console.Error.WriteLine();
-        Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify]");
+        Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]");
         Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/version/ownership and rolls back on failure");
         Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");

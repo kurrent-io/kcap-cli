@@ -69,6 +69,12 @@ public static class VerifyExit {
     /// Rolled back the same way a forward-phase failure is (bootout, plist retained).</summary>
     public const int StartGateDrift = 29;
     public const string StartGateDriftToken = "verify_start_gate_drift";
+
+    /// <summary><c>--retire</c> refused to remove the named unit: its plist is unreadable, or it is
+    /// not pinned to the profile being installed. Nothing is touched. The stderr line
+    /// <c>retire_reason=&lt;reason&gt;</c> names which.</summary>
+    public const int RetireRefused = 30;
+    public const string RetireRefusedToken = "verify_retire_refused";
 }
 
 /// <summary>Why <see cref="ServiceVerify.EvaluateStartGate"/> refused a gated start. Reported on
@@ -692,7 +698,7 @@ sealed class ServiceVerify(
     /// <summary>install [--replace] --verify. <paramref name="replace"/> selects the ownership matrix
     /// (spec §3.4): a fresh install refuses to touch an existing label/unit
     /// (<see cref="VerifyExit.Contended"/>), while <c>--replace</c> clears/takes it over first.</summary>
-    public async Task<int> InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion) {
+    public async Task<int> InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId = null) {
         // Entry reset: see StartVerifiedAsync — the in-process evidence properties describe THIS
         // operation only.
         LastGateReason       = null;
@@ -781,6 +787,16 @@ sealed class ServiceVerify(
         }
 
         var preState = DescribeQuery(pre);
+
+        if (retireServiceId is not null) {
+            // A rename's target must be free: a live daemon under the new name is another daemon,
+            // not a stale unit for --replace to take over.
+            if (validatedDaemonPid(serviceId) is not null) {
+                Say(VerifyExit.ContendedToken);
+                return VerifyExit.Contended;
+            }
+            if (await RetireAsync(retireServiceId, spec, forward) is { } retireExit) return retireExit;
+        }
 
         if (!replace) {
             if (pre.Probe == LabelProbe.Loaded || (pre.Probe == LabelProbe.Absent && pre.UnitPresent)) {
@@ -963,6 +979,47 @@ sealed class ServiceVerify(
         var reason = last.Probe == LabelProbe.Unknown ? VerifyExit.RollbackBudget : VerifyExit.RestoreVerification;
         Say(last.Probe == LabelProbe.Unknown ? VerifyExit.RollbackBudgetToken : VerifyExit.RestoreVerificationToken);
         return reason;
+    }
+
+    /// <summary>
+    /// Removes the unit a rename leaves behind, inside this transaction. Absent is a no-op; a unit
+    /// not provably pinned to the profile being installed is refused untouched; a bootout that
+    /// cannot be confirmed stops the transaction before anything is written for the new id.
+    /// </summary>
+    async Task<int?> RetireAsync(string retireId, ServiceSpec spec, DateTimeOffset deadline) {
+        var (status, content) = _discriminatedPlistRead(manager.UnitPath(retireId));
+        if (status == LaunchdUnit.PlistRead.Absent) return null;
+
+        string? retiredProfile = null;
+        var readable = status == LaunchdUnit.PlistRead.Ok;
+        if (readable) {
+            try { LaunchdUnit.EnvFromPlist(content!).TryGetValue(ProfileVar, out retiredProfile); }
+            catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException) { readable = false; }
+        }
+        if (!readable) return RetireRefusal("unit_unreadable");
+
+        spec.Environment.TryGetValue(ProfileVar, out var pinnedProfile);
+        if (string.IsNullOrEmpty(pinnedProfile) || !string.Equals(retiredProfile, pinnedProfile, StringComparison.Ordinal))
+            return RetireRefusal("foreign_profile");
+
+        using var retireTxn = ServiceTxnLock.TryAcquire(store, retireId, LockWait);
+        if (retireTxn is null) {
+            Say(VerifyExit.ContendedToken);
+            return VerifyExit.Contended;
+        }
+
+        if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
+        if (!await WaitForStopConfirmedAsync(retireId, deadline)) {
+            Say(VerifyExit.StopUnconfirmedToken);
+            return VerifyExit.StopUnconfirmed;
+        }
+        return null;
+    }
+
+    static int RetireRefusal(string reason) {
+        Say($"retire_reason={reason}");
+        Say(VerifyExit.RetireRefusedToken);
+        return VerifyExit.RetireRefused;
     }
 
     /// <summary>
