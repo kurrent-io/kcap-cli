@@ -156,6 +156,13 @@ Rollback keeps its existing meaning, uninstalling only the unit this transaction
 wrote; a retired unit is not restored. The lane maps the new coded exits to
 `Failed` with the reason token and the Attention surface.
 
+The retire step runs under the retired label's own transaction lock, taken before
+its plist is read, and on its own budget equal to one forward budget, ahead of
+the install's forward cutoff, so a slow retire fails as unconfirmed rather than
+starving the install into a rollback that leaves no daemon. A rename can
+therefore take one forward budget longer than a plain replace, and the app's
+timeout for the rename request allows for it.
+
 `--verify` stays macOS-only, so rename is too, like every other lane verb. The
 README's daemon service section documents the flag.
 
