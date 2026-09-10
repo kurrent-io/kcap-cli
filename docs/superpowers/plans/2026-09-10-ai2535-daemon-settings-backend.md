@@ -484,10 +484,11 @@ public class DaemonSettingsIpcTests {
         public RestartOutcome Restart() => RestartOutcome.NoOp;
     }
 
-    sealed record Harness(LocalControlServer Server, AgentOrchestrator Orchestrator, SeqCaptureServerConnection Connection, DaemonConfig Config, string SockPath);
+    sealed record Harness(LocalControlServer Server, AgentOrchestrator Orchestrator, DaemonConfig Config, string SockPath);
 
-    static async Task<Harness> StartAsync(CancellationToken ct) {
-        var server = new SeqCaptureServerConnection();
+    /// The server double is the test's own: the counting one for republish assertions, the
+    /// sequenced one for a launch that must settle as a rejection.
+    static async Task<Harness> StartAsync(ServerConnection server, CancellationToken ct) {
         DaemonConfig? captured = null;
         var orchestrator = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(),
@@ -509,7 +510,7 @@ public class DaemonSettingsIpcTests {
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (!File.Exists(sockPath) && DateTime.UtcNow < deadline) await Task.Delay(20, ct);
 
-        return new Harness(control, orchestrator, server, config, sockPath);
+        return new Harness(control, orchestrator, config, sockPath);
     }
 
     static async Task StopAsync(Harness h) {
@@ -518,11 +519,11 @@ public class DaemonSettingsIpcTests {
         h.Server.Dispose();
     }
 
-    static async Task RunAsync(Func<Harness, CancellationToken, Task> body) {
+    static async Task RunAsync(ServerConnection server, Func<Harness, CancellationToken, Task> body) {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         Harness? h = null;
         try {
-            h = await StartAsync(cts.Token);
+            h = await StartAsync(server, cts.Token);
             await Assert.That(File.Exists(h.SockPath)).IsTrue();
             await body(h, cts.Token);
         } finally {
@@ -554,7 +555,8 @@ public class DaemonSettingsIpcTests {
 
     [Test]
     public async Task A_valid_put_applies_live_shows_in_the_snapshot_and_republishes() {
-        await RunAsync(async (h, ct) => {
+        var server = new CaptureServerConnection();
+        await RunAsync(server, async (h, ct) => {
             var ack = await PutAsync(h, """{"max_agents":2}""", ct);
 
             await Assert.That(ack).IsEqualTo(new DaemonSettingsAckDto(true, null, 2));
@@ -562,13 +564,14 @@ public class DaemonSettingsIpcTests {
             await Assert.That((await FirstSnapshotAsync(h, ct)).Daemon.MaxAgents).IsEqualTo(2);
 
             await h.Orchestrator.CapabilityRefreshForTest;
-            await Assert.That(h.Connection.RegisterDaemonCalls).IsEqualTo(1);
+            await Assert.That(server.RegisterDaemonCalls).IsEqualTo(1);
         });
     }
 
     [Test]
     public async Task The_next_launch_over_the_new_cap_is_refused() {
-        await RunAsync(async (h, ct) => {
+        var server = new SeqCaptureServerConnection();
+        await RunAsync(server, async (h, ct) => {
             h.Orchestrator.SeedAgentForTest("s1");
             await PutAsync(h, """{"max_agents":1}""", ct);
 
@@ -576,9 +579,9 @@ public class DaemonSettingsIpcTests {
                 AgentId: "cap", Prompt: "hi", Model: "opus", Effort: null,
                 RepoPath: "/tmp/does-not-matter", Tools: null, AttachmentIds: null, Vendor: "claude",
                 Epoch: h.Orchestrator.DaemonEpochForTest, Seq: 1, CommandId: "cmd-1"));
-            await WaitHarness.SpinUntilAsync(() => h.Connection.Rejects.Count > 0, TimeSpan.FromSeconds(10));
+            await WaitHarness.SpinUntilAsync(() => server.Rejects.Count > 0, TimeSpan.FromSeconds(10));
 
-            await Assert.That(h.Connection.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.DaemonCapacity);
+            await Assert.That(server.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.DaemonCapacity);
             await Assert.That(h.Orchestrator.ReadLiveness("s1")).IsEqualTo(AgentLiveness.Live);
         });
     }
@@ -591,19 +594,20 @@ public class DaemonSettingsIpcTests {
     [Arguments("""{"max_agents":0}""", "invalid_max_agents")]
     [Arguments("""{"max_agents":-3}""", "invalid_max_agents")]
     public async Task An_invalid_put_changes_nothing_and_names_why(string payload, string reason) {
-        await RunAsync(async (h, ct) => {
+        var server = new CaptureServerConnection();
+        await RunAsync(server, async (h, ct) => {
             var ack = await PutAsync(h, payload, ct);
 
             await Assert.That(ack).IsEqualTo(new DaemonSettingsAckDto(false, reason, 5));
             await Assert.That(h.Config.MaxConcurrentAgents).IsEqualTo(5);
             await h.Orchestrator.CapabilityRefreshForTest;
-            await Assert.That(h.Connection.RegisterDaemonCalls).IsEqualTo(0);
+            await Assert.That(server.RegisterDaemonCalls).IsEqualTo(0);
         });
     }
 
     [Test]
     public async Task The_core_client_round_trips_a_put() {
-        await RunAsync(async (h, ct) => {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
             var ops = new LocalControlOps(h.Config.Store, h.Config.Name);
 
             var ack = await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(4), ct);
@@ -615,7 +619,7 @@ public class DaemonSettingsIpcTests {
 
     [Test]
     public async Task Hello_advertises_settings_1() {
-        await RunAsync(async (h, ct) => {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
             await using var s = await ConnectAsync(h.SockPath, ct);
             await FrameCodec.WriteAsync(s, new LocalFrame(FrameType.Hello), ct);
             var reply = await FrameCodec.ReadAsync(s, ct);
