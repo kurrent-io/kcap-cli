@@ -782,6 +782,8 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            _broker.TryCorrelate(pending.RequestId, serverRequestId);
+
             if (settlement.IsCompleted) {
                 await RelaySettlementAsync(pending, serverRequestId, settlement.Result);
                 return;
