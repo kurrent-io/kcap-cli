@@ -30,7 +30,7 @@ public class CodexForwardBufferTests {
 
     static async Task<List<string?>> JournaledTexts(TranscriptJournal journal) {
         await journal.CompleteAsync();
-        return File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return e.Text; }).ToList();
+        return JournalFiles.ReadLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return e.Text; }).ToList();
     }
 
     [Test]
@@ -129,7 +129,7 @@ public class CodexForwardBufferTests {
         var blocked = Task.Run(() => buf.Emit(Canonical("b")));
         await Task.Delay(100);
         await Assert.That(blocked.IsCompleted).IsFalse();
-        await Assert.That(File.ReadAllText(journal.Path)).DoesNotContain("\"b\"");
+        await Assert.That(JournalFiles.ReadText(journal.Path)).DoesNotContain("\"b\"");
         await buf.Reader.ReadAsync(); // frees the slot
         await blocked.WaitAsync(TimeSpan.FromSeconds(5));
         await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a", "b" }, CollectionOrdering.Matching);

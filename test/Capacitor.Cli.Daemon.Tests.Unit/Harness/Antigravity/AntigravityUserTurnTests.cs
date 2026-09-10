@@ -75,7 +75,7 @@ public class AntigravityUserTurnTests {
         while (rt.Envelopes.TryRead(out var e)) drained.Add(e);
         await journal.CompleteAsync();
 
-        var journaled = File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
+        var journaled = JournalFiles.ReadLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
         await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
     }
 }

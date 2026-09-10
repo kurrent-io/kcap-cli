@@ -11,8 +11,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// delivered <c>SendInput</c> must advance the same per-agent <see cref="AgentActivityClock"/> that
 /// PTY output, ACP envelopes, and turn transitions already advance (see
 /// <c>AgentActivityClockTests.PTY_output_chunk_advances_the_agents_activity_clock</c> for the
-/// output-side precedent). Before this, an agent that only ever RECEIVED input — never producing
-/// output before the next reap sweep — looked idle to the reaper even while a human/driver was
+/// output-side precedent). An agent that only ever RECEIVES input — never producing output before
+/// the next reap sweep — reads as idle to the reaper otherwise, even while a human or driver is
 /// actively working with it.
 ///
 /// <c>AgentOrchestrator.DeliverInputAsync</c> calls <c>Advance()</c> only once delivery is

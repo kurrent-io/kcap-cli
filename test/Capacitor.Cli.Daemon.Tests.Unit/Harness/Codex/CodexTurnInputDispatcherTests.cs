@@ -243,7 +243,11 @@ public class CodexTurnInputDispatcherTests {
             Task ack;
             try { ack = d.EnqueueAsync("racing"); } catch (InputNotAdmittedException) { await fault; continue; }
             await fault;
-            await Assert.That(async () => await ack.WaitAsync(TimeSpan.FromSeconds(2))).Throws<Exception>(); // faulted, not pending
+            // Settled, then faulted: awaiting a WaitAsync would accept its own TimeoutException and
+            // pass on exactly the stranded ack this exists to catch.
+            await Task.WhenAny(ack, Task.Delay(TimeSpan.FromSeconds(2)));
+            await Assert.That(ack.IsCompleted).IsTrue();
+            await Assert.That(ack.IsFaulted).IsTrue();
         }
     }
 

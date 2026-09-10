@@ -8,14 +8,13 @@ public class TranscriptJournalSweepTests {
     static readonly DateTimeOffset Now = new(2026, 9, 9, 10, 0, 0, TimeSpan.Zero);
 
     static string Journal(TempDir tmp, string agentId, TimeSpan age) {
-        var path = Path.Combine(tmp.CreateDir("transcripts"), AgentFileNames.For(agentId) + ".jsonl");
-        File.WriteAllText(path, "{}\n");
+        var path = tmp.CreateFile(["transcripts", AgentFileNames.For(agentId) + ".jsonl"], "{}\n");
         File.SetLastWriteTimeUtc(path, (Now - age).UtcDateTime);
         return path;
     }
 
     static void PidRecord(TempDir tmp, string agentId) =>
-        File.WriteAllText(Path.Combine(tmp.CreateDir("agents"), AgentFileNames.For(agentId) + ".json"), "{}");
+        tmp.CreateFile(["agents", AgentFileNames.For(agentId) + ".json"], "{}");
 
     static TranscriptJournalSweep Sweep(TempDir tmp, TimeProvider time, JournalPathLocks? locks = null) =>
         new(tmp.Path, time, NullLogger<TranscriptJournalSweep>.Instance, locks);
@@ -44,7 +43,7 @@ public class TranscriptJournalSweepTests {
         var old        = Journal(tmp, "old", TimeSpan.FromDays(31));
         var fresh      = Journal(tmp, "fresh", TimeSpan.FromDays(1));
         var oldButLive = Journal(tmp, "live", TimeSpan.FromDays(31)); PidRecord(tmp, "live");
-        var other      = Path.Combine(tmp.Path, "transcripts", "notes.txt"); File.WriteAllText(other, "x"); File.SetLastWriteTimeUtc(other, (Now - TimeSpan.FromDays(40)).UtcDateTime);
+        var other      = tmp.CreateFile(["transcripts", "notes.txt"], "x"); File.SetLastWriteTimeUtc(other, (Now - TimeSpan.FromDays(40)).UtcDateTime);
 
         await Sweep(tmp, time).RunOnceAsync(CancellationToken.None);
 
@@ -89,9 +88,31 @@ public class TranscriptJournalSweepTests {
     public async Task Missing_or_shadowed_transcripts_directory_never_throws() {
         using var tmp = new TempDir();
         var time = new FakeTimeProvider(Now);
-        await Sweep(tmp, time).RunOnceAsync(CancellationToken.None); // no transcripts dir
+        var sweep = Sweep(tmp, time);
+        await sweep.RunOnceAsync(CancellationToken.None); // no transcripts dir
         tmp.CreateFile("transcripts"); // a file where the directory belongs
-        await Sweep(tmp, time).RunOnceAsync(CancellationToken.None);
+        await sweep.RunOnceAsync(CancellationToken.None);
+
+        await Assert.That(sweep.SweepsCompleted).IsEqualTo(2);
+    }
+
+    /// An unreadable directory is the one fault that hits enumeration itself rather than a file, and
+    /// the outer catch is all that stands between it and a daemon that cannot connect.
+    [Test]
+    public async Task An_unreadable_transcripts_directory_never_throws() {
+        if (OperatingSystem.IsWindows()) return; // no mode bits to take away
+        using var tmp = new TempDir();
+        var time = new FakeTimeProvider(Now);
+        var dir = tmp.CreateDir("transcripts");
+        Journal(tmp, "old", TimeSpan.FromDays(31));
+        File.SetUnixFileMode(dir, UnixFileMode.UserWrite | UnixFileMode.UserExecute); // no read
+        var sweep = Sweep(tmp, time);
+        try {
+            await sweep.RunOnceAsync(CancellationToken.None);
+            await Assert.That(sweep.SweepsCompleted).IsEqualTo(1);
+        } finally {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     [Test]

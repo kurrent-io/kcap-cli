@@ -63,7 +63,7 @@ public class AgentOrchestratorJournalTests {
         await WaitUntil(() => journal.Drained);
 
         await Assert.That(File.Exists(journal.Path)).IsTrue(); // agent exit never deletes a journal
-        await Assert.That(File.ReadAllText(journal.Path)).Contains("\"bye\"");
+        await Assert.That(JournalFiles.ReadText(journal.Path)).Contains("\"bye\"");
     }
 
     [Test]
@@ -82,7 +82,7 @@ public class AgentOrchestratorJournalTests {
         existing.Open("/w", null); await existing.CompleteAsync();
         await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("agent-fail-rebind", repoPath));
         await Assert.That(File.Exists(existing.Path)).IsTrue();
-        await Assert.That(File.ReadLines(existing.Path).Count()).IsEqualTo(2); // its header plus the failed launch's header
+        await Assert.That(JournalFiles.ReadLines(existing.Path).Length).IsEqualTo(2); // its header plus the failed launch's header
     }
 
     sealed class FailingAfterOpenFactory : IHostedAgentRuntimeFactory {

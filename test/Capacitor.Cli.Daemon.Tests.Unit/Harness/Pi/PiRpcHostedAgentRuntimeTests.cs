@@ -556,7 +556,7 @@ public class PiRpcHostedAgentRuntimeTests {
         // Without this the comparison below reports a 400-item diff instead of the abandoned writer.
         await Assert.That(await journal.CompleteAsync()).IsTrue();
 
-        var journaled = File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
+        var journaled = JournalFiles.ReadLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
         await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
     }
 
@@ -590,6 +590,6 @@ public class PiRpcHostedAgentRuntimeTests {
         }
         await runtime.DisposeAsync();
         await journal.CompleteAsync();
-        await Assert.That(File.ReadAllText(journal.Path)).DoesNotContain("\"late\"");
+        await Assert.That(JournalFiles.ReadText(journal.Path)).DoesNotContain("\"late\"");
     }
 }
