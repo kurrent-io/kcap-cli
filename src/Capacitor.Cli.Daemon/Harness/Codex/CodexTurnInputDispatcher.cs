@@ -1,3 +1,4 @@
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
@@ -74,12 +75,17 @@ internal sealed class CodexTurnInputDispatcher {
 
     /// <summary>Enqueues one input and returns a task that completes when the dispatch carrying it
     /// (a <c>turn/start</c> or an accepted <c>turn/steer</c>) succeeds — the "wait for write" contract.
-    /// Faults if that dispatch errors or the runtime is torn down. An optional per-input token (the
-    /// launch's linked token for the initial prompt) is linked into that input's dispatch so cancelling
-    /// it aborts the send.</summary>
+    /// Faults if that dispatch errors. Throws <see cref="InputNotAdmittedException"/> synchronously
+    /// once <see cref="FaultAll"/> has torn the dispatcher down, refused under the same <see cref="_gate"/>
+    /// FaultAll takes so a late enqueue can never slip in and stay pending forever. An optional
+    /// per-input token (the launch's linked token for the initial prompt) is linked into that input's
+    /// dispatch so cancelling it aborts the send.</summary>
     public Task EnqueueAsync(string text, CancellationToken ct = default) {
         var item = new InputItem(text, ct);
-        lock (_gate) _queue.Enqueue(item);
+        lock (_gate) {
+            if (_faulted) throw new InputNotAdmittedException("Codex dispatcher is torn down; this input was not queued.");
+            _queue.Enqueue(item);
+        }
         PumpDispatch();
         return item.Ack.Task;
     }

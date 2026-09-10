@@ -3701,6 +3701,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         public const string PrivateAgent      = "private_agent";
         public const string ReaperClaimed     = "reaper_claimed";
         public const string ReaperClaimedLate = "reaper_claimed_late";
+        public const string QueueFull         = "queue_full";
     }
 
     /// <summary>Reports a drop to the server, when the dispatch carried an id to name. Never throws:
@@ -3823,9 +3824,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 await agent.Runtime.SendUserInputAsync(message);
 
             // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
-            // output/ACP envelopes/turn transitions); a throw from either await above skips it. Known
-            // residual: a full ACP _pendingTurns queue drops input silently without throwing, so this
-            // can advance on a delivery that was actually dropped — kill-delaying only, accepted.
+            // output/ACP envelopes/turn transitions); an InputNotAdmittedException (or any other
+            // throw) from either await above skips it.
             agent.ActivityClock.Advance();
             agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
 

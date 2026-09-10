@@ -465,21 +465,21 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// two alternatives are each wrong in their own way. Blocking until space frees would stall the
     /// daemon's serial command lane behind a reviewer whose turn is stuck — and a stuck turn is the
     /// only way this queue ever fills — so one wedged agent would stop launches and stops for every
-    /// other one. Dropping silently (what this used to do for a caller that asked for no write ack,
-    /// i.e. every server-driven <c>SendInput</c>) loses a message the user has already sent, with
-    /// nothing anywhere to say so. So the send task faults, AND a <c>system_note</c> goes onto the
-    /// transcript: the fault reaches the daemon log through the orchestrator's handler, and the note
-    /// is the only surface the person who typed the message actually sees. One note per rejected
-    /// message — each is a separately lost message, and summarising them is the silent drop again in
-    /// miniature. That note goes out through <see cref="EmitDaemonNotice"/>, NOT
+    /// other one. Dropping silently loses a message the user has already sent, with nothing anywhere
+    /// to say so. So this throws <see cref="InputNotAdmittedException"/> — synchronously for a plain
+    /// send, via the returned task for an acknowledging one — AND a <c>system_note</c> goes onto the
+    /// transcript: the exception reaches only the daemon log through the orchestrator's handler, and
+    /// the note is the only surface the person who typed the message actually sees. One note per
+    /// rejected message — each is a separately lost message, and summarising them is the silent drop
+    /// again in miniature. That note goes out through <see cref="EmitDaemonNotice"/>, NOT
     /// <see cref="EmitEnvelope"/>: a refusal must not refresh the liveness attestation of the very
     /// agent whose wedged turn caused it.</para>
     ///
-    /// <para>A TERMINAL runtime is deliberately NOT symmetric: it still only logs (and faults an
-    /// acknowledging caller, as before). The transcript channel is completed on entry to
-    /// <see cref="RuntimePhase.Terminal"/>, so no note could be delivered anyway, and the agent's
-    /// session ending is itself the user-visible signal — a thrown error for input that raced a
-    /// normal end-of-session would be noise, not news.</para>
+    /// <para>A TERMINAL runtime is deliberately NOT symmetric: it still only logs, throwing the same
+    /// <see cref="InputNotAdmittedException"/> for both callers. The transcript channel is completed
+    /// on entry to <see cref="RuntimePhase.Terminal"/>, so no note could be delivered anyway, and the
+    /// agent's session ending is itself the user-visible signal — a thrown error for input that raced
+    /// a normal end-of-session would be noise, not news.</para>
     /// </summary>
     Task EnqueueTurn(string text, bool acknowledgeWrite) {
         var written = acknowledgeWrite
@@ -491,10 +491,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
         if (Phase == RuntimePhase.Terminal) {
             _logger.LogDebug("Antigravity: dropped a prompt turn — the runtime is terminal.");
-            written?.TrySetException(new InvalidOperationException(
-                "Antigravity runtime is terminal; this input was dropped."));
+            var terminal = new InputNotAdmittedException(
+                "Antigravity runtime is terminal; this input was dropped.");
+            if (written is null) throw terminal;
+            written.TrySetException(terminal);
 
-            return written?.Task ?? Task.CompletedTask;
+            return written.Task;
         }
 
         // The only other reason TryWrite can fail on this bounded, not-yet-completed channel.
@@ -529,15 +531,15 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 "Antigravity: the queue-full notice for this input never reached the transcript (the "
               + "channel had already completed), so the sender received no feedback at all.");
 
-        var failure = new InvalidOperationException(
+        var failure = new InputNotAdmittedException(
             $"Antigravity pending-turns queue is full (capacity {_pendingTurnsCapacity}); this input "
           + "was not queued.");
 
-        written?.TrySetException(failure);
+        if (written is null) throw failure;
 
-        // The acknowledging caller awaits `written`; everyone else awaits this. Never both — an
-        // unawaited faulted Task is what TaskScheduler.UnobservedTaskException is for.
-        return written?.Task ?? Task.FromException(failure);
+        // The acknowledging caller awaits `written`; the throw above is how everyone else learns.
+        written.TrySetException(failure);
+        return written.Task;
     }
 
     /// <summary>

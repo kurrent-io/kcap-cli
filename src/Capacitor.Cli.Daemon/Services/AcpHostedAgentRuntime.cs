@@ -1180,13 +1180,17 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
                 _pendingTurnsCapacity, dropped);
 
-            written?.TrySetException(new InvalidOperationException("ACP pending-turns queue is full."));
-            return written?.Task ?? Task.CompletedTask;
+            var full = new InputNotAdmittedException("ACP pending-turns queue is full.");
+            if (written is null) throw full;
+            written.TrySetException(full);
+            return written.Task;
         }
 
         if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
             _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
-            written?.TrySetException(new ObjectDisposedException(nameof(AcpHostedAgentRuntime)));
+            var closed = new InputNotAdmittedException("ACP runtime is terminal; this input was not queued.");
+            if (written is null) throw closed;
+            written.TrySetException(closed);
         }
         return written?.Task ?? Task.CompletedTask;
     }

@@ -172,7 +172,8 @@ public class AntigravityRuntimeLifecycleTests {
         await using var rt = FakeRuntime(onSpawn: _ => spawns++);
         await rt.TerminateAsync(TimeSpan.FromSeconds(5)).WaitAsync(HangGuard);
 
-        await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rt.SendUserInputAsync("hello").WaitAsync(HangGuard));
         await Task.Delay(100);
 
         await Assert.That(spawns).IsEqualTo(0);

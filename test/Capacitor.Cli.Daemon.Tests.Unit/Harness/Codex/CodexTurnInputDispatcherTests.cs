@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Capacitor.Cli.Daemon.Harness.Codex;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
@@ -222,6 +223,28 @@ public class CodexTurnInputDispatcherTests {
         d.FaultAll(new ObjectDisposedException("runtime"));
 
         await Assert.That(async () => await ack2.WaitAsync(Guard)).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
+    public async Task Enqueue_after_fault_all_is_refused_never_left_pending() {
+        var sink = new FakeTurnSink();
+        var d = new CodexTurnInputDispatcher(sink.Start, sink.Steer, NullLogger.Instance, CancellationToken.None);
+        d.FaultAll(new ObjectDisposedException("runtime"));
+
+        await Assert.That(() => d.EnqueueAsync("late")).Throws<InputNotAdmittedException>();
+    }
+
+    [Test]
+    public async Task Enqueue_racing_fault_all_is_either_faulted_or_refused() {
+        for (var round = 0; round < 50; round++) {
+            var sink = new FakeTurnSink();
+            var d = new CodexTurnInputDispatcher(sink.Start, sink.Steer, NullLogger.Instance, CancellationToken.None, sealedAtStart: true);
+            var fault = Task.Run(() => d.FaultAll(new ObjectDisposedException("runtime")));
+            Task ack;
+            try { ack = d.EnqueueAsync("racing"); } catch (InputNotAdmittedException) { await fault; continue; }
+            await fault;
+            await Assert.That(async () => await ack.WaitAsync(TimeSpan.FromSeconds(2))).Throws<Exception>(); // faulted, not pending
+        }
     }
 
     // ── Deferred-first-turn seal ─────────────────────────────────────────────────────────────────

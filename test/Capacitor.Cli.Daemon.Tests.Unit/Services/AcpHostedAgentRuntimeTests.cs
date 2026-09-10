@@ -71,12 +71,13 @@ public class AcpHostedAgentRuntimeTests {
 
         Task _fakeRunTask = Task.CompletedTask;
 
-        public Harness(TranscriptJournal? journal = null, int? transcriptCapacity = null) {
+        public Harness(TranscriptJournal? journal = null, int? transcriptCapacity = null, int? pendingTurnsCapacity = null) {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
             Process = new FakeAcpProcess();
             Runtime = new AcpHostedAgentRuntime(
-                Conn, Process, NullLogger.Instance, transcriptCapacity: transcriptCapacity, journal: journal);
+                Conn, Process, NullLogger.Instance, transcriptCapacity: transcriptCapacity, journal: journal,
+                pendingTurnsCapacity: pendingTurnsCapacity);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
@@ -887,5 +888,28 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(joined).Contains("marker-a");
         await Assert.That(joined).Contains("marker-b");
         await Assert.That(joined).DoesNotContain("marker-late");
+    }
+
+    [Test]
+    public async Task Full_pending_turns_queue_refuses_with_input_not_admitted_on_both_send_paths() {
+        await using var h = new Harness(pendingTurnsCapacity: 1);
+        h.StartFakeAgentLoop();
+        h.Fake.HoldPromptResponses = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await h.Runtime.StartAsync("/abs/worktree", "first", h.Cts.Token).WaitAsync(HangGuard);
+
+        // The worker must have genuinely dequeued and dispatched "first" (its session/prompt sent
+        // and held open) before "queued" is sent below, or "queued" races the worker's own dequeue
+        // and the 1-deep queue never actually fills.
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (h.Fake.ReceivedCalls.All(c => c.Method != "session/prompt") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/prompt")).IsTrue();
+
+        await h.Runtime.SendUserInputAsync("queued");
+
+        await Assert.That(() => h.Runtime.SendUserInputAsync("refused")).Throws<InputNotAdmittedException>();
+        await Assert.That(async () => await h.Runtime.SendUserInputAndWaitForWriteAsync("refused-ack")).Throws<InputNotAdmittedException>();
+
+        h.Fake.HoldPromptResponses.TrySetResult();
     }
 }
