@@ -186,7 +186,12 @@ public partial class App : Application {
         }
     }
 
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize() {
+        AvaloniaXamlLoader.Load(this);
+        // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
+        // "About Avalonia" when there is none.
+        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel));
+    }
 
     public override void OnFrameworkInitializationCompleted() {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -197,6 +202,8 @@ public partial class App : Application {
             // comment explains the exit-code bug that pin fixes).
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             desktop.ShutdownRequested += OnShutdownRequested;
+            // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
+            new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => _coordinator is { } c ? c.ShowMainWindow : null).Install();
             _ = StartAsync(desktop);
         }
 
