@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -90,7 +91,7 @@ public class SessionStartMemoryRedirectTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         var exit = await new GeminiHookCommand(
-                Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
+                Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal,
                 sp.GetRequiredService<ICapacitorHttpClient>())
             .Handle(new StringReader(payload));
 

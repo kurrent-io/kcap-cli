@@ -3,6 +3,7 @@ using System.Text;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Harness.Pi;
 
@@ -234,7 +235,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;
 
-        psi.Environment["KCAP_AGENT_ID"] = ctx.AgentId;
+        psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 

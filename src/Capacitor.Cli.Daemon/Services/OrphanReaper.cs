@@ -208,7 +208,7 @@ internal sealed class OrphanReaper(
             // we kill. Any missing/unreadable member SPARES (ambiguity never kills) — this covers a
             // process/PID race, a partial read, and a current-incarnation recordless child whose epoch
             // read momentarily fails (record writes may fail, so such a child can exist).
-            var agentId = ProcessIdentity.ReadAgentEnv(pid, "KCAP_AGENT_ID");
+            var agentId = ProcessIdentity.ReadAgentEnv(pid, HostedAgent.AgentIdVar);
             if (agentId is null) continue;                 // not a hosted agent / env unreadable → spare
 
             var did = ProcessIdentity.ReadAgentEnv(pid, "KCAP_DAEMON_ID");
@@ -279,7 +279,7 @@ internal sealed class OrphanReaper(
 
         // Re-read the LIVE triple: (c) mismatch/unreadable -> SPARE, stay pending, NO emit (a triple
         // mismatch cannot distinguish PID-reuse from the process mutating its own env).
-        var agentId = ProcessIdentity.ReadAgentEnv(c.Pid, "KCAP_AGENT_ID");
+        var agentId = ProcessIdentity.ReadAgentEnv(c.Pid, HostedAgent.AgentIdVar);
         var did     = ProcessIdentity.ReadAgentEnv(c.Pid, "KCAP_DAEMON_ID");
         var epoch   = ProcessIdentity.ReadAgentEnv(c.Pid, "KCAP_DAEMON_EPOCH");
         var token   = ProcessIdentity.Capture(c.Pid);

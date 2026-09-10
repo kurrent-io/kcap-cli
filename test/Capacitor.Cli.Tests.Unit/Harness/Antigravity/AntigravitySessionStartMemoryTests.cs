@@ -3,6 +3,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Tests.Unit.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Antigravity;
 
@@ -30,7 +31,7 @@ public class AntigravitySessionStartMemoryTests {
     // here rather than as an argument.
     AntigravityHookCommand Hook(string serverUrl = "https://example.test") =>
         new(Config.Root, Resolutions.At(serverUrl, Config.Root), new HookClock(TimeProvider.System), Home,
-            TestHarnesses.Under(Home), new FixedCapacitorHttpClient());
+            TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient());
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     static string Write(string? fragment) {
@@ -150,7 +151,7 @@ public class AntigravitySessionStartMemoryTests {
     [Test]
     public async Task A_non_PreInvocation_event_writes_nothing_and_exits_zero() {
         var sw   = new StringWriter();
-        var code = await new AntigravityHookCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(["--antigravity", "Stop"], new StringReader("{}"), sw);
+        var code = await new AntigravityHookCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(["--antigravity", "Stop"], new StringReader("{}"), sw);
 
         await Assert.That(code).IsEqualTo(0);
         await Assert.That(sw.ToString()).IsEqualTo("");
@@ -159,7 +160,7 @@ public class AntigravitySessionStartMemoryTests {
     [Test]
     public async Task A_malformed_payload_writes_nothing_and_exits_zero() {
         var sw   = new StringWriter();
-        var code = await new AntigravityHookCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(["--antigravity", "PreInvocation"], new StringReader("{not json"), sw);
+        var code = await new AntigravityHookCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(["--antigravity", "PreInvocation"], new StringReader("{not json"), sw);
 
         await Assert.That(code).IsEqualTo(0);
         await Assert.That(sw.ToString()).IsEqualTo("");
@@ -235,7 +236,7 @@ public class AntigravitySessionStartMemoryTests {
 
         var consulted = false;
         var sw        = new StringWriter();
-     var code = await new AntigravityHookCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(["--antigravity", "PreInvocation"],
+     var code = await new AntigravityHookCommand(Config.Root, Resolutions.At("https://example.test", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(["--antigravity", "PreInvocation"],
             new StringReader($$"""
                 {"conversationId":"{{conversationId}}","transcriptPath":"/tmp/t.jsonl","workspacePaths":[]}
                 """),

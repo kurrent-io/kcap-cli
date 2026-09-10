@@ -37,7 +37,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class AntigravityHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager  _watchers = new(config, profiles, http);
     readonly AgentHookPoster _poster   = new(config, profiles, http);
 
@@ -160,7 +160,7 @@ sealed class AntigravityHookCommand(
         if (Str(payload, "antigravityVersion") is { } version)
             forwarded["antigravity_version"] = version;
 
-        if (Environment.GetEnvironmentVariable("KCAP_AGENT_ID") is { } agentHostId)
+        if (hosted.AgentId is { } agentHostId)
             forwarded["agent_host_id"] = agentHostId;
 
         // Stamp default visibility BEFORE enrichment so it survives the JsonString

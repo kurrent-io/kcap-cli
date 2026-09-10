@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Setup;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -59,7 +60,7 @@ public class ClaudeHookStdoutTests : IDisposable {
     // concurrently-running test writes to Console can contaminate it.
     async Task<string> RunSessionStartAsync() {
         var stdout = new StringWriter();
-        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()), stdout: stdout);
+        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()), stdout: stdout);
         return stdout.ToString();
     }
 

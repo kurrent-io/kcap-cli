@@ -196,7 +196,7 @@ public class CursorTailingWatcherTests {
         var spool = new HookSpool(tmp.PathTo("spool"));
 
         var body = $$"""{"hook_event_name":"sessionStart","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath.Replace(@"\", @"\\")}}"}""";
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(client, new StringReader(body), spool);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(spawned).IsEquivalentTo([sessionId]);
@@ -231,7 +231,7 @@ public class CursorTailingWatcherTests {
         var spool = new HookSpool(tmp.PathTo("spool"));
 
         var body = $$"""{"hook_event_name":"postToolUse","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath.Replace(@"\", @"\\")}}","tool_name":"Bash"}""";
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(client, new StringReader(body), spool);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(spawned).IsEquivalentTo([sessionId]);
