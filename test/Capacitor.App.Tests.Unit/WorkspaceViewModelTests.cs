@@ -183,17 +183,13 @@ public class WorkspaceViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Chat_is_built_for_a_pty_dto_only_and_torn_down_with_the_workspace() {
+    public async Task Chat_is_built_on_the_first_resolved_dto_and_torn_down_with_the_workspace() {
         await RunOnUiAsync(async () => {
             var daemon = new FakeDaemonClientService();
             var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
             await Assert.That(vm.Chat).IsNull();
 
             daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false));
-            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
-            await Assert.That(vm.Chat).IsNull();
-
-            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: true));
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await Assert.That(vm.Chat).IsNotNull();
             await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Unavailable); // gemini has no transcript projection
@@ -204,6 +200,25 @@ public class WorkspaceViewModelTests {
 
             await vm.TeardownAsync();
             await Assert.That(chat.PendingReadForTesting!).IsNull();
+        });
+    }
+
+    /// A session the daemon never reports a PTY for still gets a chat pane, so its NEEDS YOU
+    /// cards have somewhere to render.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_without_a_terminal_still_gets_a_chat_pane_for_its_cards() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.ShowsTerminalTab).IsFalse();
+            await Assert.That(vm.Chat).IsNotNull();
+            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Unavailable);
+            await vm.TeardownAsync();
         });
     }
 

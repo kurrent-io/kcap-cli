@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -85,7 +84,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
 
-    public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards { get; }
+    public PendingCardsViewModel Cards { get; }
+    public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards => Cards.PendingCards;
     public IObservable<string?> Root => _rootSubject;
 
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
@@ -197,41 +197,12 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _lifetimeToken = _lifetime.Token;
         _phase = projection is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
-        // ObserveOn BEFORE the binding operator: the cache is mutated on the service's
-        // background continuations (IPermissionService.Pending's own doc comment).
-        var cards = permissions.Pending
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Filter(p => p.AgentId == agentId)
-            .Transform(p => p switch {
-                { Questions: not null } => (PendingCardViewModel)new QuestionCardViewModel(p, permissions),
-                { AcpQuestion: not null } => new AcpQuestionCardViewModel(p, permissions),
-                _ => new PermissionCardViewModel(p, permissions, _rootSubject),
-            })
-            .DisposeMany()
-            .SortAndBind(out var pendingCards, Comparer<PendingCardViewModel>.Create((a, b) => {
-                var byTime = a.RequestedAt.CompareTo(b.RequestedAt);
-                return byTime != 0 ? byTime : string.CompareOrdinal(a.Key, b.Key);
-            }));
-        PendingCards = pendingCards;
-
-        // Hooked before the pipeline subscribes: on the UI thread the scheduler delivers an
-        // already-populated cache inline, so a hook installed afterwards would miss the first fill.
-        // The delegate-based overload, not the reflection one: ReadOnlyObservableCollection's
-        // CollectionChanged is only reachable through this interface, and the reflection overload
-        // (Observable.FromEventPattern(target, eventName)) looks up public events only.
-        var notifications = (INotifyCollectionChanged)pendingCards;
-        _hasPendingCards = Observable
-            .FromEventPattern<NotifyCollectionChangedEventHandler, NotifyCollectionChangedEventArgs>(
-                h => notifications.CollectionChanged += h, h => notifications.CollectionChanged -= h)
-            .Select(_ => pendingCards.Count > 0)
-            .ToProperty(this, x => x.HasPendingCards, initialValue: pendingCards.Count > 0)
+        Cards = new PendingCardsViewModel(agentId, permissions, _rootSubject);
+        _hasPendingCards = Cards.WhenAnyValue(c => c.HasPendingCards)
+            .ToProperty(this, x => x.HasPendingCards, initialValue: Cards.HasPendingCards)
             .DisposeWith(_disposables);
 
-        cards.Subscribe().DisposeWith(_disposables);
-
-        permissions.Pending
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Filter(p => p.AgentId == agentId)
+        Cards.Requests
             .Subscribe(changes => {
                 foreach (var change in changes) {
                     switch (change.Reason) {
@@ -493,6 +464,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _timer?.Dispose();
         _timer = null;
         _disposables.Dispose();
+        Cards.Dispose();
         _rootSubject.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _lifetime.Dispose();

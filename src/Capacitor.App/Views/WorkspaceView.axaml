@@ -153,19 +153,10 @@
                 </Border>
             </Panel>
 
-            <!-- The chat surface exists only where the tab strip does, so a session with no PTY
-                 renders none of it. The automation peer reports offscreen from the control's OWN
-                 IsVisible, so hiding an ancestor instead would leave the inactive chat announced
-                 as onscreen — and both flags live on the workspace VM, which is not this
-                 control's DataContext. -->
-            <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}">
-                <views:ChatTabView.IsVisible>
-                    <MultiBinding Converter="{x:Static BoolConverters.And}">
-                        <Binding Path="$parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsTerminalTab" />
-                        <Binding Path="$parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive" />
-                    </MultiBinding>
-                </views:ChatTabView.IsVisible>
-            </views:ChatTabView>
+            <!-- The automation peer reports offscreen from the control's OWN IsVisible, so hiding
+                 an ancestor instead would leave the inactive chat announced as onscreen. -->
+            <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
+                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
         </Grid>
     </Grid>

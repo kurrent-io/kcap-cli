@@ -42,8 +42,9 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     public TerminalTabViewModel Terminal { get; }
 
     ChatTabViewModel? _chat;
-    /// Built once, on the first dto that passes the PTY gate -- the projection is chosen by the
-    /// dto's vendor. Null for a non-PTY session.
+    /// Built once, on the first resolved dto -- the projection is chosen by the dto's vendor and
+    /// is null for a vendor with no chat projection, which renders the cards pane alone. Null only
+    /// before any dto has arrived.
     public ChatTabViewModel? Chat {
         get => _chat;
         private set => this.RaiseAndSetIfChanged(ref _chat, value);
@@ -131,9 +132,7 @@ public sealed class WorkspaceViewModel : ReactiveObject {
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);
 
-        presence
-            .Where(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
-            .Take(1)
+        presence.Where(p => p.Dto is not null).Take(1)
             .Subscribe(p => Chat = new ChatTabViewModel(
                 agentId, daemon, Terminal, TranscriptChat.For(p.Dto!.Vendor), opener, time, permissions))
             .DisposeWith(_disposables);

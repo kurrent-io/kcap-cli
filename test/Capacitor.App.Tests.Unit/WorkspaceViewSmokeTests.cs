@@ -64,11 +64,6 @@ public class WorkspaceViewSmokeTests {
         return (window, vm, daemon, attach);
     }
 
-    /// Effectively visible under this window. A name that never gets realized into the visual
-    /// tree — the collapsed chat surface's own controls — reads as not visible, which is exactly
-    /// what the gate promises.
-    static bool Visible(Window window, string name) => Find<Control>(window, name) is { IsEffectivelyVisible: true };
-
     static bool IsOffscreen(Control control) =>
         Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(control).IsOffscreen();
 
@@ -337,12 +332,12 @@ public class WorkspaceViewSmokeTests {
         });
     }
 
-    /// Pins the one gate the chat surface hangs off: a session with no PTY renders no chat at
-    /// all — not the host, not the composer, not Send — and keeps the banner layer it has no
-    /// Terminal tab to reach, so its end is still announced.
+    /// A session with no PTY still gets the chat surface — its NEEDS YOU cards have nowhere else
+    /// to render — while the terminal banner layer stays reachable for its own end-of-session note,
+    /// since the tab strip still shows the muted note in place of Chat/Terminal buttons.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_session_without_a_terminal_shows_no_chat_surface_and_still_banners_its_end() {
+    public async Task A_session_without_a_terminal_still_shows_its_chat_pane_and_banners_its_end() {
         await RunOnUiAsync(async () => {
             var (view, vm, daemon, _) = Build();
             var window = new Window { Content = view, Width = 900, Height = 600 };
@@ -356,10 +351,8 @@ public class WorkspaceViewSmokeTests {
 
             var chatHost = Find<ChatTabView>(window, "ChatHost")!;
             await Assert.That(vm.IsChatActive).IsTrue();
-            await Assert.That(chatHost.IsEffectivelyVisible).IsFalse();
-            await Assert.That(Visible(window, "ComposerInput")).IsFalse();
-            await Assert.That(Visible(window, "SendButton")).IsFalse();
-            await Assert.That(chatHost.FindControl<TextBox>("ComposerInput")!.IsFocused).IsFalse();
+            await Assert.That(chatHost.IsEffectivelyVisible).IsTrue();
+            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Waiting); // claude has a projection; no transcript_path yet
             await Assert.That(Find<Control>(window, "NoTerminalNote")!.IsVisible).IsTrue();
 
             daemon.Agents.Remove(AgentId);
