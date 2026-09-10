@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 using static Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi.PiRpcRuntimeFakes;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
@@ -528,5 +529,63 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await Assert.That(disposals).IsEqualTo(1);
         await Assert.That(proc.DisposeCalls).IsEqualTo(1);
+    }
+
+    // ---- Journal ----
+
+    [Test]
+    public async Task Journal_matches_channel_order_under_concurrent_pump_and_send_time_writers() {
+        using var tmp = new TempDir();
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        journal.Open("/w", null);
+        var (runtime, process) = NewRuntime(journal: journal);
+        await using var _ = runtime;
+        await runtime.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        var drained = new List<AcpEventEnvelope>();
+        var drain = Task.Run(async () => { await foreach (var e in runtime.Envelopes.ReadAllAsync()) drained.Add(e); });
+        var pump  = Task.Run(() => { for (var i = 0; i < 200; i++) process.Push(AssistantText($"a{i}")); });
+        var sends = Task.Run(async () => { for (var i = 0; i < 200; i++) await runtime.SendUserInputAsync($"u{i}"); });
+        await Task.WhenAll(pump, sends);
+        await Task.Delay(200);
+        process.EndOfStream();
+        await drain.WaitAsync(TimeSpan.FromSeconds(10));
+        await journal.CompleteAsync();
+
+        var journaled = File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
+        await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)));
+    }
+
+    /// <summary>
+    /// <c>WaitForExitAsync</c> alone does not prove the transcript channel is completed — the fake's
+    /// own <c>WaitForExitAsync</c> is a no-op, and even against a real process, <c>EnterTerminal</c>
+    /// completing the channel races the caller's own continuation. Draining
+    /// <see cref="PiRpcHostedAgentRuntime.Envelopes"/> to its natural end is what actually proves it:
+    /// that enumeration cannot end until <c>_transcript.Writer.TryComplete()</c> has run.
+    /// </summary>
+    [Test]
+    public async Task Envelope_written_after_channel_completion_is_not_journaled() {
+        using var tmp = new TempDir();
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        journal.Open("/w", null);
+        var (runtime, process) = NewRuntime(journal: journal);
+        await runtime.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        process.EndOfStream();
+
+        using var cts = new CancellationTokenSource(HangGuard);
+        try {
+            await foreach (var _ in runtime.Envelopes.ReadAllAsync(cts.Token)) { }
+        } catch (ChannelClosedException) {
+            // ends normally on completion; guarded defensively like the sibling terminal test.
+        }
+
+        try {
+            await runtime.SendUserInputAsync("late");
+        } catch (Exception ex) when (ex is InvalidOperationException or IOException) {
+            // the channel is already completed — the send itself may fault once the process is gone
+        }
+        await runtime.DisposeAsync();
+        await journal.CompleteAsync();
+        await Assert.That(File.ReadAllText(journal.Path)).DoesNotContain("\"late\"");
     }
 }

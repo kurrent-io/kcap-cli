@@ -118,13 +118,18 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         PiRpcHostedAgentRuntime runtime;
 
         try {
+            // Unopened until now — the orchestrator hands the factory an unopened journal so the
+            // header's cwd/model are this launch's own.
+            ctx.Journal?.Open(ctx.Worktree.Path, ResolveModel(config, ctx));
+
             runtime = new PiRpcHostedAgentRuntime(
                 process,
                 loggerFactory.CreateLogger<PiRpcHostedAgentRuntime>(),
                 ctx.AgentId,
                 ResolveModel(config, ctx),
                 ctx.Worktree.Path,
-                readyDeadline: readyDeadline);
+                readyDeadline: readyDeadline,
+                journal: ctx.Journal);
         } catch {
             // Construction itself failing (it should not, in practice) still leaves a spawned child —
             // no orphan pi processes.
