@@ -99,6 +99,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
             if (_phase == value) return;
             this.RaiseAndSetIfChanged(ref _phase, value);
             this.RaisePropertyChanged(nameof(PhaseNote));
+            RefreshActivityNote();
         }
     }
 
@@ -142,6 +143,33 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
     string _statusText = "";
     public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
+
+    string _activityNote = "";
+    /// One line under the rows for the stretches the transcript itself shows nothing: the agent
+    /// starting, or a turn in flight before its first output. "" whenever the rows speak for themselves.
+    public string ActivityNote { get => _activityNote; private set => this.RaiseAndSetIfChanged(ref _activityNote, value); }
+
+    string _status = "";
+    bool? _awaitingInput;
+    string? _transcriptFormat;
+
+    void RefreshActivityNote() =>
+        ActivityNote = ActivityNoteFor(Phase, _status, _awaitingInput, _transcriptFormat, _items.Count > 0, HasPendingCards, VendorLabel);
+
+    /// The working line is offered only for the daemon's own journal: there the awaiting flag flips
+    /// on every turn end, whereas a PTY vendor's comes from hooks that may never fire, and a note
+    /// that never clears is worse than none. It also needs a row: a running agent nobody has
+    /// prompted yet has nothing in flight.
+    internal static string ActivityNoteFor(
+            ChatTabPhase phase, string status, bool? awaitingInput, string? transcriptFormat,
+            bool hasRows, bool hasPendingCards, string vendorLabel) {
+        if (phase != ChatTabPhase.Reading) return "";
+        if (status == "Starting") return vendorLabel.Length > 0 ? $"Starting {vendorLabel}…" : "Starting…";
+        var working = status == "Running" && transcriptFormat == TranscriptFormats.Envelopes
+                   && awaitingInput == false && hasRows && !hasPendingCards;
+        if (!working) return "";
+        return vendorLabel.Length > 0 ? $"{vendorLabel} is working…" : "Working…";
+    }
 
     bool _isReadOnlyParticipant;
     /// True for a flow participant (any kind other than "agent"): the view swaps the composer
@@ -218,6 +246,10 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 h => notifications.CollectionChanged += h, h => notifications.CollectionChanged -= h)
             .Select(_ => pendingCards.Count > 0)
             .ToProperty(this, x => x.HasPendingCards, initialValue: pendingCards.Count > 0)
+            .DisposeWith(_disposables);
+
+        this.WhenAnyValue(x => x.HasPendingCards)
+            .Subscribe(_ => RefreshActivityNote())
             .DisposeWith(_disposables);
 
         cards.Subscribe().DisposeWith(_disposables);
@@ -318,7 +350,11 @@ public sealed class ChatTabViewModel : ReactiveObject {
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "");
         StatusText = SessionStatusDots.Label(dto);
         StatusDot = SessionStatusDots.For(dto.Status);
+        _status = dto.Status;
+        _awaitingInput = dto.AwaitingInput;
+        _transcriptFormat = dto.TranscriptFormat;
         if (_projection is not null && dto.TranscriptPath is { } path && path != _path) SwitchPath(path);
+        RefreshActivityNote();
     }
 
     void SwitchPath(string path) {
@@ -390,7 +426,10 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
 
         Phase = ChatTabPhase.Reading;
-        if (envelopes.Count == 0) return;
+        if (envelopes.Count == 0) {
+            RefreshActivityNote();
+            return;
+        }
 
         var fresh = new List<ChatItemViewModel>();
         foreach (var e in envelopes) {
@@ -428,6 +467,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
         if (fresh.Count > 0) _items.AddRange(fresh);
         Reconcile();
+        RefreshActivityNote();
     }
 
     /// A row is marked iff some pending request targets it: by tool-use id when the request has
