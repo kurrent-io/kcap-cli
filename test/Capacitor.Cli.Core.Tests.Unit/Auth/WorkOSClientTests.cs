@@ -99,4 +99,19 @@ public class WorkOSClientTests : IDisposable {
             Request.Create().WithPath("/user_management/authenticate").UsingPost());
         await Assert.That(posts.Count).IsEqualTo(1);
     }
+
+    /// <summary>A 5xx is the server faltering, not the token being refused: it must read as a
+    /// transport failure (retry with the same live token), not Rejected (which would strand the
+    /// daemon on the hour-long re-login backoff over a transient blip).</summary>
+    [Test]
+    public async Task A_server_error_is_a_transport_failure_not_a_rejection() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(503));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
+        await Assert.That(result.Response).IsNull();
+    }
 }

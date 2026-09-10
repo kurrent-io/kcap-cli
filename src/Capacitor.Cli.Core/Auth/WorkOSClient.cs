@@ -41,7 +41,13 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
             }, ct);
 
             if (!response.IsSuccessStatusCode) {
-                return new(WorkOSRefreshOutcome.Rejected, null);
+                // A 4xx means WorkOS understood and refused the refresh token (a 400 invalid_grant on
+                // a consumed/revoked token is the usual one) — terminal, only `kcap login` repairs it.
+                // A 5xx/408/429 is the server faltering, not the token being bad, so it reads as a
+                // transport failure the caller may retry with the same still-live token.
+                return IsTransientStatus((int)response.StatusCode)
+                    ? new(WorkOSRefreshOutcome.TransportFailed, null)
+                    : new(WorkOSRefreshOutcome.Rejected, null);
             }
 
             var body = await response.Content.ReadFromJsonAsync(
@@ -54,6 +60,8 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
             return new(WorkOSRefreshOutcome.TransportFailed, null);
         }
     }
+
+    static bool IsTransientStatus(int status) => status >= 500 || status is 408 or 429;
 
     /// <summary>
     /// Opens a device grant. It takes no organization: the human picks one at the AuthKit screen, so
