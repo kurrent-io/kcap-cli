@@ -225,8 +225,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
         hub.On<string, string, string?, JsonElement?, JsonElement?>(HubBroadcasts.PermissionRequested,
             (sid, rid, tool, input, options) => _permissionRequests.OnNext(ServerPermissionRequest.From(sid, rid, tool, input, options)));
-        hub.On<string, string, string, AcpInteractionOption[]?, bool>(HubBroadcasts.AcpElicitationRequested,
-            (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, options ?? [], multi)));
+        // JsonElement, not the typed array: binding the options to a record with required members
+        // makes SignalR drop the WHOLE push over one malformed option, so it is parsed leniently
+        // instead — an array that does not read as options is no options, which asks for free text.
+        hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
+            (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
         return hub;
     }

@@ -23,7 +23,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     AgentRow _row;
 
     public string AgentId { get; }
-    public string? MachineBadge { get; }
     public PendingCardsViewModel Cards { get; }
     public ReactiveCommand<Unit, Unit> OpenInWebCommand { get; }
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
@@ -50,6 +49,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         get => _sessionEnded;
         private set {
             this.RaiseAndSetIfChanged(ref _sessionEnded, value);
+            this.RaisePropertyChanged(nameof(ShowsCards));
             _sessionEndedChanges.OnNext(value);
         }
     }
@@ -64,7 +64,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
 
-    public bool ShowsCards => Access == RemoteSessionAccess.Ready;
+    /// An ended session's last Ready still stands until the lease is released, and its cards are
+    /// unanswerable — nobody is waiting on them any more.
+    public bool ShowsCards => Access == RemoteSessionAccess.Ready && !SessionEnded;
 
     public string AccessNote => Access switch {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
@@ -80,7 +82,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _row = row;
         _access = access;
         AgentId = row.Id;
-        MachineBadge = row.MachineBadge;
         Cards = new PendingCardsViewModel(row.Id, permissions, Observable.Return<string?>(null));
         Apply(row);
 
@@ -120,6 +121,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (sessionId is null) { Access = RemoteSessionAccess.NoSession; return; }
 
         _leasedSession = sessionId;
+        // The lease's first state arrives asynchronously; without this the pane keeps the previous
+        // session's verdict until it does.
+        Access = RemoteSessionAccess.Connecting;
         var lease = _access.Acquire(sessionId);
         var states = lease.State.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(s => Access = s switch {
             SessionAccessState.Established => RemoteSessionAccess.Ready,

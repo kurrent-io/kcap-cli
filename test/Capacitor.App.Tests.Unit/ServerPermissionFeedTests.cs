@@ -97,6 +97,33 @@ public class ServerPermissionFeedTests {
         await Assert.That(h.View.Count).IsEqualTo(1);
     }
 
+    /// A fetch that merely failed is not evidence the session has no cards — only a 404 is.
+    [Test]
+    public async Task A_failed_fetch_leaves_the_sessions_cards_in_place() {
+        using var h = new Harness();
+        h.Detail = _ => Task.FromResult(new SessionDetailFetch(null, NotFound: false));
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "r1", "Bash", null, null));
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the fetch");
+        await Task.Delay(100);
+        await Assert.That(h.View.Lookup("server:r1").HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task An_ended_session_reconciles_to_no_cards() {
+        using var h = new Harness();
+        h.Detail = _ => Task.FromResult(new SessionDetailFetch(JsonSerializer.Deserialize(
+            """
+            {"session_id":"s1","ended_at":"2026-09-10T10:00:00Z","last_event_number":1,
+             "events":[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"r1","kind":"permission","tool_name":"Bash"}}]}
+            """, RemoteModelsJsonContext.Default.SessionDetailDto)));
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "r1", "Bash", null, null));
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.View.Count == 0, what: "cards replaced with none");
+    }
+
     [Test]
     public async Task An_identity_change_clears_the_server_lane() {
         using var h = new Harness();

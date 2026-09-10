@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -79,8 +80,8 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     public IObservable<bool> RemoteStale { get; }
 
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents => _rows.Connect()
-        .QueryWhenChanged(q => (IReadOnlyDictionary<string, string>)SessionMap(q.Items))
-        .StartWith((IReadOnlyDictionary<string, string>)SessionMap(_rows.Items))
+        .QueryWhenChanged(q => SessionMap(q.Items))
+        .StartWith(SessionMap(_rows.Items))
         .DistinctUntilChanged(new DictionaryEquality());
 
     public string? VendorOfSession(string sessionId) =>
@@ -89,11 +90,11 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     // Local sorts before Remote in AgentOrigin, so the ordered pass's TryAdd lets a local row win
     // a session claimed by both an unproven twin pair — proven suppression already keeps a twin's
     // remote row out of _rows entirely, so this tie only ever arises while the pairing is unproven.
-    static Dictionary<string, string> SessionMap(IEnumerable<AgentRow> rows) {
+    static IReadOnlyDictionary<string, string> SessionMap(IEnumerable<AgentRow> rows) {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var row in rows.OrderBy(r => r.Origin))
             if (row.SessionId is { Length: > 0 } sid) map.TryAdd(sid, row.Id);
-        return map;
+        return map.Count == 0 ? FrozenDictionary<string, string>.Empty : map;
     }
 
     sealed class DictionaryEquality : IEqualityComparer<IReadOnlyDictionary<string, string>> {

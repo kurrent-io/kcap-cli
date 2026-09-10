@@ -58,6 +58,17 @@ public class InterruptReconciliationTests {
         await Assert.That(r.Pending).IsEmpty();
     }
 
+    /// An ended detail clears the pending set whatever Body returned, so only a live session
+    /// proves that an event carrying `data` instead of `payload` is read at all.
+    [Test]
+    public async Task Data_stands_in_for_a_missing_payload_on_a_live_session() {
+        var detail = Detail("""[{"event_type":"InterruptIssued","event_number":1,"data":{"requestId":"p1","kind":"permission","toolName":"Bash"}}]""");
+        var r = InterruptReconciliation.FromDetail(detail);
+        await Assert.That(r.Ended).IsFalse();
+        await Assert.That(r.Pending.Single().RequestId).IsEqualTo("p1");
+        await Assert.That(r.Pending.Single().ToolName).IsEqualTo("Bash");
+    }
+
     [Test]
     public async Task Camel_case_names_are_read_too() {
         var detail = Detail("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"requestId":"p1","kind":"permission","toolName":"Bash"}}]""");

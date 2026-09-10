@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -66,8 +67,10 @@ public sealed class PermissionService : IPermissionService {
             .QueryWhenChanged(q => PendingSummary.From(q.Items))
             .StartWith(PendingSummary.From(_cache.Items));
 
-    static IReadOnlySet<string> Agents(IEnumerable<PendingPermissionRequest> items) =>
-        items.Select(p => p.AgentId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal);
+    static IReadOnlySet<string> Agents(IEnumerable<PendingPermissionRequest> items) {
+        var agents = items.Select(p => p.AgentId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal);
+        return agents.Count == 0 ? FrozenSet<string>.Empty : agents;
+    }
 
     public Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct) {
         var apply = answer == PermissionAnswer.AllowAlways ? ClaudePermissions.AlwaysAllow(target.ToolName) : (JsonElement?)null;
@@ -105,8 +108,8 @@ public sealed class PermissionService : IPermissionService {
     }
 
     public Task<PermissionResolveOutcome> PickOptionAsync(PendingPermissionRequest target, string optionId, CancellationToken ct) {
-        var option = target.Options?.FirstOrDefault(o => o.OptionId == optionId) ?? throw new ArgumentException("not an offered option", nameof(optionId));
         if (target.Lane != PermissionLane.Server) throw new ArgumentException("ACP permissions are server-lane items", nameof(target));
+        var option = target.Options?.FirstOrDefault(o => o.OptionId == optionId) ?? throw new ArgumentException("not an offered option", nameof(optionId));
         return SendServerAsync(target, new PermissionResponsePayload {
             Behavior = BehaviorFor(option.Kind), SelectedOptionId = option.OptionId, SelectedOptionLabel = option.Label,
         }, ct);

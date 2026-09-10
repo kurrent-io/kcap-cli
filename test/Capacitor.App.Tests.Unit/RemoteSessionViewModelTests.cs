@@ -119,6 +119,8 @@ public class RemoteSessionViewModelTests {
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3", status: "Completed"));
             await Assert.That(vm.SessionEnded).IsTrue();
+            // The last access verdict is still Ready — the cards go with the session, not the lease.
+            await Assert.That(vm.ShowsCards).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s3"), what: "released on the terminal status");
             await vm.TeardownAsync();
         });

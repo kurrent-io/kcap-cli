@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -24,7 +25,7 @@ public sealed class SessionAttentionTracker : IDisposable {
     readonly TimeProvider _time;
     readonly TimeSpan _debounce;
     readonly Dictionary<string, Session> _sessions = new(StringComparer.Ordinal);
-    readonly BehaviorSubject<IReadOnlySet<string>> _attention = new(new HashSet<string>());
+    readonly BehaviorSubject<IReadOnlySet<string>> _attention = new(FrozenSet<string>.Empty);
     readonly IDisposable _subscriptions;
     readonly CancellationTokenSource _lifetime = new();
     readonly Lock _lock = new();
@@ -136,7 +137,8 @@ public sealed class SessionAttentionTracker : IDisposable {
     // Caller holds _lock.
     void Publish() {
         var next = _sessions.Where(kv => kv.Value.Ids.Count > 0).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
-        if (!next.SetEquals(_attention.Value)) _attention.OnNext(next);
+        if (next.SetEquals(_attention.Value)) return;
+        _attention.OnNext(next.Count == 0 ? FrozenSet<string>.Empty : next);
     }
 
     public void Dispose() {

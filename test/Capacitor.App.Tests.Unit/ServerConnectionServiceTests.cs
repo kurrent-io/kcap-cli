@@ -353,6 +353,24 @@ public class ServerConnectionServiceTests {
         await Assert.That(await access.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo("s1");
     }
 
+    /// One option missing its id must not cost the whole push, and no option may reach a card
+    /// without one: the malformed array reads as no options, which asks for free text.
+    [Test]
+    public async Task AnElicitationWithAMalformedOptionSurfacesWithNoOptions() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new object[] { new { option_id = "a", label = "A" }, new { label = "B" } }, false);
+
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Prompt).IsEqualTo("Pick one");
+        await Assert.That(q.Options).IsEmpty();
+    }
+
     [Test]
     public async Task ToolInputSentAsAJsonStringIsParsed() {
         await using var host = await HubTestHost.StartAsync();

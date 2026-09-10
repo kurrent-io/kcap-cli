@@ -76,8 +76,8 @@ public sealed class AgentActionService {
 
     /// Per-id gating: a second Stop for the same id no-ops while one is pending — including while
     /// a protected kind's confirm-then-force dialog is still open, since the id stays in-flight
-    /// for the whole RunStopAsync call — different ids run concurrently (spec §7, decision 5). The
-    /// same gate covers a remote stop, whatever origin either RequestStop call carried.
+    /// for the whole RunStopAsync call — different ids run concurrently. The same gate covers a
+    /// remote stop, whatever origin either RequestStop call carried.
     /// Never throws — this is a UI command target, not a Task the caller awaits.
     public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local) {
         lock (_lock) {

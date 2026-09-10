@@ -14,6 +14,7 @@ public sealed class ServerPermissionFeed : IDisposable {
     readonly CompositeDisposable _subscriptions = new();
     readonly CancellationTokenSource _lifetime = new();
     string? _subject;
+    bool _disposed;
 
     public ServerPermissionFeed(
             IServerLane lane, SessionAccessService access, PermissionService permissions,
@@ -48,25 +49,30 @@ public sealed class ServerPermissionFeed : IDisposable {
 
     async Task ReconcileAsync(string sessionId) {
         var generation = _permissions.SessionGeneration(sessionId);
-        SessionDetailFetch fetch;
-        try { fetch = await _readDetail(sessionId, _lifetime.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: session reconciliation failed: {ex.Message}"); return; }
-
-        if (fetch.Detail is null) {
-            if (fetch.NotFound) _permissions.ReplaceServerForSession(sessionId, [], generation);
-            return;
+        try {
+            var fetch = await _readDetail(sessionId, _lifetime.Token).ConfigureAwait(false);
+            // A fetch that merely failed says nothing about the session, so its cards stand; only
+            // a 404 is evidence there is nothing to hold.
+            if (fetch.Detail is null) {
+                if (fetch.NotFound) _permissions.ReplaceServerForSession(sessionId, [], generation);
+                return;
+            }
+            var reconciled = InterruptReconciliation.FromDetail(fetch.Detail);
+            IReadOnlyList<PendingPermissionRequest> items = reconciled.Ended
+                ? []
+                : [.. reconciled.Pending.Where(p => p.IsAnswerableOverHttp)
+                    .Select(p => PendingPermissionRequest.FromReconciled(sessionId, p))
+                    .OfType<PendingPermissionRequest>()];
+            _permissions.ReplaceServerForSession(sessionId, items, generation);
+        } catch (OperationCanceledException) {
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: session reconciliation failed: {ex.Message}");
         }
-        var reconciled = InterruptReconciliation.FromDetail(fetch.Detail);
-        IReadOnlyList<PendingPermissionRequest> items = reconciled.Ended
-            ? []
-            : [.. reconciled.Pending.Where(p => p.IsAnswerableOverHttp)
-                .Select(p => PendingPermissionRequest.FromReconciled(sessionId, p))
-                .OfType<PendingPermissionRequest>()];
-        _permissions.ReplaceServerForSession(sessionId, items, generation);
     }
 
     public void Dispose() {
+        if (_disposed) return;
+        _disposed = true;
         _subscriptions.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();
