@@ -6,6 +6,25 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A hosted agent's teardown cannot hang up the daemon
+
+Stopping a Pi agent that outlived its grace period took the whole daemon down: the log showed
+SIGHUP thirty milliseconds after the agent's exit, the daemon shut down cooperatively with exit 0,
+and launchd, whose `KeepAlive` only restarts a failed exit, left it down. Nothing sent that signal.
+`Process.Kill(entireProcessTree: true)` SIGSTOPs each process before it looks for children, Pi and
+its `kcap mcp` bridge children live in the daemon's own process group, and a launch agent shares
+launchd's session. So the first bridge to exit after Pi, reparented to launchd, orphaned the
+daemon's group while a sibling was still stopped, and the kernel answered with SIGHUP and SIGCONT
+to every member. Two changes, each sufficient on its own. The daemon's tree kill is now
+`ProcessTree.Kill`: SIGKILL only, children before parents, each pid signalled once and only while
+it still carries the start identity captured when it was listed, with the runtime's tree kill banned
+in the daemon assembly so no member of the group is ever stopped. Without a stop a parent can still
+fork between its last listing and its own death, and that child is reparented out of reach; the
+child-first order keeps that window to two syscalls. And a daemon with no terminal on any standard
+stream ignores SIGHUP, since there is nothing to hang up; a run attached to a terminal keeps
+treating it as the terminal closing, whether or not it logs to a file. forkpty agents were never
+exposed: `login_tty` puts them in their own session.
+
 ## The desktop app renders markdown through MarkView.Avalonia
 
 The hand-written Markdig-to-controls renderer covered the constructs agents emit and nothing else,

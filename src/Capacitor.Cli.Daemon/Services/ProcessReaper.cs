@@ -174,7 +174,7 @@ internal static class ProcessReaper {
 
         if (OperatingSystem.IsWindows()) {
             if (!hard) {
-                try { using var p = System.Diagnostics.Process.GetProcessById(pid); p.Kill(entireProcessTree: true); }
+                try { ProcessTree.Kill(pid); }
                 catch { /* gone / unkillable */ }
             }
 

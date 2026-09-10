@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -54,7 +55,7 @@ internal static class CodexMcpInventory {
             stderr = process.StandardError.ReadToEnd();
 
             if (!process.WaitForExit(TimeoutMs)) {
-                try { process.Kill(entireProcessTree: true); } catch { /* best-effort */ }
+                try { ProcessTree.Kill(process); } catch { /* best-effort */ }
 
                 throw new CodexReviewerMcpIsolationException(
                     $"'{codexPath} mcp list --json' timed out while enumerating the reviewer's inherited MCP servers.");

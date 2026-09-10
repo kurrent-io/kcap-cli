@@ -283,7 +283,7 @@ public partial class WorktreeManager {
     /// </summary>
     static async Task TerminateAndDrainAsync(Process process, params Task[] pumps) {
         using var budget = new CancellationTokenSource(CleanupBudget);
-        try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+        try { if (!process.HasExited) ProcessTree.Kill(process); }
         catch { /* already gone, or tree enumeration failed — the direct kill below is the fallback */ }
         // Tree termination can fail while killing the process itself still succeeds, and returning from
         // here with a live owned child is a leak: disposing Process does not terminate it.

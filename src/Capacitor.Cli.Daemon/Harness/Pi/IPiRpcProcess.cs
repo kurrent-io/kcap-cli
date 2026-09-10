@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Harness.Pi;
@@ -83,7 +84,7 @@ internal interface IPiRpcProcess : IAsyncDisposable {
 /// <see cref="IPiRpcProcess"/> over a real <see cref="Process"/> — the long-lived <c>pi</c> child
 /// backing one hosted Pi session for its whole lifetime. Mirrors <c>AgyTurnProcess</c>'s
 /// terminate/wait/dispose semantics (an immediate kill of the whole process tree via
-/// <see cref="Process.Kill(bool)"/> — not a graceful signal first — bounded waits that return
+/// <see cref="ProcessTree.Kill(Process)"/> — not a graceful signal first — bounded waits that return
 /// silently on timeout, idempotent dispose, terminate-safe-after-dispose) and its bounded stderr
 /// diagnostics capture, but differs in the one place the two runtimes differ: stdin.
 /// <c>AgyTurnProcess</c> closes it the instant the child spawns (a fresh exec-per-turn process that
@@ -256,7 +257,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
         try {
             if (_process.HasExited) return;
 
-            _process.Kill(entireProcessTree: true);
+            ProcessTree.Kill(_process);
         } catch {
             // Already exited, already disposed (the contract explicitly permits this call after
             // DisposeAsync), or the kill raced the exit — nothing left to terminate either way.
@@ -277,12 +278,12 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
         // dead pipe that will never accept more bytes.
         //
         // No bounded wait after the kill, deliberately — see AgyTurnProcess's identical comment.
-        // Kill(entireProcessTree: true) is an immediate kill (SIGKILL on POSIX), which no child can
+        // ProcessTree.Kill is an immediate kill (SIGKILL on POSIX), which no child can
         // catch or defer, so the death is already effectively synchronous with the call. Callers
         // that need a CONFIRMED exit terminate first and read HasExited while the handle is still
         // valid.
         try {
-            if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+            if (!_process.HasExited) ProcessTree.Kill(_process);
         } catch {
             // Best-effort — already exited or inaccessible.
         }

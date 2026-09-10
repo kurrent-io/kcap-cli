@@ -683,7 +683,7 @@ public static partial class DaemonRunner {
         // tears down the logging pipeline. Lifetime is captured so SIGHUP
         // (terminal closed) can be turned into a cooperative StopApplication
         // — without that, the host's finally-block cleanup never runs.
-        RegisterDeathRattle(logger, lifetime);
+        RegisterDeathRattle(logger, lifetime, AttachedToTerminal());
 
         // Lifetime-driven log lines — pair with the AppDomain/signal hooks so
         // we can distinguish a cooperative StopApplication (e.g. NameInUse,
@@ -1536,7 +1536,7 @@ public static partial class DaemonRunner {
                 ArgumentList = { "--version" }
             });
             if (process is null || !process.WaitForExit(timeoutMs)) {
-                try { process?.Kill(entireProcessTree: true); } catch { }
+                try { if (process is not null) ProcessTree.Kill(process); } catch { }
                 return null;
             }
             var output = process.StandardOutput.ReadToEnd().Trim();
@@ -1656,19 +1656,33 @@ public static partial class DaemonRunner {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Received POSIX signal {Signal} — requesting cooperative shutdown")]
     static partial void LogPosixSignal(ILogger logger, PosixSignal signal);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Received POSIX signal {Signal} — ignored: no terminal is attached to hang up")]
+    static partial void LogPosixSignalIgnored(ILogger logger, PosixSignal signal);
+
     /// <summary>
-    /// Wires AppDomain + TaskScheduler + POSIX-signal hooks so whenever the
-    /// daemon process is going away we get a last log line before the runtime
-    /// tears down. Without these, the only signal we'd see is "the log ends" —
-    /// indistinguishable between SIGTERM, SIGHUP (terminal closed), OOM kill,
-    /// an unobserved Task FailFast, or a clean StopApplication. SIGHUP is the
-    /// top suspect for "daemon dies silently after a foreground run", since
-    /// ConsoleLifetime doesn't register for it and the OS default is SIGTERM
-    /// the process. Routing it through <paramref name="lifetime"/> turns the
-    /// hard kill into a cooperative shutdown so the cleanup finally-block
-    /// gets to run.
+    /// Which POSIX signals become a cooperative shutdown. SIGHUP is a hangup only when a standard
+    /// stream is a terminal. Under launchd or systemd none is, and the kernel still delivers SIGHUP
+    /// to every member of the daemon's own process group when that group is orphaned while one
+    /// member is stopped. Shutting down on it exits 0, which launchd's
+    /// <c>KeepAlive SuccessfulExit=false</c> reads as deliberate and never restarts.
     /// </summary>
-    static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime) {
+    internal static bool SignalRequestsShutdown(PosixSignal signal, bool attachedToTerminal) =>
+        signal != PosixSignal.SIGHUP || attachedToTerminal;
+
+    /// <summary>Whether any standard stream is a terminal. Read once at startup: a hangup does not
+    /// change what the descriptors are, and a foreground run keeps the CLI's terminal even when it
+    /// logs to a file.</summary>
+    static bool AttachedToTerminal() =>
+        !(Console.IsInputRedirected && Console.IsOutputRedirected && Console.IsErrorRedirected);
+
+    /// <summary>
+    /// Wires AppDomain, TaskScheduler and POSIX-signal hooks so a daemon that is going away leaves
+    /// a last log line saying why: SIGTERM, a hangup, an unobserved-task FailFast and a clean
+    /// StopApplication are otherwise indistinguishable from "the log ends". A signal that
+    /// <see cref="SignalRequestsShutdown"/> accepts is routed through <paramref name="lifetime"/>
+    /// so the host's cleanup runs instead of the OS default termination.
+    /// </summary>
+    static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime, bool attachedToTerminal) {
         AppDomain.CurrentDomain.UnhandledException += (_, args) => {
             if (args.ExceptionObject is Exception ex) {
                 DeathRattle($"AppDomain.UnhandledException (terminating={args.IsTerminating}): {ex.GetType().Name}: {ex.Message}");
@@ -1690,25 +1704,26 @@ public static partial class DaemonRunner {
             LogProcessExit(logger);
         };
 
-        // POSIX signal hooks. ConsoleLifetime already wires SIGINT and SIGTERM
-        // to lifetime.StopApplication(); our registration is additive (multiple
-        // PosixSignalRegistration handlers all run) so it just guarantees a
-        // log line lands before the cooperative shutdown begins. SIGHUP and
-        // SIGQUIT are NOT caught by ConsoleLifetime, so for those we both log
-        // AND call StopApplication ourselves — otherwise the OS would terminate
-        // us before the host's finally-block could run.
+        // ConsoleLifetime already wires SIGINT and SIGTERM to StopApplication; registrations are
+        // additive, so this one adds the log line. SIGHUP and SIGQUIT are not caught by
+        // ConsoleLifetime, so for those this handler is the only thing between the signal and the
+        // OS default of terminating the process.
         //
-        // The returned PosixSignalRegistration IS the registration's lifetime
-        // anchor — if it's GC'd and finalized the handler unregisters silently
-        // and the signal goes back to its default OS action (terminate the
-        // process for SIGHUP, etc). Root them in a static list so they live
-        // as long as the DaemonRunner type — i.e. the process.
+        // The returned PosixSignalRegistration is the registration's lifetime anchor: finalized, it
+        // unregisters silently and the signal falls back to its OS default. They are rooted in a
+        // static list so they live as long as the process.
         foreach (var signal in new[] { PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGQUIT }) {
             try {
                 _signalRegistrations.Add(PosixSignalRegistration.Create(signal, ctx => {
+                    ctx.Cancel = true;
+
+                    if (!SignalRequestsShutdown(ctx.Signal, attachedToTerminal)) {
+                        LogPosixSignalIgnored(logger, ctx.Signal);
+                        return;
+                    }
+
                     DeathRattle($"Received POSIX signal {ctx.Signal} — requesting cooperative shutdown");
                     LogPosixSignal(logger, ctx.Signal);
-                    ctx.Cancel = true;
                     lifetime.StopApplication();
                 }));
             } catch (PlatformNotSupportedException) {

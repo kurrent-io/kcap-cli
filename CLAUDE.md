@@ -72,6 +72,14 @@ Deliberate choices a change can silently undo — each looks like a bug until yo
   fixes the bytes each id hashes; the server dedups by them, and a session it has already ingested
   is never re-projected. A different derivation would append duplicates on the next re-import, so
   the leaf's fixed vectors pin every row and a change needs a migration, not a bump.
+- **The daemon never stops a process in its own process group.** Every `Process.Start` child (Pi,
+  Antigravity, ACP agents, git) shares the daemon's group, and a launch agent shares launchd's
+  session: a stopped member at the moment a reparented grandchild exits makes the kernel SIGHUP
+  the whole group, daemon included. Tree kills go through `ProcessTree.Kill` (SIGKILL only,
+  children before parents, each pid identity-checked and signalled once), the runtime's
+  `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
+  standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
+  exit launchd never restarts.
 
 ## Tech stack
 

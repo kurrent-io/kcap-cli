@@ -2658,7 +2658,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try {
                 await proc.WaitForExitAsync(cts.Token);
             } catch (OperationCanceledException) {
-                try { proc.Kill(true); } catch {
+                try { ProcessTree.Kill(proc); } catch {
                     /* best-effort */
                 }
 

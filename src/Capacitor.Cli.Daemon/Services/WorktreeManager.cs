@@ -1494,7 +1494,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             try {
                 await proc.WaitForExitAsync(cts.Token);
             } catch (OperationCanceledException) {
-                try { proc.Kill(true); } catch {
+                try { ProcessTree.Kill(proc); } catch {
                     /* best-effort */
                 }
 
@@ -1596,7 +1596,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         try {
             await proc.WaitForExitAsync(cts.Token);
         } catch (OperationCanceledException) {
-            try { proc.Kill(true); } catch { /* best-effort */ }
+            try { ProcessTree.Kill(proc); } catch { /* best-effort */ }
 
             // Kill is asynchronous. Wait for it to land before unwinding: a caller may hold the
             // worktree metadata gate, whose whole point is that no other git touches this repo's

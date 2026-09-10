@@ -452,7 +452,7 @@ public partial class WorktreeManager {
             await process.WaitForExitAsync(timeoutCts.Token);
             await stdoutTask;
         } catch (OperationCanceledException) {
-            try { process.Kill(entireProcessTree: true); } catch { }
+            try { ProcessTree.Kill(process); } catch { }
             throw new InvalidOperationException(
                 $"git {string.Join(' ', args)} timed out after {timeout.TotalSeconds:F0}s");
         }

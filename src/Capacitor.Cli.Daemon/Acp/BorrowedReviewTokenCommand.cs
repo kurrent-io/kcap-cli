@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Acp;
 
@@ -78,7 +79,7 @@ internal static class BorrowedReviewTokenCommand {
     }
 
     static void Kill(Process process) {
-        try { process.Kill(entireProcessTree: true); } catch (Exception) { /* already gone */ }
+        try { ProcessTree.Kill(process); } catch (Exception) { /* already gone */ }
     }
 
     /// <summary>Reads to EOF, keeping nothing.</summary>

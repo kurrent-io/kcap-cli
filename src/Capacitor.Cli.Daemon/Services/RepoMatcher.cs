@@ -198,7 +198,7 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
         try {
             await proc.WaitForExitAsync(timeoutCts.Token);
         } catch (OperationCanceledException) {
-            try { proc.Kill(true); } catch {
+            try { ProcessTree.Kill(proc); } catch {
                 /* best-effort */
             }
 
