@@ -114,4 +114,23 @@ public class WorkOSClientTests : IDisposable {
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
         await Assert.That(result.Response).IsNull();
     }
+
+    /// <summary>A WorkOS that accepts the connection but stalls must not hold auth — and every peer's
+    /// refresh, since a refresh runs under the cross-process lock — for the client's 100 s default.
+    /// The single attempt has its own short deadline, and a stall reads as a transport failure (the
+    /// token was not spent), never a rejection.</summary>
+    [Test]
+    public async Task A_stalled_refresh_times_out_as_a_transport_failure() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithBody("""{"access_token":"acc","refresh_token":"rt2"}""")
+                .WithDelay(TimeSpan.FromSeconds(3)));
+
+        var client = new WorkOSClient(
+            new PlainHttpClientFactory(new StubHost(_server.Urls[0])), refreshTimeout: TimeSpan.FromMilliseconds(200));
+
+        var result = await client.RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
+    }
 }

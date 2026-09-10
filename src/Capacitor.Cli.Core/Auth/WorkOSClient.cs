@@ -16,9 +16,14 @@ namespace Capacitor.Cli.Core.Auth;
 /// authenticate exits quietly rather than stack-tracing into a transcript. The sign-in legs do not,
 /// because a sign-in is interactive and a transport failure there is worth saying out loud.</para>
 /// </summary>
-public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
+public sealed class WorkOSClient(IHttpClientFactory httpFactory, TimeSpan? refreshTimeout = null) {
     /// <summary>AuthKit's API host. The machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.</summary>
     public const string ApiBase = "https://api.workos.com";
+
+    // A hard deadline on the single refresh attempt: the shared HttpClient carries the 100 s default,
+    // and a refresh runs under the cross-process lock, so a stalled WorkOS would otherwise hold auth
+    // and every peer's refresh for that long. Short — a hook must not block on an unreachable WorkOS.
+    readonly TimeSpan _refreshTimeout = refreshTimeout ?? TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Exchanges a rotating refresh token for a fresh access token, classifying the outcome so a caller
@@ -33,12 +38,17 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
     /// </summary>
     public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
+        // The deadline cancels only the linked token, not the caller's ct, so a timeout is caught below
+        // as a TransportFailed (the token was not spent — retry is safe) while a real caller cancel
+        // still propagates.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_refreshTimeout);
         try {
             using var response = await PostFormAsync(AuthenticateUrl, new() {
                 ["grant_type"]    = "refresh_token",
                 ["client_id"]     = clientId,
                 ["refresh_token"] = refreshToken
-            }, ct);
+            }, deadline.Token);
 
             if (!response.IsSuccessStatusCode) {
                 // A 4xx means WorkOS understood and refused the refresh token (a 400 invalid_grant on
@@ -51,7 +61,7 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
             }
 
             var body = await response.Content.ReadFromJsonAsync(
-                CapacitorJsonContext.Default.WorkOSAuthResponse, ct);
+                CapacitorJsonContext.Default.WorkOSAuthResponse, deadline.Token);
 
             return body is null
                 ? new(WorkOSRefreshOutcome.TransportFailed, null)
