@@ -1,5 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Codex;
+using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 
@@ -13,8 +15,22 @@ public class CodexForwardBufferTests {
     static AcpEventEnvelope Ephemeral(string text) =>
         new(Kind: AcpEventKind.AssistantText, Text: text, Ephemeral: true, ItemId: "i1");
 
-    static CodexForwardBuffer New(int capacity, TimeSpan stall, Action<TimeSpan>? onStall = null) =>
-        new(capacity, stall, CancellationToken.None, onStall ?? (_ => { }));
+    static CodexForwardBuffer New(
+            int capacity, TimeSpan stall, Action<TimeSpan>? onStall = null,
+            TranscriptJournal? journal = null, CancellationToken shutdown = default) =>
+        new(capacity, stall, shutdown, onStall ?? (_ => { }), journal);
+
+    static (TranscriptJournal Journal, TempDir Tmp) OpenJournal() {
+        var tmp = new TempDir();
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        journal.Open("/w", null);
+        return (journal, tmp);
+    }
+
+    static async Task<List<string?>> JournaledTexts(TranscriptJournal journal) {
+        await journal.CompleteAsync();
+        return File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return e.Text; }).ToList();
+    }
 
     [Test]
     public async Task Canonical_envelopes_are_delivered_in_order() {
@@ -92,5 +108,57 @@ public class CodexForwardBufferTests {
         buf.Emit(Canonical("after"));
         buf.Emit(Ephemeral("after"));
         await Assert.That(buf.DroppedEphemeralCount).IsEqualTo(0); // not even counted — buffer is dead
+    }
+
+    [Test]
+    public async Task Canonical_envelopes_are_journaled_and_ephemerals_dropped_from_a_full_buffer_are_not() {
+        var (journal, tmp) = OpenJournal(); using var _ = tmp;
+        using var buf = New(1, TimeSpan.FromSeconds(5), journal: journal);
+        buf.Emit(Canonical("a"));
+        buf.Emit(Ephemeral("live"));  // full: dropped
+        await Assert.That(buf.DroppedEphemeralCount).IsEqualTo(1);
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" });
+    }
+
+    [Test]
+    public async Task Blocking_canonical_write_is_journaled_only_after_it_completes() {
+        var (journal, tmp) = OpenJournal(); using var _ = tmp;
+        using var buf = New(1, TimeSpan.FromSeconds(5), journal: journal);
+        buf.Emit(Canonical("a"));
+        var blocked = Task.Run(() => buf.Emit(Canonical("b")));
+        await Task.Delay(100);
+        await Assert.That(blocked.IsCompleted).IsFalse();
+        await Assert.That(File.ReadAllText(journal.Path)).DoesNotContain("\"b\"");
+        await buf.Reader.ReadAsync(); // frees the slot
+        await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a", "b" });
+    }
+
+    [Test]
+    public async Task Stalled_buffer_journals_nothing_further_and_the_watchdog_fires_once() {
+        var (journal, tmp) = OpenJournal(); using var _ = tmp;
+        var stalls = 0;
+        using var buf = New(1, TimeSpan.FromMilliseconds(100), onStall: _ => stalls++, journal: journal);
+        buf.Emit(Canonical("a"));
+        buf.Emit(Canonical("stalled")); // blocks 100 ms, then faults
+        buf.Emit(Canonical("after"));
+        await Assert.That(stalls).IsEqualTo(1);
+        await Assert.That(buf.Stalled).IsTrue();
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" });
+    }
+
+    [Test]
+    public async Task Shutdown_cancelled_wait_and_emit_after_complete_are_not_journaled_and_do_not_throw() {
+        var (journal, tmp) = OpenJournal(); using var _ = tmp;
+        using var shutdown = new CancellationTokenSource();
+        using var buf = New(1, TimeSpan.FromSeconds(30), journal: journal, shutdown: shutdown.Token);
+        buf.Emit(Canonical("a"));
+        var blocked = Task.Run(() => buf.Emit(Canonical("cancelled")));
+        await Task.Delay(50);
+        shutdown.Cancel();
+        await blocked.WaitAsync(TimeSpan.FromSeconds(5)); // returned, no throw
+        buf.Complete();
+        buf.Emit(Canonical("after-complete")); // no throw
+        await Assert.That(await JournaledTexts(journal)).IsEquivalentTo(new string?[] { "a" });
     }
 }

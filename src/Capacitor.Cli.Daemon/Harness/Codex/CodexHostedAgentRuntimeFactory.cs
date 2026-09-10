@@ -123,6 +123,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         CodexAppServerSpawn spawn = (seed, spawnCt) =>
             _spawnFactory(_launcher.CliPath, appServerArgs, seed, ctx.Worktree.Path, env, _config, _loggerFactory);
 
+        ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
+
         var runtime = new CodexAppServerHostedAgentRuntime(
             spawn, launch, ctx.ActivityClock,
             _loggerFactory.CreateLogger<CodexAppServerHostedAgentRuntime>(),
@@ -130,7 +132,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             deferFirstTurn: envelopeSourced,
             agentId: ctx.AgentId,
             requestInteraction: _connection is { } c ? c.RequestAcpInteractionAsync : null,
-            approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)));
+            approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)),
+            journal: ctx.Journal);
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a

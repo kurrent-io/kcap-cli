@@ -1,5 +1,7 @@
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -31,15 +33,21 @@ internal sealed class CodexForwardBuffer : IDisposable {
     readonly TimeSpan          _stallTimeout;
     readonly CancellationToken _shutdown;
     readonly Action<TimeSpan>  _onStall;
+    readonly TranscriptJournal? _journal;
+    readonly ILogger?           _logger;
     int _droppedEphemeral;
     int _stalled;
 
-    public CodexForwardBuffer(int capacity, TimeSpan stallTimeout, CancellationToken shutdown, Action<TimeSpan> onStall) {
+    public CodexForwardBuffer(
+            int capacity, TimeSpan stallTimeout, CancellationToken shutdown, Action<TimeSpan> onStall,
+            TranscriptJournal? journal = null, ILogger? logger = null) {
         _channel = Channel.CreateBounded<AcpEventEnvelope>(new BoundedChannelOptions(capacity) {
             SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
         _stallTimeout = stallTimeout;
         _shutdown     = shutdown;
         _onStall      = onStall;
+        _journal      = journal;
+        _logger       = logger;
     }
 
     /// <summary>The forwarder's drain side — FIFO, real seq assigned downstream (envelopes carry the
@@ -55,7 +63,8 @@ internal sealed class CodexForwardBuffer : IDisposable {
     public bool Stalled => Volatile.Read(ref _stalled) == 1;
 
     /// <summary>Emit one envelope from the read loop. Canonical blocks when full (backpressure);
-    /// ephemeral drops when full. A no-op once stalled.</summary>
+    /// ephemeral drops when full. A no-op once stalled. A canonical envelope is journaled only once it
+    /// is confirmed IN the channel — never on a drop, a stall, or a completed/shutdown buffer.</summary>
     public void Emit(AcpEventEnvelope env) {
         if (Stalled) return;
 
@@ -65,23 +74,32 @@ internal sealed class CodexForwardBuffer : IDisposable {
         }
 
         // Canonical: never dropped. TryWrite is the fast path when there is room.
-        if (_channel.Writer.TryWrite(env)) return;
-        WriteCanonicalBlocking(env);
+        if (_channel.Writer.TryWrite(env) || WriteCanonicalBlocking(env)) _journal?.Record(env);
     }
 
-    void WriteCanonicalBlocking(AcpEventEnvelope env) {
+    /// <summary>True only when <paramref name="env"/> actually entered the channel.</summary>
+    bool WriteCanonicalBlocking(AcpEventEnvelope env) {
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(_shutdown);
         stall.CancelAfter(_stallTimeout);
         try {
             // Blocks the read-loop thread until space frees — the app-server blocks on stdout (lossless).
             _channel.Writer.WriteAsync(env, stall.Token).AsTask().GetAwaiter().GetResult();
+            return true;
+        } catch (ChannelClosedException) {
+            // The ordinary teardown race: Complete() ran while this write was blocked (or arrived
+            // after). Debug, not Warning — every clean stop can hit this.
+            _logger?.LogDebug(
+                "Codex: dropped a transcript envelope (Kind={Kind}) — forward buffer already completed.",
+                env.Kind);
+            return false;
         } catch (OperationCanceledException) {
             // Shutdown fired mid-wait: we are tearing down, so drop this envelope silently (the session
             // is ending anyway) rather than propagating out of the read-loop notification handler.
-            if (_shutdown.IsCancellationRequested) return;
+            if (_shutdown.IsCancellationRequested) return false;
             // Otherwise the buffer stayed full past the stall timeout → deterministic terminal fault. The
             // undrained canonical tail is lost by design and reported loudly by onStall (never silently).
             if (Interlocked.Exchange(ref _stalled, 1) == 0) _onStall(_stallTimeout);
+            return false;
         }
     }
 

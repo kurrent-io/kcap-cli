@@ -154,7 +154,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             bool emitEnvelopeTranscript = false, bool deferFirstTurn = false,
             string? agentId = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
-            TimeSpan? approvalTimeout = null) {
+            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null) {
         _spawn   = spawn;
         _launch  = launch;
         _clock   = clock;
@@ -180,7 +180,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         _forwardBuffer = new CodexForwardBuffer(
             ForwardBufferCapacity,
             forwardStallTimeout ?? TimeSpan.FromSeconds(DefaultForwardStallSeconds),
-            _cts.Token, OnForwardStall);
+            _cts.Token, OnForwardStall, journal, logger);
     }
 
     // ── IHostedAgentRuntime: identity / lifecycle observables ──────────────────────────────────
