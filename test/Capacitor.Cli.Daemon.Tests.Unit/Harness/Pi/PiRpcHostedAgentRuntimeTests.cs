@@ -537,7 +537,9 @@ public class PiRpcHostedAgentRuntimeTests {
     [Test]
     public async Task Journal_matches_channel_order_under_concurrent_pump_and_send_time_writers() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        // The stock completion grace bounds the writer against a hung disk, which turns an assertion
+        // over 400 fsynced appends into a throughput race the suite's own load can lose.
+        var journal = new TranscriptJournal(tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(1));
         journal.Open("/w", null);
         var (runtime, process) = NewRuntime(journal: journal);
         await using var _ = runtime;
@@ -551,7 +553,8 @@ public class PiRpcHostedAgentRuntimeTests {
         await Task.Delay(200);
         process.EndOfStream();
         await drain.WaitAsync(TimeSpan.FromSeconds(10));
-        await journal.CompleteAsync();
+        // Without this the comparison below reports a 400-item diff instead of the abandoned writer.
+        await Assert.That(await journal.CompleteAsync()).IsTrue();
 
         var journaled = File.ReadAllLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
         await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);
