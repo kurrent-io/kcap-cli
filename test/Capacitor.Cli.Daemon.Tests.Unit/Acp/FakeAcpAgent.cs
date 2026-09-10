@@ -249,6 +249,19 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public void SimulateCrash() => _toClient.Writer.Complete();
 
+    /// <summary>Pushes an unsolicited <c>agent_message_chunk</c> update outside any prompt script —
+    /// for a test driving agent output at an arbitrary moment rather than through a turn's response.
+    /// Fire-and-forget, like <see cref="RunAsync"/>'s own dispatch: a fault is captured the same way
+    /// so it still surfaces via <see cref="DisposeAsync"/> instead of being silently lost.</summary>
+    public void EmitAgentText(string text) {
+        var write = WriteRawFrameAsync(DefaultAgentMessageChunkUpdate(FixedSessionId, text), CancellationToken.None);
+        _ = write.ContinueWith(t => {
+            if (!t.IsFaulted) return;
+            var captured = ExceptionDispatchInfo.Capture(t.Exception!.InnerException ?? t.Exception);
+            Interlocked.CompareExchange(ref _dispatchFault, captured, null);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
     /// <summary>
     /// Arranges the NEXT <c>initialize</c> request to be answered with a JSON-RPC error instead of
     /// a success result — models a logged-out/unsubscribed <c>cursor-agent</c> rejecting

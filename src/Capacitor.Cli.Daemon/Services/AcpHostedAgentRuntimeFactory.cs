@@ -196,6 +196,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             // and the orchestrator replaces recorder+clearer in ONE atomic reference assignment so no
             // partially-wired state is ever observable.
 
+            // Unopened until now — the orchestrator hands the factory an unopened journal
+            // (RuntimeStartContext's remarks) so the header's cwd/model are this launch's own.
+            ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
+
             // Spec-review Finding 4: real production wiring — every launch now gets the
             // permission/elicitation bridge, not the default MethodNotFound/decline.
             runtime = new AcpHostedAgentRuntime(
@@ -260,7 +264,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 // The same directory the child is spawned in, so a relative tool-call path resolves to
                 // the file the agent will actually touch — an unresolvable one evaluates as Other and
                 // slips past every path rule.
-                policyCwd: ctx.Worktree.Path
+                policyCwd: ctx.Worktree.Path,
+                journal: ctx.Journal
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against

@@ -290,6 +290,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// successful review's home would otherwise sit on disk until a later daemon epoch swept it.</summary>
     readonly Action? _onDisposed;
 
+    /// <summary>Recorded from <see cref="EmitEnvelope"/>, opened by the factory before construction. Null
+    /// for every launch/test that carries no journal.</summary>
+    readonly TranscriptJournal? _journal;
+
     /// <summary>
     /// The in-flight out-of-band reap, if one was started. Awaited by disposal so cleanup never runs
     /// ahead of the termination it depends on.
@@ -628,8 +632,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             Action<AcpAutoApprovalNotice>?                                                  notifyAutoApproval = null,
             PolicySnapshot?                                                                 policySnapshot = null,
             Action<PolicyDecisionEventV1>?                                                  notifyPolicyDecision = null,
-            string?                                                                         policyCwd = null
+            string?                                                                         policyCwd = null,
+            TranscriptJournal?                                                              journal = null
         ) {
+        _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
         _firstOutputDeadline = firstOutputDeadline;
@@ -1829,6 +1835,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
             if (!_transcript.Writer.TryWrite(envelope))
                 _logger.LogDebug("ACP: dropped an ACP transcript envelope (Kind={Kind}) — transcript channel already completed.", envelope.Kind);
+            else
+                _journal?.Record(envelope);
         }
     }
 

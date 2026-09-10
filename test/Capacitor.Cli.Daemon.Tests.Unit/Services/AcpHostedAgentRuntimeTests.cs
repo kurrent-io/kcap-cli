@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Acp;
@@ -70,11 +71,12 @@ public class AcpHostedAgentRuntimeTests {
 
         Task _fakeRunTask = Task.CompletedTask;
 
-        public Harness() {
+        public Harness(TranscriptJournal? journal = null, int? transcriptCapacity = null) {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance);
+            Runtime = new AcpHostedAgentRuntime(
+                Conn, Process, NullLogger.Instance, transcriptCapacity: transcriptCapacity, journal: journal);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
@@ -833,5 +835,57 @@ public class AcpHostedAgentRuntimeTests {
         var result = AcpHostedAgentRuntime.SanitizeForForward("anything at all", maxLength: 0);
 
         await Assert.That(result).IsEqualTo("…");
+    }
+
+    static async Task<List<AcpEventEnvelope>> JournalEnvelopes(string path) {
+        var list = new List<AcpEventEnvelope>();
+        foreach (var line in await File.ReadAllLinesAsync(path)) if (EnvelopeJournalFormat.TryRead(line, out var e)) list.Add(e);
+        return list;
+    }
+
+    [Test]
+    public async Task Journal_receives_every_accepted_envelope_in_channel_order_including_the_initial_user_message() {
+        using var tmp = new TempDir();
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        journal.Open("/abs/worktree", null);
+        await using var h = new Harness(journal);
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard);
+        h.Fake.EmitAgentText("hello");
+        var fromChannel = new List<AcpEventEnvelope>();
+        while (fromChannel.Count < 2) fromChannel.Add(await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard));
+
+        await journal.CompleteAsync();
+        var fromJournal = (await JournalEnvelopes(journal.Path)).Skip(1).ToList(); // header first
+
+        await Assert.That(fromJournal.Select(e => (e.Kind, e.Text))).IsEquivalentTo(fromChannel.Select(e => (e.Kind, e.Text)));
+        await Assert.That(fromJournal[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
+    }
+
+    /// <summary>
+    /// Consecutive agent_message_chunk updates aggregate into one buffered run until a turn boundary
+    /// flushes it, so two chunks emitted close together can land in the SAME envelope rather than
+    /// two — asserting against the joined text of every journaled envelope (not a single envelope's
+    /// own <c>Text</c>) is what makes this test correct regardless of which way that aggregation falls.
+    /// </summary>
+    [Test]
+    public async Task Envelope_evicted_by_drop_oldest_is_still_in_the_journal_and_one_after_completion_is_not() {
+        using var tmp = new TempDir();
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        journal.Open("/abs/worktree", null);
+        await using var h = new Harness(journal, transcriptCapacity: 1);
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "p", h.Cts.Token).WaitAsync(HangGuard);
+        h.Fake.EmitAgentText("marker-a"); h.Fake.EmitAgentText("marker-b"); // capacity 1: earlier envelopes are evicted from the live channel
+        await Task.Delay(100);
+        await h.Runtime.DisposeAsync();  // flushes any open run, then completes the channel
+        h.Fake.EmitAgentText("marker-late");
+        await Task.Delay(100);
+        await journal.CompleteAsync();
+
+        var joined = string.Join("\n", (await JournalEnvelopes(journal.Path)).Select(e => e.Text));
+        await Assert.That(joined).Contains("marker-a");
+        await Assert.That(joined).Contains("marker-b");
+        await Assert.That(joined).DoesNotContain("marker-late");
     }
 }
