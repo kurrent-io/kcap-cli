@@ -8,6 +8,9 @@ namespace Capacitor.Cli.Core.LocalIpc;
 /// frame; Error carries its display text). Ok is true only for "stopped".
 public sealed record StopAgentResult(bool Ok, string Status, string? Error);
 
+/// The SendTextAck's four members verbatim; Reason is "transport" when the exchange itself failed.
+public sealed record SendTextResult(bool Ok, string? Reason, string? Error, string? Outcome);
+
 /// Reason ∈ daemon_unreachable | daemon_rejected | unexpected_reply | timed_out (stable
 /// identifiers, not user copy — spec §10).
 public sealed class LocalControlOpsException(string reason, string message) : Exception(message) {
@@ -21,6 +24,7 @@ public interface ILocalControlOps {
     Task<ConsentAckDto>    PutConsentPolicyV2Async(ConsentPolicyPutV2Dto put, CancellationToken ct);
     Task<ConsentAckDto>    ResolveConsentAsync(ConsentResolveDto resolve, CancellationToken ct);
     Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct);
+    Task<SendTextResult>   SendTextAsync(string agentId, string text, CancellationToken ct);
 }
 
 /// One-shot Core IPC operations behind a fresh socket per call — no Hello negotiation (callers
@@ -129,6 +133,32 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
                 throw new LocalControlOpsException(DaemonRejected, reply.Text);
             default:
                 throw new LocalControlOpsException(UnexpectedReply, $"unexpected daemon response to permission resolve ({reply.Type})");
+        }
+    }
+
+    /// The ack lands only when the daemon's delivery settles, so this exchange has no reply
+    /// timeout — the caller's own token is the only bound.
+    public async Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) {
+        var json = JsonSerializer.Serialize(new SendTextDto(agentId, text), InputIpcJsonContext.Default.SendTextDto);
+        LocalFrame reply;
+        try {
+            reply = await ExchangeAsync(LocalFrame.InputJson(FrameType.SendText, json), Timeout.InfiniteTimeSpan, ct);
+        } catch (LocalControlOpsException ex) {
+            return new SendTextResult(false, SendTextReasons.Transport, ex.Message, null);
+        }
+        switch (reply.Type) {
+            case FrameType.SendTextAck:
+                try {
+                    var ack = DeserializeOrThrow(reply.Text, InputIpcJsonContext.Default.SendTextAckDto, "malformed send text ack reply");
+                    if (ack is null) return new SendTextResult(false, SendTextReasons.Transport, "malformed send text ack reply", null);
+                    return new SendTextResult(ack.Ok, ack.Reason, ack.Error, ack.Outcome);
+                } catch (LocalControlOpsException ex) {
+                    return new SendTextResult(false, SendTextReasons.Transport, ex.Message, null);
+                }
+            case FrameType.Error:
+                return new SendTextResult(false, SendTextReasons.Transport, reply.Text, null);
+            default:
+                return new SendTextResult(false, SendTextReasons.Transport, $"unexpected daemon response to send text ({reply.Type})", null);
         }
     }
 
