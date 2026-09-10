@@ -6,6 +6,22 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Capacity changes live; a rename restarts the daemon
+
+A client changes the running daemon's agent cap over a new local frame pair, `DaemonSettingsPut`
+23 and `DaemonSettingsAck` 81 behind `settings/1`, because the daemon reads the cap per launch off
+a mutable field and the server overwrites a repeat connect on the same connection: no restart, and
+the server learns through the same single-flighted re-register the vendor-CLI watcher uses. The
+caller persists the value itself, to the profile, before the push, so a push that fails leaves a
+durable value rather than a live one the next start forgets. The name gets no frame. It keys the
+lock, pid, socket and state paths, the launchd label and the server's slot, and the unit bakes it
+in as `--name`, so a rename is a reinstall under a new label. `install --replace --verify --retire
+<old-id>` removes the old unit inside that transaction, refusing a unit pinned to another profile
+and treating a live daemon under the new name as contended rather than as a takeover, so the app
+issues one verb and never sequences two destructive commands itself. The daemon now applies the
+profile's `max_agents` whenever `--max-agents` is absent; comparing the live value with the
+default 5 had made a profile of exactly 5 read as unset.
+
 ## A hosted agent's teardown cannot hang up the daemon
 
 Stopping a Pi agent that outlived its grace period took the whole daemon down: the log showed
