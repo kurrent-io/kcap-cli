@@ -61,13 +61,19 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
 
     /// <summary>
     /// Hosted-UI text input (server <c>SendInput</c>). PTY runtimes perform the CLI-specific
-    /// text-then-Enter split write; the ACP runtime sends a <c>session/prompt</c>.
+    /// text-then-Enter split write; the ACP runtime sends a <c>session/prompt</c>. Fails with
+    /// <see cref="InputNotAdmittedException"/> when the runtime will not queue or write the text (a
+    /// full pending-turn queue, a terminal runtime): thrown synchronously by this method, carried by
+    /// the task from <see cref="SendUserInputAndWaitForWriteAsync"/>.
     /// </summary>
     Task SendUserInputAsync(string text);
 
     /// <summary>Queue input and complete only after the runtime has written the prompt to its
     /// protocol transport. Borrowed snapshot rounds use this acknowledgement to close the race
-    /// between prompt delivery and a subsequent refresh. PTY runtimes use the normal send.</summary>
+    /// between prompt delivery and a subsequent refresh. PTY runtimes use the normal send. Fails with
+    /// <see cref="InputNotAdmittedException"/> when the runtime will not queue or write the text (a
+    /// full pending-turn queue, a terminal runtime): thrown synchronously by
+    /// <see cref="SendUserInputAsync"/>, carried by the task from this method.</summary>
     Task SendUserInputAndWaitForWriteAsync(string text) => SendUserInputAsync(text);
 
     /// <summary>Wait until any prior structured prompt turn has received its terminal response.

@@ -17,6 +17,7 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     readonly Queue<TaskCompletionSource<StopAgentResult>> _stops = new();
     readonly Queue<TaskCompletionSource<ConsentAckDto>> _resolves = new();
     readonly Queue<TaskCompletionSource<PermissionAckDto>> _permissionResolves = new();
+    readonly Queue<TaskCompletionSource<SendTextResult>> _sendTexts = new();
 
     public int GetCalls;
     public int PutCalls;
@@ -24,11 +25,13 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public int StopCalls;
     public int ResolveCalls;
     public int PermissionResolveCalls;
+    public int SendTextCalls;
     public readonly List<ConsentPolicyDto> PutPayloads = [];
     public readonly List<ConsentPolicyPutV2Dto> PutV2Payloads = [];
     public readonly List<(string AgentId, bool Force)> StopPayloads = [];
     public readonly List<ConsentResolveDto> ResolvePayloads = [];
     public readonly List<PermissionResolveDto> PermissionResolvePayloads = [];
+    public readonly List<(string AgentId, string Text)> SendTextPayloads = [];
 
     public TaskCompletionSource<ConsentPolicyDto> ArmGet() {
         var tcs = new TaskCompletionSource<ConsentPolicyDto>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -87,6 +90,14 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public void QueuePermissionResolve(bool ok, string? error = null) => ArmPermissionResolve().SetResult(new PermissionAckDto(ok, error));
     public void QueuePermissionResolveFailure(string reason) => ArmPermissionResolve().SetException(new LocalControlOpsException(reason, reason));
 
+    public TaskCompletionSource<SendTextResult> ArmSendText() {
+        var tcs = new TaskCompletionSource<SendTextResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _sendTexts.Enqueue(tcs);
+        return tcs;
+    }
+
+    public void QueueSendText(SendTextResult result) => ArmSendText().SetResult(result);
+
     public Task<ConsentPolicyDto> GetConsentPolicyAsync(CancellationToken ct) {
         Interlocked.Increment(ref GetCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentPolicyDto>(ct);
@@ -144,5 +155,13 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
         var tcs = _permissionResolves.Dequeue();
         ct.Register(() => tcs.TrySetCanceled(ct));
         return tcs.Task;
+    }
+
+    public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) {
+        SendTextCalls++;
+        SendTextPayloads.Add((agentId, text));
+        if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
+        var tcs = _sendTexts.Count > 0 ? _sendTexts.Dequeue() : throw new InvalidOperationException("arm SendText first");
+        return tcs.Task.WaitAsync(ct);
     }
 }

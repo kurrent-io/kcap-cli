@@ -440,4 +440,49 @@ public class AgentStatusSnapshotTests {
             await Assert.That(json).Contains("\"branch\":\"feature/sidebar\"");
         } finally { await fx.CleanupAsync(); }
     }
+
+    [Test]
+    public async Task Envelope_sourced_agent_reports_envelopes_format_canonical_session_id_and_journal_path() {
+        var f = Build();
+        try {
+            var journal = TranscriptJournal.ForAgent(f.Daemons.Store.StateDirectory("status-snapshot-test"), "acp-1", NullLogger.Instance);
+            journal.Open("/w", "m");
+            var runtime = new FakeAcpRuntime { AcpSessionId = "8BC7255F-2453-4EFD-A733-0AF4B6AE9F20" };
+            f.Orchestrator.RegisterAgentForTest(new AgentInstance("acp-1", "p", "m", null, "/repo", "cursor", runtime, new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()) {
+                SessionId = SessionIds.Canonical(runtime.AcpSessionId), TranscriptPath = journal.Path, Journal = journal });
+
+            var row = f.Orchestrator.SnapshotAgentsForStatus().Single();
+
+            await Assert.That(row.TranscriptFormat).IsEqualTo(TranscriptFormats.Envelopes);
+            await Assert.That(row.SessionId).IsEqualTo("8bc7255f24534efda7330af4b6ae9f20");
+            await Assert.That(row.TranscriptPath).IsEqualTo(journal.Path);
+            await journal.CompleteAsync();
+        } finally { await f.CleanupAsync(); }
+    }
+
+    [Test]
+    public async Task Pty_agent_reports_vendor_format_and_null_path_until_discovery() {
+        var f = Build();
+        try {
+            f.Orchestrator.RegisterAgentForTest(new AgentInstance("pty-1", "p", "m", null, "/repo", "claude",
+                new PtyHostedAgentRuntime("claude", NoopPtyProcess.Instance), new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()));
+
+            var row = f.Orchestrator.SnapshotAgentsForStatus().Single();
+
+            await Assert.That(row.TranscriptFormat).IsEqualTo(TranscriptFormats.Vendor);
+            await Assert.That(row.TranscriptPath).IsNull();
+            await Assert.That(row.SessionId).IsNull();
+        } finally { await f.CleanupAsync(); }
+    }
+
+    [Test]
+    public async Task Opaque_acp_session_id_is_reported_unchanged() {
+        var f = Build();
+        try {
+            var runtime = new FakeAcpRuntime { AcpSessionId = "sess-1" };
+            f.Orchestrator.RegisterAgentForTest(new AgentInstance("acp-2", "p", "m", null, "/repo", "cursor", runtime, new WorktreeInfo("/repo", "b", "/w"), new CancellationTokenSource()) {
+                SessionId = SessionIds.Canonical(runtime.AcpSessionId) });
+            await Assert.That(f.Orchestrator.SnapshotAgentsForStatus().Single().SessionId).IsEqualTo("sess-1");
+        } finally { await f.CleanupAsync(); }
+    }
 }

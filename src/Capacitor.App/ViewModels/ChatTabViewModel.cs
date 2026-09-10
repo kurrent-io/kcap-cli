@@ -20,7 +20,7 @@ namespace Capacitor.App.ViewModels;
 public enum ChatTabPhase { Waiting, Reading, Missing, Unavailable }
 
 /// The Chat tab: the session's transcript, tailed and projected into chat rows, plus the composer
-/// that sends through the sibling terminal. Ctor-scoped; TeardownAsync is the one exit.
+/// that sends through whatever channel the session offers. Ctor-scoped; TeardownAsync is the one exit.
 ///
 /// Path identity is part of the read generation: a distinct transcript_path clears the rows and
 /// installs a fresh tail in one UI-thread step, and any read still in flight for the old file
@@ -32,8 +32,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
     internal const int MaxWithdrawRetries = 3;
 
     readonly string _agentId;
-    readonly TerminalTabViewModel _terminal;
-    readonly TranscriptChatProjection? _projection;
+    readonly ChatInput _input;
+    readonly IChatTranscriptProjection? _projection;
+    readonly string? _unavailableNote;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
@@ -65,7 +66,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         int _linesRead;
 
         // The app has no session id and persists nothing, so the agent id stands in; only attachment ids would read it.
-        public TranscriptContext ContextFor(TranscriptChatProjection projection, string agentId) =>
+        public TranscriptContext ContextFor(IChatTranscriptProjection projection, string agentId) =>
             _context ??= projection.CreateContext(agentId, null);
 
         public void Reset() { _context = null; _linesRead = 0; }
@@ -104,14 +105,19 @@ public sealed class ChatTabViewModel : ReactiveObject {
     public string PhaseNote => Phase switch {
         ChatTabPhase.Waiting     => "Waiting for the transcript…",
         ChatTabPhase.Missing     => "The transcript file is missing",
-        ChatTabPhase.Unavailable => "No chat view for this harness",
+        ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
         _                        => "",
     };
 
     string _composerText = "";
+    int _composerEdits;
     public string ComposerText {
         get => _composerText;
-        set => this.RaiseAndSetIfChanged(ref _composerText, value);
+        set {
+            if (string.Equals(_composerText, value, StringComparison.Ordinal)) return;
+            _composerEdits++;
+            this.RaiseAndSetIfChanged(ref _composerText, value);
+        }
     }
 
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
@@ -163,20 +169,6 @@ public sealed class ChatTabViewModel : ReactiveObject {
     IBrush _statusDot = SessionStatusDots.For("");
     public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
 
-    /// The hint is built from the terminal's own availability, so it is true in the windows
-    /// where State alone would lie (a reattach or detach under way while State reads Attached).
-    /// Ready omits the harness name — the workspace chip already names it.
-    internal static string HintFor(SendAvailability availability, TerminalSessionState state) => availability switch {
-        SendAvailability.Ready         => "Enter sends · Shift+Enter for a new line",
-        SendAvailability.Sending       => "Sending…",
-        SendAvailability.Transitioning => "Updating the terminal connection…",
-        SendAvailability.ReadOnly      => $"Read-only: {state.Detail}",
-        SendAvailability.Connecting    => "Connecting to the terminal…",
-        SendAvailability.Reattach      => "Reattach the terminal to send",
-        SendAvailability.Ended         => "This session has ended",
-        _                              => "No terminal to send to",
-    };
-
     /// Test-only seam: the read in flight, or the last one started. A switch that loses the
     /// in-flight CAS starts no read of its own, so this still points at the previous file's read —
     /// await that, advance one tick, then await again to see the new path's first rows.
@@ -186,11 +178,14 @@ public sealed class ChatTabViewModel : ReactiveObject {
     internal int WithdrawsInFlightForTesting => _withdrawing.Count;
 
     public ChatTabViewModel(
-            string agentId, IDaemonClientService daemon, TerminalTabViewModel terminal,
-            TranscriptChatProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions) {
+            string agentId, IDaemonClientService daemon, ChatInput input,
+            IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
+            string? unavailableNote = null) {
         _agentId = agentId;
-        _terminal = terminal;
+        _input = input;
+        _disposables.Add(input);
         _projection = projection;
+        _unavailableNote = unavailableNote;
         _opener = opener;
         _time = time;
         _permissions = permissions;
@@ -264,27 +259,36 @@ public sealed class ChatTabViewModel : ReactiveObject {
         // The banner carries the read-only explanation for a flow participant, so the hint
         // goes blank there instead of offering a reply that can never be sent.
         _composerHint = Observable.CombineLatest(
-                terminal.WhenAnyValue(t => t.SendAvailability, t => t.State, (availability, state) => (availability, state)),
+                _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-                (t, readOnly) => readOnly ? "" : HintFor(t.availability, t.state))
-            .ToProperty(this, x => x.ComposerHint, HintFor(terminal.SendAvailability, terminal.State))
+                (hint, readOnly) => readOnly ? "" : hint)
+            .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
 
         _showsComposer = Observable.CombineLatest(
-                terminal.WhenAnyValue(t => t.SendAvailability),
+                _input.WhenAnyValue(i => i.Availability),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 (availability, readOnly) => !readOnly && availability != SendAvailability.Ended)
             .ToProperty(this, x => x.ShowsComposer,
-                initialValue: !IsReadOnlyParticipant && terminal.SendAvailability != SendAvailability.Ended)
+                initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended)
             .DisposeWith(_disposables);
 
         var canSend = Observable.CombineLatest(
             this.WhenAnyValue(x => x.ComposerText),
-            terminal.WhenAnyValue(t => t.CanAcceptText),
+            _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
             (text, can, readOnly) => can && !readOnly && !string.IsNullOrWhiteSpace(text));
-        SendCommand = ReactiveCommand.Create(() => {
-            if (_terminal.TrySendText(ComposerText)) ComposerText = "";
+        // The composer keeps whatever the user typed while the channel was deciding: only the
+        // snapshot that was actually sent is cleared, and only once the channel commits it. The
+        // edit count is what the text alone cannot say — an edit that lands back on the sent text
+        // is still the user's own draft, not the snapshot.
+        SendCommand = ReactiveCommand.CreateFromTask(async () => {
+            var snapshot = ComposerText;
+            var edits = _composerEdits;
+            bool committed;
+            try { committed = await _input.SendAsync(snapshot, _lifetimeToken); }
+            catch (OperationCanceledException) { return; }
+            if (committed && _composerEdits == edits && ComposerText == snapshot) ComposerText = "";
         }, canSend);
         _disposables.Add(SendCommand);
 
@@ -339,7 +343,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _pendingRead = ReadAndApplyAsync(lease, projection);
     }
 
-    async Task ReadAndApplyAsync(TailLease lease, TranscriptChatProjection projection) {
+    async Task ReadAndApplyAsync(TailLease lease, IChatTranscriptProjection projection) {
         try {
             var (read, envelopes) = await Task.Run(() => {
                 var result = lease.Tail.ReadAppended();
@@ -490,9 +494,11 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _lease = null;
         _timer?.Dispose();
         _timer = null;
+        // Ahead of the disposables: the input is one of them, and an in-flight send has to see
+        // the cancellation before the channel it is sending through goes away.
+        try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         _rootSubject.Dispose();
-        try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _lifetime.Dispose();
         return Task.CompletedTask;
     }

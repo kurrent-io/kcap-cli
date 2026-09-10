@@ -3,7 +3,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using DynamicData;
@@ -19,8 +18,6 @@ public enum WorkspaceTab { Chat, Terminal, PullRequest }
 public sealed class WorkspaceViewModel : ReactiveObject {
     const string UnresolvedKind = "unresolved";
 
-    sealed record AgentPresence(AgentStatusDto? Dto, bool SessionEnded);
-
     public string AgentId { get; }
 
     readonly ObservableAsPropertyHelper<string> _title;
@@ -33,17 +30,14 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     readonly ObservableAsPropertyHelper<bool> _showsTerminalTab;
     public bool ShowsTerminalTab => _showsTerminalTab.Value;
 
-    readonly ObservableAsPropertyHelper<string> _noTerminalNote;
-    public string NoTerminalNote => _noTerminalNote.Value;
-
     readonly ObservableAsPropertyHelper<bool> _sessionEnded;
     public bool SessionEnded => _sessionEnded.Value;
 
     public TerminalTabViewModel Terminal { get; }
 
     ChatTabViewModel? _chat;
-    /// Built once, on the first dto that passes the PTY gate -- the projection is chosen by the
-    /// dto's vendor. Null for a non-PTY session.
+    /// Built once, on the first dto; the reader comes from transcript_format and the input channel
+    /// from has_terminal.
     public ChatTabViewModel? Chat {
         get => _chat;
         private set => this.RaiseAndSetIfChanged(ref _chat, value);
@@ -70,7 +64,7 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     public bool IsChatActive => ActiveTab == WorkspaceTab.Chat;
     public bool IsTerminalActive => ActiveTab == WorkspaceTab.Terminal;
     public bool IsPullRequestActive => ActiveTab == WorkspaceTab.PullRequest;
-    public bool ShowsTerminalBanners => !IsPullRequestActive && (IsTerminalActive || !ShowsTerminalTab);
+    public bool ShowsTerminalBanners => !IsPullRequestActive && IsTerminalActive;
 
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
@@ -89,7 +83,7 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     public WorkspaceViewModel(
             string agentId, IDaemonClientService daemon, AgentActionService actions,
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
-            IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext,
+            IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
@@ -120,22 +114,21 @@ public sealed class WorkspaceViewModel : ReactiveObject {
         _showsTerminalTab = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
-        presence.Subscribe(_ => this.RaisePropertyChanged(nameof(ShowsTerminalBanners))).DisposeWith(_disposables);
-        // Blank whenever ShowsTerminalTab is true (or the dto isn't resolved yet): the note
-        // replaces the Terminal tab button in the tab strip, so it must never render alongside it.
-        _noTerminalNote = presence
-            .Select(p => p.Dto is null || HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor) ? "" : HostedHarnessCatalog.NoTerminalNote(p.Dto.HasTerminal, p.Dto.Vendor))
-            .ToProperty(this, x => x.NoTerminalNote, "")
-            .DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);
 
         presence
-            .Where(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
+            .Where(p => p.Dto is not null)
             .Take(1)
-            .Subscribe(p => Chat = new ChatTabViewModel(
-                agentId, daemon, Terminal, TranscriptChat.For(p.Dto!.Vendor), opener, time, permissions))
+            .Subscribe(p => {
+                var dto = p.Dto!;
+                var (projection, note) = ChatTranscriptSource.Resolve(dto);
+                ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
+                    ? new TerminalChatInput(Terminal)
+                    : new LocalFrameChatInput(agentId, daemon, ops, presence);
+                Chat = new ChatTabViewModel(agentId, daemon, input, projection, opener, time, permissions, note);
+            })
             .DisposeWith(_disposables);
 
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = WorkspaceTab.Chat; });

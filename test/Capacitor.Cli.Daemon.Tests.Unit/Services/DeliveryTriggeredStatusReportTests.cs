@@ -71,11 +71,10 @@ public class DeliveryTriggeredStatusReportTests {
 
         time.Advance(TimeSpan.FromSeconds(10));
 
-        await Assert.ThrowsAsync<IOException>(
-            async () => await orch.HandleSendInputForTest(new SendInputCommand(agent.Id, "hello", null)));
+        await orch.HandleSendInputForTest(new SendInputCommand(agent.Id, "hello", null));
 
-        // The emission is fire-and-forget, so a wrongly-placed one would land shortly AFTER the throw
-        // propagates — wait before asserting absence rather than reading the count immediately.
+        // The emission is fire-and-forget, so a wrongly-placed one would land shortly AFTER the
+        // handler returns — wait before asserting absence rather than reading the count immediately.
         await Task.Delay(100);
         await Assert.That(server.StatusReportCount).IsEqualTo(0);
         await Assert.That(agent.ActivityClock.ActivitySeq).IsEqualTo(1UL);

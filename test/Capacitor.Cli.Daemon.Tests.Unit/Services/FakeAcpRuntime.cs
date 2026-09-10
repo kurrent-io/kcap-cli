@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
     readonly Channel<AcpEventEnvelope> _envelopes = Channel.CreateUnbounded<AcpEventEnvelope>();
 
-    public string Vendor              => "cursor";
+    public string Vendor              { get; init; } = "cursor";
     public int    Pid                 => 0;
     public bool   HasExited           => ExitGate.Task.IsCompleted;
     public int?   ExitCode            => 0;
@@ -68,15 +68,53 @@ internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource
         return BeginFirstTurnThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 
-    public Task SendUserInputAsync(string  text) => Task.CompletedTask;
+    /// <summary>What each send path was handed, kept apart so a test can tell which path a delivery
+    /// chose — the acknowledging one is the borrowed round's, and the interface's default
+    /// implementation would forward it to the plain one and hide the difference.</summary>
+    public List<string> Inputs             { get; } = [];
+    public List<string> WaitForWriteInputs { get; } = [];
+
+    /// <summary>Every input either path took, in the order the runtime accepted them — for a caller
+    /// that cares about how many messages landed and in what order rather than which path carried them.</summary>
+    public List<string> SentInputs { get; } = [];
+
+    /// <summary>Thrown by both send paths instead of recording the input — a runtime whose transport
+    /// has failed under it.</summary>
+    public Exception? SendUserInputThrow { get; init; }
+
+    /// <summary>Awaited by both send paths before the input is recorded, so a test can hold a
+    /// delivery in flight for as long as it likes.</summary>
+    public TaskCompletionSource? SendUserInputGate { get; init; }
+
+    public async Task SendUserInputAsync(string text) {
+        await AdmitAsync();
+        lock (Inputs) Inputs.Add(text);
+        lock (SentInputs) SentInputs.Add(text);
+    }
+
+    public async Task SendUserInputAndWaitForWriteAsync(string text) {
+        await AdmitAsync();
+        lock (WaitForWriteInputs) WaitForWriteInputs.Add(text);
+        lock (SentInputs) SentInputs.Add(text);
+    }
+
+    async Task AdmitAsync() {
+        if (SendUserInputThrow is { } ex) throw ex;
+        if (SendUserInputGate is { } gate) await gate.Task;
+    }
+
     public Task SendSpecialKeyAsync(string key) => Task.CompletedTask;
     public Task SendRawInputAsync(byte[]   data) => Task.CompletedTask;
     public void Resize(ushort              cols, ushort rows) { }
     public Task RequestGracefulStopAsync() => Task.CompletedTask;
     public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
 
+    /// <summary>A runtime a terminate cannot finish off: <see cref="HasExited"/> stays false, so a stop
+    /// that runs to completion still cannot confirm the process is gone.</summary>
+    public bool NeverExits { get; init; }
+
     public Task TerminateAsync(TimeSpan? timeout = null) {
-        ExitGate.TrySetResult();
+        if (!NeverExits) ExitGate.TrySetResult();
 
         return Task.CompletedTask;
     }

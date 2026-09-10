@@ -190,14 +190,17 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             var reconnect = descriptor.SupportsReconnectResume && !ctx.IsReviewFlow && config.AcpReconnectEnabled
                 ? new AcpReconnectSupport { Spawn = () => _connectionSource(ctx) }
                 : null;
-            // PidCallbacks defaults to AcpPidRecordCallbacks.Unwired — FAIL-CLOSED (code-review r1/r2):
-            // a crash landing in the orchestrator's wiring window fails its attempts (§6.2's
-            // record-before-any-handshake MUST) rather than proceeding with an unrecorded candidate,
-            // and the orchestrator replaces recorder+clearer in ONE atomic reference assignment so no
-            // partially-wired state is ever observable.
+            // PidCallbacks defaults to AcpPidRecordCallbacks.Unwired — fail-closed: a crash during the
+            // orchestrator's wiring window fails its attempts rather than proceeding with an unrecorded
+            // candidate. The orchestrator replaces recorder+clearer in one atomic reference assignment,
+            // so no partially-wired state is ever observable.
 
-            // Spec-review Finding 4: real production wiring — every launch now gets the
-            // permission/elicitation bridge, not the default MethodNotFound/decline.
+            // Unopened until now — the orchestrator hands the factory an unopened journal
+            // (<see cref="RuntimeStartContext"/>) so the header's cwd/model are this launch's own.
+            ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
+
+            // requestInteraction wires the real permission/elicitation bridge — omitting it
+            // silently reverts every launch to the default MethodNotFound/decline.
             runtime = new AcpHostedAgentRuntime(
                 acpConnection,
                 acpProcess,
@@ -260,7 +263,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 // The same directory the child is spawned in, so a relative tool-call path resolves to
                 // the file the agent will actually touch — an unresolvable one evaluates as Other and
                 // slips past every path rule.
-                policyCwd: ctx.Worktree.Path
+                policyCwd: ctx.Worktree.Path,
+                journal: ctx.Journal
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against

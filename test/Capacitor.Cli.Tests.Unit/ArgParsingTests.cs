@@ -135,7 +135,7 @@ public class ArgParsingTests {
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
-    public async Task ResolveSessionIdFromEnv_returns_kcap_env_stripped_of_dashes() {
+    public async Task ResolveSessionIdFromEnv_keeps_an_opaque_kcap_env_id_unchanged() {
         var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
         var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "abc-def-123");
@@ -144,7 +144,7 @@ public class ArgParsingTests {
         try {
             var id = ArgParsing.ResolveSessionIdFromEnv();
 
-            await Assert.That(id).IsEqualTo("abcdef123");
+            await Assert.That(id).IsEqualTo("abc-def-123");
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
@@ -153,7 +153,7 @@ public class ArgParsingTests {
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
-    public async Task ResolveSessionIdFromEnv_returns_codex_env_stripped_of_dashes_when_kcap_unset() {
+    public async Task ResolveSessionIdFromEnv_keeps_an_opaque_codex_env_id_when_kcap_unset() {
         var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
         var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, null);
@@ -162,7 +162,7 @@ public class ArgParsingTests {
         try {
             var id = ArgParsing.ResolveSessionIdFromEnv();
 
-            await Assert.That(id).IsEqualTo("threaduuid1");
+            await Assert.That(id).IsEqualTo("thread-uuid-1");
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
@@ -180,7 +180,7 @@ public class ArgParsingTests {
         try {
             var id = ArgParsing.ResolveSessionIdFromEnv();
 
-            await Assert.That(id).IsEqualTo("kap1");
+            await Assert.That(id).IsEqualTo("kap-1");
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
@@ -198,7 +198,7 @@ public class ArgParsingTests {
         try {
             var id = ArgParsing.ResolveSessionIdFromEnv();
 
-            await Assert.That(id).IsEqualTo("cdx3");
+            await Assert.That(id).IsEqualTo("cdx-3");
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
@@ -219,11 +219,24 @@ public class ArgParsingTests {
                 valueFlags: ["--model"]
             );
 
-            await Assert.That(id).IsEqualTo("cdxonly");
+            await Assert.That(id).IsEqualTo("cdx-only");
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
+    }
+
+    /// The ambient id must land on the same key an explicit `session_id` does: an opaque vendor id
+    /// keeps its dashes (stripping them names a session the server has never seen) and a GUID
+    /// collapses to the 32-hex form the server files it under.
+    [Test]
+    [Arguments("sess-1", "sess-1")]
+    [Arguments("fixed-conversation-id", "fixed-conversation-id")]
+    [Arguments("1234abcd-56ef-78ab-90cd-1234567890ab", "1234abcd56ef78ab90cd1234567890ab")]
+    public async Task ResolveSessionIdFromEnv_canonicalizes_like_the_server(string exported, string expected) {
+        var id = ArgParsing.ResolveSessionIdFromEnv(key => key == "KCAP_SESSION_ID" ? exported : null);
+
+        await Assert.That(id).IsEqualTo(expected);
     }
 
     [Test]
@@ -260,10 +273,10 @@ public class ArgParsingTests {
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
-    public async Task ResolveSessionId_strips_dashes_from_kcap_env_fallback() {
+    public async Task ResolveSessionId_canonicalizes_a_guid_kcap_env_fallback() {
         var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
         var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "abc-def");
+        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "1234abcd-56ef-78ab-90cd-1234567890ab");
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
 
         try {
@@ -272,7 +285,7 @@ public class ArgParsingTests {
                 valueFlags: ["--model"]
             );
 
-            await Assert.That(id).IsEqualTo("abcdef");
+            await Assert.That(id).IsEqualTo("1234abcd56ef78ab90cd1234567890ab");
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);

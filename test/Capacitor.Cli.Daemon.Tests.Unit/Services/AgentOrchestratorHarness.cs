@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Hosting;
@@ -207,14 +208,42 @@ internal static class AgentOrchestratorHarness {
     /// clock passes one; omitting it keeps every existing caller's real-time default.</summary>
     internal static AgentInstance SeedAcpAgent(
             AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
-            AgentActivityClock? activityClock = null) {
+            AgentActivityClock? activityClock = null, LaunchKind kind = LaunchKind.Default, bool isPrivate = false) {
         var agent = new AgentInstance(
             agentId, "review this", "default", null, "/repo", "cursor",
             runtime,
             new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Status = status,
-            ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System)
+            ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System),
+            Kind = kind,
+            IsPrivate = isPrivate
+        };
+
+        orch.RegisterAgentForTest(agent);
+
+        return agent;
+    }
+
+    /// <summary>Latches the reap claim the way the reaper's own claim does, so a delivery can be made
+    /// to meet a condemned agent without standing up a sweep to condemn it.</summary>
+    internal static void ClaimReap(AgentInstance agent) => Interlocked.CompareExchange(ref agent.ReapClaimed, 1, 0);
+
+    /// <summary>A borrowed-checkout reviewer: it takes the acknowledging send path, and its
+    /// <see cref="WorkLocation.BorrowedCwd"/> work location is what keeps a delivery from trying to
+    /// refresh a snapshot that no daemon-owned worktree exists to receive.</summary>
+    internal static AgentInstance SeedBorrowedAcpAgent(
+            AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
+            AgentActivityClock? activityClock = null) {
+        var agent = new AgentInstance(
+            agentId, "review this", "default", null, "/repo", "cursor",
+            runtime,
+            new WorktreeInfo("/repo", "b", "/repo"),
+            new CancellationTokenSource()) {
+            Status                 = status,
+            ActivityClock          = activityClock ?? new AgentActivityClock(TimeProvider.System),
+            Work                   = WorkLocation.BorrowedCwd,
+            BorrowedSnapshotSource = "/repo"
         };
 
         orch.RegisterAgentForTest(agent);

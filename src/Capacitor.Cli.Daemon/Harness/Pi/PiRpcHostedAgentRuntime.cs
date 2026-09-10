@@ -97,8 +97,14 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     readonly TimeSpan      _readyDeadline;
     readonly TimeSpan      _stopGrace;
     readonly Action?       _onDisposed;
+    readonly TranscriptJournal? _journal;
 
     readonly Channel<AcpEventEnvelope> _transcript;
+
+    /// <summary>Guards <see cref="Write"/>'s TryWrite + journal Record as one unit — Pi's channel has
+    /// two writers (the pump, and a send-time <c>user_message</c>), so without this a Record could
+    /// interleave in an order that disagrees with the channel's own FIFO write order.</summary>
+    readonly Lock _writeLock = new();
 
     /// <summary>Cancelled by <see cref="TerminateAsync"/>/<see cref="DisposeAsync"/>; the pump's
     /// read token and every command write rides it.
@@ -173,7 +179,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             string        cwd,
             TimeSpan?     readyDeadline = null,
             TimeSpan?     stopGrace     = null,
-            Action?       onDisposed    = null) {
+            Action?       onDisposed    = null,
+            TranscriptJournal? journal  = null) {
         _process        = process;
         _logger         = logger;
         _agentId        = agentId;
@@ -182,6 +189,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         _readyDeadline  = readyDeadline ?? DefaultReadyDeadline;   // never absent — rule (a)
         _stopGrace      = stopGrace ?? DefaultStopGrace;
         _onDisposed     = onDisposed;
+        _journal        = journal;
         _ownerToken     = _ownerCts.Token;
 
         // DropOldest with SingleWriter=false: the pump is the only writer that matters for
@@ -660,7 +668,9 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         // visible, on another thread, so the reverse order is a race a fast reader wins.
         if (agentActivity) ActivityClock?.Advance();
 
-        if (_transcript.Writer.TryWrite(env)) return;
+        lock (_writeLock) {
+            if (_transcript.Writer.TryWrite(env)) { _journal?.Record(env); return; }
+        }
 
         // Debug, not Warning: an envelope arriving after the channel closed is the ORDINARY shape
         // of teardown (the pump is draining Pi's last lines while terminal is entered).
