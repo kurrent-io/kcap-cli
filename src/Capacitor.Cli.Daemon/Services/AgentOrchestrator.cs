@@ -2535,6 +2535,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
+            // No AgentInstance owns the journal, so complete it here. Only a file THIS launch
+            // created is removed, and only once the writer is proven gone: a rebind's failed launch
+            // must leave the prior incarnation's records where the app is already reading them.
+            if (journal is { IsOpen: true }) {
+                var drained = await journal.CompleteAsync();
+                if (journal.CreatedFile && drained) {
+                    using var lease = await JournalPathLocks.Shared.AcquireAsync(journal.Path, TranscriptJournal.LockBound, CancellationToken.None);
+                    if (lease is not null) {
+                        try { File.Delete(journal.Path); } catch (Exception deleteEx) { LogCleanupStepFailed(deleteEx, "deleting transcript journal (failed-launch)", agentId); }
+                    }
+                }
+            }
+
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
             if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
@@ -4932,6 +4945,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // Each cleanup step is best-effort so later steps still run
         try { await agent.Runtime.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
+
+        // After the dispose, never before it: the runtime's last envelopes are recorded on its way
+        // out, and completing the journal first would drop them.
+        if (agent.Journal is { } journal) {
+            try { await journal.CompleteAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "completing transcript journal", agentId); }
+        }
 
         if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
