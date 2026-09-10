@@ -52,12 +52,15 @@ public sealed record TokenResolution(
 // Outcome of a proactive-refresh tick (<see cref="TokenStore.RefreshIfExpiringAsync"/>).
 // NotDue = no-op (no tokens, the None provider, or the token still comfortably valid);
 // Refreshed = a valid token is now persisted (we refreshed, a peer did, or it was already
-// fresh under the lock); Failed = a refresh was attempted but failed (network / 4xx) and the
-// token is unchanged; Contended = we couldn't acquire the cross-process lock before its
+// fresh under the lock); Failed = a refresh was attempted but the endpoint never answered
+// (transport failure) — the refresh credential may still be live, so a later retry can succeed;
+// Rejected = WorkOS refused the refresh token (a non-success response, a 400 invalid_grant the
+// usual case — the token is consumed or revoked), which only a fresh `kcap login` repairs, so
+// re-sending it is pointless; Contended = we couldn't acquire the cross-process lock before its
 // deadline (a peer holds it, presumably refreshing) — no endpoint call was made, so it is NOT a
-// failure. The daemon loop rate-limits on Refreshed and Failed (to bound endpoint traffic) but
+// failure. The daemon loop rate-limits on Refreshed and Failed, backs off hard on Rejected, and
 // treats Contended quietly — no warning, no backoff.
-public enum ProactiveRefreshOutcome { NotDue, Refreshed, Failed, Contended }
+public enum ProactiveRefreshOutcome { NotDue, Refreshed, Failed, Contended, Rejected }
 
 public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpClientFactory httpFactory, WorkOSClient workos) {
     string LegacyTokenPath { get; } = config.Path("tokens.json");
@@ -483,8 +486,14 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         // between our read here and our acquiring the lock, leaving the re-read token fresh.
         bool ExpiringWithinWindow(StoredTokens t) => DateTimeOffset.UtcNow >= t.ExpiresAt - window;
 
+        // Capture the raw WorkOS classification the same way `contended` captures lock contention:
+        // the delegate records it, the code after the lock reads it. Only set when the WorkOS
+        // refresh delegate actually runs (a peer-refresh or still-fresh re-read returns non-null
+        // without calling it), so a null result plus a Rejected outcome is a genuine refusal.
+        WorkOSRefreshOutcome? workosOutcome = null;
+
         var refresh = decision == RefreshDecision.RefreshWorkOS
-            ? (Func<StoredTokens, Task<StoredTokens?>>)RefreshWorkOSAsync
+            ? (Func<StoredTokens, Task<StoredTokens?>>)(t => RefreshWorkOSAsync(t, CancellationToken.None, o => workosOutcome = o))
             : t => RefreshGitHubAsync(profile, t, CancellationToken.None);
 
         var contended = false;
@@ -495,8 +504,13 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         // don't let the daemon warn/back off as though the endpoint rejected us. Otherwise:
         // non-null = a valid token is now persisted; null = the refresh call actually failed.
         if (contended) return ProactiveRefreshOutcome.Contended;
+        if (result is not null) return ProactiveRefreshOutcome.Refreshed;
 
-        return result is not null ? ProactiveRefreshOutcome.Refreshed : ProactiveRefreshOutcome.Failed;
+        // A refused WorkOS refresh token is terminal — re-sending it is pointless, so the daemon
+        // backs off hard on Rejected rather than the ordinary Failed retry cadence.
+        return workosOutcome is WorkOSRefreshOutcome.Rejected
+            ? ProactiveRefreshOutcome.Rejected
+            : ProactiveRefreshOutcome.Failed;
     }
 
     // Profile-scoped cross-process lock. Acquire it, re-read the token under it (a peer
@@ -682,8 +696,14 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
     Task<StoredTokens?> RefreshWorkOSAsync(StoredTokens tokens) =>
         RefreshWorkOSAsync(tokens, CancellationToken.None);
 
-    async Task<StoredTokens?> RefreshWorkOSAsync(StoredTokens tokens, CancellationToken ct) {
+    // `onOutcome` reports the raw WorkOS classification so a caller (the proactive tick) can tell a
+    // refused refresh token — terminal, `kcap login` repairs it — from a transport failure it may
+    // retry. The non-Rotated → null mapping is unchanged: every other caller ignores the outcome.
+    async Task<StoredTokens?> RefreshWorkOSAsync(
+            StoredTokens tokens, CancellationToken ct, Action<WorkOSRefreshOutcome>? onOutcome = null) {
         var result = await workos.RefreshAsync(tokens.ClientId!, tokens.RefreshToken!, ct);
+
+        onOutcome?.Invoke(result.Outcome);
 
         if (result.Outcome is not WorkOSRefreshOutcome.Rotated) {
             return null;

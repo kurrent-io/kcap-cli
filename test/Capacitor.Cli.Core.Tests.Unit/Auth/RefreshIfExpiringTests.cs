@@ -1,15 +1,20 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
 /// <summary>
-/// No-op behaviour of <see cref="TokenStore.RefreshIfExpiringAsync"/> — the paths that
-/// must NOT touch the network. These are the daemon acceptance criteria: proactive refresh
-/// is a no-op when no tokens are stored, for the None provider, and while the token is still
-/// comfortably valid (refresh only inside the expiry window). The provider paths that DO hit
-/// the WorkOS / server refresh endpoints are exercised by DecideProactiveRefresh's unit tests
-/// and integration coverage, never here, so this suite stays offline and fast.
+/// Behaviour of <see cref="TokenStore.RefreshIfExpiringAsync"/> the daemon relies on. Most cases
+/// are the no-op paths that must NOT touch the network — proactive refresh is a no-op when no
+/// tokens are stored, for the None provider, and while the token is still comfortably valid
+/// (refresh only inside the expiry window). The remaining case pins the classification the daemon
+/// loop keys its hard backoff on: a WorkOS refresh the endpoint refuses reads as
+/// <see cref="ProactiveRefreshOutcome.Rejected"/>, not <see cref="ProactiveRefreshOutcome.Failed"/>,
+/// so the daemon stops re-sending a dead token. It reaches WorkOS through a local stub, never the
+/// real host.
 /// </summary>
 public class RefreshIfExpiringTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -51,5 +56,28 @@ public class RefreshIfExpiringTests {
         });
 
         await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).RefreshIfExpiringAsync(ProfileConfig.DefaultName, Window)).IsEqualTo(ProactiveRefreshOutcome.NotDue);
+    }
+
+    [Test]
+    public async Task Rejected_when_workos_refuses_the_refresh_token() {
+        // A refused refresh (400 invalid_grant) is terminal — the token is spent, only `kcap login`
+        // repairs it — so the tick reports Rejected, distinct from a Failed transport blip.
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400).WithBody("""{"error":"invalid_grant"}"""));
+
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", new StoredTokens {
+            AccessToken    = "at",
+            RefreshToken   = "rt",
+            ClientId       = "cid",
+            ExpiresAt      = DateTimeOffset.UtcNow.AddMinutes(1), // inside the window
+            GitHubUsername = "alice",
+            Provider       = AuthProvider.WorkOS
+        });
+
+        var outcome = await AuthFixtures.NewTokenStore(Config.Root, new StubHost(server.Urls[0]))
+            .RefreshIfExpiringAsync(ProfileConfig.DefaultName, Window);
+
+        await Assert.That(outcome).IsEqualTo(ProactiveRefreshOutcome.Rejected);
     }
 }

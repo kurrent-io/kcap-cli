@@ -598,9 +598,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // scan) or explicitly rate-limited by TitleResolveLoop itself.
     readonly PeriodicTimer _titleResolve = new(TimeSpan.FromSeconds(60));
 
-    // Refresh once the token is within this much of its expiry. Comfortably above the 60 s tick
-    // so the window is never stepped over.
-    static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(5);
+    // Refresh once the token is within this much of its expiry. Kept above the 60 s tick plus the
+    // reactive 30 s IsExpired margin, so proactive refresh still fires before a hook would hit the
+    // margin — but no wider, so a token minted seconds ago at login isn't refreshed on the spot.
+    static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(2);
 
     // Hit the refresh endpoint at most once per this interval (see TokenRefreshLoop). Small
     // enough that a healthy token issued with a short lifetime is still renewed before it
