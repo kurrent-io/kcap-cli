@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Hosting;
@@ -215,6 +216,28 @@ internal static class AgentOrchestratorHarness {
             new CancellationTokenSource()) {
             Status = status,
             ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System)
+        };
+
+        orch.RegisterAgentForTest(agent);
+
+        return agent;
+    }
+
+    /// <summary>A borrowed-checkout reviewer: it takes the acknowledging send path, and its
+    /// <see cref="WorkLocation.BorrowedCwd"/> work location is what keeps a delivery from trying to
+    /// refresh a snapshot that no daemon-owned worktree exists to receive.</summary>
+    internal static AgentInstance SeedBorrowedAcpAgent(
+            AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
+            AgentActivityClock? activityClock = null) {
+        var agent = new AgentInstance(
+            agentId, "review this", "default", null, "/repo", "cursor",
+            runtime,
+            new WorktreeInfo("/repo", "b", "/repo"),
+            new CancellationTokenSource()) {
+            Status                 = status,
+            ActivityClock          = activityClock ?? new AgentActivityClock(TimeProvider.System),
+            Work                   = WorkLocation.BorrowedCwd,
+            BorrowedSnapshotSource = "/repo"
         };
 
         orch.RegisterAgentForTest(agent);

@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// relaunch gets a fresh one — fed by PTY output chunks, ACP transcript envelopes, ACP turn
 /// start/end, Antigravity's and Pi's own <c>agentActivity</c>-flagged advances, two independent
 /// <c>LocalPermissionBridge</c> reviewer tool-call-hit sites, and (round-dispatch grace) a
-/// successfully delivered <c>SendInput</c> — see <see cref="AgentOrchestrator.HandleSendInput"/>.
+/// successfully delivered <c>SendInput</c> — see <see cref="AgentOrchestrator.DeliverInputAsync"/>.
 ///
 /// <para>READS are lock-guarded, not just writes: the sources above run on independent threads (a PTY
 /// read loop, an ACP connection's read thread, an HTTP listener), and an unguarded property read can

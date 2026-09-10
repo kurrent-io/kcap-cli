@@ -268,10 +268,10 @@ internal record AgentInstance(
     /// .git entries, and neither the worktree nor the work location changes after launch.</summary>
     public AgentCheckout Checkout => _checkout ??= AgentCheckout.Resolve(Worktree, Work, BorrowedSnapshotSource);
 
-    /// <summary>The per-agent critical section. Named for its original duty (serializing the borrowed-
-    /// checkout refresh against a concurrent send) but it has always wrapped the ENTIRE
-    /// <see cref="AgentOrchestrator.HandleSendInput"/> body for EVERY vendor, borrowed or not — so it
-    /// is simply "the delivery section", and that is its second, load-bearing purpose:
+    /// <summary>The per-agent delivery section: held across the whole of
+    /// <see cref="AgentOrchestrator.DeliverInputAsync"/> for EVERY vendor, borrowed or not. It
+    /// serializes the borrowed-checkout refresh against a concurrent send, and it has a second,
+    /// load-bearing purpose:
     ///
     /// <para><b>The delivery/reap fence (round-dispatch grace §3).</b> The reaper's
     /// validate-and-claim (<see cref="AgentOrchestrator.TryClaimReapAsync"/>) runs inside this same
@@ -289,7 +289,7 @@ internal record AgentInstance(
     /// its stdin. The graceful-stop wait in <see cref="AgentOrchestrator.StopAgentCoreAsync"/> is exactly this case: it
     /// is waiting on the very process that only its OWN next action (terminate) can unblock, so that
     /// wait is bounded. The delivery's own ENTRY wait onto this gate (<see
-    /// cref="AgentOrchestrator.HandleSendInput"/>) is exempt from this rule — it is the holder class,
+    /// cref="AgentOrchestrator.DeliverInputAsync"/>) is exempt from this rule — it is the holder class,
     /// not the bounded class: it is unblocked by whatever the current holder is itself waiting on (the
     /// child exiting, or a stop completing), never by an action the entry waiter must take. See <see
     /// cref="AgentOrchestrator.TryClaimReapAsync"/>.</para>
@@ -314,7 +314,7 @@ internal record AgentInstance(
     /// delivery is holding it (see <see cref="AgentOrchestrator.TryClaimReapAsync"/>), so the two claim
     /// paths cannot share a lock and must share a CAS instead.
     ///
-    /// <para>Read via <see cref="IsReapClaimed"/> by <see cref="AgentOrchestrator.HandleSendInput"/>,
+    /// <para>Read via <see cref="IsReapClaimed"/> by <see cref="AgentOrchestrator.DeliverInputAsync"/>,
     /// which refuses to deliver to a condemned agent. Effectively write-once: a claimed agent is on its
     /// way down, and <see cref="AgentOrchestrator.StopAgentCoreAsync"/> flipping the status to
     /// "Completed" already takes it out of the reap candidate set permanently, so the latch adds no new
@@ -1526,7 +1526,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     ///
     /// <para><b>Lock order.</b> ordering → clock (via <see cref="BuildStatusReport"/>). MUST NEVER be
     /// acquired while a per-agent <see cref="AgentInstance.BorrowedSnapshotGate"/> is held —
-    /// <see cref="HandleSendInput"/> offloads its emission for exactly this reason.</para>
+    /// <see cref="DeliverInputAsync"/> offloads its emission for exactly this reason.</para>
     ///
     /// <para>Never disposed: emissions are fire-and-forget, so a waiter parked here during teardown
     /// must not fault on an <see cref="ObjectDisposedException"/> nobody observes.</para>
@@ -3128,7 +3128,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     ///
     /// <para>Note it is SHORTER than a delivery's own worst-case in-section time (the borrowed-snapshot
     /// refresh is budgeted 30s), so the unfenced timeout arm fires against healthy deliveries too — by
-    /// design, and handled by <see cref="HandleSendInput"/>'s pre-write re-read of the claim latch
+    /// design, and handled by <see cref="DeliverInputAsync"/>'s pre-write re-read of the claim latch
     /// rather than by inflating this wait, which would only restore the deadlock it exists to
     /// prevent.</para></summary>
     internal TimeSpan ReapClaimGateWait { get; set; } = TimeSpan.FromSeconds(20);
@@ -3259,7 +3259,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>The atomic reap claim (round-dispatch grace §3). Runs inside
     /// <see cref="AgentInstance.BorrowedSnapshotGate"/> — the same per-agent section every
-    /// <see cref="HandleSendInput"/> delivery holds across its clock advance — so the claim and a
+    /// <see cref="DeliverInputAsync"/> delivery holds across its clock advance — so the claim and a
     /// delivery are mutually exclusive and exactly one of them wins.
     ///
     /// <para>Rechecking "immediately before" the stop would NOT do: selection is a snapshot, and any
@@ -3376,7 +3376,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para>It races a delivery by construction, and the delivery it races is NOT necessarily a
     /// wedged one. The section is legitimately held past this wait by healthy work — the borrowed-
     /// snapshot refresh alone is budgeted 30s — so this claim can fire against an in-flight, entirely
-    /// well-behaved delivery. That is why <see cref="HandleSendInput"/> re-reads the latch immediately
+    /// well-behaved delivery. That is why <see cref="DeliverInputAsync"/> re-reads the latch immediately
     /// before its write instead of only on entry: a healthy delivery must ABORT there rather than
     /// complete into a condemned agent. The genuinely parked case resolves differently — the write is
     /// released by the terminate this claim leads to (which is reachable only because
@@ -3455,7 +3455,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         await StopAgentCoreAsync(agent);
     }
 
-    /// <summary>Test-only: awaited inside <see cref="HandleSendInput"/>'s section in the window between
+    /// <summary>Test-only: awaited inside <see cref="DeliverInputAsync"/>'s section in the window between
     /// its slow pre-write steps (the borrowed-snapshot refresh, attachment downloads) and its
     /// pre-write re-read of the reap-claim latch — i.e. exactly where a reaper's un-sectioned claim
     /// lands in production, since that refresh is budgeted LONGER than the claim's gate wait. A test
@@ -3702,6 +3702,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         public const string ReaperClaimed     = "reaper_claimed";
         public const string ReaperClaimedLate = "reaper_claimed_late";
         public const string QueueFull         = "queue_full";
+        public const string DeliveryFailed    = "delivery_failed";
     }
 
     /// <summary>Reports a drop to the server, when the dispatch carried an id to name. Never throws:
@@ -3737,44 +3738,77 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         LogSendInputReceived(agentId, agent.Runtime.Vendor, text.Length, attachmentIds?.Length ?? 0);
 
+        var outcome = await DeliverInputAsync(agent, text, attachmentIds);
+
+        switch (outcome.Kind) {
+            case InputDeliveryKind.QuitRequested:
+                LogSendInputQuitCommand(agentId, agent.Runtime.Vendor);
+                // Translated onto the same serial lane a server-origin stop rides.
+                await HandleUnsequencedStopAgent(agentId);
+
+                break;
+
+            // Reported here rather than from inside the delivery section: the report is an unbounded
+            // server round trip, and awaiting one while the per-agent gate is held would hold every
+            // later input for that agent behind a stalled connection — and stretch the section the
+            // reaper's own claim races against.
+            case InputDeliveryKind.Dropped:
+                await ReportInputDroppedAsync(cmd, outcome.Reason!);
+
+                break;
+        }
+    }
+
+    /// <summary>Delivers one message to an agent's runtime and says what happened. It reports
+    /// nothing and stops nothing: answering whoever typed the message belongs to the caller, so a
+    /// caller with a different sender to answer can reuse this write path unchanged. Everything the
+    /// write depends on — the borrowed-snapshot refresh, attachment downloads, and the reap-claim
+    /// checks that decide whether a condemned agent may still be written to — happens inside the
+    /// agent's own delivery section.</summary>
+    internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds) {
         // A quit command typed into chat: a runtime with no TUI has nothing that interprets it, so
         // forwarding would hand the text to the model as an ordinary prompt — at best role-played
-        // ("Quitting"), never a stop. Translate it onto the same serial lane a server stop rides.
-        // PTY runtimes keep receiving the text verbatim: their TUI owns the command's meaning.
-        if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) {
-            LogSendInputQuitCommand(agentId, agent.Runtime.Vendor);
-            await HandleUnsequencedStopAgent(agentId);
-            return;
-        }
+        // ("Quitting"), never a stop. PTY runtimes keep receiving the text verbatim: their TUI owns
+        // the command's meaning.
+        if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) return InputDeliveryOutcome.QuitRequested;
 
         // Codex turn diagnostic: whether to run the post-send rollout probe, plus this round's
-        // generation and the rollout length sampled just BEFORE delivery. Declared out here so both
-        // survive the try/finally to reach ArmCodexTurnProbe below.
-        // The probe reads a rollout Codex's own CLI writes; an envelope-sourced Codex has none, and
-        // its TranscriptPath names the daemon's journal instead.
+        // generation and the rollout length sampled just BEFORE delivery. The probe reads a rollout
+        // Codex's own CLI writes; an envelope-sourced Codex has none, and its TranscriptPath names
+        // the daemon's journal instead.
         var   isCodex       = agent.Runtime.EmitsTerminalOutput
                            && string.Equals(agent.Runtime.Vendor, "codex", StringComparison.OrdinalIgnoreCase);
         long? codexBaseline = null;
         long  codexGen      = 0;
 
-        // Set inside the section, reported outside it: the report is an unbounded server round trip,
-        // and awaiting one while holding this gate would hold every later input for that agent behind
-        // a stalled connection — and stretch the section the reaper's own claim races against.
-        string? dropReason = null;
+        InputDeliveryOutcome outcome;
 
         await agent.BorrowedSnapshotGate.WaitAsync(_shutdownCts.Token);
         try {
-            // Losing side of the reap claim (round-dispatch grace §3): a reap-claimed agent gets
-            // nothing — no write, no clock advance, no report. Failing the dispatch here (not writing
-            // into a dying runtime) is deliberate; the server heals it on resubmit.
-            if (agent.IsReapClaimed) {
-                LogSendInputReapClaimed(agentId);
-                dropReason = SendInputDropReason.ReaperClaimed;
+            outcome = await DeliverInSectionAsync();
+        } finally {
+            agent.BorrowedSnapshotGate.Release();
+        }
 
-                return;
+        // Armed outside the section, and only for a write that actually landed.
+        if (isCodex && outcome.Kind is InputDeliveryKind.Delivered) ArmCodexTurnProbe(agent, codexBaseline, codexGen);
+
+        return outcome;
+
+        async Task<InputDeliveryOutcome> DeliverInSectionAsync() {
+            // Losing side of the reap claim: a reap-claimed agent gets nothing — no write, no clock
+            // advance. Failing the dispatch here rather than writing into a dying runtime is
+            // deliberate; the server heals it on resubmit.
+            if (agent.IsReapClaimed) {
+                LogSendInputReapClaimed(agent.Id);
+
+                return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimed);
             }
 
-            if (!await TryRefreshBorrowedSnapshotAsync(agent)) return;
+            // Fails closed: a refresh that failed has already terminated the reviewer rather than
+            // leave it on a possibly-partial snapshot, so this round is over.
+            if (!await TryRefreshBorrowedSnapshotAsync(agent))
+                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, "borrowed snapshot refresh failed");
 
             var message = text;
 
@@ -3786,28 +3820,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // Re-checked HERE, not only at the top of the section: the borrowed-snapshot refresh
-            // budget (30s, BorrowedSnapshotRefreshTimeout) plus any downloads routinely exceeds the
-            // reap claim's own gate wait (20s, ReapClaimGateWait), so an unfenced claim
-            // (TryClaimUnfencedReapWithoutSection) can land mid-section. The latch is monotonic 0→1
-            // via Volatile.Read, so this re-read can never false-positive.
             if (SendInputBeforeWriteHookForTest is { } beforeWrite) await beforeWrite();
 
+            // Re-read HERE, not only on entry: the borrowed-snapshot refresh budget
+            // (BorrowedSnapshotRefreshTimeout) plus any downloads routinely exceed the reap claim's
+            // own gate wait (ReapClaimGateWait), so an unfenced claim can land mid-section. The latch
+            // is monotonic 0→1 via Volatile.Read, so this re-read can never false-positive.
             if (agent.IsReapClaimed) {
-                LogSendInputReapClaimedLate(agentId);
-                dropReason = SendInputDropReason.ReaperClaimedLate;
+                LogSendInputReapClaimedLate(agent.Id);
 
-                return;
+                return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimedLate);
             }
 
-            // Codex turn diagnostic: BEFORE delivering this round's input — and while the send gate
-            // is held, so it is ordered per agent — bump the round generation and sample the rollout
-            // length from the cached path. Bumping first instantly invalidates any prior round's
-            // still-running probe (it emits a verdict only while its generation is the latest), so a
-            // fast Codex append caused by THIS input can never be credited to the previous round.
-            // Sampling the length after the bump but before the send keeps the baseline honest (the
-            // append lands strictly after it). A null here (path not cached yet, or the stat failed)
-            // is handled in ArmCodexTurnProbe.
+            // Codex turn diagnostic: bump the round generation and sample the rollout length BEFORE
+            // delivering, while the gate is held so it is ordered per agent. Bumping first instantly
+            // invalidates any prior round's still-running probe (it emits a verdict only while its
+            // generation is the latest), so a fast Codex append caused by THIS input can never be
+            // credited to the previous round. Sampling after the bump but before the send keeps the
+            // baseline honest — the append lands strictly after it. A null here (path not cached yet,
+            // or the stat failed) is handled in ArmCodexTurnProbe.
             if (isCodex) {
                 codexGen = Interlocked.Increment(ref agent.CodexTurnProbeGen);
                 if (agent.TranscriptPath is { } rolloutPath) codexBaseline = TryFileLength(rolloutPath);
@@ -3817,15 +3848,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // that wait is newer than the one this input answers.
             var waitGeneration = agent.ActivityClock.WaitGeneration;
 
-            // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
-            if (agent.BorrowedSnapshotSource is not null)
-                await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
-            else
-                await agent.Runtime.SendUserInputAsync(message);
+            try {
+                // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
+                if (agent.BorrowedSnapshotSource is not null)
+                    await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
+                else
+                    await agent.Runtime.SendUserInputAsync(message);
+            } catch (InputNotAdmittedException ex) {
+                LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.QueueFull);
+
+                return InputDeliveryOutcome.Drop(SendInputDropReason.QueueFull, ex.Message);
+            } catch (Exception ex) {
+                LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.DeliveryFailed);
+
+                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, ex.Message);
+            }
 
             // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
-            // output/ACP envelopes/turn transitions); an InputNotAdmittedException (or any other
-            // throw) from either await above skips it.
+            // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
             agent.ActivityClock.Advance();
             agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
 
@@ -3842,18 +3882,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // loop while still holding BorrowedSnapshotGate.
             _ = Task.Run(() => SendDaemonStatusReportOnceAsync());
 
-            LogSendInputDelivered(agentId, agent.Runtime.Vendor, message.Length);
-        } finally {
-            agent.BorrowedSnapshotGate.Release();
+            LogSendInputDelivered(agent.Id, agent.Runtime.Vendor, message.Length);
 
-            // After the release, never before it — see dropReason's own note.
-            if (dropReason is { } reason) await ReportInputDroppedAsync(cmd, reason);
+            return InputDeliveryOutcome.Delivered;
         }
-
-        // Codex turn diagnostic: arm the post-send rollout-growth probe. Only reached on the
-        // successful-delivery path (the guards and the borrowed-snapshot failure above all return
-        // before here).
-        if (isCodex) ArmCodexTurnProbe(agent, codexBaseline, codexGen);
     }
 
     /// <summary>
@@ -3862,7 +3894,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// round's input was delivered) and logs whether a turn began — the only clean turn-start signal
     /// a PTY runtime gives the daemon (see <see cref="CodexTurnObserver"/>).
     ///
-    /// <para>Single-flight is by GENERATION, established in <see cref="HandleSendInput"/> before
+    /// <para>Single-flight is by GENERATION, established in <see cref="DeliverInputAsync"/> before
     /// delivery: <paramref name="gen"/> is this round's generation, and the probe emits a verdict
     /// only while it is still the agent's latest — so a later round's growth is never credited to an
     /// earlier round even during that earlier probe's own poll. This method itself does no I/O and
@@ -5259,6 +5291,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "SendInput delivered to agent {AgentId}'s {Vendor} runtime ({Chars} chars)")]
     partial void LogSendInputDelivered(string agentId, string vendor, int chars);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId}'s {Vendor} runtime did not take the write ({Reason})")]
+    partial void LogSendInputDeliveryFailed(Exception ex, string agentId, string vendor, string reason);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Could not report the dropped input for agent {AgentId} ({Reason})")]
     partial void LogSendInputRejectReportFailed(Exception ex, string agentId, string reason);

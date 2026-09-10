@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// output before the next reap sweep — looked idle to the reaper even while a human/driver was
 /// actively working with it.
 ///
-/// <c>AgentOrchestrator.HandleSendInput</c> calls <c>Advance()</c> only once delivery is
+/// <c>AgentOrchestrator.DeliverInputAsync</c> calls <c>Advance()</c> only once delivery is
 /// KNOWN to have succeeded — the runtime write returned without throwing. A failed/cancelled
 /// delivery must leave the clock untouched: a false advance would mask a genuinely wedged/dead
 /// agent from the reaper, which is exactly the failure mode this whole clock exists to catch.
@@ -43,7 +43,7 @@ public class SendInputActivityClockTests {
     /// <summary>Pins the mechanism the design's residual note is about: ACP's default (non-borrowed)
     /// <c>SendUserInputAsync</c> is fire-and-forget — its non-throwing return means "enqueued", not
     /// "the agent read it" (<c>AcpHostedAgentRuntime.EnqueueTurn</c>'s full-queue branch drops
-    /// silently, no throw) — yet <c>AgentOrchestrator.HandleSendInput</c> still advances the
+    /// silently, no throw) — yet <c>AgentOrchestrator.DeliverInputAsync</c> still advances the
     /// clock on it, by design (a false advance only delays a reap/silence verdict, never manufactures
     /// one). Uses <see cref="FakeAcpRuntime"/> (an <see cref="IHostedAgentRuntime"/> test double
     /// from <see cref="AgentOrchestratorHarness"/>) via <c>SeedAcpAgent</c> — its
@@ -115,23 +115,27 @@ public class SendInputActivityClockTests {
         await Assert.That(agent.ActivityClock.AwaitingInput).IsTrue();
     }
 
+    /// <summary>A write the runtime would not take is a drop the sender is told about rather than an
+    /// exception escaping the handler — either way the clock must show nothing happened.</summary>
     [Test]
     public async Task Failed_delivery_advances_nothing() {
-        var server = new CaptureServerConnection();
-        var time   = new FakeTimeProvider();
-        var clock  = new AgentActivityClock(time);
+        var server     = new CaptureServerConnection();
+        var time       = new FakeTimeProvider();
+        var clock      = new AgentActivityClock(time);
+        var dispatchId = Guid.NewGuid();
 
         await using var orch  = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var             agent = orch.SeedAgentForTest("send-input-fail", pty: new AlwaysThrowsPtyProcess(), activityClock: clock);
 
         time.Advance(TimeSpan.FromSeconds(10));
 
-        await Assert.ThrowsAsync<IOException>(
-            async () => await orch.HandleSendInputForTest(new SendInputCommand(agent.Id, "hello", null)));
+        await orch.HandleSendInputForTest(new SendInputCommand(agent.Id, "hello", null, dispatchId));
 
         // The write failed before "delivered" — seq and idle are exactly where spawn left them.
         await Assert.That(agent.ActivityClock.ActivitySeq).IsEqualTo(1UL);
         await Assert.That(agent.ActivityClock.IdleForMs).IsGreaterThanOrEqualTo(9_900UL);
+        await Assert.That(server.InputRejections)
+            .Contains((dispatchId, agent.Id, AgentOrchestrator.SendInputDropReason.DeliveryFailed));
     }
 
 }
