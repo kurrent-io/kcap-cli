@@ -8,7 +8,13 @@ using DynamicData;
 namespace Capacitor.App.Services;
 
 /// Sole owner of the pending-permission cache, which holds both lanes keyed by
-/// PendingPermissionRequest.Key. One lock guards the tombstone set, the shadow set, the session
+/// PendingPermissionRequest.Key. A local item is answerable only over the subscription that
+/// delivered it, so every loss of that subscription — a closed attempt, a daemon without the
+/// capability, a daemon gone — drops the local lane and hands back the server twins it was
+/// shadowing, which carry handles that still work. The next Subscribed replay restores the local
+/// cards and re-shadows the twins, so a daemon restart blinks those cards rather than leaving
+/// unanswerable ones on screen.
+/// One lock guards the tombstone set, the shadow set, the session
 /// generations and every cache mutation: the tombstone test + upsert, the tombstone add + evict
 /// (on an ack and on a Resolved push), the local-lane drops, the server-lane mutations and the
 /// disposed flag. The stream loop, the status subscription, the session-agent feed and the
@@ -167,8 +173,7 @@ public sealed class PermissionService : IPermissionService {
             return;
         }
         StopLoop();
-        // A Connected daemon without the capability is a different incarnation; disconnected retains.
-        if (status.State == AttachState.Connected) DropLocalLane();
+        DropLocalLane();
     }
 
     void StartLoop() {
@@ -206,6 +211,9 @@ public sealed class PermissionService : IPermissionService {
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"kcap: permission subscription attempt failed: {ex.Message}");
                 }
+                // The attempt ended for a reason other than this loop's own cancellation, so the
+                // socket that could answer the local cards is gone before the next one replays.
+                DropLocalLane();
                 try { await Task.Delay(RetryDelay, _time, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
             }

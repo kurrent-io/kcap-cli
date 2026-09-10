@@ -35,6 +35,7 @@ public class PermissionServiceTests {
         public void EmitSubscribed() => _channel.Writer.TryWrite(new PermissionStreamEvent.Subscribed());
         public void EmitPending(PermissionPendingDto dto) => _channel.Writer.TryWrite(new PermissionStreamEvent.Pending(dto));
         public void EmitResolved(string id, string source) => _channel.Writer.TryWrite(new PermissionStreamEvent.Resolved(new PermissionResolvedDto(id, "allow", source)));
+        public void EndAttempt() => _channel.Writer.TryWrite(null);
     }
 
     sealed class Harness : IDisposable {
@@ -65,16 +66,6 @@ public class PermissionServiceTests {
             Connect("consent/1", "permission/1");
             await WaitUntilAsync(() => Stream.Attempts == 1, what: "the subscribe attempt");
             Stream.EmitSubscribed();
-        }
-
-        /// Drops the daemon and reconnects it, which is the deterministic way to reach a second
-        /// subscribe attempt: the loop's own retry gap is armed on a FakeTimeProvider nothing here
-        /// advances.
-        public async Task ResubscribeAsync() {
-            var attempts = Stream.Attempts;
-            Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            Connect("consent/1", "permission/1");
-            await WaitUntilAsync(() => Stream.Attempts == attempts + 1, what: "resubscribe");
         }
 
         public async Task<PendingPermissionRequest> EmitAsync(PermissionPendingDto dto) {
@@ -152,18 +143,19 @@ public class PermissionServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(1);
     }
 
+    /// A local card is answerable only over the subscription that delivered it, so losing the
+    /// daemon retires it; the next attempt's replay is what brings it back.
     [Test]
-    public async Task Subscribed_clears_at_the_boundary_and_disconnect_retains() {
+    public async Task Subscribed_clears_at_the_boundary_and_disconnect_drops_the_local_lane() {
         using var h = new Harness();
         await h.StartAsync();
         await h.EmitAsync(Dto("r1"));
         h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-        await Task.Delay(50);
-        await Assert.That(h.View.Count).IsEqualTo(1);
+        await WaitUntilAsync(() => h.View.Count == 0, what: "the local lane dropped with the subscription");
 
         h.Connect("permission/1");
         await WaitUntilAsync(() => h.Stream.Attempts == 2, what: "resubscribe");
-        await Assert.That(h.View.Count).IsEqualTo(1);
+        await h.EmitAsync(Dto("r1"));
         h.Stream.EmitSubscribed();
         await WaitUntilAsync(() => h.View.Count == 0, what: "cleared at Subscribed");
     }
@@ -316,10 +308,40 @@ public class PermissionServiceTests {
         h.Service.UpsertServer(ServerPermission("srv-9"));
         await Assert.That(h.View.Count).IsEqualTo(2);
 
-        await h.ResubscribeAsync();
         h.Stream.EmitSubscribed();
-        await WaitUntilAsync(() => h.View.Count == 1, what: "local item dropped on resubscribe");
+        await WaitUntilAsync(() => h.View.Count == 1, what: "local item dropped at the Subscribed boundary");
         await Assert.That(h.View.Lookup("server:srv-9").HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task A_daemon_disconnect_drops_the_local_item_and_resurfaces_its_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "twin resurfaced");
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
+        var twin = h.View.Lookup("server:srv-1").Value;
+        await Assert.That(twin.Lane).IsEqualTo(PermissionLane.Server);
+        await Assert.That(twin.RequestId).IsEqualTo("srv-1");
+    }
+
+    /// A socket closing under a daemon the status feed still calls healthy is the same loss: the
+    /// attempt ends, and nothing can answer the local card until the next one replays it.
+    [Test]
+    public async Task A_lost_attempt_drops_the_local_item_and_resurfaces_its_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        h.Stream.EndAttempt();
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "twin resurfaced");
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
     }
 
     [Test]
