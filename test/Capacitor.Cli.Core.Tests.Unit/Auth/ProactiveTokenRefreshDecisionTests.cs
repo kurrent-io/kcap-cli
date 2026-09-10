@@ -65,7 +65,7 @@ public class ProactiveTokenRefreshDecisionTests {
 
     [Test]
     public async Task Two_minute_window_leaves_a_token_beyond_it_not_due() {
-        // The daemon's shrunk 2-minute window: a token 2m30s out is still comfortably valid, so a
+        // The daemon's 2-minute window: a token 2m30s out is still comfortably valid, so a
         // freshly-issued token is not refreshed the instant after login.
         var window   = TimeSpan.FromMinutes(2);
         var tokens   = Tokens(AuthProvider.WorkOS, Now.AddSeconds(150));

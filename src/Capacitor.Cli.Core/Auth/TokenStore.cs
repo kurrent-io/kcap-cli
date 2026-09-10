@@ -698,7 +698,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
 
     // `onOutcome` reports the raw WorkOS classification so a caller (the proactive tick) can tell a
     // refused refresh token — terminal, `kcap login` repairs it — from a transport failure it may
-    // retry. The non-Rotated → null mapping is unchanged: every other caller ignores the outcome.
+    // retry. A non-Rotated outcome maps to null; only the proactive tick reads onOutcome.
     async Task<StoredTokens?> RefreshWorkOSAsync(
             StoredTokens tokens, CancellationToken ct, Action<WorkOSRefreshOutcome>? onOutcome = null) {
         var result = await workos.RefreshAsync(tokens.ClientId!, tokens.RefreshToken!, ct);

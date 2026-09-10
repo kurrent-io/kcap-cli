@@ -133,4 +133,19 @@ public class WorkOSClientTests : IDisposable {
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
     }
+
+    /// <summary>A success status means WorkOS already consumed the old token and rotated; an unreadable
+    /// body loses the new token, so the outcome is Rejected (re-login) — never a retryable failure that
+    /// would re-send the spent token and trip reuse detection.</summary>
+    [Test]
+    public async Task An_unreadable_success_body_is_rejected_not_retried() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("not-json"));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
+        await Assert.That(result.Response).IsNull();
+    }
 }

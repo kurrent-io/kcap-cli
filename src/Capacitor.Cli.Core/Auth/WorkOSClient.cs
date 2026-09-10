@@ -43,13 +43,24 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory, TimeSpan? refre
         // still propagates.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(_refreshTimeout);
+
+        HttpResponseMessage response;
         try {
-            using var response = await PostFormAsync(AuthenticateUrl, new() {
+            response = await PostFormAsync(AuthenticateUrl, new() {
                 ["grant_type"]    = "refresh_token",
                 ["client_id"]     = clientId,
                 ["refresh_token"] = refreshToken
             }, deadline.Token);
+        } catch when (!ct.IsCancellationRequested) {
+            // No response headers arrived — the request may never have reached WorkOS, so the token is
+            // most likely still live and a later attempt re-reads the same on-disk one. The residual
+            // ambiguity (a reply lost after WorkOS processed it) needs a durable "attempted" marker to
+            // close fully — a deliberate follow-up, since marking every transient blip terminal would
+            // force a re-login far more often than a lost reply actually occurs.
+            return new(WorkOSRefreshOutcome.TransportFailed, null);
+        }
 
+        using (response) {
             if (!response.IsSuccessStatusCode) {
                 // A 4xx means WorkOS understood and refused the refresh token (a 400 invalid_grant on
                 // a consumed/revoked token is the usual one) — terminal, only `kcap login` repairs it.
@@ -60,14 +71,20 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory, TimeSpan? refre
                     : new(WorkOSRefreshOutcome.Rejected, null);
             }
 
-            var body = await response.Content.ReadFromJsonAsync(
-                CapacitorJsonContext.Default.WorkOSAuthResponse, deadline.Token);
+            // A success status means WorkOS has consumed the old token and rotated. If the new one is
+            // unreadable it is lost and the old token is spent — Rejected (re-login), never a
+            // retryable failure that would re-send the consumed token.
+            WorkOSAuthResponse? body;
+            try {
+                body = await response.Content.ReadFromJsonAsync(
+                    CapacitorJsonContext.Default.WorkOSAuthResponse, deadline.Token);
+            } catch when (!ct.IsCancellationRequested) {
+                return new(WorkOSRefreshOutcome.Rejected, null);
+            }
 
             return body is null
-                ? new(WorkOSRefreshOutcome.TransportFailed, null)
+                ? new(WorkOSRefreshOutcome.Rejected, null)
                 : new(WorkOSRefreshOutcome.Rotated, body);
-        } catch when (!ct.IsCancellationRequested) {
-            return new(WorkOSRefreshOutcome.TransportFailed, null);
         }
     }
 
