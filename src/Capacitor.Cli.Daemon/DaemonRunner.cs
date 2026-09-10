@@ -400,6 +400,7 @@ public static partial class DaemonRunner {
         // Local-socket consent frames — the same broker instance the gate above prompts through, so
         // a subscriber connected via ConsentSubscribe sees the gate's own pending requests.
         builder.Services.AddSingleton<LaunchConsentIpc>();
+        builder.Services.AddSingleton<DaemonSettingsIpc>();
 
         builder.Services.AddSingleton<PermissionPromptBroker>();
         builder.Services.AddSingleton<PermissionIpc>();

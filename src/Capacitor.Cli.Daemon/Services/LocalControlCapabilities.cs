@@ -16,8 +16,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// only — enforcement lives in the v2 frames themselves. <c>"status/1"</c> routes StatusSubscribe
 /// to <see cref="DaemonStatusIpc"/>; <c>"permission/1"</c> routes
 /// PermissionSubscribe/PermissionResolve to <see cref="PermissionIpc"/>; and <c>"input/1"</c>
-/// routes SendText to <see cref="AgentOrchestrator.HandleLocalSendTextAsync"/>.
+/// routes SendText to <see cref="AgentOrchestrator.HandleLocalSendTextAsync"/>; and
+/// <c>"settings/1"</c> routes DaemonSettingsPut to <see cref="DaemonSettingsIpc"/>.
 /// </summary>
 internal static class LocalControlCapabilities {
-    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1"];
+    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "settings/1"];
 }

@@ -1289,6 +1289,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
 
+    /// <summary>
+    /// Re-sends the registration on the current connection so the server's copy of a connect
+    /// field that changed at runtime (capacity) is overwritten. Rides the capability refresh so a
+    /// burst of changes coalesces and the last publication carries the newest config.
+    /// </summary>
+    internal void RepublishRegistration(string reason) => RefreshAdvertisedCapabilities(reason, republishUnchanged: true);
+
     internal AgentLiveness ReadLiveness(string agentId) {
         // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
         // The add-to-quarantine-before-remove-from-_agents invariant makes this ordering false-Dead-free.
