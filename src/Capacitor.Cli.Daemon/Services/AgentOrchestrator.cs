@@ -72,6 +72,10 @@ internal record AgentInstance(
     /// runtime that writes nothing the daemon locates.
     public string? TranscriptPath { get; set; }
 
+    /// The daemon-written envelope journal for this launch, for the runtimes that emit envelopes.
+    /// Null for a PTY runtime, which writes its own transcript and needs none.
+    public TranscriptJournal? Journal { get; init; }
+
     bool _titleComputed;
     string? _title;
     /// <summary>The status payload's display title, computed ONCE from the immutable Prompt
@@ -439,6 +443,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     int _discoveryStarts;
     internal int DiscoveryStartsForTest => Volatile.Read(ref _discoveryStarts);
+
+    int _codexProbesArmed;
+    internal int CodexProbesArmedForTest => Volatile.Read(ref _codexProbesArmed);
 
     // Phase B (D4): durable PID records + this daemon's logical identity/epoch for
     // crash-survivor reaping. Initialized in the ctor from config.
@@ -2007,6 +2014,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // method scope so the failure catch can revoke it when no AgentInstance was created to carry it.
         string? reviewerToken = null;
 
+        // Hoisted for the same reason: a launch that fails after the factory opened the journal must
+        // be able to complete it, and remove a file no other incarnation has written to.
+        TranscriptJournal? journal = null;
+
         // Created here, ahead of the reviewer-token mint and the AgentInstance that will own it, so the
         // SAME instance reaches the permission-bridge grant, the ACP runtime and the AgentInstance —
         // one clock per launch, never three.
@@ -2224,6 +2235,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (brokeredResultDelivery) flowResultCapabilityUrl = reviewerUrl;
             }
 
+            journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger);
+
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
                 Vendor: cmd.Vendor,
@@ -2269,7 +2282,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 PermissionMode: cmd.PermissionMode,
                 // The same instance the AgentInstance below carries, so a factory that judges an
                 // action during its own startup uses the documents this launch was reported with.
-                PolicySnapshot: policySnapshot
+                PolicySnapshot: policySnapshot,
+                Journal: journal
             );
 
             HostedRuntimeStart start;
@@ -2364,6 +2378,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var registeredModel = start.Transcript is { } confirmed ? confirmed.ResolvedModel : effectiveModel;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
+                // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
+                // reads, and RegisterAgentAsync after it can stall on a server outage.
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : null,
+                TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
+                Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,
                 McpConfigPath       = mcpConfigPath,
                 CurrentCols         = HostedPtyCols,
@@ -2478,7 +2497,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // daemon-side locator no-op (the hook stays their only source). Best-effort
             // background task, cancelled with the agent — the server converges incarnations on
             // daemon liveness, so a missing id never blocks a launch.
-            _ = DetectSessionIdAsync(agent, cmd.Vendor, spawnedAtUtc);
+            // Only a runtime that writes its own transcript has anything to discover: an
+            // envelope-sourced one already carries its session id and the journal it is written to.
+            if (start.Transcript is null) _ = DetectSessionIdAsync(agent, cmd.Vendor, spawnedAtUtc);
 
             // Report the resolved model so the server can display / validate the real model the agent
             // is running. Best-effort: never let a report failure break the launch.
@@ -3703,7 +3724,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Codex turn diagnostic: whether to run the post-send rollout probe, plus this round's
         // generation and the rollout length sampled just BEFORE delivery. Declared out here so both
         // survive the try/finally to reach ArmCodexTurnProbe below.
-        var   isCodex       = string.Equals(agent.Runtime.Vendor, "codex", StringComparison.OrdinalIgnoreCase);
+        // The probe reads a rollout Codex's own CLI writes; an envelope-sourced Codex has none, and
+        // its TranscriptPath names the daemon's journal instead.
+        var   isCodex       = agent.Runtime.EmitsTerminalOutput
+                           && string.Equals(agent.Runtime.Vendor, "codex", StringComparison.OrdinalIgnoreCase);
         long? codexBaseline = null;
         long  codexGen      = 0;
 
@@ -3824,6 +3848,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// already invalidated.</para>
     /// </summary>
     void ArmCodexTurnProbe(AgentInstance agent, long? baseline, long gen) {
+        Interlocked.Increment(ref _codexProbesArmed);
         if (agent.TranscriptPath is not { } rolloutPath || baseline is not { } b) {
             LogCodexTurnRolloutUnresolved(agent.Id);
             return;

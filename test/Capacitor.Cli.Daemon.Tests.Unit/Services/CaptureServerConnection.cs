@@ -280,6 +280,10 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// drove (e.g. Fix B/E's immediate Running flip for a no-terminal runtime).</summary>
     public List<(string AgentId, string Status)> StatusChangedCalls { get; } = [];
 
+    /// <summary>The same calls with the session id the daemon reported alongside each status — the
+    /// only place a test can see whether the FIRST status a server saw already named the session.</summary>
+    public List<(string AgentId, string Status, string? SessionId)> StatusChangedWithSession { get; } = [];
+
     public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) {
         // Capture BEFORE recording: was a launch-window verdict already published when this
         // non-failure status was sent? (finding 1 — the invariant a check-to-send race breaks.)
@@ -288,6 +292,7 @@ sealed class CaptureServerConnection() : ServerConnection(
             NonFailureStatusSentAfterVerdictPublished = true;
 
         lock (StatusChangedCalls) StatusChangedCalls.Add((agentId, status));
+        lock (StatusChangedWithSession) StatusChangedWithSession.Add((agentId, status, sessionId));
 
         return Task.CompletedTask;
     }

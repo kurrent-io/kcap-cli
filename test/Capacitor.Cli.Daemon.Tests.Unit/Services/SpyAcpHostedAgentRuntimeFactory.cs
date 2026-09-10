@@ -35,6 +35,7 @@ internal sealed class SpyAcpHostedAgentRuntimeFactory(string vendor = "cursor") 
         LastContext = ctx;
 
         var runtime = new FakeAcpRuntime {
+            Vendor = Vendor,
             ResolvedModel = ResolvedModel, DeferFirstTurn = DeferFirstTurn, BeginFirstTurnThrow = BeginFirstTurnThrow
         };
         LastRuntime = runtime;

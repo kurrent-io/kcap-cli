@@ -252,5 +252,8 @@ internal sealed record RuntimeStartContext(
         // own file — the same instance the AgentInstance carries, so a factory and the permission
         // seam judge against one set of documents. Null when no provider is wired, when the build
         // failed, and for constructions predating this field.
-        PolicySnapshot?     PolicySnapshot = null
+        PolicySnapshot?     PolicySnapshot = null,
+        // The launch's transcript journal, unopened. An envelope-emitting factory opens it before
+        // constructing its runtime and hands it to the constructor; a PTY factory ignores it.
+        TranscriptJournal?  Journal = null
     );

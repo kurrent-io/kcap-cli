@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
     readonly Channel<AcpEventEnvelope> _envelopes = Channel.CreateUnbounded<AcpEventEnvelope>();
 
-    public string Vendor              => "cursor";
+    public string Vendor              { get; init; } = "cursor";
     public int    Pid                 => 0;
     public bool   HasExited           => ExitGate.Task.IsCompleted;
     public int?   ExitCode            => 0;

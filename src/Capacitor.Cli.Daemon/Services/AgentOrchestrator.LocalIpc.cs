@@ -58,11 +58,12 @@ internal partial class AgentOrchestrator {
                 WorktreePath: a.Checkout.Worktree,
                 WorkLocation: a.Checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
                 BorrowedFrom: a.Checkout.BorrowedFrom,
-                SessionId: a.SessionId ?? (a.Runtime as IAcpTranscriptSource)?.AcpSessionId,
+                SessionId: a.SessionId ?? SessionIds.Canonical((a.Runtime as IAcpTranscriptSource)?.AcpSessionId),
                 Branch: string.IsNullOrWhiteSpace(a.Worktree.Branch) ? null : a.Worktree.Branch,
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
-                AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput))];
+                AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput,
+                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor))];
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame
