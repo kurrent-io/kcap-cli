@@ -46,10 +46,11 @@ public class ResolveForRepoTests {
         await Assert.That(await ResolveIn([], ProfileOverrides.None)).IsEqualTo(PinnedUrl);
     }
 
-    /// <summary>An override genuinely names a server, so the repo has nothing left to decide and the
-    /// git probe behind discovery is not worth paying for.</summary>
+    /// <summary>A named override outranks what the repo pins, so the profile named in
+    /// <c>.kcap.json</c> loses to it. Says nothing about whether discovery ran — both paths feed the
+    /// resolver the same override, and only the git probe tells them apart.</summary>
     [Test, NotInParallel]
-    public async Task A_named_override_skips_repo_discovery() {
+    public async Task A_named_override_outranks_the_repos_own_profile() {
         await WriteRepoPinnedToAnotherProfile();
 
         await Assert.That(await ResolveIn([], new ProfileOverrides("https://env.example", null)))

@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalIpc;
@@ -342,7 +343,7 @@ internal sealed partial class CodexLauncher(
         args.Add("-c");
         args.Add($"mcp_servers.{name}.args=[{TomlString("mcp")},{TomlString("flow-result")}]");
         args.Add("-c");
-        args.Add($"mcp_servers.{name}.env={{KCAP_URL={TomlString(config.ServerUrl)},KCAP_FLOW_AGENT_ID={TomlString(ctx.AgentId)}}}");
+        args.Add($"mcp_servers.{name}.env={{{ProfileOverrides.UrlVar}={TomlString(config.ServerUrl)},KCAP_FLOW_AGENT_ID={TomlString(ctx.AgentId)}}}");
         AddAppServerApprovalMode(args, name, appServer);
     }
 
@@ -384,7 +385,7 @@ internal sealed partial class CodexLauncher(
             args.Add("-c");
             args.Add($"mcp_servers.{id}.args=[{argsList}]");
             args.Add("-c");
-            args.Add($"mcp_servers.{id}.env={{KCAP_URL={TomlString(config.ServerUrl)}}}");
+            args.Add($"mcp_servers.{id}.env={{{ProfileOverrides.UrlVar}={TomlString(config.ServerUrl)}}}");
             AddAppServerApprovalMode(args, id, appServer);
         }
     }

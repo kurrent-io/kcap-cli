@@ -52,9 +52,9 @@ public class RefreshServerSelectionTests {
         return recorder.PostedTo;
     }
 
-    /// <summary>With nothing overridden the profile's own server_url is the only endpoint on offer.
-    /// An empty variable names no server, so it must not outrank the profile: the endpoint that
-    /// would leave is just the path, which no refresh can reach and which reads as a dead credential.</summary>
+    /// <summary>With nothing overridden the profile's own server_url is the only endpoint on offer —
+    /// the refresh reaches for the named profile's config, not the resolution the process started
+    /// with, which for a token minted before server-binding names nothing.</summary>
     [Test]
     public async Task An_unoverridden_refresh_posts_to_the_profiles_own_server() =>
         await Assert.That(await RefreshUnder(ProfileOverrides.None))
