@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Logging;
@@ -136,10 +134,7 @@ internal sealed class AgentPidRecordStore(string stateDir, ILogger logger) {
     }
 
     // Hash the (untrusted) agent id into the filename so no id can escape _agentsDir via path separators.
-    string PathFor(string agentId) => Path.Combine(_agentsDir, SafeName(agentId) + ".json");
-
-    static string SafeName(string agentId) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(agentId ?? ""))).ToLowerInvariant();
+    string PathFor(string agentId) => Path.Combine(_agentsDir, AgentFileNames.For(agentId) + ".json");
 
     void TryQuarantine(string path) {
         try { File.Move(path, path + ".corrupt", overwrite: true); }
