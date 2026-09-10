@@ -64,7 +64,7 @@ public static class ServerSessionHttp {
             var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(text);
             return doc.RootElement.Prop("error")?.GetString() ?? text;
-        } catch (Exception) {
+        } catch (Exception) when (!ct.IsCancellationRequested) {
             return "rejected";
         }
     }

@@ -49,6 +49,21 @@ public class ServerSessionHttpTests {
     }
 
     [Test]
+    public async Task Responder_lets_the_callers_own_cancellation_escape_a_pending_bad_request_read() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/s1/permission-response/slow").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(400).WithBody("""{"error":"count mismatch"}""").WithDelay(TimeSpan.FromSeconds(3)));
+        var (http, profiles, provider) = await WireMockLane.BuildAsync(server, Config.Root);
+        await using var _ = provider;
+        var respond = ServerSessionHttp.Responder(http, profiles);
+        var allow = new PermissionResponsePayload { Behavior = PermissionBehaviors.Allow };
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => respond("s1", "slow", allow, cts.Token));
+    }
+
+    [Test]
     public async Task Responder_without_a_server_or_client_is_unreachable_not_a_throw() {
         var outcome = await ServerSessionHttp.Responder(null, null)("s1", "r1", new PermissionResponsePayload { Behavior = "allow" }, CancellationToken.None);
         await Assert.That(outcome.Kind).IsEqualTo(ServerRespondKind.Unreachable);
