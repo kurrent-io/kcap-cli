@@ -586,6 +586,10 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<LocalControlServer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalControlServer>());
 
+        builder.Services.AddSingleton(sp => new TranscriptJournalSweep(
+            config.Store.StateDirectory(config.Name), TimeProvider.System, sp.GetRequiredService<ILogger<TranscriptJournalSweep>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptJournalSweep>());
+
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
 
@@ -740,6 +744,8 @@ public static partial class DaemonRunner {
                 // handler. Under the daemon lock; best-effort (swallows its own faults).
                 orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
                 await orchestrator.ReapOrphansOnceAsync();
+
+                await host.Services.GetRequiredService<TranscriptJournalSweep>().RunOnceAsync(lifetime.ApplicationStopping);
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
