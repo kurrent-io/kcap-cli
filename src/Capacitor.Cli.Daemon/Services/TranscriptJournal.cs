@@ -93,8 +93,14 @@ internal sealed class TranscriptJournal : IDisposable {
             // both claim authorship and a failed launch then deletes the other's file.
             CreatedFile = !File.Exists(Path);
 
+            // A new file is born 0600 (UnixCreateMode), closing the umask-default window a
+            // post-write chmod would otherwise leave; the chmod below still re-asserts it onto a
+            // pre-existing file, which UnixCreateMode never touches.
+            var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.Write, Share = FileShare.ReadWrite | FileShare.Delete };
+            if (!OperatingSystem.IsWindows()) options.UnixCreateMode = FileMode0600;
+
             var header = Encode(AcpEventTranslator.BuildSessionStarted(0, NowIso(), cwd, model));
-            using (var fs = new FileStream(Path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) {
+            using (var fs = new FileStream(Path, options)) {
                 fs.Seek(0, SeekOrigin.End);
                 fs.Write(header);
                 fs.Flush(true);

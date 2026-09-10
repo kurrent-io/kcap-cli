@@ -82,6 +82,7 @@ internal sealed class LocalFrameChatInput : ChatInput {
             SendTextReasons.QueueFull      => "the agent's input queue is full, try again shortly",
             SendTextReasons.StopFailed     => "the agent did not stop",
             SendTextReasons.ReaperClaimed or SendTextReasons.ReaperClaimedLate => "the agent is being stopped",
+            SendTextReasons.TooLarge       => result.Error ?? "message is too large",
             SendTextReasons.DeliveryFailed => result.Error ?? "delivery failed",
             // A reason this build has no wording for is still not composer text: the raw wire token
             // would read as a bug report to the user.

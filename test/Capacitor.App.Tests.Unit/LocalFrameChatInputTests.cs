@@ -72,6 +72,7 @@ public class LocalFrameChatInputTests {
     [Arguments("reaper_claimed", null, "the agent is being stopped")]
     [Arguments("reaper_claimed_late", null, "the agent is being stopped")]
     [Arguments("delivery_failed", "pipe closed", "pipe closed")]
+    [Arguments("too_large", "text exceeds 262144 bytes", "text exceeds 262144 bytes")]
     [Arguments("transport", "eof", "delivery unconfirmed — check the chat before sending again")]
     // A reason this build has no wording for still never shows the caller the wire token.
     [Arguments("some_future_reason", "raw detail", "delivery failed")]
