@@ -1560,14 +1560,45 @@ public static partial class DaemonRunner {
                 RedirectStandardError = true,
                 ArgumentList = { "--version" }
             });
-            if (process is null || !process.WaitForExit(timeoutMs)) {
-                try { if (process is not null) ProcessTree.Kill(process); } catch { }
+            if (process is null) return null;
+
+            // Drain both pipes WHILE the child runs. A --version that writes more than the OS pipe
+            // buffer — some vendor CLIs emit a banner or an "update available" notice — blocks on
+            // write until the parent reads, so reading only after WaitForExit deadlocks: the child
+            // parks on a full pipe, the wait never returns, and the probe hangs until the timeout
+            // kills it. The drains never fault (they swallow to ""), so the abandoned timeout path
+            // leaves no unobserved task exception.
+            var stdout = DrainToEndAsync(process.StandardOutput);
+            var stderr = DrainToEndAsync(process.StandardError);
+
+            if (!process.WaitForExit(timeoutMs)) {
+                try { ProcessTree.Kill(process); } catch { }
                 return null;
             }
-            var output = process.StandardOutput.ReadToEnd().Trim();
-            if (output.Length == 0) output = process.StandardError.ReadToEnd().Trim();
+
+            var output = stdout.GetAwaiter().GetResult().Trim();
+            if (output.Length == 0) output = stderr.GetAwaiter().GetResult().Trim();
             return ParseProbedVersion(output);
         } catch { return null; }
+    }
+
+    /// Enough for any real vendor <c>--version</c> (a line or two); a version that needed more would
+    /// fail the parser anyway. Past the cap the stream is still read to EOF so the child never blocks
+    /// on a full pipe, but nothing more is retained — a noisy or runaway CLI cannot grow this buffer
+    /// for the whole probe budget.
+    const int ProbeOutputCap = 8 * 1024;
+
+    static async Task<string> DrainToEndAsync(System.IO.StreamReader reader) {
+        try {
+            var buffer = new char[4096];
+            var kept   = new System.Text.StringBuilder();
+            int read;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0) {
+                var room = ProbeOutputCap - kept.Length;
+                if (room > 0) kept.Append(buffer, 0, Math.Min(read, room));
+            }
+            return kept.ToString();
+        } catch { return ""; }
     }
 
     /// <summary>
