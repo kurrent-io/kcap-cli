@@ -800,6 +800,92 @@ public class ChatTabViewModelTests {
         });
     }
 
+    static AgentStatusDto Hosted(string path, string status, bool? awaitingInput) =>
+        Agent("a1", "pi", hasTerminal: false) with {
+            TranscriptPath = path, TranscriptFormat = TranscriptFormats.Envelopes, Status = status, AwaitingInput = awaitingInput,
+        };
+
+    /// The note is the only sign of life before the first envelope: a starting agent, then a turn
+    /// in flight once a prompt row exists, then nothing once the daemon says the agent waits on
+    /// the user. A running agent with no row yet has nothing in flight, so it gets no note either.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Activity_note_reads_starting_then_working_and_clears_when_the_agent_waits() {
+        await RunOnUiAsync(async () => {
+            var path = Tmp.CreateFile("j.jsonl", [
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.SessionStarted, Cwd: "/w")),
+            ]);
+            var h = new Harness(TranscriptChat.Journal);
+
+            await h.PushAsync(Hosted(path, "Starting", awaitingInput: false));
+            await h.TickAsync();
+            await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Starting Pi…");
+
+            await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+
+            File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")) + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+
+            // The awaiting-input flag hides it (the turn ended and the agent waits on the user)…
+            await h.PushAsync(Hosted(path, "Running", awaitingInput: true));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+
+            // …and so does the agent's first output row, mid-turn: the transcript is now the sign of
+            // life, so the note clears instead of sitting beside the streaming answer.
+            File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "on it")) + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A pending card means the agent waits on the user, whatever the awaiting flag says: the card
+    /// arrives before the daemon's status pulse does.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_card_suppresses_the_working_note() {
+        await RunOnUiAsync(async () => {
+            var path = Tmp.CreateFile("j.jsonl", [
+                EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")),
+            ]);
+            var h = new Harness(TranscriptChat.Journal);
+            await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+
+            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+            await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the card");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+
+            h.Permissions.Remove("r1");
+            await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card gone");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A PTY session's awaiting flag comes from vendor hooks that may never fire, so the working
+    /// note is not offered there: its terminal already shows the activity.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pty_session_shows_no_working_note() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [UserLine]);
+            await h.PushAsync(Dto(path) with { Status = "Running", AwaitingInput = false });
+            await h.TickAsync();
+
+            await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
     sealed class CountingProjection(ITranscriptProjection inner) : ITranscriptProjection {
         public List<int> LineNumbers { get; } = [];
         public int ContextsCreated { get; private set; }

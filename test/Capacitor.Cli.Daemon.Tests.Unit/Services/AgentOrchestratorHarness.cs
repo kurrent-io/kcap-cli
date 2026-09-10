@@ -208,7 +208,8 @@ internal static class AgentOrchestratorHarness {
     /// clock passes one; omitting it keeps every existing caller's real-time default.</summary>
     internal static AgentInstance SeedAcpAgent(
             AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
-            AgentActivityClock? activityClock = null, LaunchKind kind = LaunchKind.Default, bool isPrivate = false) {
+            AgentActivityClock? activityClock = null, LaunchKind kind = LaunchKind.Default, bool isPrivate = false,
+            TranscriptJournal? journal = null) {
         var agent = new AgentInstance(
             agentId, "review this", "default", null, "/repo", "cursor",
             runtime,
@@ -217,7 +218,8 @@ internal static class AgentOrchestratorHarness {
             Status = status,
             ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System),
             Kind = kind,
-            IsPrivate = isPrivate
+            IsPrivate = isPrivate,
+            Journal = journal
         };
 
         orch.RegisterAgentForTest(agent);
