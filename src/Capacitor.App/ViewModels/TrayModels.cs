@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.ViewModels;
@@ -22,42 +23,6 @@ public static class CheckoutLabel {
 
     public static string Format(string checkout, string repoRoot) =>
         IsMain(checkout, repoRoot) ? "main checkout" : PlatformPaths.Leaf(checkout);
-}
-
-/// The path primitives every surface shares: one platform comparison rule and one leaf
-/// expression, never a per-view copy.
-public static class PlatformPaths {
-    /// Repo paths compare the way the filesystem underneath them does: case-insensitively on
-    /// Windows and macOS, case-sensitively on Linux where two checkouts differing only in case
-    /// are genuinely different repositories. Trailing directory separators are ignored — `/a`
-    /// and `/a/` are one repository.
-    public static readonly StringComparer Comparer = new TrailingSeparatorComparer(
-        OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
-
-    /// Drops a trailing directory separator so list/group keys share one spelling.
-    public static string Normalize(string path) =>
-        string.IsNullOrEmpty(path) ? path : Path.TrimEndingDirectorySeparator(path);
-
-    /// The path's own last segment, verbatim.
-    public static string Leaf(string path) => Path.GetFileName(Normalize(path));
-
-    sealed class TrailingSeparatorComparer(StringComparer inner) : StringComparer {
-        public override int Compare(string? x, string? y) {
-            if (ReferenceEquals(x, y)) return 0;
-            if (x is null) return -1;
-            if (y is null) return 1;
-            return inner.Compare(Normalize(x), Normalize(y));
-        }
-
-        public override bool Equals(string? x, string? y) {
-            if (ReferenceEquals(x, y)) return true;
-            if (x is null || y is null) return false;
-            return inner.Equals(Normalize(x), Normalize(y));
-        }
-
-        public override int GetHashCode(string obj) =>
-            inner.GetHashCode(Normalize(obj));
-    }
 }
 
 // StopEnabled: false while AgentActionService.StopsInFlight contains Id. Kind is the wire

@@ -5,6 +5,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using DynamicData;
 using DynamicData.Binding;
 using ReactiveUI.Reactive;
