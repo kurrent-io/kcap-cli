@@ -41,7 +41,7 @@ public class DaemonCommandsServiceInstallTests {
         await Assert.That(exit).IsEqualTo(1);
     }
 
-    /// The comparison is on sanitized ids, so a differently-cased spelling of the target is still the target.
+    /// <summary>The comparison is on sanitized ids, so a differently-cased spelling of the target is still the target.</summary>
     [Test]
     public async Task Retire_naming_the_target_itself_is_rejected() {
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "Test-ID"], true);

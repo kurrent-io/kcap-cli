@@ -117,7 +117,9 @@ sealed class ServiceVerify(
     /// residue, a recovery pre-phase (≤ the rollback reserve) — so for full headroom a caller should
     /// allow the sum. The one accepted exception is <see cref="KillWait"/> (≤ 5s) on the manual-owner
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
-    /// caller's 60s kill-timeout.</summary>
+    /// caller's 60s kill-timeout. <c>--retire</c> spends its OWN forward budget ahead of this bound
+    /// (never the install's), so a caller driving a rename must allow for one more forward budget on
+    /// top of the sum above.</summary>
     public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
@@ -698,6 +700,8 @@ sealed class ServiceVerify(
     /// <summary>install [--replace] --verify. <paramref name="replace"/> selects the ownership matrix
     /// (spec §3.4): a fresh install refuses to touch an existing label/unit
     /// (<see cref="VerifyExit.Contended"/>), while <c>--replace</c> clears/takes it over first.</summary>
+    /// <param name="retireServiceId">When set, removes this other unit inside the same transaction
+    /// before installing — the one a daemon rename leaves behind.</param>
     public async Task<int> InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId = null) {
         // Entry reset: see StartVerifiedAsync — the in-process evidence properties describe THIS
         // operation only.
@@ -777,6 +781,20 @@ sealed class ServiceVerify(
             }
         }
 
+        if (retireServiceId is not null) {
+            // A rename's target must be free: a live daemon under the new name is another daemon,
+            // not a stale unit for --replace to take over. No pre-query needed for this check.
+            if (validatedDaemonPid(serviceId) is not null) {
+                Say(VerifyExit.ContendedToken);
+                return VerifyExit.Contended;
+            }
+            // Retire spends its OWN forward budget — never the install's — so a late-but-successful
+            // retire can never starve the install's own readiness poll and strand the operator with
+            // no daemon at all (a retired unit is never restored on the install's own timeout).
+            var retireBy = time.GetUtcNow() + _forwardBudget;
+            if (await RetireAsync(retireServiceId, spec, retireBy) is { } retireExit) return retireExit;
+        }
+
         // ── forward phase: one cutoff shared by pre-query, the matrix, write, bootstrap, readiness ──
         var forward = time.GetUtcNow() + _forwardBudget;
 
@@ -787,16 +805,6 @@ sealed class ServiceVerify(
         }
 
         var preState = DescribeQuery(pre);
-
-        if (retireServiceId is not null) {
-            // A rename's target must be free: a live daemon under the new name is another daemon,
-            // not a stale unit for --replace to take over.
-            if (validatedDaemonPid(serviceId) is not null) {
-                Say(VerifyExit.ContendedToken);
-                return VerifyExit.Contended;
-            }
-            if (await RetireAsync(retireServiceId, spec, forward) is { } retireExit) return retireExit;
-        }
 
         if (!replace) {
             if (pre.Probe == LabelProbe.Loaded || (pre.Probe == LabelProbe.Absent && pre.UnitPresent)) {
@@ -987,6 +995,15 @@ sealed class ServiceVerify(
     /// cannot be confirmed stops the transaction before anything is written for the new id.
     /// </summary>
     async Task<int?> RetireAsync(string retireId, ServiceSpec spec, DateTimeOffset deadline) {
+        // The lock must be held BEFORE reading the plist and deciding "same profile, mine to
+        // destroy" — reading first would let a concurrent install/verify on this same id replace
+        // the unit in the window between that read and acquiring the lock.
+        using var retireTxn = ServiceTxnLock.TryAcquire(store, retireId, LockWait);
+        if (retireTxn is null) {
+            Say(VerifyExit.ContendedToken);
+            return VerifyExit.Contended;
+        }
+
         var (status, content) = _discriminatedPlistRead(manager.UnitPath(retireId));
         if (status == LaunchdUnit.PlistRead.Absent) return null;
 
@@ -1001,12 +1018,6 @@ sealed class ServiceVerify(
         spec.Environment.TryGetValue(ProfileVar, out var pinnedProfile);
         if (string.IsNullOrEmpty(pinnedProfile) || !string.Equals(retiredProfile, pinnedProfile, StringComparison.Ordinal))
             return RetireRefusal("foreign_profile");
-
-        using var retireTxn = ServiceTxnLock.TryAcquire(store, retireId, LockWait);
-        if (retireTxn is null) {
-            Say(VerifyExit.ContendedToken);
-            return VerifyExit.Contended;
-        }
 
         if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
         if (!await WaitForStopConfirmedAsync(retireId, deadline)) {

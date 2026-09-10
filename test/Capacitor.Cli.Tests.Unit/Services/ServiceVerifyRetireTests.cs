@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Services;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
@@ -72,18 +73,13 @@ public class ServiceVerifyRetireTests {
         public bool Stop(string serviceId, TimeSpan timeout, out string? error) { error = null; return true; }
     }
 
-    string ViableDaemonPath() {
-        var dir = Tmp.CreateDir(Guid.NewGuid().ToString("N"));
-        var daemonPath = dir.PathTo("kcap-daemon");
-        File.WriteAllText(daemonPath, "");
-        return daemonPath;
-    }
+    string ViableDaemonPath() => Tmp.CreateFile("kcap-daemon");
 
     static ServiceSpec Spec(string daemonPath, string profile) =>
         new(NewId, daemonPath, Path.ChangeExtension(daemonPath, ".log"),
             new Dictionary<string, string> { ["KCAP_PROFILE"] = profile }, []);
 
-    /// The new daemon answers hello only once bootstrapped; the old one never does.
+    /// <summary>The new daemon answers hello only once bootstrapped; the old one never does.</summary>
     static Func<string, TimeSpan, Task<HelloProbeResult>> Hello(FakeServiceManager manager) =>
         (id, _) => Task.FromResult(id == NewId && manager.Bootstrapped
             ? new HelloProbeResult(true, 1, ExpectedVersion, NewId)
@@ -95,6 +91,15 @@ public class ServiceVerifyRetireTests {
             Hello(manager), TimeProvider.System,
             readPlist: path => path == manager.UnitPath(OldId) ? oldPlist : OwnPlistContent,
             plistExists: path => path == manager.UnitPath(OldId) ? oldPlist is not null : true);
+
+    /// <summary>Same drive loop as ServiceVerifyInstallTests: Task.Delay(interval, time, ct)'s
+    /// continuation resumes synchronously inside Advance(), so a tight Advance-loop reliably steps
+    /// a multi-iteration poll to completion without any real waiting.</summary>
+    static async Task<int> Drive(Task<int> task, FakeTimeProvider time, TimeSpan step) {
+        var guard = 0;
+        while (!task.IsCompleted && guard++ < 500) time.Advance(step);
+        return await task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
 
     [Test]
     public async Task An_absent_retired_unit_is_a_no_op() {
@@ -108,8 +113,9 @@ public class ServiceVerifyRetireTests {
         await Assert.That(manager.Calls).Contains($"writeAndBootstrap:{NewId}");
     }
 
-    [Test]
+    [Test, NotInParallel]
     public async Task A_unit_pinned_to_another_profile_is_refused_untouched() {
+        using var err = ConsoleOutput.StartErrorCapture();
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
         var sut = Sut(manager, OldPlist("other"));
 
@@ -120,6 +126,8 @@ public class ServiceVerifyRetireTests {
         await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
         await Assert.That(manager.OldUnitInstalled).IsTrue();
         await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, NewId)).IsFalse();
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).IsEquivalentTo(["retire_reason=foreign_profile", "verify_retire_refused"]);
     }
 
     [Test]
@@ -160,8 +168,9 @@ public class ServiceVerifyRetireTests {
         await Assert.That(manager.Calls.Any(c => c.StartsWith("uninstall:", StringComparison.Ordinal))).IsFalse();
     }
 
-    [Test]
+    [Test, NotInParallel]
     public async Task An_unreadable_retired_unit_is_refused_untouched() {
+        using var err = ConsoleOutput.StartErrorCapture();
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello(manager), TimeProvider.System,
@@ -172,5 +181,34 @@ public class ServiceVerifyRetireTests {
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
         await Assert.That(manager.OldUnitInstalled).IsTrue();
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).IsEquivalentTo(["retire_reason=unit_unreadable", "verify_retire_refused"]);
+    }
+
+    [Test]
+    public async Task An_unconfirmed_stop_of_the_retired_unit_aborts_before_writing_the_new_unit() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var time = new FakeTimeProvider();
+
+        // The retired daemon keeps answering hello even after its label clears (a hung process
+        // still holding the socket) — WaitForStopConfirmedAsync(OldId, ...) can never confirm.
+        static Task<HelloProbeResult> Hello(string id, TimeSpan _) =>
+            Task.FromResult(id == OldId
+                ? new HelloProbeResult(true, 1, ExpectedVersion, OldId)
+                : new HelloProbeResult(false, null, null, null));
+
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+            id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello, time,
+            forwardBudget: TimeSpan.FromSeconds(2),
+            readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,
+            plistExists: _ => true);
+
+        var task = sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+        var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.StopUnconfirmed);
+        await Assert.That(manager.Calls).Contains($"uninstall:{OldId}");
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, NewId)).IsFalse();
     }
 }
