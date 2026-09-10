@@ -913,4 +913,32 @@ public class AcpHostedAgentRuntimeTests {
 
         h.Fake.HoldPromptResponses.TrySetResult();
     }
+
+    /// <summary>A dispose racing the tail of the handshake can complete <c>_pendingTurns</c> before
+    /// <c>StartAsync</c>'s initial-prompt enqueue runs, so that enqueue must survive a refusal rather
+    /// than let <see cref="InputNotAdmittedException"/> propagate out of the launch. Forces the
+    /// channel closed BEFORE <c>StartAsync</c> runs (<see cref="AcpHostedAgentRuntime.CompletePendingTurnsForTest"/>)
+    /// so the handshake still completes in full and the refusal happens exactly at the enqueue call,
+    /// rather than racing a concurrent dispose to hit the same narrow window.</summary>
+    [Test]
+    public async Task StartAsync_survives_the_initial_prompt_enqueue_being_refused() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        h.Runtime.CompletePendingTurnsForTest();
+
+        await h.Runtime.StartAsync("/abs/worktree", "first", h.Cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (h.Fake.ReceivedCalls.Count < 2 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var calls = h.Fake.ReceivedCalls;
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(2);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+        await Assert.That(calls[1].Method).IsEqualTo("session/new");
+
+        // The refused turn never reached the agent — no session/prompt was ever sent.
+        await Assert.That(calls.Any(c => c.Method == "session/prompt")).IsFalse();
+    }
 }

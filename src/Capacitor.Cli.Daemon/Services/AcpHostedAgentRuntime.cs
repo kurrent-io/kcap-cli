@@ -511,6 +511,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// by production code.</summary>
     internal Task TurnWorkerTaskForTest => _turnWorkerTask;
 
+    /// <summary>Test-only: completes <see cref="_pendingTurns"/> the same way <see cref="DisposeAsync"/>
+    /// does, so a test can force <see cref="EnqueueTurn"/>'s channel-closed branch deterministically —
+    /// simulating a dispose that raced the tail of <see cref="StartAsync"/>'s handshake without
+    /// actually racing a concurrent dispose. Never touched by production code.</summary>
+    internal void CompletePendingTurnsForTest() => _pendingTurns.Writer.TryComplete();
+
     /// <summary>Test-only: installs a throwing owner CTS so <see cref="DisposeAsync"/>'s owner-cancel
     /// (the EARLY cancellation callback) faults. Never touched by production code.</summary>
     internal void SetOwnerCtsForTest(CancellationTokenSource cts) { lock (_reconnectLock) _ownerCts = cts; }
@@ -1079,7 +1085,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt)) {
-            _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false);
+            // A dispose racing the tail of this handshake can already have completed
+            // _pendingTurns by the time this runs — the only reachable refusal here, since a
+            // fresh queue can't be full, so it is Debug rather than Warning.
+            try { _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false); }
+            catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "ACP: initial prompt not queued — the runtime is already being torn down."); }
             ArmFirstOutputWatchdog();
         } else {
             // Deterministic backstop (design spec §3.3): no turn will ever run to settle the marker
