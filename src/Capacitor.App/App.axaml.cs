@@ -567,9 +567,13 @@ public partial class App : Application {
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             });
-        // Only ever called for an id the lookup below has just answered Remote for.
-        RemoteSessionViewModel BuildRemote(string agentId) => new(
-            directory.Rows.Lookup($"remote:{agentId}").Value, directory, sessionAccess, permissions, actions);
+        // The origin lookup below and this call are two reads of a cache the directory's own
+        // background recompute mutates, so the row can be gone by the time this runs: no row, no
+        // host, and the click opens nothing.
+        RemoteSessionViewModel? BuildRemote(string agentId) =>
+            directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
+                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions)
+                : null;
 
         _coordinator = new MainWindowCoordinator(
             () => BuildAndShowMainWindow(
@@ -1008,7 +1012,7 @@ public partial class App : Application {
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null,
-            Func<string, RemoteSessionViewModel>? remoteWorkspaceFactory = null) {
+            Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.

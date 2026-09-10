@@ -29,7 +29,7 @@ public class MainWindowViewModelTests {
     static MainWindowViewModel NewVm(
             FakeDaemonClientService service, Func<string, WorkspaceViewModel>? workspaceFactory = null,
             SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
-            Func<string, RemoteSessionViewModel>? remoteWorkspaceFactory = null,
+            Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             Action<Func<Task>>? trackWorkspaceTeardown = null) {
         var (actions, _) = NewActions(service);
         return new MainWindowViewModel(
@@ -675,6 +675,50 @@ public class MainWindowViewModelTests {
             vm.OpenSession("a1");
 
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
+            await Assert.That(remoteBuilt).IsEqualTo(0);
+        });
+    }
+
+    /// The origin lookup and the factory are two reads of a cache a background recompute mutates:
+    /// a row that vanishes between them yields no host, and the click must open nothing rather
+    /// than fall through to the local workspace.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_row_whose_host_cannot_be_built_opens_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var localBuilt = 0;
+            var vm = NewVm(service,
+                workspaceFactory: id => { localBuilt++; return NewWorkspace(service, id); },
+                originOf: _ => AgentOrigin.Remote,
+                remoteWorkspaceFactory: _ => null);
+
+            vm.OpenSession("r1");
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(localBuilt).IsEqualTo(0);
+        });
+    }
+
+    /// An id on neither lane is not a local id: opening the local workspace for it would attach a
+    /// terminal to an agent this machine never ran.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_id_with_no_origin_opens_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var localBuilt = 0;
+            var remoteBuilt = 0;
+            var vm = NewVm(service,
+                workspaceFactory: id => { localBuilt++; return NewWorkspace(service, id); },
+                originOf: _ => null,
+                remoteWorkspaceFactory: id => { remoteBuilt++; return host.New(id); });
+
+            vm.OpenSession("gone");
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(localBuilt).IsEqualTo(0);
             await Assert.That(remoteBuilt).IsEqualTo(0);
         });
     }

@@ -133,7 +133,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Action<Func<Task>> _trackTeardown;
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
     readonly Func<string, AgentOrigin?> _originOf;
-    readonly Func<string, RemoteSessionViewModel>? _remoteFactory;
+    readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
 
     ISessionWorkspace? _currentWorkspace;
     /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace,
@@ -246,11 +246,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// </param>
     /// <param name="originOf">
     /// Which lane an agent id belongs to, for routing a click at the right workspace. Null reads
-    /// every id as local — the only answer a caller with no merged directory can give.
+    /// every id as local — the only answer a caller with no merged directory can give. A null
+    /// ANSWER means neither lane holds the id, which opens nothing.
     /// </param>
     /// <param name="remoteWorkspaceFactory">
-    /// Builds the card host for a remote row. Null means a remote id has no host to open, so it
-    /// falls back to the local factory exactly as it did before there was one.
+    /// Builds the card host for a remote row, or returns null when the row is gone by the time it
+    /// runs. A null factory means a remote id has no host to open, so it falls back to the local
+    /// factory.
     /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
@@ -260,7 +262,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
-            Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel>? remoteWorkspaceFactory = null) {
+            Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null) {
         _service = service;
         _time = time ?? TimeProvider.System;
         Activity = activity;
@@ -430,7 +432,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // Re-clicking the open session must not tear down and rebuild a live attach.
         if (CurrentWorkspace?.AgentId == agentId) return;
 
-        ISessionWorkspace? next = _originOf(agentId) == AgentOrigin.Remote && _remoteFactory is { } remote
+        // Neither lane holds the id: opening the local workspace for it would attach a terminal to
+        // an agent this machine never ran.
+        if (_originOf(agentId) is not { } origin) return;
+        ISessionWorkspace? next = origin == AgentOrigin.Remote && _remoteFactory is { } remote
             ? remote(agentId)
             : _workspaceFactory is { } local ? local(agentId) : null;
         if (next is null) return;
