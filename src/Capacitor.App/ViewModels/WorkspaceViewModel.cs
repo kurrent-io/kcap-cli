@@ -19,8 +19,6 @@ public enum WorkspaceTab { Chat, Terminal, PullRequest }
 public sealed class WorkspaceViewModel : ReactiveObject {
     const string UnresolvedKind = "unresolved";
 
-    sealed record AgentPresence(AgentStatusDto? Dto, bool SessionEnded);
-
     public string AgentId { get; }
 
     readonly ObservableAsPropertyHelper<string> _title;
