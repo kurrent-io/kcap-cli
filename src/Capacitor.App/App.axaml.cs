@@ -203,12 +203,17 @@ public partial class App : Application {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             desktop.ShutdownRequested += OnShutdownRequested;
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
-            new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => _coordinator is { } c ? c.ShowMainWindow : null).Install();
+            new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator)).Install();
             _ = StartAsync(desktop);
         }
 
         base.OnFrameworkInitializationCompleted();
     }
+
+    // A failed startup latches the coordinator but keeps it, and a quit latches it too: showing a
+    // window from either would run the window factory over a graph that is being torn down.
+    internal static Action? MainWindowAction(MainWindowCoordinator? coordinator) =>
+        coordinator is { QuitInProgress: false } c ? c.ShowMainWindow : null;
 
     // This continuation is the ONLY path to a visible window: OnFrameworkInitializationCompleted
     // fires it fire-and-forget and returns immediately, so an exception escaping here would

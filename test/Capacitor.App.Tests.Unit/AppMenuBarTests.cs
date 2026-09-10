@@ -1,12 +1,11 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.Views;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The Window and Help menus every window carries: their layout, what each item does to the
-/// window it was built for, and the exact pages Help opens.
 public class AppMenuBarTests {
     static AppMenuBar NewBar(RecordingOpener? opener = null, Action? showMainWindow = null, IReadOnlyList<Window>? windows = null) =>
         new(opener ?? new RecordingOpener(), () => windows ?? [], () => showMainWindow);
@@ -123,6 +122,18 @@ public class AppMenuBarTests {
             Click(Item(Submenu(NewBar(showMainWindow: () => shown++).Build(new Window()), "Window"), "Kurrent Capacitor")));
 
         await Assert.That(shown).IsEqualTo(1);
+    }
+
+    /// A failed startup latches the coordinator but keeps it, and then opens its error window: that
+    /// window must not get an item that re-runs the window factory over the torn-down graph.
+    [Test]
+    public async Task Only_a_coordinator_no_failure_or_quit_has_latched_supplies_the_main_window_item() {
+        var live = new MainWindowCoordinator(() => throw new InvalidOperationException("factory"));
+        var latched = new MainWindowCoordinator(() => throw new InvalidOperationException("factory")) { QuitInProgress = true };
+
+        await Assert.That(Capacitor.App.App.MainWindowAction(live) is not null).IsTrue();
+        await Assert.That(Capacitor.App.App.MainWindowAction(latched) is null).IsTrue();
+        await Assert.That(Capacitor.App.App.MainWindowAction(null) is null).IsTrue();
     }
 
     [Test]
