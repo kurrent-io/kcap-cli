@@ -135,7 +135,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1" });
         });
     }
 
@@ -151,7 +151,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1" });
         });
     }
 
@@ -170,7 +170,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1" });
         });
     }
 
@@ -196,6 +196,20 @@ public class LocalControlHelloTests {
 
             var resp = await FrameCodec.ReadAsync(s, ct);
             await Assert.That(resp!.Type).IsEqualTo(FrameType.AgentList);
+        });
+    }
+
+    [Test]
+    public async Task SendText_frame_is_routed_and_answered_with_an_ack() {
+        await RunAsync("hello-sendtext", async (h, ct) => {
+            await using var s = await ConnectAsync(h.SockPath, ct);
+            var json = JsonSerializer.Serialize(new SendTextDto("nope", "hi"), InputIpcJsonContext.Default.SendTextDto);
+            await FrameCodec.WriteAsync(s, LocalFrame.InputJson(FrameType.SendText, json), ct);
+
+            var resp = await FrameCodec.ReadAsync(s, ct);
+            await Assert.That(resp!.Type).IsEqualTo(FrameType.SendTextAck);
+            var ack = JsonSerializer.Deserialize(resp.Text, InputIpcJsonContext.Default.SendTextAckDto)!;
+            await Assert.That(ack.Reason).IsEqualTo(SendTextReasons.NoSuchAgent);
         });
     }
 

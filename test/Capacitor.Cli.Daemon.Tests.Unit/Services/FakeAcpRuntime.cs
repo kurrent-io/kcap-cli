@@ -74,6 +74,10 @@ internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource
     public List<string> Inputs             { get; } = [];
     public List<string> WaitForWriteInputs { get; } = [];
 
+    /// <summary>Every input either path took, in the order the runtime accepted them — for a caller
+    /// that cares about how many messages landed and in what order rather than which path carried them.</summary>
+    public List<string> SentInputs { get; } = [];
+
     /// <summary>Thrown by both send paths instead of recording the input — a runtime whose transport
     /// has failed under it.</summary>
     public Exception? SendUserInputThrow { get; init; }
@@ -85,11 +89,13 @@ internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource
     public async Task SendUserInputAsync(string text) {
         await AdmitAsync();
         lock (Inputs) Inputs.Add(text);
+        lock (SentInputs) SentInputs.Add(text);
     }
 
     public async Task SendUserInputAndWaitForWriteAsync(string text) {
         await AdmitAsync();
         lock (WaitForWriteInputs) WaitForWriteInputs.Add(text);
+        lock (SentInputs) SentInputs.Add(text);
     }
 
     async Task AdmitAsync() {
@@ -103,8 +109,12 @@ internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource
     public Task RequestGracefulStopAsync() => Task.CompletedTask;
     public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
 
+    /// <summary>A runtime a terminate cannot finish off: <see cref="HasExited"/> stays false, so a stop
+    /// that runs to completion still cannot confirm the process is gone.</summary>
+    public bool NeverExits { get; init; }
+
     public Task TerminateAsync(TimeSpan? timeout = null) {
-        ExitGate.TrySetResult();
+        if (!NeverExits) ExitGate.TrySetResult();
 
         return Task.CompletedTask;
     }

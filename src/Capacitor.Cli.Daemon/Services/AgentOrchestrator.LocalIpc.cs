@@ -1,5 +1,8 @@
+using System.Text;
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -146,6 +149,65 @@ internal partial class AgentOrchestrator {
     }
 
     static string StatusText(bool confirmedStopped) => confirmedStopped ? "stopped" : "failed";
+
+    /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can
+    /// word — never an Error frame, never an escaped exception — and it is written only once the
+    /// delivery core has settled, so an ack can never describe a write still in flight.</summary>
+    public async Task HandleLocalSendTextAsync(string payload, Stream stream, CancellationToken ct) {
+        var ack = await AnswerSendTextAsync(payload);
+
+        try {
+            var json = JsonSerializer.Serialize(ack, InputIpcJsonContext.Default.SendTextAckDto);
+            await FrameCodec.WriteAsync(stream, LocalFrame.InputJson(FrameType.SendTextAck, json), ct);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            _logger.LogDebug(
+                ex, "SendText: the ack could not be written; the delivery already settled ({Reason})",
+                ack.Reason ?? ack.Outcome);
+        }
+    }
+
+    /// <summary>A protected kind and a non-running agent are refused BEFORE the delivery core: one is
+    /// addressed through the flow protocol rather than typed at, the other has nothing to accept the
+    /// text. A quit rides <see cref="StopAgentCoreAsync"/> rather than the server-origin stop handler,
+    /// which refuses a private agent — a composer typing at its own local agent would otherwise be
+    /// acked for a stop that never happened.</summary>
+    async Task<SendTextAckDto> AnswerSendTextAsync(string payload) {
+        SendTextDto? dto;
+        try { dto = JsonSerializer.Deserialize(payload, InputIpcJsonContext.Default.SendTextDto); }
+        catch (JsonException) { dto = null; }
+
+        if (!InputWire.IsStructurallyValid(dto)) return Refuse(SendTextReasons.Malformed, "expected {\"agent_id\",\"text\"}");
+        if (string.IsNullOrWhiteSpace(dto!.Text)) return Refuse(SendTextReasons.TextEmpty, "text is empty");
+        if (Encoding.UTF8.GetByteCount(dto.Text) > InputWire.MaxTextBytes)
+            return Refuse(SendTextReasons.TooLarge, $"text exceeds {InputWire.MaxTextBytes} bytes");
+        if (!_agents.TryGetValue(dto.AgentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {dto.AgentId}");
+        if (agent.Kind != LaunchKind.Default) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
+        if (agent.Status is "Starting" or "Completed" or "Failed") return Refuse(SendTextReasons.NotRunning, $"agent is {agent.Status}");
+
+        InputDeliveryOutcome outcome;
+
+        try { outcome = await DeliverInputAsync(agent, dto.Text, null); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return Refuse(SendTextReasons.DeliveryFailed, ex.Message); }
+
+        switch (outcome.Kind) {
+            case InputDeliveryKind.Delivered:
+                return new SendTextAckDto(true, null, null, SendTextOutcomes.Delivered);
+
+            case InputDeliveryKind.QuitRequested:
+                LogSendInputQuitCommand(agent.Id, agent.Runtime.Vendor);
+
+                return await StopAgentCoreAsync(agent)
+                    ? new SendTextAckDto(true, null, null, SendTextOutcomes.Stopped)
+                    : Refuse(SendTextReasons.StopFailed, "the agent did not stop");
+
+            // The core's drop reasons are spelled identically to the wire's, so they pass through
+            // unchanged rather than through a mapping that could drift out of step with either set.
+            default:
+                return Refuse(outcome.Reason!, outcome.Error);
+        }
+    }
+
+    static SendTextAckDto Refuse(string reason, string? error) => new(false, reason, error, null);
 
     /// <summary>
     /// Spawn a new agent from a local <c>agent start</c> request, then attach the requesting
