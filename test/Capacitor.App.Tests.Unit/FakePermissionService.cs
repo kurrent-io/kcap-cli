@@ -56,12 +56,19 @@ sealed class FakePermissionService : IPermissionService {
     public readonly List<(string RequestId, string OptionId)> Picked = [];
     public readonly List<string> Withdrawn = [];
 
+    // Null (the default) derives Summary from Cache; a caller that only needs to script Summary
+    // values directly, without driving a live cache, supplies its own replay-shaped observable
+    // instead.
+    readonly IObservable<PendingSummary>? _summaryOverride;
+
+    public FakePermissionService(IObservable<PendingSummary>? summary = null) => _summaryOverride = summary;
+
     public IObservable<IChangeSet<PendingPermissionRequest, string>> Pending => Cache.Connect();
     public IObservable<int> PendingCount => Cache.CountChanged;
     public IObservable<IReadOnlySet<string>> AgentsWithPending =>
         Cache.Connect().QueryWhenChanged(q => (IReadOnlySet<string>)q.Items.Select(p => p.AgentId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal))
             .StartWith((IReadOnlySet<string>)new HashSet<string>());
-    public IObservable<PendingSummary> Summary =>
+    public IObservable<PendingSummary> Summary => _summaryOverride ??
         Cache.Connect()
             .QueryWhenChanged(q => PendingSummary.From(q.Items))
             .StartWith(default(PendingSummary));

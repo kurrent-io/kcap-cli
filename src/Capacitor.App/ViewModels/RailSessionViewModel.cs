@@ -32,11 +32,15 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _isStale;
+    /// A remote row greys out while the lane is stale; a local row is never stale.
+    public bool IsStale => _isStale.Value;
+
     readonly CompositeDisposable _disposables = new();
 
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
-            IObservable<IReadOnlySet<string>> agentsWithPending,
+            IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
@@ -61,6 +65,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var byStatus = SessionStatusDots.NeedsAttention(row);
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
+            .DisposeWith(_disposables);
+
+        _isStale = (IsRemote ? remoteStale : Observable.Return(false))
+            .ToProperty(this, x => x.IsStale, initialValue: false)
             .DisposeWith(_disposables);
 
         OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));

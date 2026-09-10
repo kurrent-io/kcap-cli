@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
@@ -38,6 +39,23 @@ public class TrayViewModelTests {
     // construct it for real against a scripted ILocalControlOps.
     static AgentActionService NewActions(FakeDaemonClientService service, ScriptedLocalControlOps? ops = null) =>
         new(ops ?? new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
+
+    /// A ready-to-assert TrayViewModel over fresh fakes: status defaults to Connected and snap to
+    /// an idle connected snapshot, so callers exercising the pendingAttention/remote gating land
+    /// on an Idle/Running baseState without repeating that setup at every call site.
+    static TrayViewModel NewTray(
+            AttachStatus? status = null, DaemonStatusDto? snap = null,
+            IObservable<PendingSummary>? permissionsSummary = null,
+            IObservable<RemoteTraySummary>? remote = null) {
+        var service = new FakeDaemonClientService();
+        var actions = NewActions(service);
+        IPermissionService? permissions = permissionsSummary is null ? null : new FakePermissionService(permissionsSummary);
+        var vm = new TrayViewModel(service, new FakePauseController(), actions, new FakeConsentService(),
+            permissions: permissions, remote: remote);
+        service.StatusSubject.OnNext(status ?? new AttachStatus(AttachState.Connected, null, []));
+        service.SnapshotsSubject.OnNext(snap ?? Snap());
+        return vm;
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -289,6 +307,41 @@ public class TrayViewModelTests {
                 Vendor = "claude", RepoOwner = "o", RepoName = "r",
             });
             await Assert.That(seen!.Value.RemoteLiveAgents).IsEqualTo(1); // Completed doesn't count
+        });
+    }
+
+    [Test]
+    public async Task Idle_upgrades_to_running_only_while_the_lane_is_connected() {
+        var idle = new AttachStatus(AttachState.Connected, null, ["consent/1"]);
+        var snap = Snap("connected", 0);
+        await Assert.That(TrayViewModel.ProjectAggregate(idle, snap, new RemoteTraySummary(2, LaneConnected: true)).State).IsEqualTo(TrayState.Running);
+        await Assert.That(TrayViewModel.ProjectAggregate(idle, snap, new RemoteTraySummary(2, LaneConnected: false)).State).IsEqualTo(TrayState.Idle);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_prompt_asserts_attention_with_the_local_daemon_stopped_and_lists_the_session() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = NewTray(status: new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null),
+                remote: Observable.Return(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+                    AttentionEntries: [new TrayAgentEntry("r1", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)])));
+
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).Contains("1 remote session waiting");
+            await Assert.That(vm.MenuModel.Agents.Single().Origin).IsEqualTo(AgentOrigin.Remote);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_server_lane_card_asserts_attention_only_while_the_lane_is_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var summary = new PendingSummary(1, 0, LocalCount: 0, ServerCount: 1);
+            var down = NewTray(permissionsSummary: Observable.Return(summary), remote: Observable.Return(new RemoteTraySummary(0, false)));
+            await Assert.That(down.MenuModel.State).IsNotEqualTo(TrayState.Attention);
+
+            var up = NewTray(permissionsSummary: Observable.Return(summary), remote: Observable.Return(new RemoteTraySummary(0, true)));
+            await Assert.That(up.MenuModel.State).IsEqualTo(TrayState.Attention);
         });
     }
 
