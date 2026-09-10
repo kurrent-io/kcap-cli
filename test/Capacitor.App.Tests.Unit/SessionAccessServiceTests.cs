@@ -108,6 +108,28 @@ public class SessionAccessServiceTests {
         await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Count(s => s == "s1") == 2, what: "late subscribe triggers a follow-up unsubscribe");
     }
 
+    /// A hub failure is otherwise indistinguishable from the lane being down: the state is
+    /// Unavailable either way, and the retry ladder keeps trying in silence. The reason is
+    /// reported once per entry, not once per retry tick.
+    [Test]
+    [NotInParallel]
+    public async Task A_failed_subscribe_reports_the_reason_once() {
+        using var capture = ConsoleOutput.StartErrorCapture(newLine: "\n");
+        using var h = new Harness();
+        h.Lane.SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Failed("boom"));
+        h.Connect();
+        using var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
+
+        h.Time.Advance(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count(s => s == "s1") == 2, what: "the retry");
+        await Task.Delay(100); // the second attempt's report, were it not deduped, lands here
+
+        var lines = capture.GetCapturedError().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines.Length).IsEqualTo(1);
+        await Assert.That(lines[0]).Contains("s1").And.Contains("boom");
+    }
+
     [Test]
     public async Task Dispose_ignores_late_lane_notifications_and_completes_leases() {
         using var h = new Harness();

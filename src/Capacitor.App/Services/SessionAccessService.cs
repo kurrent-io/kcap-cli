@@ -19,6 +19,7 @@ public sealed class SessionAccessService : IDisposable {
         public int Attempt;
         public int Failures;
         public ITimer? RetryTimer;
+        public string? LastDiagnostic;
     }
 
     readonly IServerLane _lane;
@@ -103,18 +104,22 @@ public sealed class SessionAccessService : IDisposable {
 
     async Task EstablishAsync(Entry entry, int attempt) {
         SessionAccessState verdict;
+        string? diagnostic;
         var subscribed = false;
         try {
             var watch = await _lane.RegisterSessionAccessWatchAsync(entry.SessionId, CancellationToken.None).ConfigureAwait(false);
             if (watch.Result == HubCallResult.Ok) {
                 var chat = await _lane.SubscribeToChatAsync(entry.SessionId, CancellationToken.None).ConfigureAwait(false);
                 verdict = Classify(chat);
+                diagnostic = Diagnose(entry.SessionId, chat);
                 subscribed = chat.Result == HubCallResult.Ok;
             } else {
                 verdict = Classify(watch);
+                diagnostic = Diagnose(entry.SessionId, watch);
             }
-        } catch (Exception) {
+        } catch (Exception ex) {
             verdict = SessionAccessState.Unavailable;
+            diagnostic = $"kcap: session access for {entry.SessionId} failed: {ex.Message}";
         }
 
         // A lease released (or the service disposed) while the chat subscribe above was still in
@@ -122,10 +127,15 @@ public sealed class SessionAccessService : IDisposable {
         // this subscribe does. Firing a second one here, strictly after the subscribe resolved,
         // is what guarantees the group membership ends up dropped regardless of that ordering.
         var unsubscribeStale = false;
+        string? report = null;
         lock (_lock) {
             if (_disposed || entry.Attempt != attempt) {
                 unsubscribeStale = subscribed;
             } else {
+                // The retry ladder re-runs this every few seconds, so only a CHANGE of reason is
+                // worth a line; a recovery re-arms the next one.
+                if (diagnostic != entry.LastDiagnostic) report = diagnostic;
+                entry.LastDiagnostic = diagnostic;
                 Publish(entry, verdict);
                 if (verdict != SessionAccessState.Unavailable || !_connected) {
                     entry.Failures = 0;
@@ -135,6 +145,7 @@ public sealed class SessionAccessService : IDisposable {
                 }
             }
         }
+        if (report is not null) Console.Error.WriteLine(report);
         if (unsubscribeStale) _ = _lane.UnsubscribeFromChatAsync(entry.SessionId, CancellationToken.None);
     }
 
@@ -142,6 +153,14 @@ public sealed class SessionAccessService : IDisposable {
         HubCallResult.Ok => SessionAccessState.Established,
         HubCallResult.Denied => SessionAccessState.Denied,
         _ => SessionAccessState.Unavailable,
+    };
+
+    /// NotConnected is the normal lane-down state and stays silent; everything else would
+    /// otherwise present as "Not connected to the server" plus a silent retry loop.
+    static string? Diagnose(string sessionId, HubCallOutcome outcome) => outcome.Result switch {
+        HubCallResult.Failed => $"kcap: session access for {sessionId} failed: {outcome.Reason}",
+        HubCallResult.Denied => $"kcap: session access for {sessionId} denied: {outcome.Reason}",
+        _ => null,
     };
 
     // Caller holds _lock.
