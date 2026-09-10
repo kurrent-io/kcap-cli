@@ -105,6 +105,22 @@ public class DaemonSettingsIpcTests {
     }
 
     [Test]
+    public async Task A_live_subscriber_is_pushed_the_new_cap_after_a_put() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            await using var s = await ConnectAsync(h.SockPath, ct);
+            await FrameCodec.WriteAsync(s, new LocalFrame(FrameType.StatusSubscribe), ct);
+            var first = await FrameCodec.ReadAsync(s, ct);
+            await Assert.That(JsonSerializer.Deserialize(first!.Text, StatusIpcJsonContext.Default.DaemonStatusDto)!.Daemon.MaxAgents).IsEqualTo(5);
+
+            await PutAsync(h, """{"max_agents":2}""", ct);
+
+            var second = await FrameCodec.ReadAsync(s, ct);
+            await Assert.That(second!.Type).IsEqualTo(FrameType.DaemonStatus);
+            await Assert.That(JsonSerializer.Deserialize(second.Text, StatusIpcJsonContext.Default.DaemonStatusDto)!.Daemon.MaxAgents).IsEqualTo(2);
+        });
+    }
+
+    [Test]
     public async Task The_next_launch_over_the_new_cap_is_refused() {
         var server = new SeqCaptureServerConnection();
         await RunAsync(server, async (h, ct) => {
