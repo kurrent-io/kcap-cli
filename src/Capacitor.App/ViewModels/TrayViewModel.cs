@@ -100,7 +100,13 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             var entry = MenuModel.Agents.FirstOrDefault(a => a.Id == id);
             actions.RequestStop(id, entry?.Label ?? id, entry?.Kind ?? "", entry?.Origin ?? AgentOrigin.Local);
         });
-        OpenInWebCommand = ReactiveCommand.Create<string>(actions.OpenInWeb);
+        // Same origin dispatch as StopAgentCommand above: a remote entry's URL is the app's own
+        // server, never the local daemon's snapshot — see AgentActionService.OpenInWebRemote.
+        OpenInWebCommand = ReactiveCommand.Create<string>(id => {
+            var entry = MenuModel.Agents.FirstOrDefault(a => a.Id == id);
+            if (entry?.Origin == AgentOrigin.Remote) actions.OpenInWebRemote(id);
+            else actions.OpenInWeb(id);
+        });
         OpenMainWindowCommand = ReactiveCommand.Create(openMainWindow ?? (() => { }));
         QuitCommand = ReactiveCommand.Create(quit ?? (() => { }));
         ReviewPendingCommand = ReactiveCommand.Create(openReviewPrompts ?? (() => { }));
@@ -341,11 +347,12 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return "needs attention";
     }
 
-    // Local entries only while Connected (spec §5) — the daemon's own upstream link status (rows
-    // 5–6, 9) does not hide them, since the snapshot Agents array is still the app's local truth.
-    // Remote entries are appended regardless of the LOCAL daemon's own status — a remote prompt
-    // still needs the owner's attention with the local daemon stopped — and carry the same
-    // in-flight gate as a local entry, recomputed here since SummaryFrom has no StopsInFlight.
+    // Local entries need a Connected local socket AND a snapshot — the daemon's own upstream link
+    // status does not hide them once both hold, since the snapshot's Agents array is still the
+    // app's local truth regardless of that link's state. Remote entries are appended regardless
+    // of the LOCAL daemon's own status — a remote prompt still needs the owner's attention with
+    // the local daemon stopped — and carry the same in-flight gate as a local entry, recomputed
+    // here since SummaryFrom has no StopsInFlight.
     static IReadOnlyList<TrayAgentEntry> BuildEntries(
             AttachStatus status, DaemonStatusDto? snap, IReadOnlySet<string> stopsInFlight, RemoteTraySummary remote) {
         IEnumerable<TrayAgentEntry> local = status.State != AttachState.Connected || snap is null

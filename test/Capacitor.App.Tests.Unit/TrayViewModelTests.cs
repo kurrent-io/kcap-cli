@@ -970,6 +970,33 @@ public class TrayViewModelTests {
         });
     }
 
+    // A remote entry's URL is the app profile's own server, never the local daemon's snapshot —
+    // the two can point at different servers entirely.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task OpenInWebCommand_for_a_remote_entry_opens_the_app_profiles_server_not_the_local_snapshot() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var ops = new ScriptedLocalControlOps();
+            var opener = new RecordingOpener();
+            var actions = new AgentActionService(ops, new RecordingNotifier(), opener, service.SnapshotsSubject,
+                CancellationToken.None, NeverConfirm.Confirm, fallbackServerUrl: "https://app.kcap.ai");
+            var consent = new FakeConsentService();
+            var remote = Observable.Return(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+                AttentionEntries: [new TrayAgentEntry("r1", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)]));
+            using var vm = new TrayViewModel(service, pause, actions, consent, remote: remote);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://local-daemon.kcap.ai"));
+            await Assert.That(vm.MenuModel.Agents.Single().Origin).IsEqualTo(AgentOrigin.Remote);
+
+            await vm.OpenInWebCommand.Execute("r1").ToTask();
+
+            await Assert.That(opener.Opened).IsEquivalentTo(["https://app.kcap.ai/agents/r1"], CollectionOrdering.Matching);
+        });
+    }
+
     // ---- OpenMainWindowCommand / QuitCommand delegation (Task 6 adds the injected delegates; Task 7 supplies the real callbacks) ----
 
     [Test]
