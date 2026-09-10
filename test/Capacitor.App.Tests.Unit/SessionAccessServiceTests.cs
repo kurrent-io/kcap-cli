@@ -1,0 +1,96 @@
+using Capacitor.App.Services;
+using Microsoft.Extensions.Time.Testing;
+using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
+
+namespace Capacitor.App.Tests.Unit;
+
+public class SessionAccessServiceTests {
+    sealed class Harness : IDisposable {
+        public readonly FakeServerLane Lane = new();
+        public readonly FakeTimeProvider Time = new();
+        public readonly SessionAccessService Service;
+        public Harness() => Service = new SessionAccessService(Lane, Time);
+        public void Connect(int epoch = 1) => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: epoch));
+        public void Drop() => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "closed"));
+        public static async Task<SessionAccessState> Current(SessionAccessLease lease) {
+            SessionAccessState? state = null;
+            using (lease.State.Subscribe(s => state = s)) { }
+            return state!.Value;
+        }
+        public void Dispose() => Service.Dispose();
+    }
+
+    [Test]
+    public async Task Establishes_in_order_watch_then_chat_and_reports_established() {
+        using var h = new Harness();
+        h.Connect();
+        var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s1"), what: "chat subscribe");
+        await Assert.That(h.Lane.Calls.IndexOf("watch:s1")).IsLessThan(h.Lane.Calls.IndexOf("chat:s1"));
+        await Assert.That(h.Lane.AccessWatches).Contains("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established");
+        lease.Dispose();
+        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "unsubscribe on last release");
+    }
+
+    [Test]
+    public async Task A_denied_watch_is_terminal_and_never_subscribes_chat() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Denied, "denied");
+        await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+    }
+
+    [Test]
+    public async Task Lane_down_is_unavailable_and_reconnect_re_establishes() {
+        using var h = new Harness();
+        var lease = h.Service.Acquire("s1");
+        await Assert.That(await Harness.Current(lease)).IsEqualTo(SessionAccessState.Unavailable);
+        h.Connect();
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established after connect");
+        h.Drop();
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable on drop");
+        h.Connect(epoch: 2);
+        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count(s => s == "s1") == 2, what: "re-subscribed after reconnect");
+    }
+
+    [Test]
+    public async Task Access_changed_ping_rechecks_and_a_denial_moves_the_lease_to_denied() {
+        using var h = new Harness();
+        h.Connect();
+        var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established");
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Lane.SessionAccessChangedSubject.OnNext("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Denied, "denied after recheck");
+    }
+
+    [Test]
+    public async Task A_transient_failure_retries_on_the_ladder_while_connected() {
+        using var h = new Harness();
+        var attempts = 0;
+        h.Lane.SubscribeChatHandler = _ => Task.FromResult(++attempts == 1 ? HubCallOutcome.Failed("recheck") : HubCallOutcome.Ok);
+        h.Connect();
+        var lease = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
+        h.Time.Advance(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established on retry");
+    }
+
+    [Test]
+    public async Task Two_leases_share_one_subscription_and_unsubscribe_on_the_last_release() {
+        using var h = new Harness();
+        h.Connect();
+        var a = h.Service.Acquire("s1");
+        var b = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(b) == SessionAccessState.Established, "established");
+        await Assert.That(h.Lane.ChatSubscribes.Count(s => s == "s1")).IsEqualTo(1);
+        a.Dispose();
+        await Task.Delay(50);
+        await Assert.That(h.Lane.ChatUnsubscribes).DoesNotContain("s1");
+        b.Dispose();
+        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "unsubscribe on last release");
+    }
+}
