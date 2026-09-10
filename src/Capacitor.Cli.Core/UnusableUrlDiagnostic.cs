@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Config;
+
 namespace Capacitor.Cli.Core;
 
 /// <summary>Where the resolved server URL came from, so remediation can name the right thing to fix.</summary>
@@ -53,8 +55,8 @@ public static class UnusableUrlDiagnostic {
         var (name, fix) = source switch {
             UrlSource.CommandLine => ("--server-url",
                                       "Pass --server-url https://<host>."),
-            UrlSource.Environment => ("KCAP_URL",
-                                      "Set KCAP_URL to https://<host>, or unset it to use the configured profile."),
+            UrlSource.Environment => (ProfileOverrides.UrlVar,
+                                      $"Set {ProfileOverrides.UrlVar} to https://<host>, or unset it to use the configured profile."),
             _                     => ("server_url",
                                       "Run: kcap config set server_url https://<host>"),
         };

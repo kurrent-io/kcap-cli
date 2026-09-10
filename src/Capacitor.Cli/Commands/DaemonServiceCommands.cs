@@ -534,8 +534,8 @@ sealed class DaemonServiceCommands(
         };
         // Same "explicit pin wins" rule as ServiceEnvironment.Build — only a real profile is pinned.
         if (!string.IsNullOrEmpty(profileName)) {
-            env["KCAP_PROFILE"] = profileName;
-            env.Remove("KCAP_URL");
+            env[ProfileOverrides.ProfileVar] = profileName;
+            env.Remove(ProfileOverrides.UrlVar);
         }
         return env;
     }
@@ -570,7 +570,7 @@ sealed class DaemonServiceCommands(
     /// process env for anything else, so an operator's own KCAP_* exports still apply.</summary>
     static Func<string, string?> EnsureGateEnv(string? profileName, string? serverUrl) => k => k switch {
         "KCAP_CONSENT_SEED_DEFAULT" => "prompt",
-        "KCAP_PROFILE"              => profileName,
+        ProfileOverrides.ProfileVar => profileName,
         "KCAP_EXPECT_SERVER_URL"    => serverUrl,
         _                           => Environment.GetEnvironmentVariable(k),
     };
@@ -601,11 +601,11 @@ sealed class DaemonServiceCommands(
 
         try {
             var env = LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(home, id)));
-            env.TryGetValue("KCAP_PROFILE", out var profile);
+            env.TryGetValue(ProfileOverrides.ProfileVar, out var profile);
             env.TryGetValue("KCAP_EXPECT_SERVER_URL", out var expectedServer);
             env.TryGetValue("KCAP_CONSENT_SEED_DEFAULT", out var consentSeed);
 
-            var serverUrl = env.TryGetValue("KCAP_URL", out var bakedUrl)
+            var serverUrl = env.TryGetValue(ProfileOverrides.UrlVar, out var bakedUrl)
                 ? bakedUrl
                 : BakedProfileServerUrl(env, profile, root);
 

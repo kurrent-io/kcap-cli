@@ -56,18 +56,16 @@ public static class AppConfig {
     /// remote matching — used by the daemon, which is not bound to a working
     /// directory.
     /// </summary>
-    public static async Task<ProfileContext> ResolveActiveProfile(string[] args, ConfigRoot config) {
+    public static async Task<ProfileContext> ResolveActiveProfile(string[] args, ConfigRoot config, ProfileOverrides env) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
-        var envUrl       = Environment.GetEnvironmentVariable("KCAP_URL");
-        var envProfile   = Environment.GetEnvironmentVariable("KCAP_PROFILE");
 
         var loaded   = await LoadProfileConfig(config);
         var resolver = new ProfileResolver(
             loaded,
             cliServerUrl,
-            envUrl,
-            envProfile,
+            env.Url,
+            env.Profile,
             repoConfig: null,
             repoRemoteUrls: [],
             repoPath: null
@@ -82,22 +80,21 @@ public static class AppConfig {
         return new(resolved, loaded);
     }
 
-    public static async Task<ProfileContext> ResolveForRepo(string[] args, ConfigRoot root, int gitTimeoutMs = 5000) {
+    public static async Task<ProfileContext> ResolveForRepo(string[] args, ConfigRoot root, ProfileOverrides env, int gitTimeoutMs = 5000) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
-        var envUrl     = Environment.GetEnvironmentVariable("KCAP_URL");
-        var envProfile = Environment.GetEnvironmentVariable("KCAP_PROFILE");
-
-        // Short-circuit: if explicit URL is provided, skip all profile/repo resolution
-        if (cliServerUrl is not null || envUrl is not null) {
+        // Short-circuit: if an explicit URL is provided, skip all profile/repo resolution. Empty is
+        // not one — the resolver skips an empty value, so short-circuiting on it would withhold the
+        // repo inputs from the very resolution that then has to fall back to them.
+        if (!string.IsNullOrEmpty(cliServerUrl) || env.Url is not null) {
             var config = await LoadProfileConfig(root);
 
             var resolver = new ProfileResolver(
                 config,
                 cliServerUrl,
-                envUrl,
-                envProfile,
+                env.Url,
+                env.Profile,
                 repoConfig: null,
                 repoRemoteUrls: [],
                 repoPath: null
@@ -129,8 +126,8 @@ public static class AppConfig {
             var resolver = new ProfileResolver(
                 config,
                 cliServerUrl,
-                envUrl,
-                envProfile,
+                env.Url,
+                env.Profile,
                 repoConfig,
                 remoteUrls,
                 repoRoot

@@ -14,7 +14,7 @@ namespace Capacitor.App.Tests.Unit;
 public class OnboardingGateTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root));
+    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None);
 
     const string ProfileName = "acme";
     const string ServerUrl = "https://acme.example";
@@ -253,7 +253,7 @@ public class OnboardingGateTests {
     public async Task EvaluateResolvedAsync_never_re_resolves_ignoring_a_config_change_after_capture() {
         WriteConfig(SingleProfileConfig(
             new Profile { ServerUrl = ServerUrl, AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl) }));
-        var resolved = (await AppConfig.ResolveActiveProfile([], Config.Root)).Resolution;
+        var resolved = (await AppConfig.ResolveActiveProfile([], Config.Root, ProfileOverrides.None)).Resolution;
 
         // Mutates the identity underneath the already-captured resolution — a fresh self-resolving
         // EvaluateAsync call at this point would see NoProfile instead.

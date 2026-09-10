@@ -84,7 +84,7 @@ public class SessionStartMemoryRedirectTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(_server.Url!, Config.Root, profiles));
-        services.AddCapacitorHttp();
+        services.AddCapacitorHttp(ProfileOverrides.None);
 
         await using var sp = services.BuildServiceProvider();
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.App.Services;
 
@@ -207,7 +208,7 @@ public sealed class KcapCli : IKcapCli {
 
     // Every child carries the pinned profile and the app-spawn telemetry-suppression marker.
     Dictionary<string, string> Env() => new() {
-        ["KCAP_PROFILE"]      = _profileName,
+        [ProfileOverrides.ProfileVar]      = _profileName,
         [SpawnNoTelemetryVar] = "1",
     };
 

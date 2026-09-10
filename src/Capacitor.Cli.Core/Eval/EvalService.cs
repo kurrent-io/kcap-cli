@@ -124,7 +124,7 @@ public static class EvalService {
                 [JudgeMcpServerName] = new JsonObject {
                     ["command"] = commandPath,
                     ["args"]    = new JsonArray("mcp", "judge", "--session", sessionId),
-                    ["env"]     = new JsonObject { ["KCAP_URL"] = baseUrl }
+                    ["env"]     = new JsonObject { [ProfileOverrides.UrlVar] = baseUrl }
                 }
             }
         }.ToJsonString();

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Cursor;
@@ -920,7 +921,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         };
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl))
-            psi.Environment["KCAP_URL"] = ctx.ServerUrl;
+            psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         // The isolated home is what suppresses the operator's GLOBAL MCP servers — the flows server
         // among them, which would let a reviewer start nested review flows. Created here rather than

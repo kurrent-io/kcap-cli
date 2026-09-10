@@ -414,7 +414,7 @@ sealed class SetupMachineActions : IFirstRunMachineActions {
 }
 
 public sealed class SetupCommand(
-        ConfigRoot config, ProfileContext profiles, TokenStore store, IHttpClientFactory httpFactory,
+        ConfigRoot config, ProfileContext profiles, ProfileOverrides env, TokenStore store, IHttpClientFactory httpFactory,
         IAuthProxyClient proxy, WorkOSClient workos, GitHubOAuthClient github, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery) {
@@ -1268,7 +1268,7 @@ public sealed class SetupCommand(
             .AddSingleton(config)
             .AddSingleton(context)
             .AddSingleton(new CapacitorServer(serverUrl, config, context))
-            .AddCapacitorHttp()
+            .AddCapacitorHttp(env)
             .BuildValidated();
     }
 

@@ -3656,7 +3656,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KCAP_URL"] = _config.ServerUrl,
+                    [ProfileOverrides.UrlVar] = _config.ServerUrl,
                     [ConfigRoot.ConfigDirEnvVar] = _config.ConfigRoot.Directory
                 }
             };

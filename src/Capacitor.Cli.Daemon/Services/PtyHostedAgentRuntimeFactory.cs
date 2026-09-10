@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Pty;
 using Microsoft.Extensions.Logging;
@@ -100,7 +101,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) {
-            env["KCAP_URL"] = ctx.ServerUrl;
+            env[ProfileOverrides.UrlVar] = ctx.ServerUrl;
         }
 
         // Tell the spawned Claude's permission-request hook where to find this daemon's local

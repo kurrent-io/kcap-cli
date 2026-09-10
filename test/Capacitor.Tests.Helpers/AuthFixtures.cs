@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Duende.IdentityModel.OidcClient.Browser;
 using NSubstitute;
@@ -14,10 +15,13 @@ public static class AuthFixtures {
     /// constructor the suites reach from eighty-odd files. A test that scripts what the refresh lanes
     /// answer passes a handler.
     /// </summary>
-    public static TokenStore NewTokenStore(ConfigRoot root, HttpMessageHandler? handler = null) {
+    /// <param name="env">The environment overrides the refresh lanes resolve a server through. Pass
+    /// one only when the test is about that resolution.</param>
+    public static TokenStore NewTokenStore(
+            ConfigRoot root, HttpMessageHandler? handler = null, ProfileOverrides? env = null) {
         var factory = new PlainHttpClientFactory(handler);
 
-        return new TokenStore(root, factory, new WorkOSClient(factory));
+        return new TokenStore(root, env ?? ProfileOverrides.None, factory, new WorkOSClient(factory));
     }
 
     public static OnboardingFacade NewFacade(

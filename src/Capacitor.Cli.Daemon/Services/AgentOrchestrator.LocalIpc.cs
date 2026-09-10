@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Logging;
 
@@ -251,7 +252,7 @@ internal partial class AgentOrchestrator {
             // normal local auth survives UnixPtyProcess.Spawn's headless scrub (it applies
             // extraEnv after unsetenv).
             var env = new Dictionary<string, string>();
-            if (!string.IsNullOrEmpty(_config.ServerUrl)) env["KCAP_URL"] = _config.ServerUrl;
+            if (!string.IsNullOrEmpty(_config.ServerUrl)) env[ProfileOverrides.UrlVar] = _config.ServerUrl;
             var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"] = apiKey;
 
