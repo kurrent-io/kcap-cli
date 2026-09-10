@@ -179,7 +179,7 @@ public static class HostedHarnessCatalog {
         return hasTerminal == false && family == "pty" ? "rpc" : family;
     }
 
-    /// The one source of the no-terminal wording (terminal tab and workspace tab strip alike).
+    /// The one source of the no-terminal wording, which the terminal pane carries as its state.
     /// Suffixed only when the family is reliably known: ACP is; the rpc/"chat" bucket also covers
     /// claude/codex/any unmapped vendor whose has_terminal came back false for a reason this build
     /// can't classify further, so it gets no family token at all rather than leaking "RPC" (an

@@ -13,7 +13,7 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 namespace Capacitor.App.Tests.Unit;
 
 /// WorkspaceViewModel's header projections (Title/RepoLabelText/
-/// ShowsTerminalTab/NoTerminalNote), SessionEnded, and Stop routing. WorkspaceViewModel always
+/// ShowsTerminalTab), SessionEnded, Chat construction, and Stop routing. WorkspaceViewModel always
 /// builds a real TerminalTabViewModel internally, so pushing a matching AgentStatusDto into the
 /// shared daemon.Agents cache also drives Terminal's OWN resolve gate -- which reaches
 /// Dispatcher.UIThread.InvokeAsync regardless of hasTerminal (both the NoTerminal and the attach
@@ -25,7 +25,8 @@ public class WorkspaceViewModelTests {
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1") =>
-        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource());
+        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps());
 
     static AgentActionService NewActions(
             ScriptedLocalControlOps ops, RecordingNotifier notifier, RecordingOpener opener,
@@ -52,38 +53,6 @@ public class WorkspaceViewModelTests {
             await Assert.That(vm.Title).IsEqualTo("myproj");
             await Assert.That(vm.RepoLabelText).IsEqualTo("myproj");
             await Assert.That(vm.ShowsTerminalTab).IsTrue();
-            await Assert.That(vm.NoTerminalNote).IsEqualTo("");
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Has_terminal_false_hides_the_tab_and_sets_the_family_aware_note() {
-        await RunOnUiAsync(async () => {
-            // Case 1: an ACP vendor (gemini) -- note says "runs over ACP", never the vendor name.
-            var daemon1 = new FakeDaemonClientService();
-            var actions1 = NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener());
-            var factory1 = new FakeTerminalAttachClientFactory();
-            var vm1 = Build(daemon1, actions1, factory1, new FakeTimeProvider(), agentId: "a1");
-
-            daemon1.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false));
-            await (vm1.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
-
-            await Assert.That(vm1.ShowsTerminalTab).IsFalse();
-            await Assert.That(vm1.NoTerminalNote).Contains("runs over ACP");
-            await Assert.That(vm1.NoTerminalNote).DoesNotContain("Gemini");
-
-            // Case 2: a non-ACP vendor (pi maps to rpc) -- bare note, no family token leaked.
-            var daemon2 = new FakeDaemonClientService();
-            var actions2 = NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener());
-            var factory2 = new FakeTerminalAttachClientFactory();
-            var vm2 = Build(daemon2, actions2, factory2, new FakeTimeProvider(), agentId: "a2");
-
-            daemon2.Agents.AddOrUpdate(Agent("a2", "pi", hasTerminal: false));
-            await (vm2.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
-
-            await Assert.That(vm2.ShowsTerminalTab).IsFalse();
-            await Assert.That(vm2.NoTerminalNote).IsEqualTo("This session has no terminal.");
         });
     }
 
@@ -183,20 +152,17 @@ public class WorkspaceViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Chat_is_built_for_a_pty_dto_only_and_torn_down_with_the_workspace() {
+    public async Task Chat_is_built_on_the_first_dto_of_any_vendor_with_the_reader_the_format_names() {
         await RunOnUiAsync(async () => {
             var daemon = new FakeDaemonClientService();
             var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
             await Assert.That(vm.Chat).IsNull();
 
-            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false));
-            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
-            await Assert.That(vm.Chat).IsNull();
-
-            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: true));
+            daemon.Agents.AddOrUpdate(Agent("a1", "pi", hasTerminal: false) with { TranscriptFormat = TranscriptFormats.Envelopes });
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await Assert.That(vm.Chat).IsNotNull();
-            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Unavailable); // gemini has no transcript projection
+            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Waiting); // journal reader, no path yet
+            await Assert.That(vm.ShowsTerminalTab).IsFalse();
 
             var chat = vm.Chat;
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
@@ -204,6 +170,28 @@ public class WorkspaceViewModelTests {
 
             await vm.TeardownAsync();
             await Assert.That(chat.PendingReadForTesting!).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Null_format_non_pty_dto_is_the_older_daemon_and_a_vendor_pty_dto_takes_the_vendor_reader() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var older = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false));
+            await (older.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(older.Chat!.Phase).IsEqualTo(ChatTabPhase.Unavailable);
+            await Assert.That(older.Chat.PhaseNote).IsEqualTo("Update the daemon to view this session");
+            await older.TeardownAsync();
+
+            var daemon2 = new FakeDaemonClientService();
+            var pty = Build(daemon2, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), agentId: "a2");
+            daemon2.Agents.AddOrUpdate(Agent("a2", "claude", hasTerminal: true) with { TranscriptFormat = TranscriptFormats.Vendor });
+            await (pty.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(pty.Chat!.Phase).IsEqualTo(ChatTabPhase.Waiting);
+            await Assert.That(pty.ShowsTerminalTab).IsTrue();
+            await pty.TeardownAsync();
         });
     }
 
@@ -258,7 +246,8 @@ public class WorkspaceViewModelTests {
             var source = new FakeWorkContextSource();
             var factory = new FakeTerminalAttachClientFactory();
             var vm = new WorkspaceViewModel("a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
-                factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), source);
+                factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), source,
+                new ScriptedLocalControlOps());
             await Assert.That(vm.WorkContext.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "0123456789abcdef0123456789abcdef"));

@@ -37,7 +37,8 @@ public class MainWindowSmokeTests {
     /// pieces MainWindowViewModelTests wires, over the actions this file's NewActions built.
     static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, AgentActionService actions, string agentId) =>
         new(agentId, service, actions, new FakeTerminalAttachClientFactory().Factory,
-            () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource());
+            () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
+            new FakeWorkContextSource(), new ScriptedLocalControlOps());
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -299,7 +300,8 @@ public class MainWindowSmokeTests {
             var vm = new MainWindowViewModel(
                 service, CancellationToken.None, activity,
                 workspaceFactory: agentId => new WorkspaceViewModel(
-                    agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource()));
+                    agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps()));
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -386,7 +388,8 @@ public class MainWindowSmokeTests {
                 var vm = new MainWindowViewModel(
                     service, CancellationToken.None, TestActivity.New(),
                     workspaceFactory: agentId => new WorkspaceViewModel(
-                        agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource()));
+                        agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
+                        new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps()));
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();

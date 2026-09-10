@@ -56,18 +56,15 @@
                     Foreground="{StaticResource KcapDangerBrush}" Padding="10,5" FontSize="12.5" />
         </Grid>
 
-        <!-- Tab strip: Chat and Terminal when the daemon reports this session has a PTY; the muted
-             family-aware note in their place otherwise (it never names a vendor). -->
+        <!-- Chat for every session; Terminal only when the daemon reports a PTY. -->
         <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,1">
             <Grid Margin="20,0">
                 <StackPanel Orientation="Horizontal" Spacing="6"
                             HorizontalAlignment="Left" VerticalAlignment="Center">
                     <Button x:Name="ChatTabButton" Content="Chat" Classes="tab" Classes.active="{Binding IsChatActive}"
-                            Command="{Binding ShowChatCommand}" IsVisible="{Binding ShowsTerminalTab}" />
+                            Command="{Binding ShowChatCommand}" />
                     <Button x:Name="TerminalTabButton" Content="Terminal" Classes="tab" Classes.active="{Binding IsTerminalActive}"
                             Command="{Binding ShowTerminalCommand}" IsVisible="{Binding ShowsTerminalTab}" />
-                <TextBlock x:Name="NoTerminalNote" Text="{Binding NoTerminalNote}" IsVisible="{Binding !ShowsTerminalTab}"
-                           Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5" VerticalAlignment="Center" />
                     <Button x:Name="PullRequestTabButton" Content="Pull request" Classes="tab" Classes.active="{Binding IsPullRequestActive}"
                             Command="{Binding ShowPullRequestCommand}" IsVisible="{Binding ShowsPullRequestTab}" />
                 </StackPanel>
@@ -93,9 +90,9 @@
                                        CaretBrush="{StaticResource KcapTextBrush}"
                                        Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
 
-            <!-- A session with no tabs at all has no Terminal tab to activate, and these banners
-                 are the only content its cell ever gets — so they stay up whenever the strip is
-                 showing the muted note instead of the tabs. -->
+            <!-- A session with no PTY has no Terminal tab to activate, so these banners are the
+                 only place its terminal state — the end of the session included — is announced;
+                 they stay up whenever the strip offers no Terminal tab. -->
             <Panel x:Name="TerminalBanners" IsVisible="{Binding ShowsTerminalBanners}">
 
                 <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Connecting}"
@@ -153,19 +150,12 @@
                 </Border>
             </Panel>
 
-            <!-- The chat surface exists only where the tab strip does, so a session with no PTY
-                 renders none of it. The automation peer reports offscreen from the control's OWN
-                 IsVisible, so hiding an ancestor instead would leave the inactive chat announced
-                 as onscreen — and both flags live on the workspace VM, which is not this
-                 control's DataContext. -->
-            <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}">
-                <views:ChatTabView.IsVisible>
-                    <MultiBinding Converter="{x:Static BoolConverters.And}">
-                        <Binding Path="$parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsTerminalTab" />
-                        <Binding Path="$parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive" />
-                    </MultiBinding>
-                </views:ChatTabView.IsVisible>
-            </views:ChatTabView>
+            <!-- The automation peer reports offscreen from the control's OWN IsVisible, so hiding
+                 an ancestor instead would leave the inactive chat announced as onscreen — and the
+                 active-tab flag lives on the workspace VM, which is not this control's
+                 DataContext. -->
+            <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
+                               IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
         </Grid>
     </Grid>

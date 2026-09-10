@@ -23,7 +23,7 @@ public class PullRequestViewSmokeTests {
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time);
         var vm = new WorkspaceViewModel("agent", daemon, NewActions(), attach.Factory, () => new FakeTerminalSurface(), time,
-            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), pullRequests: source);
+            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source);
         var view = new WorkspaceView { DataContext = vm };
         var window = new Window { Content = view, Width = 1200, Height = 800 };
         window.Show();
