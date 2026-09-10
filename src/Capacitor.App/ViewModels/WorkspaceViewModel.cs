@@ -47,7 +47,11 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     /// subscription per workspace, not two.
     public WorkContextViewModel WorkContext { get; }
     public PullRequestContextViewModel? PullRequests { get; }
-    public bool ShowsPullRequestTab => PullRequests is not null;
+    bool _showsPullRequestTab;
+    public bool ShowsPullRequestTab {
+        get => _showsPullRequestTab;
+        private set => this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+    }
 
     WorkspaceTab _activeTab = WorkspaceTab.Chat;
     public WorkspaceTab ActiveTab {
@@ -99,6 +103,10 @@ public sealed class WorkspaceViewModel : ReactiveObject {
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
+        PullRequests?.HasPullRequestChanges.Subscribe(has => {
+            ShowsPullRequestTab = has;
+            if (!has && IsPullRequestActive) ActiveTab = WorkspaceTab.Chat;
+        }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
@@ -133,7 +141,7 @@ public sealed class WorkspaceViewModel : ReactiveObject {
 
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = WorkspaceTab.Chat; });
         ShowTerminalCommand = ReactiveCommand.Create(() => { ActiveTab = WorkspaceTab.Terminal; });
-        ShowPullRequestCommand = ReactiveCommand.Create(() => { if (PullRequests is not null) ActiveTab = WorkspaceTab.PullRequest; });
+        ShowPullRequestCommand = ReactiveCommand.Create(() => { if (ShowsPullRequestTab) ActiveTab = WorkspaceTab.PullRequest; });
         _disposables.Add(ShowChatCommand);
         _disposables.Add(ShowTerminalCommand);
         _disposables.Add(ShowPullRequestCommand);

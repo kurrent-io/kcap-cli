@@ -36,9 +36,9 @@ public sealed partial class WorkContextViewModel {
         private set { this.RaiseAndSetIfChanged(ref _title, value); NotifyIdentity(); }
     }
     bool IsPrimaryIssue => Issue is not null && string.Equals(Issue.Key, Key, StringComparison.OrdinalIgnoreCase);
-    bool IsFallbackIssueTitle => Issue is not null && (string.Equals(Issue.Title, Issue.Key, StringComparison.OrdinalIgnoreCase)
+    bool IsFallbackIssueTitle => Issue is not null && (Issue.Title.Length == 0 || string.Equals(Issue.Title, Issue.Key, StringComparison.OrdinalIgnoreCase)
         || string.Equals(Issue.Title, $"Issue {Issue.Key}", StringComparison.OrdinalIgnoreCase));
-    public string DisplayTitle => !string.Equals(Title, Key, StringComparison.OrdinalIgnoreCase) ? Title
+    public string DisplayTitle => Title.Length > 0 && !string.Equals(Title, Key, StringComparison.OrdinalIgnoreCase) ? Title
         : IsPrimaryIssue && !IsFallbackIssueTitle ? Issue!.Title : "";
     public bool HasInlineIssue => IsPrimaryIssue && (IsFallbackIssueTitle || string.Equals(Issue!.Title, DisplayTitle, StringComparison.OrdinalIgnoreCase));
     public bool HasSeparateIssue => HasIssue && !HasInlineIssue;
@@ -78,7 +78,7 @@ public sealed partial class WorkContextViewModel {
         set {
             if (_sessionCount == value) return;
             _sessionCount = value;
-            this.RaisePropertyChanged(nameof(SessionCountText));
+            this.RaisePropertyChanged(nameof(WhoCountText));
         }
     }
 
@@ -92,11 +92,20 @@ public sealed partial class WorkContextViewModel {
     public bool HasBlockers => _blockedBy.Count > 0;
     public bool HasIssue => Issue is not null;
     public bool HasContributors => _contributors.Count > 0;
-    public string SessionCountText => _sessionCount switch {
-        0     => "",
-        1     => "1 session",
-        var n => $"{n} sessions",
-    };
+    /// People first, since that is what the section lists; the session count follows because one
+    /// person can hold several. With nobody listed the session count stands alone.
+    public string WhoCountText {
+        get {
+            var sessions = _sessionCount switch {
+                0     => "",
+                1     => "1 session",
+                var n => $"{n} sessions",
+            };
+            if (_contributors.Count == 0) return sessions;
+            var people = _contributors.Count == 1 ? "1 person" : $"{_contributors.Count} people";
+            return sessions.Length == 0 ? people : $"{people} · {sessions}";
+        }
+    }
 
     string _requester = "You";
     public string Requester { get => _requester; private set => this.RaiseAndSetIfChanged(ref _requester, value); }
@@ -176,6 +185,7 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(HasParts));
         this.RaisePropertyChanged(nameof(HasBlockers));
         this.RaisePropertyChanged(nameof(HasContributors));
+        this.RaisePropertyChanged(nameof(WhoCountText));
     }
 
     void ApplyReady(WorkContextRead read) {
@@ -214,7 +224,9 @@ public sealed partial class WorkContextViewModel {
 
     void ApplyItem(WorkItemDto item, IReadOnlyList<SessionWorkItemAssignmentDto> assignments) {
         Key = FirstNonBlank(item.Key?.ShortKey);
-        Title = FirstNonBlank(item.EnrichedTitle, item.Title) ?? "";
+        // An item with no tracker or generated title arrives with its key as the title.
+        var title = FirstNonBlank(item.EnrichedTitle, item.Title) ?? "";
+        Title = string.Equals(title, Key, StringComparison.OrdinalIgnoreCase) ? "" : title;
         Overview = item.IsOverviewMechanical ? null : FirstNonBlank(item.Overview);
         ApplyState(item.State?.Kind);
 
@@ -254,7 +266,7 @@ public sealed partial class WorkContextViewModel {
             Issue = null;
             return;
         }
-        var title = FirstNonBlank(link.Title) ?? $"Issue {link.ShortKey}";
+        var title = FirstNonBlank(link.Title) ?? "";
         if (Issue is { } current && current.Key == link.ShortKey && current.Title == title && current.Url == link.Url) return;
         Issue = new WorkContextLinkViewModel("ISSUE", link.ShortKey, title, link.Url, _opener);
     }
@@ -299,7 +311,7 @@ public sealed partial class WorkContextViewModel {
     }
 
     WorkContextLinkViewModel Link(int number, string? title, string? url) =>
-        new("PULL REQUEST", $"#{number}", title ?? $"Pull request #{number}", url, _opener);
+        new("PULL REQUEST", $"#{number}", title ?? "", url, _opener);
 
     static (string Provider, string Host) RepositoryIdentity(SessionSummaryDto summary, string repoHash) {
         var link = summary.PullRequests.FirstOrDefault(pr => pr.RepoHash == repoHash && PullRequestWire.SafeLink(pr.Url) is not null);

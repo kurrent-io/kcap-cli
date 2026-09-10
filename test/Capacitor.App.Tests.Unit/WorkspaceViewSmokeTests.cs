@@ -116,7 +116,7 @@ public class WorkspaceViewSmokeTests {
             foreach (var name in new[] {
                 "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
                 "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton", "LinkCards", "IssueCard",
-                "WhoToggle", "ContributorStack", "ContributorList", "SessionCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts",
+                "WhoToggle", "ContributorStack", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts",
             })
                 await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
 

@@ -204,6 +204,33 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    public Task An_unlinked_explicit_selection_does_not_count_as_a_linked_PR() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Vm.Selected = h.Vm.Choices[1];
+        await WaitUntilAsync(() => h.Vm.CanReveal, what: "explicit PR admitted");
+        h.Source.Links = [];
+        h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "unlink applied");
+        await Assert.That(h.Vm.Selected!.IsAvailable).IsFalse();
+        await Assert.That(h.Vm.HasPullRequest).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_signed_out_discovery_forgets_the_linked_PRs_until_discovery_succeeds_again() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Source.Capability = PullRequestCapabilityKind.SignedOut;
+        h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "signed-out discovery applied");
+        await Assert.That(h.Vm.HasPullRequest).IsFalse();
+        await Assert.That(h.Vm.ShowsSignIn).IsTrue();
+        h.Source.Capability = PullRequestCapabilityKind.Supported;
+        h.Time.Advance(TimeSpan.FromSeconds(16)); await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.HasPullRequest && !h.Vm.IsReading, what: "PRs rediscovered");
+        await h.Dispose();
+    });
+
+    [Test]
     [Arguments("https://example.com/example/repo/pull/1", false)]
     [Arguments("https://github.com/example/repo/pull/99", false)]
     [Arguments("https://github.com/example/other/pull/1", false)]

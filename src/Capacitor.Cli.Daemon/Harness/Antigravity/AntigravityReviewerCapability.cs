@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Daemon.Harness.Antigravity;
 
@@ -121,8 +122,8 @@ internal static class AntigravityReviewerCapability {
                 $"antigravity_reviewer_version_unresolved: the version of '{binaryPath}' could not be "
               + "determined, so it cannot be compared against this daemon's recorded minimum. Check "
               + "that the Antigravity CLI is installed (the `agy` binary — the IDE alone is not "
-              + "enough), that `agy --version` succeeds, and set KCAP_ANTIGRAVITY_PATH if it lives "
-              + "elsewhere. A build we cannot identify is refused rather than assumed compatible.",
+              + $"enough), that `agy --version` succeeds, and set {HarnessId.Antigravity.PathEnvVar} if it "
+              + "lives elsewhere. A build we cannot identify is refused rather than assumed compatible.",
 
             AntigravityReviewerDecision.VersionNoMinimum =>
                 "antigravity_reviewer_version_no_minimum: this daemon has no recorded minimum agy "
