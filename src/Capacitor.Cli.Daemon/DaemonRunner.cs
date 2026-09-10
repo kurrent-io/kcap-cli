@@ -94,7 +94,8 @@ public static partial class DaemonRunner {
         // Program.cs, but the daemon is a separate process so its statics start
         // empty. Skips repo discovery (the daemon isn't bound to a working dir);
         // honors --server-url, KCAP_URL, KCAP_PROFILE.
-        var profiles = await AppConfig.ResolveActiveProfile(args, configRoot);
+        var serverEnv = ProfileOverrides.FromEnvironment();
+        var profiles  = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv);
         config.Profiles  = profiles;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
@@ -371,7 +372,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(harnesses);
         builder.Services.AddSingleton(daemonLock);
-        builder.Services.AddDaemonHttp(configRoot, config);
+        builder.Services.AddDaemonHttp(configRoot, config, serverEnv);
         builder.Services.AddSingleton<ServerConnection>();
 
         // The owner consent gate — policy store + append-only decision log share the

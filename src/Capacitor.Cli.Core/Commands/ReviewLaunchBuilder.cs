@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Core.Commands;
 
@@ -30,7 +31,7 @@ public static class ReviewLaunchBuilder {
         var mcp = new ReviewMcpServer(
             Command: cliPath,
             Args: ["mcp", "review", "--owner", owner, "--repo", repo, "--pr", prNumber.ToString(CultureInfo.InvariantCulture)],
-            Env: new Dictionary<string, string> { ["KCAP_URL"] = baseUrl });
+            Env: new Dictionary<string, string> { [ProfileOverrides.UrlVar] = baseUrl });
 
         string? configPath = null;
 

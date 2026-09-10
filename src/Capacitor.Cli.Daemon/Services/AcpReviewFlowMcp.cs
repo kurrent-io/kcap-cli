@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -39,7 +40,7 @@ internal static class AcpReviewFlowMcp {
         var resultEnv = ctx.RequiresBrokeredResultDelivery
             ? new AcpMcpServerEnvVar[] { new("KCAP_FLOW_CAPABILITY_URL", ctx.FlowResultCapabilityUrl!),
                                          new("KCAP_FLOW_AGENT_ID", ctx.AgentId) }
-            : [new("KCAP_URL", ctx.ServerUrl!), new("KCAP_FLOW_AGENT_ID", ctx.AgentId)];
+            : [new(ProfileOverrides.UrlVar, ctx.ServerUrl!), new("KCAP_FLOW_AGENT_ID", ctx.AgentId)];
 
         var servers = new List<AcpMcpServerSpec> {
             new(channelName, ctx.CapacitorPath, ["mcp", "flow-result"], resultEnv)
@@ -52,7 +53,7 @@ internal static class AcpReviewFlowMcp {
             // vendor's name gate would be the same impersonation hole the result channel's alias closes.
             var descriptor = KcapMcpRegistry.Resolve(id)!;
             servers.Add(new(WireName(ctx, descriptor.Id), ctx.CapacitorPath, descriptor.Args,
-                [new("KCAP_URL", ctx.ServerUrl!)]));
+                [new(ProfileOverrides.UrlVar, ctx.ServerUrl!)]));
         }
 
         if (ctx.IsBorrowedSnapshot) {

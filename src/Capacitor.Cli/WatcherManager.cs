@@ -150,7 +150,7 @@ sealed partial class WatcherManager(ConfigRoot config, ProfileContext profiles, 
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KCAP_URL"]                 = Url,
+                    [ProfileOverrides.UrlVar]    = Url,
                     [ConfigRoot.ConfigDirEnvVar] = config.Directory
                 }
             };
@@ -500,7 +500,7 @@ sealed partial class WatcherManager(ConfigRoot config, ProfileContext profiles, 
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KCAP_URL"]                 = Url,
+                    [ProfileOverrides.UrlVar]    = Url,
                     [ConfigRoot.ConfigDirEnvVar] = config.Directory
                 }
             };
@@ -566,7 +566,7 @@ sealed partial class WatcherManager(ConfigRoot config, ProfileContext profiles, 
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KCAP_URL"]                 = Url,
+                    [ProfileOverrides.UrlVar]    = Url,
                     [ConfigRoot.ConfigDirEnvVar] = config.Directory
                 }
             };

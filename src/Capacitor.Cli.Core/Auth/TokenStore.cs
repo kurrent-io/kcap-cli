@@ -59,7 +59,7 @@ public sealed record TokenResolution(
 // treats Contended quietly — no warning, no backoff.
 public enum ProactiveRefreshOutcome { NotDue, Refreshed, Failed, Contended }
 
-public sealed class TokenStore(ConfigRoot config, IHttpClientFactory httpFactory, WorkOSClient workos) {
+public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpClientFactory httpFactory, WorkOSClient workos) {
     string LegacyTokenPath { get; } = config.Path("tokens.json");
     string TokenDir        { get; } = config.Path("tokens");
 
@@ -625,7 +625,7 @@ public sealed class TokenStore(ConfigRoot config, IHttpClientFactory httpFactory
         // it falls back to KCAP_URL and then to the profile's own server_url.
         var configured = tokens.ServerUrl is not null
             ? null
-            : Environment.GetEnvironmentVariable("KCAP_URL")
+            : env.Url
               ?? (await AppConfig.LoadProfileConfig(config, ct)).Profiles.GetValueOrDefault(profile)?.ServerUrl;
 
         var baseUrl = tokens.ServerUrl ?? configured ?? "http://localhost:5108";

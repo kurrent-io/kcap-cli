@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -579,7 +580,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // its config, MCP servers and result channel at the operator's profile, not this home.
         psi.Environment.Remove("GEMINI_CLI_HOME");
 
-        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;
+        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         // Without these a surviving turn child is invisible to OrphanReaper's env-marker pass — and
         // nothing fails visibly when they are omitted, which is exactly why they are stamped here
