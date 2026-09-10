@@ -110,9 +110,14 @@ public sealed class ChatTabViewModel : ReactiveObject {
     };
 
     string _composerText = "";
+    int _composerEdits;
     public string ComposerText {
         get => _composerText;
-        set => this.RaiseAndSetIfChanged(ref _composerText, value);
+        set {
+            if (string.Equals(_composerText, value, StringComparison.Ordinal)) return;
+            _composerEdits++;
+            this.RaiseAndSetIfChanged(ref _composerText, value);
+        }
     }
 
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
@@ -274,13 +279,16 @@ public sealed class ChatTabViewModel : ReactiveObject {
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
             (text, can, readOnly) => can && !readOnly && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
-        // snapshot that was actually sent is cleared, and only once the channel commits it.
+        // snapshot that was actually sent is cleared, and only once the channel commits it. The
+        // edit count is what the text alone cannot say — an edit that lands back on the sent text
+        // is still the user's own draft, not the snapshot.
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
+            var edits = _composerEdits;
             bool committed;
             try { committed = await _input.SendAsync(snapshot, _lifetimeToken); }
             catch (OperationCanceledException) { return; }
-            if (committed && ComposerText == snapshot) ComposerText = "";
+            if (committed && _composerEdits == edits && ComposerText == snapshot) ComposerText = "";
         }, canSend);
         _disposables.Add(SendCommand);
 

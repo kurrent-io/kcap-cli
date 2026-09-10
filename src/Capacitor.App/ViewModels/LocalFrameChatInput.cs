@@ -1,4 +1,5 @@
 using System.Reactive.Disposables;
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
@@ -23,7 +24,9 @@ internal sealed class LocalFrameChatInput : ChatInput {
     public LocalFrameChatInput(string agentId, IDaemonClientService daemon, ILocalControlOps ops, IObservable<AgentPresence> presence) {
         _agentId = agentId;
         _ops = ops;
-        _subscriptions.Add(daemon.Status.Subscribe(ApplyStatus));
+        // Status comes off the daemon client's worker thread; presence is already marshalled by the
+        // workspace that publishes it.
+        _subscriptions.Add(daemon.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(ApplyStatus));
         _subscriptions.Add(presence.Subscribe(ApplyPresence));
     }
 
@@ -60,7 +63,7 @@ internal sealed class LocalFrameChatInput : ChatInput {
     };
 
     public override async Task<bool> SendAsync(string text, CancellationToken ct) {
-        if (!CanAcceptText) return false;
+        if (_disposed || !CanAcceptText) return false;
         _sending = true; _notice = null; Raise();
         SendTextResult result;
         try {
@@ -78,8 +81,11 @@ internal sealed class LocalFrameChatInput : ChatInput {
             SendTextReasons.ProtectedKind  => "read-only participant",
             SendTextReasons.QueueFull      => "the agent's input queue is full, try again shortly",
             SendTextReasons.StopFailed     => "the agent did not stop",
+            SendTextReasons.ReaperClaimed or SendTextReasons.ReaperClaimedLate => "the agent is being stopped",
             SendTextReasons.DeliveryFailed => result.Error ?? "delivery failed",
-            _                              => result.Error ?? result.Reason ?? "delivery failed",
+            // A reason this build has no wording for is still not composer text: the raw wire token
+            // would read as a bug report to the user.
+            _                              => "delivery failed",
         });
     }
 

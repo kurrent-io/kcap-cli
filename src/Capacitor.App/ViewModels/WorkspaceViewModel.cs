@@ -114,7 +114,6 @@ public sealed class WorkspaceViewModel : ReactiveObject {
         _showsTerminalTab = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
-        presence.Subscribe(_ => this.RaisePropertyChanged(nameof(ShowsTerminalBanners))).DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);

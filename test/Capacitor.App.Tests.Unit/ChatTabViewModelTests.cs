@@ -757,6 +757,28 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Text alone cannot decide this: an edit during the round trip that ends on the sent text is
+    /// still the user's own draft, and clearing it would erase what they typed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Text_edited_back_to_the_sent_value_during_the_round_trip_survives() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
+
+            h.Chat.ComposerText = "hello";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            h.Chat.ComposerText = "hello!";
+            h.Chat.ComposerText = "hello";
+            input.Pending!.SetResult(true);
+            await send;
+
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("hello");
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Teardown_cancels_an_in_flight_send_before_disposing_the_input_once() {
