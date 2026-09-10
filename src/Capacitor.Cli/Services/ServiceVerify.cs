@@ -112,14 +112,15 @@ sealed class ServiceVerify(
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
 
     /// <summary>The advertised transaction bound (30s at the defaults): forward cutoff + rollback
-    /// reserve. A caller's kill-timeout (the desktop app's mutation timeout, §3.6) MUST sit strictly
+    /// reserve. A caller's kill-timeout (the desktop app's mutation timeout) MUST sit strictly
     /// above this. Two bounded phases can precede it — lock acquisition (≤ 10s) and, only on crash
     /// residue, a recovery pre-phase (≤ the rollback reserve) — so for full headroom a caller should
     /// allow the sum. The one accepted exception is <see cref="KillWait"/> (≤ 5s) on the manual-owner
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
     /// caller's 60s kill-timeout. <c>--retire</c> spends its OWN forward budget ahead of this bound
-    /// (never the install's), so a caller driving a rename must allow for one more forward budget on
-    /// top of the sum above.</summary>
+    /// (never the install's) and takes its own <see cref="LockWait"/> on the retired label before
+    /// that, so a caller driving a rename must allow for one more forward budget PLUS one more lock
+    /// wait on top of the sum above.</summary>
     public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
@@ -697,8 +698,8 @@ sealed class ServiceVerify(
 
     enum InstallReady { NotReady, Ready, VersionMismatch }
 
-    /// <summary>install [--replace] --verify. <paramref name="replace"/> selects the ownership matrix
-    /// (spec §3.4): a fresh install refuses to touch an existing label/unit
+    /// <summary>install [--replace] --verify. <paramref name="replace"/> selects the ownership matrix:
+    /// a fresh install refuses to touch an existing label/unit
     /// (<see cref="VerifyExit.Contended"/>), while <c>--replace</c> clears/takes it over first.</summary>
     /// <param name="retireServiceId">When set, removes this other unit inside the same transaction
     /// before installing — the one a daemon rename leaves behind.</param>
@@ -782,6 +783,9 @@ sealed class ServiceVerify(
         }
 
         if (retireServiceId is not null) {
+            if (retireServiceId == spec.ServiceId)
+                throw new ArgumentException("retireServiceId must differ from the service being installed");
+
             // A rename's target must be free: a live daemon under the new name is another daemon,
             // not a stale unit for --replace to take over. No pre-query needed for this check.
             if (validatedDaemonPid(serviceId) is not null) {

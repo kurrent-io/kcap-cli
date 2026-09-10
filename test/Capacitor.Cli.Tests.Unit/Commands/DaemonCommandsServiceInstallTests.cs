@@ -35,17 +35,32 @@ public class DaemonCommandsServiceInstallTests {
         await Assert.That(exit).IsEqualTo(1);
     }
 
-    [Test]
+    [Test, NotInParallel]
     public async Task Retire_without_replace_and_verify_is_rejected() {
+        using var err = ConsoleOutput.StartErrorCapture();
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--verify", "--retire", "old"], true);
         await Assert.That(exit).IsEqualTo(1);
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).Contains("install --retire requires --replace --verify.");
     }
 
     /// <summary>The comparison is on sanitized ids, so a differently-cased spelling of the target is still the target.</summary>
-    [Test]
+    [Test, NotInParallel]
     public async Task Retire_naming_the_target_itself_is_rejected() {
+        using var err = ConsoleOutput.StartErrorCapture();
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "Test-ID"], true);
         await Assert.That(exit).IsEqualTo(1);
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).Contains("--retire names the service being installed; nothing to retire.");
+    }
+
+    [Test, NotInParallel]
+    public async Task Retire_value_that_sanitizes_to_the_fallback_is_rejected() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "***"], true);
+        await Assert.That(exit).IsEqualTo(1);
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).Contains("--retire value '***' is not a service id.");
     }
 
     /// <summary>--no-start withholds the start; --verify's job is to prove the started daemon is

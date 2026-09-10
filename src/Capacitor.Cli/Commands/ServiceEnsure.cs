@@ -193,8 +193,8 @@ internal static class EnsureFlowMap {
         // Viability is proven before anything destructive, so an unusable pinned URL is a
         // misconfiguration rather than a transaction that failed — and retrying it cannot help.
         // install --retire's own refusal is the same shape (nothing written) though the ladder's
-        // own install arm never passes a retire id — it still needs a row for the exhaustiveness
-        // check below.
+        // own install arm never passes a retire id — it still needs a row in the pinned-exhaustive
+        // flow map that covers every coded verify exit.
         "no_profile_configured" or "no_server_configured" or "daemon_not_found" or "verify_viability"
             or "verify_retire_refused" =>
             Refused(FirstRunMachineActionReasons.NotConfigured),

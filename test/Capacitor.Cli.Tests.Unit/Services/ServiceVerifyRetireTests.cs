@@ -102,6 +102,45 @@ public class ServiceVerifyRetireTests {
     }
 
     [Test]
+    public async Task Retiring_the_target_itself_throws() {
+        var manager = new FakeServiceManager(Home);
+        var sut = Sut(manager, oldPlist: null);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: NewId));
+
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_new_daemon_that_never_answers_rolls_back_without_touching_the_settled_retirement() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var time = new FakeTimeProvider();
+
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+            id => id == NewId && manager.Bootstrapped ? 4242 : null,
+            (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
+            time,
+            forwardBudget: TimeSpan.FromSeconds(2),
+            readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,
+            plistExists: _ => true);
+
+        var task = sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+        var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+        await Assert.That(manager.Calls.Count(c => c == $"uninstall:{OldId}")).IsEqualTo(1);
+        await Assert.That(manager.Calls.Count(c => c == $"writeAndBootstrap:{NewId}")).IsEqualTo(1);
+        await Assert.That(manager.Calls.IndexOf($"writeAndBootstrap:{NewId}")).IsLessThan(manager.Calls.IndexOf($"uninstall:{NewId}"));
+        // The retirement is fully settled before the new unit's own install/poll/rollback begins —
+        // none of that later work ever names the already-retired id again.
+        await Assert.That(manager.Calls.SkipWhile(c => c != $"writeAndBootstrap:{NewId}")
+            .Any(c => c.EndsWith($":{OldId}", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, NewId)).IsFalse();
+        await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, OldId)).IsFalse();
+    }
+
+    [Test]
     public async Task An_absent_retired_unit_is_a_no_op() {
         var manager = new FakeServiceManager(Home);
         var sut = Sut(manager, oldPlist: null);

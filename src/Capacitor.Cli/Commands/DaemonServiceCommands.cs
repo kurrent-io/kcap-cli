@@ -110,6 +110,14 @@ sealed class DaemonServiceCommands(
         var retire   = DaemonCommands.ExtractFlagValue(args, "--retire");
         var retireId = retire is null ? null : DaemonStore.Sanitize(retire);
 
+        // Sanitize maps a blank or all-invalid value to "daemon" — the fallback name, which usually
+        // shares the profile. A raw value that isn't itself (a spelling of) "daemon" but sanitizes to
+        // it is a typo aimed at the wrong target, not a deliberate name for the default daemon.
+        if (retireId == "daemon" && retire is not null && !string.Equals(retire.Trim(), "daemon", StringComparison.OrdinalIgnoreCase)) {
+            await Console.Error.WriteLineAsync($"--retire value '{retire}' is not a service id.");
+            return 1;
+        }
+
         if (retireId is not null && !(replace && verify)) {
             await Console.Error.WriteLineAsync("install --retire requires --replace --verify.");
             return 1;
