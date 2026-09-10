@@ -202,13 +202,15 @@ public sealed class ChatTabViewModel : ReactiveObject {
         var cards = permissions.Pending
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Filter(p => p.AgentId == agentId)
-            .Transform(p => p.Questions is null
-                ? (PendingCardViewModel)new PermissionCardViewModel(p, permissions, _rootSubject)
-                : new QuestionCardViewModel(p, permissions))
+            .Transform(p => p switch {
+                { Questions: not null } => (PendingCardViewModel)new QuestionCardViewModel(p, permissions),
+                { AcpQuestion: not null } => new AcpQuestionCardViewModel(p, permissions),
+                _ => new PermissionCardViewModel(p, permissions, _rootSubject),
+            })
             .DisposeMany()
             .SortAndBind(out var pendingCards, Comparer<PendingCardViewModel>.Create((a, b) => {
                 var byTime = a.RequestedAt.CompareTo(b.RequestedAt);
-                return byTime != 0 ? byTime : string.CompareOrdinal(a.RequestId, b.RequestId);
+                return byTime != 0 ? byTime : string.CompareOrdinal(a.Key, b.Key);
             }));
         PendingCards = pendingCards;
 
@@ -453,13 +455,13 @@ public sealed class ChatTabViewModel : ReactiveObject {
     void WithdrawSettled() {
         if (_lifetimeToken.IsCancellationRequested) return;
         foreach (var request in _requests.Values) {
-            if (request.ToolUseId is not { } id || !_settledTools.Contains(id) || !_withdrawing.Add(request.RequestId)) continue;
+            if (request.ToolUseId is not { } id || !_settledTools.Contains(id) || !_withdrawing.Add(request.Key)) continue;
             _ = WithdrawAsync(request);
         }
     }
 
     async Task WithdrawAsync(PendingPermissionRequest request) {
-        var id = request.RequestId;
+        var id = request.Key;
         try {
             var outcome = await _permissions.WithdrawAsync(request, _lifetimeToken);
             if (outcome.Kind != PermissionResolveKind.TransportFailure) { _withdrawFailures.Remove(id); return; }

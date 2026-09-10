@@ -20,6 +20,8 @@ public abstract class PendingCardViewModel : ReactiveObject, IDisposable {
     bool _isBusy;
     string? _errorText;
 
+    /// The cache key: lane-scoped, so two lanes' ids can never collide in a card list.
+    public string Key { get; }
     public string RequestId { get; }
     internal DateTimeOffset RequestedAt { get; }
     protected bool IsDisposed { get; private set; }
@@ -42,6 +44,7 @@ public abstract class PendingCardViewModel : ReactiveObject, IDisposable {
     }
 
     protected PendingCardViewModel(PendingPermissionRequest entry) {
+        Key = entry.Key;
         RequestId = entry.RequestId;
         RequestedAt = entry.RequestedAt;
         Disposables.Add(Busy);
