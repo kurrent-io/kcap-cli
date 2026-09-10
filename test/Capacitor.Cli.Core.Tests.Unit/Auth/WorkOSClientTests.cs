@@ -63,4 +63,40 @@ public class WorkOSClientTests : IDisposable {
         await Assert.That(result.Problem!).Contains("403");
         await Assert.That(result.Problem!).DoesNotContain("sekrit");
     }
+
+    /// <summary>A refresh that WorkOS honours rotates and carries the parsed tokens back to the caller.</summary>
+    [Test]
+    public async Task A_honoured_refresh_rotates_and_carries_the_response() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"user":{"id":"user_x"},"access_token":"acc","refresh_token":"rt2"}"""));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
+        await Assert.That(result.Response!.AccessToken).IsEqualTo("acc");
+        await Assert.That(result.Response!.RefreshToken).IsEqualTo("rt2");
+    }
+
+    /// <summary>
+    /// A refused refresh reads as Rejected with no response — the token WorkOS declined must not be
+    /// mistaken for a live one — and the refresh is sent once, never retried onto a consumed token.
+    /// </summary>
+    [Test]
+    public async Task A_refused_refresh_is_rejected_and_sent_exactly_once() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400).WithBody(
+                """{"error":"invalid_grant"}"""));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
+        await Assert.That(result.Response).IsNull();
+
+        var posts = _server.FindLogEntries(
+            Request.Create().WithPath("/user_management/authenticate").UsingPost());
+        await Assert.That(posts.Count).IsEqualTo(1);
+    }
 }

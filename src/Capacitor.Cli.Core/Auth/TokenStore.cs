@@ -683,11 +683,13 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         RefreshWorkOSAsync(tokens, CancellationToken.None);
 
     async Task<StoredTokens?> RefreshWorkOSAsync(StoredTokens tokens, CancellationToken ct) {
-        var json = await workos.RefreshAsync(tokens.ClientId!, tokens.RefreshToken!, ct);
+        var result = await workos.RefreshAsync(tokens.ClientId!, tokens.RefreshToken!, ct);
 
-        if (json is null) {
+        if (result.Outcome is not WorkOSRefreshOutcome.Rotated) {
             return null;
         }
+
+        var json = result.Response!;
 
         // Persistence is the caller's responsibility (RefreshWithCrossProcessLockAsync saves under the
         // locked profile) — see RefreshGitHubAsync. WorkOS rotates the refresh token on use, so writing

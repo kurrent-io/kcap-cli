@@ -20,36 +20,38 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
     /// <summary>AuthKit's API host. The machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.</summary>
     public const string ApiBase = "https://api.workos.com";
 
-    // Short, so a hook never blocks for the default budget when WorkOS is unreachable.
-    static readonly TimeSpan RetryBudget = TimeSpan.FromSeconds(5);
-
     /// <summary>
-    /// Exchanges a rotating refresh token for a fresh access token, or null when WorkOS refused it or
-    /// answered unreadably — the repair is a fresh login either way.
+    /// Exchanges a rotating refresh token for a fresh access token, classifying the outcome so a caller
+    /// can tell a token WorkOS refused apart from a request that never landed.
     ///
-    /// <para>The retry covers transport failures only, never a non-success response. WorkOS rotates the
-    /// refresh token on every successful use, so a retry after a response was lost in transit does
-    /// re-send a token WorkOS already consumed — but that window exists without the retry too, since
-    /// the next refresh re-reads the same unrotated token from disk. What it buys is the common case:
-    /// a request that never arrived.</para>
+    /// <para>Sent once — never retried. WorkOS consumes the refresh token on every use, so re-sending
+    /// one after a lost response presents a token it has already spent, which trips reuse detection and
+    /// revokes the whole family. A <see cref="WorkOSRefreshOutcome.Rejected"/> is any non-success status
+    /// (an <c>invalid_grant</c> among them); <see cref="WorkOSRefreshOutcome.TransportFailed"/> is an
+    /// exception or an unreadable body, where the token was not spent. Reports rather than throws,
+    /// cancellation aside.</para>
     /// </summary>
-    public async Task<WorkOSAuthResponse?> RefreshAsync(
+    public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
         try {
-            using var http = httpFactory.CreateClient(CapacitorClients.WorkOS);
-            using var form = new FormUrlEncodedContent(new Dictionary<string, string> {
+            using var response = await PostFormAsync(AuthenticateUrl, new() {
                 ["grant_type"]    = "refresh_token",
                 ["client_id"]     = clientId,
                 ["refresh_token"] = refreshToken
-            });
+            }, ct);
 
-            using var response = await http.PostWithRetryAsync(AuthenticateUrl, form, RetryBudget, ct);
+            if (!response.IsSuccessStatusCode) {
+                return new(WorkOSRefreshOutcome.Rejected, null);
+            }
 
-            return response.IsSuccessStatusCode
-                ? await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse, ct)
-                : null;
-        } catch {
-            return null;
+            var body = await response.Content.ReadFromJsonAsync(
+                CapacitorJsonContext.Default.WorkOSAuthResponse, ct);
+
+            return body is null
+                ? new(WorkOSRefreshOutcome.TransportFailed, null)
+                : new(WorkOSRefreshOutcome.Rotated, body);
+        } catch when (!ct.IsCancellationRequested) {
+            return new(WorkOSRefreshOutcome.TransportFailed, null);
         }
     }
 
