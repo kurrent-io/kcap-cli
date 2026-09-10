@@ -829,7 +829,16 @@ public class ChatTabViewModelTests {
             await h.TickAsync();
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
 
+            // The awaiting-input flag hides it (the turn ended and the agent waits on the user)…
             await h.PushAsync(Hosted(path, "Running", awaitingInput: true));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+
+            // …and so does the agent's first output row, mid-turn: the transcript is now the sign of
+            // life, so the note clears instead of sitting beside the streaming answer.
+            File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "on it")) + "\n");
+            await h.TickAsync();
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
             await h.TeardownAsync();
         });

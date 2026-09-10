@@ -154,19 +154,23 @@ public sealed class ChatTabViewModel : ReactiveObject {
     string? _transcriptFormat;
 
     void RefreshActivityNote() =>
-        ActivityNote = ActivityNoteFor(Phase, _status, _awaitingInput, _transcriptFormat, _items.Count > 0, HasPendingCards, VendorLabel);
+        ActivityNote = ActivityNoteFor(
+            Phase, _status, _awaitingInput, _transcriptFormat,
+            _items.Count > 0 && _items[^1] is UserTurnItem, HasPendingCards, VendorLabel);
 
     /// The working line is offered only for the daemon's own journal: there the awaiting flag flips
     /// on every turn end, whereas a PTY vendor's comes from hooks that may never fire, and a note
-    /// that never clears is worse than none. It also needs a row: a running agent nobody has
-    /// prompted yet has nothing in flight.
+    /// that never clears is worse than none. It shows only while the tail row is the user's own
+    /// prompt — the agent has been given something and produced nothing yet. The first assistant or
+    /// tool row makes the transcript itself the sign of life, so the note clears rather than sitting
+    /// beside the output.
     internal static string ActivityNoteFor(
             ChatTabPhase phase, string status, bool? awaitingInput, string? transcriptFormat,
-            bool hasRows, bool hasPendingCards, string vendorLabel) {
+            bool awaitingFirstOutput, bool hasPendingCards, string vendorLabel) {
         if (phase != ChatTabPhase.Reading) return "";
         if (status == "Starting") return vendorLabel.Length > 0 ? $"Starting {vendorLabel}…" : "Starting…";
         var working = status == "Running" && transcriptFormat == TranscriptFormats.Envelopes
-                   && awaitingInput == false && hasRows && !hasPendingCards;
+                   && awaitingInput == false && awaitingFirstOutput && !hasPendingCards;
         if (!working) return "";
         return vendorLabel.Length > 0 ? $"{vendorLabel} is working…" : "Working…";
     }
