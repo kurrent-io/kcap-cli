@@ -4,6 +4,7 @@ using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
@@ -27,11 +28,39 @@ public class MainWindowViewModelTests {
     /// an optional workspace factory and rail — mirrors NewActions' shape.
     static MainWindowViewModel NewVm(
             FakeDaemonClientService service, Func<string, WorkspaceViewModel>? workspaceFactory = null,
-            SessionRailViewModel? rail = null) {
+            SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
+            Func<string, RemoteSessionViewModel>? remoteWorkspaceFactory = null,
+            Action<Func<Task>>? trackWorkspaceTeardown = null) {
         var (actions, _) = NewActions(service);
         return new MainWindowViewModel(
             service, CancellationToken.None, TestActivity.New(),
-            workspaceFactory: workspaceFactory, rail: rail);
+            trackWorkspaceTeardown: trackWorkspaceTeardown,
+            workspaceFactory: workspaceFactory, rail: rail,
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory);
+    }
+
+    /// The remote host's dependencies, held together so a test disposes them once. Rows carry no
+    /// session id, so no lease is ever acquired and the routing assertions stay deterministic.
+    sealed class RemoteHost : IDisposable {
+        readonly FakeServerLane _lane = new();
+        readonly SessionAccessService _access;
+        readonly FakePermissionService _permissions = new();
+        readonly FakeAgentDirectory _directory = new();
+
+        public RemoteHost() => _access = new SessionAccessService(_lane, new FakeTimeProvider());
+
+        public RemoteSessionViewModel New(string agentId) => new(
+            AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = agentId, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }),
+            _directory, _access, _permissions, WorkspaceFixtures.NewActions());
+
+        public void Dispose() {
+            _access.Dispose();
+            _permissions.Dispose();
+            _directory.Dispose();
+        }
     }
 
     /// A real WorkspaceViewModel over the fake service and scripted attach/surface fakes — same
@@ -600,6 +629,53 @@ public class MainWindowViewModelTests {
 
             vm.CloseWorkspace();
             await Assert.That(rail.SelectedAgentId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_a_remote_row_swaps_in_the_remote_host_and_close_tears_it_down() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var torn = 0;
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: id => id == "r1" ? AgentOrigin.Remote : AgentOrigin.Local,
+                remoteWorkspaceFactory: id => built = host.New(id),
+                trackWorkspaceTeardown: teardown => { torn++; _ = teardown(); });
+
+            vm.OpenSession("r1");
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
+
+            vm.OpenSession("r1"); // same id: no rebuild of the open host
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
+
+            vm.CloseWorkspace();
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(torn).IsEqualTo(1);
+        });
+    }
+
+    /// The origin decides the workspace, not the presence of a remote factory: a local id still
+    /// gets the local one even while a remote factory is wired.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_row_still_opens_the_local_workspace_while_a_remote_factory_is_wired() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var remoteBuilt = 0;
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local,
+                remoteWorkspaceFactory: id => { remoteBuilt++; return host.New(id); });
+
+            vm.OpenSession("a1");
+
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
+            await Assert.That(remoteBuilt).IsEqualTo(0);
         });
     }
 }

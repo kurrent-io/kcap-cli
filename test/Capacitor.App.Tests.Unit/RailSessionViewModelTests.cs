@@ -141,19 +141,21 @@ public class RailSessionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Remote_row_is_read_only_and_carries_its_machine_badge() {
+    public async Task OpenCommand_invokes_the_remote_callback_and_the_row_carries_its_machine_badge() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var dto = new AgentInstanceDto {
                 AgentId = "b1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
                 Vendor = "claude", RepoOwner = "o", RepoName = "r",
             };
             string? openedRemote = null;
+            string? openedLocal = null;
             using var row = new RailSessionViewModel(
-                AgentRow.FromRemote(dto), new BehaviorSubject<string?>(null), NoPending, _ => { }, id => openedRemote = id);
+                AgentRow.FromRemote(dto), new BehaviorSubject<string?>(null), NoPending, id => openedLocal = id, id => openedRemote = id);
             await Assert.That(row.IsRemote).IsTrue();
             await Assert.That(row.MachineBadge).IsEqualTo("work-mac");
             row.OpenCommand.Execute().Subscribe();
             await Assert.That(openedRemote).IsEqualTo("b1");
+            await Assert.That(openedLocal).IsNull();
         });
     }
 

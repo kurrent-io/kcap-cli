@@ -60,7 +60,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// permission service still compile and render.
     public SessionRailViewModel(
             IAgentDirectory directory,
-            Action<string> openLocalSession, Action<string> openRemoteInWeb,
+            Action<string> openLocalSession, Action<string> openRemoteSession,
             Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null) {
         _directory = directory;
@@ -90,7 +90,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, resolveRoot, openLocalSession, openRemoteInWeb))
+                g, _collapse, selected, pending, resolveRoot, openLocalSession, openRemoteSession))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

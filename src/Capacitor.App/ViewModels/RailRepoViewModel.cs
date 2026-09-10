@@ -39,7 +39,7 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
     public RailRepoViewModel(
             IGroup<AgentRow, string, string> group, RailCollapseState collapse,
             IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
-            Func<string, string> resolveRepoRoot, Action<string> openLocal, Action<string> openRemoteInWeb) {
+            Func<string, string> resolveRepoRoot, Action<string> openLocal, Action<string> openRemote) {
         RootPath = group.Key;
         // Rows in one group share RepoGroupLabel by construction — any member names it.
         Label = group.Cache.Items[0].RepoGroupLabel;
@@ -56,7 +56,7 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             .Group(SessionRailViewModel.WorktreeKeyFor)
             .Transform(wt => new RailWorktreeViewModel(
                 wt.Key, resolveRepoRoot, showHeader: !IsNoRepository, wt.Cache, collapse, selectedAgentId,
-                agentsWithPending, openLocal, openRemoteInWeb))
+                agentsWithPending, openLocal, openRemote))
             .DisposeMany()
             .SortAndBind(_worktreesSource, WorktreeComparer)
             .Subscribe()

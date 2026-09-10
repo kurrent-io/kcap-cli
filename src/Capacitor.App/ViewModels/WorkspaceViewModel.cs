@@ -16,7 +16,7 @@ public enum WorkspaceTab { Chat, Terminal, PullRequest }
 /// Owns the persistent Chat, Terminal and PR surfaces for one agent. Presence is
 /// replayed as accumulated state so each subscriber receives an already-cached agent.
 /// Ended or removed agents retain their last known session context.
-public sealed class WorkspaceViewModel : ReactiveObject {
+public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     const string UnresolvedKind = "unresolved";
 
     sealed record AgentPresence(AgentStatusDto? Dto, bool SessionEnded);

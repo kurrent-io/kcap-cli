@@ -1,0 +1,143 @@
+using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
+using Capacitor.Remote.Models;
+using DynamicData;
+using Microsoft.Extensions.Time.Testing;
+using static Capacitor.App.Tests.Unit.AvaloniaSession;
+using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
+
+namespace Capacitor.App.Tests.Unit;
+
+/// The remote card host over a scripted lane: access is the server's verdict, and the cards are
+/// only ever shown once it says the session is readable.
+[NotInParallel(nameof(AvaloniaSession))]
+public class RemoteSessionViewModelTests {
+    sealed class Harness : IDisposable {
+        public readonly FakeServerLane Lane = new();
+        public readonly SessionAccessService Access;
+        public readonly FakePermissionService Permissions = new();
+        public readonly FakeAgentDirectory Directory = new();
+        public readonly AgentActionService Actions = NewActions();
+
+        public Harness() {
+            Access = new SessionAccessService(Lane, new FakeTimeProvider());
+            Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        }
+
+        public static AgentRow Row(string id = "a1", string? sessionId = "s1", string status = "Running") =>
+            AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = id, SessionId = sessionId, Status = status, DaemonName = "work-mac",
+                Vendor = "gemini", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
+            });
+
+        public RemoteSessionViewModel Build(AgentRow row) {
+            Directory.Rows.AddOrUpdate(row);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions);
+        }
+
+        public void Dispose() {
+            Access.Dispose();
+            Permissions.Dispose();
+            Directory.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Opening_a_remote_row_establishes_access_and_shows_its_server_lane_cards() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await Assert.That(h.Lane.ChatSubscribes).Contains("s1");
+            await Assert.That(vm.ShowsCards).IsTrue();
+            await Assert.That(vm.AccessNote).IsEqualTo("");
+
+            var card = PendingPermissionRequest.FromServer(new ServerElicitationRequest("s1", "q1", "Pick", [], false), DateTimeOffset.UtcNow);
+            card.AgentId = "a1";
+            h.Permissions.Add(card);
+
+            await WaitUntilAsync(() => vm.Cards.HasPendingCards, what: "the card");
+            await Assert.That(vm.RepoLabelText).Contains("work-mac");
+            await vm.TeardownAsync();
+            await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "released on teardown");
+        });
+    }
+
+    [Test]
+    public async Task A_revocation_hides_the_cards_and_a_reconnect_rechecks_access() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+            h.Lane.SessionAccessChangedSubject.OnNext("s1");
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Denied, what: "denied");
+            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("You no longer have access to this session");
+
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 2));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready after reconnect");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_row_without_a_session_waits_and_a_removed_row_ends_the_session() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(id: "a2", sessionId: null));
+            await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.NoSession);
+            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
+            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(h.Lane.AccessWatches).IsEmpty();
+
+            h.Directory.Rows.Remove("remote:a2");
+
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A session id that only arrives with a later row revision still gets its lease, a change of
+    /// id moves the lease with it, and a terminal status gives it back.
+    [Test]
+    public async Task The_lease_follows_the_rows_session_id_and_a_terminal_status_releases_it() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(sessionId: null));
+            await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.NoSession);
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s2"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready on the late session id");
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3"));
+            await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s3"), what: "re-acquired on the new session id");
+            await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s2"), what: "the old session released");
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3", status: "Completed"));
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s3"), what: "released on the terminal status");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A row that leaves the directory takes its hub subscriptions with it, whether or not the
+    /// pane is torn down afterwards.
+    [Test]
+    public async Task A_removed_row_releases_the_lease_it_held() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.Rows.Remove("remote:a1");
+
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "released on the removed row");
+            await vm.TeardownAsync();
+        });
+    }
+}

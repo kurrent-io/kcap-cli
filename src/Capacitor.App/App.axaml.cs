@@ -996,7 +996,7 @@ public partial class App : Application {
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId),
-            openRemoteInWeb: actions.OpenInWebRemote, agentsWithPending: agentsWithPending);
+            openRemoteSession: actions.OpenInWebRemote, agentsWithPending: agentsWithPending);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,

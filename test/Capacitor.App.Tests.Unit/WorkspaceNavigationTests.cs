@@ -99,7 +99,7 @@ public class WorkspaceNavigationTests {
     static async Task<FakeTerminalAttachClient> OpenAttachedAsync(Nav nav, string agentId) {
         nav.Daemon.Agents.AddOrUpdate(Agent(agentId));
         nav.Vm.OpenSession(agentId);
-        await (nav.Vm.CurrentWorkspace!.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+        await (((WorkspaceViewModel)nav.Vm.CurrentWorkspace!).Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
         return nav.Attach.Created[^1];
     }
 

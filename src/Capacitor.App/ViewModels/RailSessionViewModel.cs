@@ -37,7 +37,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
             IObservable<IReadOnlySet<string>> agentsWithPending,
-            Action<string> openLocal, Action<string> openRemoteInWeb) {
+            Action<string> openLocal, Action<string> openRemote) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
         var kindLine = row.Kind == "agent" ? row.Vendor : $"{row.Vendor} · {row.Kind}";
@@ -63,8 +63,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
             .DisposeWith(_disposables);
 
-        // Remote rows are read-only in-app; opening deep-links to the web.
-        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemoteInWeb : openLocal)(row.Id));
+        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));
         _disposables.Add(OpenCommand);
     }
 
