@@ -54,7 +54,7 @@
                 <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
                     <Button Content="View PR" Command="{Binding OpenReaderCommand}" IsVisible="{Binding HasChoice}"
                             IsEnabled="{Binding !IsLegacy}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-                    <Button Grid.Column="1" Command="{Binding RefreshCommand}" Classes="prButton" ToolTip.Tip="{Binding OverviewFreshnessLabel, StringFormat='Refresh pull request · {0}'}"
+                    <Button Grid.Column="1" Command="{Binding RefreshCommand}" Classes="prButton" ToolTip.Tip="{Binding RefreshTip}"
                             AutomationProperties.Name="Refresh pull request">
                         <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round"
                               Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
