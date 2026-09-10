@@ -61,13 +61,21 @@
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
-        <!-- Transparent stretch wrapper for cards / nested chrome — not a hit-target of its own. -->
+        <!-- Stretch wrapper around a card: the card is the chrome, so the wrapper paints nothing in
+             any state — Fluent's hover fill lands on the presenter at the button's own radius and
+             would show behind the card's corners. -->
         <Style Selector="Button.toggle">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="10" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="Button.toggle:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.toggle:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
         <!-- Section rows (Who's on it / Session): real padding so hover and click aren't tight to glyphs. -->
         <Style Selector="Button.sectionHeader">
@@ -111,6 +119,9 @@
             <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="13" />
         </Style>
+        <Style Selector="Button.toggle:pointerover Border.card">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
         <Style Selector="Path.chevron">
             <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="StrokeThickness" Value="1.8" />
@@ -125,8 +136,9 @@
                     <StackPanel Spacing="6">
                         <TextBlock Text="{Binding Eyebrow}" Classes="cardEyebrow" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="{Binding Key}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding Title}" FontSize="11.5" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                            <TextBlock x:Name="LinkKey" Text="{Binding Key}" FontSize="11.5" FontWeight="Bold" Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="LinkTitle" Text="{Binding Title}" FontSize="11.5" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                       IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -175,7 +187,8 @@
                                        Foreground="{StaticResource KcapSuccessBrush}" Margin="0,8,0,0"
                                        IsVisible="{Binding Key, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="WorkContextTitle" Text="{Binding Title}" FontSize="12.5" LineHeight="18"
-                                       Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                       Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       IsVisible="{Binding Title, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="OverviewText" Text="{Binding Overview}" FontSize="11" LineHeight="16"
                                        Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" Margin="0,6,0,0"
                                        IsVisible="{Binding Overview, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -259,9 +272,9 @@
                             <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
                             <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
                         </Panel>
-                        <TextBlock x:Name="SessionCountText" DockPanel.Dock="Right" Text="{Binding SessionCountText}" FontSize="10.5"
+                        <TextBlock x:Name="WhoCountText" DockPanel.Dock="Right" Text="{Binding WhoCountText}" FontSize="10.5"
                                    Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0"
-                                   IsVisible="{Binding SessionCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                   IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
                     </DockPanel>
                 </Button>
