@@ -68,10 +68,14 @@ public sealed record InterruptReconciliation(IReadOnlyList<PendingInterrupt> Pen
         if (Elem(interaction, "options", "options") is not { ValueKind: JsonValueKind.Array } arr) return [];
         var list = new List<AcpInteractionOption>();
         foreach (var o in arr.EnumerateArray()) {
+            // Only an absent or null id makes an option unusable; an empty one is a real offered id
+            // the agent resolves by exact match. The label is display text either way, so falling
+            // back to an empty id would render a nameless button.
             var optionId = Read(o, "option_id", "optionId");
-            if (string.IsNullOrEmpty(optionId)) continue;
+            if (optionId is null) continue;
+            var label = Read(o, "label", "label") ?? optionId;
             list.Add(new AcpInteractionOption {
-                OptionId = optionId, Label = Read(o, "label", "label") ?? optionId, Description = Read(o, "description", "description"),
+                OptionId = optionId, Label = label.Length > 0 ? label : "Option", Description = Read(o, "description", "description"),
                 Kind = Read(o, "kind", "kind"), MinSelections = Int(o, "min_selections", "minSelections"), MaxSelections = Int(o, "max_selections", "maxSelections"),
             });
         }

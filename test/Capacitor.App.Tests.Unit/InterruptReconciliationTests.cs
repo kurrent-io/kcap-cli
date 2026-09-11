@@ -37,6 +37,19 @@ public class InterruptReconciliationTests {
         await Assert.That(transcript.IsAnswerableOverHttp).IsFalse();
     }
 
+    /// An empty option id is offerable and keeps its identity through reconciliation; only an
+    /// absent one makes the option unusable. The label never falls back to an empty id, which
+    /// would render a nameless button.
+    [Test]
+    public async Task An_empty_option_id_survives_reconciliation_and_an_absent_one_is_dropped() {
+        var detail = Detail("""
+            [{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"q1","kind":"input","tool_name":"AskUserQuestion","prompt":"Pick","extensions":{"acp":{"interaction":{"raw_kind":"elicitation","options":[{"option_id":""},{"label":"B","option_id":"b"},{"label":"C"}]}}}}}]
+            """);
+        var question = InterruptReconciliation.FromDetail(detail).Pending.Single();
+        await Assert.That(question.Options.Select(o => o.OptionId)).IsEquivalentTo(new[] { "", "b" });
+        await Assert.That(question.Options.Single(o => o.OptionId.Length == 0).Label).IsEqualTo("Option");
+    }
+
     [Test]
     public async Task Session_end_clears_everything_and_marks_ended() {
         var detail = Detail("""

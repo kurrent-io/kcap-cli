@@ -27,7 +27,11 @@ public sealed record ServerPermissionRequest(
         if (options is not { ValueKind: JsonValueKind.Array } arr) return null;
         try {
             var parsed = arr.Deserialize(RemoteModelsJsonContext.Default.AcpInteractionOptionArray);
-            return parsed is { Length: > 0 } && parsed.All(o => !string.IsNullOrEmpty(o.OptionId)) ? parsed : null;
+            // An empty id is offerable, not missing: the daemon accepts an empty-string enum value
+            // and resolves the answer by exact id, so rejecting it would turn a selection question
+            // into a free-text card whose answer cannot satisfy that contract. Deserialization
+            // already throws on an absent required member, leaving an explicit null to reject here.
+            return parsed is { Length: > 0 } && parsed.All(o => o.OptionId is not null) ? parsed : null;
         } catch (JsonException) {
             return null;
         }

@@ -371,6 +371,24 @@ public class ServerConnectionServiceTests {
         await Assert.That(q.Options).IsEmpty();
     }
 
+    /// An empty option id is offered, not missing: the daemon accepts an empty-string enum value
+    /// and resolves by exact id, so dropping it would degrade a selection question into a
+    /// free-text card whose answer cannot satisfy that contract.
+    [Test]
+    public async Task AnElicitationOptionWithAnEmptyIdStillReachesTheCard() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new object[] { new { option_id = "", label = "Default" }, new { option_id = "b", label = "B" } }, false);
+
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Options.Select(o => o.OptionId)).IsEquivalentTo(new[] { "", "b" });
+    }
+
     [Test]
     public async Task ToolInputSentAsAJsonStringIsParsed() {
         await using var host = await HubTestHost.StartAsync();
