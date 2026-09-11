@@ -103,6 +103,26 @@ public class ReportVersionCommandTests : IDisposable {
     }
 
     /// <summary>
+    /// <c>kcap update</c> sends this probe to refresh the server version its cap reads: the cached value
+    /// changes only on an authenticated response, so a server upgraded since the last one would hold the
+    /// update back.
+    /// </summary>
+    [Test]
+    public async Task Probe_refreshes_the_cached_server_version() {
+        StubDiscovery("github_app");
+        _server.Given(Request.Create().WithPath(ProbePath).UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader(HttpClientExtensions.ServerVersionHeader, "1.0.2"));
+
+        var profiles = await SeedValidTokenAsync("report-version-refresh");
+        ServerVersionStore.Set(_server.Urls[0], "1.0.1", Config.Root);
+
+        await Command(profiles).HandleAsync();
+
+        await Assert.That(ServerVersionStore.Get(_server.Urls[0], Config.Root)).IsEqualTo("1.0.2");
+    }
+
+    /// <summary>
     /// An <c>Auth:Provider=None</c> tenant: no bearer token exists (there is nothing to log
     /// into), but the request still authenticates via the server's synthetic principal, so the
     /// middleware still observes it — <see cref="AuthStatus.NoAuthRequired"/> must proceed exactly

@@ -24,7 +24,9 @@ The update hint caps its target at the connected server's version on the stable 
 command users know. `kcap update --check` now resolves the same capped advisory and reports the
 server's version as `install_tag`; the launcher already installs whatever tag it is handed, so a
 launcher from any release follows the pin. A CLI at its server's version reads as up to date even
-when npm has newer.
+when npm has newer. The cached server version changes only on an authenticated response, so
+`kcap update` sends one read-only probe before capping; without a credential it keeps the cached
+value.
 
 ## Desktop Settings use the profile and the mutation lane
 

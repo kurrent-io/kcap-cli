@@ -5,7 +5,9 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles, NpmRegistryClient npm, bool? appBundled = null) {
+public sealed class UpdateCommand(
+        ConfigRoot root, ProfileContext profiles, NpmRegistryClient npm, CapacitorServer server, ICapacitorHttpClient http,
+        bool? appBundled = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
         "This kcap is bundled with the Kurrent Capacitor desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
@@ -79,7 +81,11 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles, NpmR
             }
         }
 
+        // The cap reads a cached server version that only an authenticated response refreshes, so a
+        // server upgraded since the last one would otherwise hold this update back.
+        var probe             = channel == "latest" ? ServerProbe.SendAsync(server, http) : Task.CompletedTask;
         var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, npm);
+        await probe;
         var advisory          = UpdateAdvisoryResolver.Resolve(checkResult, channel, profiles.Resolution.ServerUrl, root);
         var (latest, current) = (advisory.Target, advisory.Current);
 
