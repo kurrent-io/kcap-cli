@@ -1071,6 +1071,13 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 ct)
             .ConfigureAwait(false);
 
+        // Default launch (nothing requested): no selection ran, so report the vendor's CURRENT model
+        // from the handshake — the same "show the running model" the desktop rail gets from Pi. Only
+        // when nothing was requested, so a requested-but-unmatched model still reports null (the
+        // signal EmitModelFallbackNote and registration rely on).
+        if (_resolvedModel is null && string.IsNullOrWhiteSpace(requestedModel))
+            _resolvedModel = AcpSessionModelList.ExtractCurrentModel(sessionNewResult);
+
         // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
         // one consolidated Info log carrying the negotiated protocol version, loadSession, and the
         // resolved model (null if none was requested/matched).

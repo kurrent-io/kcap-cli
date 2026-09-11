@@ -93,6 +93,13 @@ internal record AgentInstance(
     /// <see cref="AgentOrchestrator.SetResolvedTitle"/> so the pulse cannot be forgotten.</summary>
     public string? ResolvedTitle { get; set; }
 
+    /// <summary>Settable override of the positional <c>Model</c> above, for runtimes that only learn
+    /// the running model after the handshake (Codex resolves it from its config). Written only
+    /// through <see cref="AgentOrchestrator.SetResolvedModel"/> so the status pulse cannot be
+    /// forgotten — the same discipline as <see cref="ResolvedTitle"/>. Initialized from the
+    /// positional parameter so every existing construction site still sets it.</summary>
+    public string? Model { get; set; } = Model;
+
     /// First non-blank line of the launch prompt, trimmed, capped at 80 chars total (ellipsis when
     /// cut, never splitting a surrogate pair) — the status payload is re-sent on every revision,
     /// so the full prompt never rides it.
@@ -902,6 +909,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal void SetResolvedTitle(AgentInstance agent, string title) {
         if (agent.ResolvedTitle == title) return;
         agent.ResolvedTitle = title;
+        _statusNotifier.Pulse();
+    }
+
+    /// The running model, learned after launch (Codex resolves it from its config). Mutate first,
+    /// pulse second — same ordering as SetResolvedTitle — so the local status frame re-pushes and
+    /// the desktop rail's model chip fills in.
+    internal void SetResolvedModel(AgentInstance agent, string model) {
+        if (agent.Model == model) return;
+        agent.Model = model;
         _statusNotifier.Pulse();
     }
 
@@ -2650,6 +2666,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 : model;
 
             if (string.IsNullOrEmpty(resolved)) return;
+
+            // Surface it locally too, not just to the server: the desktop rail reads the model off
+            // the local status frame, so without this a local Codex row shows no model chip.
+            if (_agents.TryGetValue(agentId, out var agent)) SetResolvedModel(agent, resolved);
 
             _ = _server.ReportAgentResolvedModelAsync(agentId, resolved);
         } catch (Exception ex) {
