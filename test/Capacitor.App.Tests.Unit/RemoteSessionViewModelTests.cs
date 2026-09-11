@@ -173,6 +173,28 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A same-id local row is not proof of a twin: the dedup fails open, so an unrelated local
+    /// agent can carry this id. Calling that an origin change would tell the user the agent moved
+    /// and point them at a process that has nothing to do with it.
+    [Test]
+    public async Task A_same_id_local_row_for_another_session_is_not_an_origin_change() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "a-different-session"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            h.Directory.Rows.Remove("remote:a1");
+
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.OriginChangedToLocal).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A row that leaves the directory takes its hub subscriptions with it, whether or not the
     /// pane is torn down afterwards.
     [Test]
