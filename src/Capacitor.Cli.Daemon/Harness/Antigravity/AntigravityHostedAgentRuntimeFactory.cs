@@ -415,7 +415,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
     /// Turns a failed handshake into a reason an operator can act on. The auth arm is
     /// <b>non-retryable and names the kcap command that fixes it</b>, not the three environment
     /// variables it sets — every CLI-driven daemon start (<c>daemon start</c>, <c>-d</c>,
-    /// <c>service install</c>) now derives them the same way, so the fix is a restart, not manual
+    /// <c>service install</c>) derives them the same way, so the fix is a restart, not manual
     /// export.
     ///
     /// <para><b>Naming GOOGLE_APPLICATION_CREDENTIALS is still load-bearing.</b> ADC's default
@@ -435,10 +435,12 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
               + "agy has no way to complete an interactive login (its stdin is closed). Give the "
               + "daemon durable credentials: `gcloud auth application-default login`, then stop and "
               + "start it (`kcap daemon stop` then `kcap daemon start` or `-d`) — or re-run `kcap "
-              + "daemon service install` for a supervised daemon. That now derives all three of "
-              + "GOOGLE_CLOUD_PROJECT, AGY_ADC_AUTH=1 and GOOGLE_APPLICATION_CREDENTIALS for you; the "
-              + "explicit credentials path matters even though ADC has a default location, because a "
-              + "reviewer launch redirects HOME and that default location is not visible to it.",
+              + "daemon service install` for a supervised daemon. That derives AGY_ADC_AUTH=1 and "
+              + "GOOGLE_APPLICATION_CREDENTIALS from the credential you just wrote, and "
+              + "GOOGLE_CLOUD_PROJECT from your active gcloud project — so set one first if you have "
+              + "not (`gcloud config set project <id>`). The explicit credentials path matters even "
+              + "though ADC has a default location, because a reviewer launch redirects HOME and that "
+              + "default location is not visible to it.",
                 cause);
 
         if (launchToken.IsCancellationRequested && !callerToken.IsCancellationRequested)

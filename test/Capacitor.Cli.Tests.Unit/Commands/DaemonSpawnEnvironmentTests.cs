@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class DaemonSpawnEnvironmentTests {
     [Test]
     public async Task Includes_the_trio_when_adc_and_project_exist() {
-        var env = new Dictionary<string, string>();
+        var env = new Dictionary<string, string?>();
 
         DaemonCommands.ApplySpawnEnvironment(
             env, "/daemons", "/config", isWindows: false,
@@ -27,7 +27,7 @@ public class DaemonSpawnEnvironmentTests {
 
     [Test]
     public async Task Omits_the_trio_without_adc_or_project() {
-        var env = new Dictionary<string, string>();
+        var env = new Dictionary<string, string?>();
 
         DaemonCommands.ApplySpawnEnvironment(
             env, "/daemons", "/config", isWindows: false,
@@ -40,7 +40,7 @@ public class DaemonSpawnEnvironmentTests {
 
     [Test]
     public async Task Never_derives_on_windows_even_when_adc_and_project_are_given() {
-        var env = new Dictionary<string, string>();
+        var env = new Dictionary<string, string?>();
 
         DaemonCommands.ApplySpawnEnvironment(
             env, "/daemons", "/config", isWindows: true,
@@ -53,7 +53,7 @@ public class DaemonSpawnEnvironmentTests {
 
     [Test]
     public async Task Keeps_an_already_exported_credentials_path() {
-        var env = new Dictionary<string, string> { ["GOOGLE_APPLICATION_CREDENTIALS"] = "/custom/adc.json" };
+        var env = new Dictionary<string, string?> { ["GOOGLE_APPLICATION_CREDENTIALS"] = "/custom/adc.json" };
 
         DaemonCommands.ApplySpawnEnvironment(
             env, "/daemons", "/config", isWindows: false,
@@ -63,8 +63,66 @@ public class DaemonSpawnEnvironmentTests {
     }
 
     [Test]
+    public async Task Keeps_an_already_exported_project() {
+        var env = new Dictionary<string, string?> { ["GOOGLE_CLOUD_PROJECT"] = "operator-proj" };
+
+        DaemonCommands.ApplySpawnEnvironment(
+            env, "/daemons", "/config", isWindows: false,
+            adcCredentialsPath: null, gcloudProject: "gcloud-proj");
+
+        await Assert.That(env["GOOGLE_CLOUD_PROJECT"]).IsEqualTo("operator-proj");
+    }
+
+    [Test]
+    public async Task Derives_over_an_empty_exported_credentials_path() {
+        var env = new Dictionary<string, string?> { ["GOOGLE_APPLICATION_CREDENTIALS"] = "" };
+
+        DaemonCommands.ApplySpawnEnvironment(
+            env, "/daemons", "/config", isWindows: false,
+            adcCredentialsPath: "/derived/adc.json", gcloudProject: null);
+
+        await Assert.That(env["GOOGLE_APPLICATION_CREDENTIALS"]).IsEqualTo("/derived/adc.json");
+        await Assert.That(env["AGY_ADC_AUTH"]).IsEqualTo("1");
+    }
+
+    [Test]
+    public async Task Never_manufactures_the_auth_flag_for_an_empty_path_without_adc() {
+        var env = new Dictionary<string, string?> { ["GOOGLE_APPLICATION_CREDENTIALS"] = "" };
+
+        DaemonCommands.ApplySpawnEnvironment(
+            env, "/daemons", "/config", isWindows: false,
+            adcCredentialsPath: null, gcloudProject: null);
+
+        await Assert.That(env.ContainsKey("AGY_ADC_AUTH")).IsFalse();
+    }
+
+    [Test]
+    public async Task Derives_over_an_empty_exported_project() {
+        var env = new Dictionary<string, string?> { ["GOOGLE_CLOUD_PROJECT"] = "" };
+
+        DaemonCommands.ApplySpawnEnvironment(
+            env, "/daemons", "/config", isWindows: false,
+            adcCredentialsPath: null, gcloudProject: "gcloud-proj");
+
+        await Assert.That(env["GOOGLE_CLOUD_PROJECT"]).IsEqualTo("gcloud-proj");
+    }
+
+    [Test]
+    public async Task Keeps_an_empty_exported_auth_flag_as_a_refusal() {
+        var env = new Dictionary<string, string?> {
+            ["AGY_ADC_AUTH"] = "", ["GOOGLE_APPLICATION_CREDENTIALS"] = "/custom/adc.json",
+        };
+
+        DaemonCommands.ApplySpawnEnvironment(
+            env, "/daemons", "/config", isWindows: false,
+            adcCredentialsPath: "/derived/adc.json", gcloudProject: null);
+
+        await Assert.That(env["AGY_ADC_AUTH"]).IsEqualTo("");
+    }
+
+    [Test]
     public async Task Always_carries_the_daemon_and_config_roots() {
-        var env = new Dictionary<string, string>();
+        var env = new Dictionary<string, string?>();
 
         DaemonCommands.ApplySpawnEnvironment(
             env, "/daemons", "/config", isWindows: false,
