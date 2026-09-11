@@ -112,7 +112,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void UpdateActivityVisibility() {
         if (DataContext is MainWindowViewModel vm) {
             vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.IsSessionsView && vm.CurrentWorkspace is null);
-            var workspace = vm.IsSessionsView ? vm.CurrentWorkspace : null;
+            // Only a local workspace owns a PR reader; a remote host has none to foreground.
+            var workspace = vm.IsSessionsView ? vm.CurrentWorkspace as WorkspaceViewModel : null;
             if (_foregroundWorkspace != workspace) _foregroundWorkspace?.PullRequests?.SetForeground(false);
             _foregroundWorkspace = workspace;
             workspace?.PullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);

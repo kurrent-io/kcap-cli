@@ -406,7 +406,7 @@ public class MainWindowSmokeTests {
             try {
                 vm.OpenSession("agent");
                 Dispatcher.UIThread.RunJobs();
-                var workspace = vm.CurrentWorkspace!;
+                var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
                 var pullRequests = workspace.PullRequests!;
                 service.Agents.AddOrUpdate(WorkspaceFixtures.Agent("agent", "claude", hasTerminal: false, sessionId: "session"));
                 await (workspace.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);

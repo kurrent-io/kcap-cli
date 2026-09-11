@@ -132,12 +132,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly NavigationGate _navigation;
     readonly Action<Func<Task>> _trackTeardown;
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
+    readonly Func<string, AgentOrigin?> _originOf;
+    readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
 
-    WorkspaceViewModel? _currentWorkspace;
-    /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace.
-    /// Exactly one workspace at a time, and this VM owns it: every swap starts the outgoing one's
-    /// tracked teardown.
-    public WorkspaceViewModel? CurrentWorkspace {
+    ISessionWorkspace? _currentWorkspace;
+    /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace,
+    /// local or remote. Exactly one at a time, and this VM owns it: every swap starts the outgoing
+    /// one's tracked teardown.
+    public ISessionWorkspace? CurrentWorkspace {
         get => _currentWorkspace;
         private set => this.RaiseAndSetIfChanged(ref _currentWorkspace, value);
     }
@@ -242,6 +244,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// <param name="restartPending">
     /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
     /// </param>
+    /// <param name="originOf">
+    /// Which lane an agent id belongs to, for routing a click at the right workspace. Null reads
+    /// every id as local — the only answer a caller with no merged directory can give. A null
+    /// ANSWER means neither lane holds the id, which opens nothing.
+    /// </param>
+    /// <param name="remoteWorkspaceFactory">
+    /// Builds the card host for a remote row, or returns null when the row is gone by the time it
+    /// runs. A null factory means a remote id has no host to open, so it falls back to the local
+    /// factory.
+    /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
             CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
@@ -249,7 +261,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
-            IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null) {
+            IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
+            Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null) {
         _service = service;
         _time = time ?? TimeProvider.System;
         Activity = activity;
@@ -257,6 +270,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _navigation = navigation ?? new NavigationGate();
         _trackTeardown = trackWorkspaceTeardown ?? RunUntracked;
         _workspaceFactory = workspaceFactory;
+        _originOf = originOf ?? (_ => AgentOrigin.Local);
+        _remoteFactory = remoteWorkspaceFactory;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
@@ -408,17 +423,37 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         });
     }
 
-    /// Card and rail click: swaps to this session's workspace. Refused once shutdown has latched —
-    /// a new workspace is a new attach, and quiesce is already running.
-    public void OpenSession(string agentId) {
-        if (_navigation.ShutdownLatched || _workspaceFactory is null) return;
+    /// Card and rail click: swaps to this session's workspace — the local one, or the remote card
+    /// host when the id belongs to another machine. A caller that knows which row was clicked says
+    /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
+    /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
+    /// running.
+    public void OpenSession(string agentId, AgentOrigin? origin = null) {
+        if (_navigation.ShutdownLatched) return;
         CurrentView = ShellView.Sessions;
-        // Re-clicking the open session must not tear down and rebuild a live attach.
-        if (CurrentWorkspace?.AgentId == agentId) return;
 
-        SwapTo(_workspaceFactory(agentId));
+        // Neither lane holds the id: opening the local workspace for it would attach a terminal to
+        // an agent this machine never ran.
+        if ((origin ?? _originOf(agentId)) is not { } lane) return;
+
+        // Re-clicking the open session must not tear down and rebuild a live attach. The other
+        // lane's same-id agent is a different agent, and a remote host the local daemon has taken
+        // over no longer owns the id at all: both are a real swap.
+        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return;
+
+        ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
+            ? remote(agentId)
+            : _workspaceFactory is { } local ? local(agentId) : null;
+        if (next is null) return;
+
+        SwapTo(next);
         Rail?.NotifySessionOpened(agentId);
     }
+
+    static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
+        open is RemoteSessionViewModel remote
+            ? lane != AgentOrigin.Remote || remote.OriginChangedToLocal
+            : lane != AgentOrigin.Local;
 
     /// The launch auto-open. `generation` is what the launch captured BEFORE its call: a success
     /// arriving after any navigation (closing the workspace, another session, close-to-hide, the
@@ -444,7 +479,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (live is not null) _trackTeardown(live.TeardownAsync);
     }
 
-    void SwapTo(WorkspaceViewModel? next) {
+    void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
         if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;

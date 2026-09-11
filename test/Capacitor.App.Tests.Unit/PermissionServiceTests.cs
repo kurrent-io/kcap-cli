@@ -1,17 +1,23 @@
+using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
+using AcpInteractionOption = Capacitor.Remote.Models.AcpInteractionOption;
 
 namespace Capacitor.App.Tests.Unit;
 
 public class PermissionServiceTests {
-    static PermissionPendingDto Dto(string id = "r1", string agent = "a1") =>
-        new(id, agent, "s1", "claude", "Bash", null, null, false, false, "2026-08-28T10:00:00.0000000+00:00");
+    static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? serverRequestId = null) =>
+        new(id, agent, "s1", "claude", "Bash", null, null, false, false, "2026-08-28T10:00:00.0000000+00:00", null, serverRequestId);
+
+    static PendingPermissionRequest ServerPermission(string id = "srv-1", string session = "s1", IReadOnlyList<AcpInteractionOption>? options = null) =>
+        PendingPermissionRequest.FromServer(new ServerPermissionRequest(session, id, "Bash", null, options), "claude", DateTimeOffset.UtcNow);
 
     sealed class FakePermissionStream {
         readonly Channel<PermissionStreamEvent?> _channel = Channel.CreateUnbounded<PermissionStreamEvent?>();
@@ -36,13 +42,19 @@ public class PermissionServiceTests {
         public readonly FakeDaemonClientService Daemon = new();
         public readonly ScriptedLocalControlOps Ops = new();
         public readonly FakePermissionStream Stream = new();
+        public readonly List<(string SessionId, string RequestId, PermissionResponsePayload Payload)> Responses = [];
+        public ServerRespondOutcome NextRespond = new(ServerRespondKind.Applied);
+        public readonly BehaviorSubject<IReadOnlyDictionary<string, string>> SessionAgents = new(new Dictionary<string, string>());
         public readonly PermissionService Service;
         public readonly IObservableCache<PendingPermissionRequest, string> View;
         public IReadOnlySet<string> Agents = new HashSet<string>();
         public int Count;
 
         public Harness() {
-            Service = new PermissionService(Daemon, Ops, Stream.RunAsync, new FakeTimeProvider(), CancellationToken.None);
+            Service = new PermissionService(
+                Daemon, Ops, Stream.RunAsync, new FakeTimeProvider(), CancellationToken.None,
+                (sid, rid, payload, _) => { Responses.Add((sid, rid, payload)); return Task.FromResult(NextRespond); },
+                SessionAgents);
             View = Service.Pending.AsObservableCache();
             Service.AgentsWithPending.Subscribe(s => Agents = s);
             Service.PendingCount.Subscribe(c => Count = c);
@@ -57,12 +69,13 @@ public class PermissionServiceTests {
         }
 
         public async Task<PendingPermissionRequest> EmitAsync(PermissionPendingDto dto) {
+            var key = PendingPermissionRequest.KeyFor(PermissionLane.Local, dto.RequestId);
             Stream.EmitPending(dto);
-            await WaitUntilAsync(() => View.Lookup(dto.RequestId).HasValue, what: $"pending {dto.RequestId} cached");
-            return View.Lookup(dto.RequestId).Value;
+            await WaitUntilAsync(() => View.Lookup(key).HasValue, what: $"pending {dto.RequestId} cached");
+            return View.Lookup(key).Value;
         }
 
-        public void Dispose() { Service.Dispose(); View.Dispose(); }
+        public void Dispose() { Service.Dispose(); View.Dispose(); SessionAgents.Dispose(); }
     }
 
     [Test]
@@ -130,18 +143,19 @@ public class PermissionServiceTests {
         await Assert.That(h.View.Count).IsEqualTo(1);
     }
 
+    /// A local card is answerable only over the subscription that delivered it, so losing the
+    /// daemon retires it; the next attempt's replay is what brings it back.
     [Test]
-    public async Task Subscribed_clears_at_the_boundary_and_disconnect_retains() {
+    public async Task Subscribed_clears_at_the_boundary_and_disconnect_drops_the_local_lane() {
         using var h = new Harness();
         await h.StartAsync();
         await h.EmitAsync(Dto("r1"));
         h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-        await Task.Delay(50);
-        await Assert.That(h.View.Count).IsEqualTo(1);
+        await WaitUntilAsync(() => h.View.Count == 0, what: "the local lane dropped with the subscription");
 
         h.Connect("permission/1");
         await WaitUntilAsync(() => h.Stream.Attempts == 2, what: "resubscribe");
-        await Assert.That(h.View.Count).IsEqualTo(1);
+        await h.EmitAsync(Dto("r1"));
         h.Stream.EmitSubscribed();
         await WaitUntilAsync(() => h.View.Count == 0, what: "cleared at Subscribed");
     }
@@ -271,18 +285,271 @@ public class PermissionServiceTests {
         using var h = new Harness();
         var summaries = new List<PendingSummary>();
         using var sub = h.Service.Summary.Subscribe(summaries.Add);
-        await Assert.That(summaries[0]).IsEqualTo(new PendingSummary(0, 0));
+        await Assert.That(summaries[0]).IsEqualTo(default(PendingSummary));
 
         await h.StartAsync();
         await h.EmitAsync(PendingDto("p1", "a1", "claude", "Bash", """{"command":"ls"}"""));
         await h.EmitAsync(PendingDto("q1", "a1", "claude", ClaudeElicitation.ToolName, QuestionInput));
-        await WaitUntilAsync(() => summaries[^1] == new PendingSummary(1, 1), what: "one of each");
+        await WaitUntilAsync(() => summaries[^1] == new PendingSummary(1, 1, 2, 0), what: "one of each");
 
         h.Stream.EmitResolved("q1", "server");
-        await WaitUntilAsync(() => summaries[^1] == new PendingSummary(1, 0), what: "question settled");
+        await WaitUntilAsync(() => summaries[^1] == new PendingSummary(1, 0, 1, 0), what: "question settled");
         foreach (var s in summaries) {
             await Assert.That(s.Permissions).IsGreaterThanOrEqualTo(0);
             await Assert.That(s.Questions).IsGreaterThanOrEqualTo(0);
         }
+    }
+
+    [Test]
+    public async Task Local_subscribed_replaces_local_items_only() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1"));
+        h.Service.UpsertServer(ServerPermission("srv-9"));
+        await Assert.That(h.View.Count).IsEqualTo(2);
+
+        h.Stream.EmitSubscribed();
+        await WaitUntilAsync(() => h.View.Count == 1, what: "local item dropped at the Subscribed boundary");
+        await Assert.That(h.View.Lookup("server:srv-9").HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task A_daemon_disconnect_drops_the_local_item_and_resurfaces_its_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "twin resurfaced");
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
+        var twin = h.View.Lookup("server:srv-1").Value;
+        await Assert.That(twin.Lane).IsEqualTo(PermissionLane.Server);
+        await Assert.That(twin.RequestId).IsEqualTo("srv-1");
+    }
+
+    /// A socket closing under a daemon the status feed still calls healthy is the same loss: the
+    /// attempt ends, and nothing can answer the local card until the next one replays it.
+    [Test]
+    public async Task A_lost_attempt_drops_the_local_item_and_resurfaces_its_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        h.Stream.EndAttempt();
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "twin resurfaced");
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_correlated_local_item_keeps_its_instance_and_shadows_the_server_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var local = await h.EmitAsync(Dto("l1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(2);
+
+        h.Stream.EmitPending(Dto("l1", serverRequestId: "srv-1"));
+        await WaitUntilAsync(() => h.View.Count == 1, what: "twin shadowed");
+        await Assert.That(ReferenceEquals(h.View.Lookup("local:l1").Value, local)).IsTrue();
+        await Assert.That(local.ServerRequestId).IsEqualTo("srv-1");
+
+        // A later server push for the claimed id stays shadowed.
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Subscription_loss_resurfaces_the_shadowed_twin_with_its_own_handle() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["consent/1"]));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "twin resurfaced");
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
+        var twin = h.View.Lookup("server:srv-1").Value;
+        await Assert.That(twin.Lane).IsEqualTo(PermissionLane.Server);
+        await Assert.That(twin.RequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
+    public async Task Server_settlement_by_id_clears_the_twin_and_the_claiming_local_item() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.SettleServer("s1", "srv-1");
+        await WaitUntilAsync(() => h.View.Count == 0, what: "local claimant concluded");
+
+        h.Stream.EmitPending(Dto("l1", serverRequestId: "srv-1"));
+        // One stream, one loop, in order: the sentinel behind the replay can only be cached once
+        // the replay itself has been handled and dropped.
+        await h.EmitAsync(Dto("l2"));
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_session_wide_clear_retires_server_items_only_even_after_a_late_correlation() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-2", session: "s2"));
+        var local = await h.EmitAsync(Dto("l1"));
+        var generation = h.Service.SessionGeneration("s1");
+
+        h.Service.SettleServer("s1", null);
+        await Assert.That(h.View.Lookup("server:srv-1").HasValue).IsFalse();
+        await Assert.That(h.View.Lookup("server:srv-2").HasValue).IsTrue();
+        await Assert.That(h.Service.SessionGeneration("s1")).IsNotEqualTo(generation);
+
+        h.Stream.EmitPending(Dto("l1", serverRequestId: "srv-1"));
+        await WaitUntilAsync(() => local.ServerRequestId == "srv-1", what: "late correlation applied");
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task Reconciliation_results_apply_only_under_the_generation_they_started_with() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var marker = h.Service.SessionMarker("s1");
+        h.Service.SettleServer("s1", null);
+
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], marker);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], h.Service.SessionMarker("s1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+    }
+
+    /// A revocation settles nothing, so only the generation keeps the fetch that was already
+    /// running from handing the revoked session's cards straight back.
+    [Test]
+    public async Task A_drop_supersedes_a_reconciliation_that_started_before_it() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var marker = h.Service.SessionMarker("s1");
+
+        h.Service.DropServerForSession("s1");
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], marker);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
+    /// Same for the signed-in subject changing: a fetch the previous account started must not
+    /// deliver its cards to the new one.
+    [Test]
+    public async Task Clearing_the_lane_supersedes_a_reconciliation_that_started_before_it() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var marker = h.Service.SessionMarker("s1");
+
+        h.Service.ClearServerLane();
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], marker);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Server_items_answer_over_http_with_their_own_id_and_a_404_drops_the_card() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var item = h.View.Lookup("server:srv-1").Value;
+
+        var applied = await h.Service.ResolveAsync(item, PermissionAnswer.AllowAlways, CancellationToken.None);
+        await Assert.That(applied.Kind).IsEqualTo(PermissionResolveKind.Applied);
+        await Assert.That(h.Responses.Single().RequestId).IsEqualTo("srv-1");
+        await Assert.That(h.Responses.Single().Payload.Behavior).IsEqualTo("allow");
+        await Assert.That(h.Responses.Single().Payload.ApplyPermissions).IsNotNull();
+        await Assert.That(h.Ops.PermissionResolveCalls).IsEqualTo(0);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+
+        h.Service.UpsertServer(ServerPermission("srv-2"));
+        h.NextRespond = new(ServerRespondKind.NotPending);
+        var gone = await h.Service.ResolveAsync(h.View.Lookup("server:srv-2").Value, PermissionAnswer.Deny, CancellationToken.None);
+        await Assert.That(gone.Kind).IsEqualTo(PermissionResolveKind.AlreadyDecided);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+
+        h.Service.UpsertServer(ServerPermission("srv-3"));
+        h.NextRespond = new(ServerRespondKind.Unreachable, "boom");
+        var failed = await h.Service.ResolveAsync(h.View.Lookup("server:srv-3").Value, PermissionAnswer.Allow, CancellationToken.None);
+        await Assert.That(failed.Kind).IsEqualTo(PermissionResolveKind.TransportFailure);
+        await Assert.That(h.View.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task An_acp_question_answers_with_option_ids_and_an_acp_permission_with_the_picked_option() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var options = new AcpInteractionOption[] {
+            new() { OptionId = "a", Label = "Same", MinSelections = 1, MaxSelections = 2 },
+            new() { OptionId = "b", Label = "Same", MinSelections = 1, MaxSelections = 2 },
+        };
+        h.Service.UpsertServer(PendingPermissionRequest.FromServer(new ServerElicitationRequest("s1", "q1", "Pick", options, true), DateTimeOffset.UtcNow));
+        var question = h.View.Lookup("server:q1").Value;
+        await Assert.That(question.IsQuestion).IsTrue();
+
+        await h.Service.AnswerAcpAsync(question, new AcpAnswer(["a", "b"], null), CancellationToken.None);
+        var payload = h.Responses.Single().Payload;
+        await Assert.That(payload.Behavior).IsEqualTo("answered");
+        await Assert.That(payload.SelectedOptionIds).IsEquivalentTo(new[] { "a", "b" });
+        await Assert.That(payload.SelectedOptionLabels).IsEquivalentTo(new[] { "Same", "Same" });
+
+        h.Responses.Clear();
+        h.Service.UpsertServer(ServerPermission("p1", options: [new() { OptionId = "reject", Label = "Reject", Kind = "reject_once" }]));
+        await h.Service.PickOptionAsync(h.View.Lookup("server:p1").Value, "reject", CancellationToken.None);
+        await Assert.That(h.Responses.Single().Payload.Behavior).IsEqualTo("deny");
+        await Assert.That(h.Responses.Single().Payload.SelectedOptionId).IsEqualTo("reject");
+    }
+
+    [Test]
+    public async Task Server_items_resolve_their_agent_id_from_the_session_map() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1", session: "s1"));
+        await Assert.That(h.Agents.Count).IsEqualTo(0);
+
+        h.SessionAgents.OnNext(new Dictionary<string, string> { ["s1"] = "agent-1" });
+        await WaitUntilAsync(() => h.Agents.Contains("agent-1"), what: "agent resolved");
+        await Assert.That(h.View.Lookup("server:srv-1").Value.AgentId).IsEqualTo("agent-1");
+    }
+
+    /// The local entry can leave the cache while its answer is in flight — a lost subscription
+    /// hands the twin back — and the twin is still settled by the ack that follows.
+    [Test]
+    public async Task A_resolve_that_outlives_its_local_entry_still_retires_the_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var local = await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        var gate = h.Ops.ArmPermissionResolve();
+        var run = h.Service.ResolveAsync(local, PermissionAnswer.Allow, CancellationToken.None);
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "the twin handed back");
+
+        gate.SetResult(new PermissionAckDto(true, null));
+        await run;
+        await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Local_settlement_retires_the_claimed_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var local = await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+
+        h.Ops.QueuePermissionResolve(true);
+        await h.Service.ResolveAsync(local, PermissionAnswer.Allow, CancellationToken.None);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(0);
     }
 }

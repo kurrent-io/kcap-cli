@@ -171,6 +171,7 @@
                                                                             HorizontalContentAlignment="Stretch"
                                                                             BorderThickness="0" Padding="8,6" Margin="0,2,0,0"
                                                                             ToolTip.Tip="{Binding Tooltip}"
+                                                                            Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}"
                                                                             Classes="railRow" Classes.selected="{Binding IsSelected}">
                                                                         <DockPanel>
                                                                             <Border DockPanel.Dock="Right" Background="{StaticResource KcapWarningDimBrush}"

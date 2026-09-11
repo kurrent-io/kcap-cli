@@ -1,66 +1,134 @@
+using System.Collections.Frozen;
 using System.Reactive.Linq;
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Remote.Models;
 using DynamicData;
 
 namespace Capacitor.App.Services;
 
-/// Sole owner of the pending-permission cache. One lock guards the tombstone set and every
-/// cache mutation: the tombstone test + upsert, the tombstone add + evict (on an ack and on a
-/// Resolved push), the Connected-without-capability clear, the Subscribed clear and the disposed
-/// flag. The stream loop, the status subscription and ResolveAsync run on different
-/// continuations, and this lock is what makes the ordering hold. Tombstones live for the
-/// service lifetime: request ids are never reused, so one can never suppress a future request.
+/// Sole owner of the pending-permission cache, which holds both lanes keyed by
+/// PendingPermissionRequest.Key. A local item is answerable only over the subscription that
+/// delivered it, so every loss of that subscription — a closed attempt, a daemon without the
+/// capability, a daemon gone — drops the local lane and hands back the server twins it was
+/// shadowing, which carry handles that still work. The next Subscribed replay restores the local
+/// cards and re-shadows the twins, so a daemon restart blinks those cards rather than leaving
+/// unanswerable ones on screen.
+/// One lock guards the tombstone set, the shadow set, the session
+/// generations and every cache mutation: the tombstone test + upsert, the tombstone add + evict
+/// (on an ack and on a Resolved push), the local-lane drops, the server-lane mutations and the
+/// disposed flag. The stream loop, the status subscription, the session-agent feed and the
+/// answering calls run on different continuations, and this lock is what makes the ordering hold.
+/// Tombstones live for the service lifetime: request ids are never reused, so one can never
+/// suppress a future request.
 public sealed class PermissionService : IPermissionService {
     const string Capability = "permission/1";
     static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
 
-    readonly SourceCache<PendingPermissionRequest, string> _cache = new(p => p.RequestId);
+    readonly SourceCache<PendingPermissionRequest, string> _cache = new(p => p.Key);
+    /// Server items a live local item claims: out of the cache, still known, so a lost local
+    /// subscription can hand each back with its own answerable handle.
+    readonly Dictionary<string, PendingPermissionRequest> _shadowed = new(StringComparer.Ordinal);
+    readonly Dictionary<string, int> _sessionGenerations = new(StringComparer.Ordinal);
     readonly HashSet<string> _tombstones = new(StringComparer.Ordinal);
     readonly Lock _lock = new();
     readonly ILocalControlOps _ops;
     readonly Func<CancellationToken, IAsyncEnumerable<PermissionStreamEvent>> _subscribe;
     readonly TimeProvider _time;
     readonly CancellationToken _shutdownToken;
+    readonly PermissionResponder _respond;
     readonly IDisposable _statusSub;
+    readonly IDisposable? _agentsSub;
+    IReadOnlyDictionary<string, string> _sessionAgents = new Dictionary<string, string>();
     CancellationTokenSource? _loopCts;
+    long _liveSequence;
+    long _laneEpoch;
     bool _disposed;
 
     public PermissionService(
             IDaemonClientService service, ILocalControlOps ops,
             Func<CancellationToken, IAsyncEnumerable<PermissionStreamEvent>> subscribe,
-            TimeProvider time, CancellationToken shutdownToken) {
+            TimeProvider time, CancellationToken shutdownToken,
+            PermissionResponder? respond = null,
+            IObservable<IReadOnlyDictionary<string, string>>? sessionAgents = null) {
         _ops = ops; _subscribe = subscribe; _time = time; _shutdownToken = shutdownToken;
+        _respond = respond ?? ((_, _, _, _) => Task.FromResult(new ServerRespondOutcome(ServerRespondKind.Unreachable, "not_signed_in")));
         _statusSub = service.Status.Subscribe(OnStatus);
+        _agentsSub = sessionAgents?.Subscribe(OnSessionAgents);
     }
 
     public IObservable<IChangeSet<PendingPermissionRequest, string>> Pending => _cache.Connect();
     public IObservable<int> PendingCount => _cache.CountChanged;
     public IObservable<IReadOnlySet<string>> AgentsWithPending =>
         _cache.Connect()
-            .QueryWhenChanged(q => (IReadOnlySet<string>)q.Items.Select(p => p.AgentId).ToHashSet(StringComparer.Ordinal))
-            .StartWith((IReadOnlySet<string>)_cache.Items.Select(p => p.AgentId).ToHashSet(StringComparer.Ordinal));
+            .QueryWhenChanged(q => Agents(q.Items))
+            .StartWith(Agents(_cache.Items));
     public IObservable<PendingSummary> Summary =>
         _cache.Connect()
             .QueryWhenChanged(q => PendingSummary.From(q.Items))
             .StartWith(PendingSummary.From(_cache.Items));
 
-    public async Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct) {
-        var decision = answer == PermissionAnswer.Deny ? PermissionResolveDecisions.Deny : PermissionResolveDecisions.Allow;
-        var apply = answer == PermissionAnswer.AllowAlways ? ClaudePermissions.AlwaysAllow(target.ToolName) : (System.Text.Json.JsonElement?)null;
-        return await SendResolveAsync(new PermissionResolveDto(target.RequestId, decision, apply, null), ct).ConfigureAwait(false);
+    static IReadOnlySet<string> Agents(IEnumerable<PendingPermissionRequest> items) {
+        var agents = items.Select(p => p.AgentId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal);
+        return agents.Count == 0 ? FrozenSet<string>.Empty : agents;
     }
 
-    public async Task<PermissionResolveOutcome> AnswerAsync(PendingPermissionRequest target, IReadOnlyList<ElicitationAnswer> answers, CancellationToken ct) {
+    public Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct) {
+        var apply = answer == PermissionAnswer.AllowAlways ? ClaudePermissions.AlwaysAllow(target.ToolName) : (JsonElement?)null;
+        if (target.Lane == PermissionLane.Local) {
+            var decision = answer == PermissionAnswer.Deny ? PermissionResolveDecisions.Deny : PermissionResolveDecisions.Allow;
+            return SendResolveAsync(target, new PermissionResolveDto(target.RequestId, decision, apply, null), ct);
+        }
+        return SendServerAsync(target, new PermissionResponsePayload {
+            Behavior = answer == PermissionAnswer.Deny ? PermissionBehaviors.Deny : PermissionBehaviors.Allow, ApplyPermissions = apply,
+        }, ct);
+    }
+
+    public Task<PermissionResolveOutcome> AnswerAsync(PendingPermissionRequest target, IReadOnlyList<ElicitationAnswer> answers, CancellationToken ct) {
         if (target.Questions is null) throw new ArgumentException("not an elicitation entry", nameof(target));
         var updated = ClaudeElicitation.ComposeAnswers(target.Questions, answers);
-        return await SendResolveAsync(new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Allow, null, updated), ct).ConfigureAwait(false);
+        return target.Lane == PermissionLane.Local
+            ? SendResolveAsync(target, new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Allow, null, updated), ct)
+            : SendServerAsync(target, new PermissionResponsePayload { Behavior = PermissionBehaviors.Allow, UpdatedInput = updated }, ct);
     }
 
-    public async Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) =>
-        await SendResolveAsync(new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Withdraw, null, null), ct).ConfigureAwait(false);
+    public Task<PermissionResolveOutcome> AnswerAcpAsync(PendingPermissionRequest target, AcpAnswer answer, CancellationToken ct) {
+        if (target.AcpQuestion is not { } question) throw new ArgumentException("not an ACP question", nameof(target));
+        if (target.Lane != PermissionLane.Server) throw new ArgumentException("ACP questions are server-lane items", nameof(target));
+        var labels = answer.SelectedOptionIds.Select(id => question.Options.FirstOrDefault(o => o.OptionId == id)?.Label ?? id).ToArray();
+        var payload = answer.SelectedOptionIds.Count switch {
+            0 => new PermissionResponsePayload { Behavior = PermissionBehaviors.Answered, FreeText = answer.FreeText },
+            1 => new PermissionResponsePayload {
+                Behavior = PermissionBehaviors.Answered, SelectedOptionId = answer.SelectedOptionIds[0], SelectedOptionLabel = labels[0], FreeText = answer.FreeText,
+            },
+            _ => new PermissionResponsePayload {
+                Behavior = PermissionBehaviors.Answered, SelectedOptionIds = [.. answer.SelectedOptionIds], SelectedOptionLabels = labels, FreeText = answer.FreeText,
+            },
+        };
+        return SendServerAsync(target, payload, ct);
+    }
 
-    async Task<PermissionResolveOutcome> SendResolveAsync(PermissionResolveDto dto, CancellationToken ct) {
+    public Task<PermissionResolveOutcome> PickOptionAsync(PendingPermissionRequest target, string optionId, CancellationToken ct) {
+        if (target.Lane != PermissionLane.Server) throw new ArgumentException("ACP permissions are server-lane items", nameof(target));
+        var option = target.Options?.FirstOrDefault(o => o.OptionId == optionId) ?? throw new ArgumentException("not an offered option", nameof(optionId));
+        return SendServerAsync(target, new PermissionResponsePayload {
+            Behavior = BehaviorFor(option.Kind), SelectedOptionId = option.OptionId, SelectedOptionLabel = option.Label,
+        }, ct);
+    }
+
+    /// The daemon resolves the pick by OptionId; the behavior only tells it which way a missing id
+    /// would have gone, so an unknown kind reads as allow.
+    internal static string BehaviorFor(string? kind) =>
+        kind is not null && (kind.Contains("reject", StringComparison.OrdinalIgnoreCase) || kind.Contains("deny", StringComparison.OrdinalIgnoreCase) || kind.Contains("cancel", StringComparison.OrdinalIgnoreCase))
+            ? PermissionBehaviors.Deny : PermissionBehaviors.Allow;
+
+    public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) =>
+        target.Lane == PermissionLane.Local
+            ? SendResolveAsync(target, new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Withdraw, null, null), ct)
+            : Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, "withdraw_unsupported"));
+
+    async Task<PermissionResolveOutcome> SendResolveAsync(PendingPermissionRequest target, PermissionResolveDto dto, CancellationToken ct) {
         PermissionAckDto ack;
         try {
             ack = await _ops.ResolvePermissionAsync(dto, ct).ConfigureAwait(false);
@@ -71,8 +139,26 @@ public sealed class PermissionService : IPermissionService {
             return new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, ex.Message);
         }
 
-        Conclude(dto.RequestId);
+        ConcludeLocal(target.RequestId, target.ServerRequestId);
         return new PermissionResolveOutcome(ack.Ok ? PermissionResolveKind.Applied : PermissionResolveKind.AlreadyDecided, ack.Error);
+    }
+
+    async Task<PermissionResolveOutcome> SendServerAsync(PendingPermissionRequest target, PermissionResponsePayload payload, CancellationToken ct) {
+        var outcome = await _respond(target.SessionId, target.RequestId, payload, ct).ConfigureAwait(false);
+        switch (outcome.Kind) {
+            case ServerRespondKind.Applied:
+                lock (_lock) { if (!_disposed) ConcludeServerKey(target.RequestId); }
+                return new(PermissionResolveKind.Applied, null);
+            case ServerRespondKind.NotPending:
+                lock (_lock) { if (!_disposed) ConcludeServerKey(target.RequestId); }
+                return new(PermissionResolveKind.AlreadyDecided, null);
+            case ServerRespondKind.Rejected:
+                return new(PermissionResolveKind.TransportFailure, outcome.Reason ?? "rejected");
+            case ServerRespondKind.Unauthorized:
+                return new(PermissionResolveKind.TransportFailure, "not_signed_in");
+            default:
+                return new(PermissionResolveKind.TransportFailure, outcome.Reason ?? "server_unreachable");
+        }
     }
 
     public void Dispose() {
@@ -81,6 +167,7 @@ public sealed class PermissionService : IPermissionService {
             _disposed = true;
         }
         _statusSub.Dispose();
+        _agentsSub?.Dispose();
         StopLoop();
         _cache.Dispose();
     }
@@ -91,8 +178,7 @@ public sealed class PermissionService : IPermissionService {
             return;
         }
         StopLoop();
-        // A Connected daemon without the capability is a different incarnation; disconnected retains.
-        if (status.State == AttachState.Connected) lock (_lock) { if (!_disposed) _cache.Clear(); }
+        DropLocalLane();
     }
 
     void StartLoop() {
@@ -120,9 +206,9 @@ public sealed class PermissionService : IPermissionService {
                     await foreach (var evt in _subscribe(ct).WithCancellation(ct).ConfigureAwait(false)) {
                         ct.ThrowIfCancellationRequested();
                         switch (evt) {
-                            case PermissionStreamEvent.Subscribed: lock (_lock) { if (!_disposed) _cache.Clear(); } break;
-                            case PermissionStreamEvent.Pending p:  Upsert(p.Request); break;
-                            case PermissionStreamEvent.Resolved r: Conclude(r.Settlement.RequestId); break;
+                            case PermissionStreamEvent.Subscribed: DropLocalLane(); break;
+                            case PermissionStreamEvent.Pending p:  UpsertLocal(p.Request); break;
+                            case PermissionStreamEvent.Resolved r: ConcludeLocal(r.Settlement.RequestId); break;
                         }
                     }
                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -130,6 +216,9 @@ public sealed class PermissionService : IPermissionService {
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"kcap: permission subscription attempt failed: {ex.Message}");
                 }
+                // The attempt ended for a reason other than this loop's own cancellation, so the
+                // socket that could answer the local cards is gone before the next one replays.
+                DropLocalLane();
                 try { await Task.Delay(RetryDelay, _time, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
             }
@@ -138,18 +227,174 @@ public sealed class PermissionService : IPermissionService {
         }
     }
 
-    void Upsert(PermissionPendingDto dto) {
+    void UpsertLocal(PermissionPendingDto dto) {
         lock (_lock) {
-            if (_disposed || _tombstones.Contains(dto.RequestId)) return;
-            _cache.AddOrUpdate(new PendingPermissionRequest(dto));
+            if (_disposed) return;
+            var key = PendingPermissionRequest.KeyFor(PermissionLane.Local, dto.RequestId);
+            if (_tombstones.Contains(key)) return;
+            if (_cache.Lookup(key) is { HasValue: true, Value: var existing }) {
+                // A mapping learned late is metadata: same instance, same card, so a draft answer
+                // or an in-flight submit survives it.
+                if (existing.ServerRequestId != dto.ServerRequestId) {
+                    existing.ServerRequestId = dto.ServerRequestId;
+                    _cache.Refresh(existing);
+                    Shadow(dto.ServerRequestId);
+                }
+                return;
+            }
+            var item = new PendingPermissionRequest(dto);
+            _cache.AddOrUpdate(item);
+            Shadow(dto.ServerRequestId);
         }
     }
 
-    void Conclude(string requestId) {
+    // Caller holds _lock.
+    void Shadow(string? serverRequestId) {
+        if (serverRequestId is null) return;
+        var key = PendingPermissionRequest.KeyFor(PermissionLane.Server, serverRequestId);
+        if (_cache.Lookup(key) is { HasValue: true, Value: var twin }) { _shadowed[key] = twin; _cache.Remove(key); }
+    }
+
+    // Caller holds _lock.
+    bool IsClaimed(string serverRequestId) => _cache.Items.Any(i => i.Lane == PermissionLane.Local && i.ServerRequestId == serverRequestId);
+
+    void DropLocalLane() {
         lock (_lock) {
             if (_disposed) return;
-            _tombstones.Add(requestId);
-            _cache.Remove(requestId);
+            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) _cache.Remove(item.Key);
+            foreach (var (key, twin) in _shadowed.ToList()) {
+                _shadowed.Remove(key);
+                if (_tombstones.Contains(key)) continue;
+                // The map moved on while the twin was out of the cache, where nothing restamps it.
+                twin.AgentId = _sessionAgents.GetValueOrDefault(twin.SessionId, "");
+                _cache.AddOrUpdate(twin);
+            }
+        }
+    }
+
+    /// <param name="claimedServerRequestId">
+    /// The answering caller's own view of the mapping, for the case where the local entry has
+    /// already left the cache (a lost subscription resurfaces the twin mid-answer) and the lookup
+    /// below can no longer supply it.
+    /// </param>
+    void ConcludeLocal(string requestId, string? claimedServerRequestId = null) {
+        lock (_lock) {
+            if (_disposed) return;
+            var key = PendingPermissionRequest.KeyFor(PermissionLane.Local, requestId);
+            _tombstones.Add(key);
+            // The daemon has answered the hook, so the server copy is moot even if its relay fails.
+            var cached = _cache.Lookup(key) is { HasValue: true, Value: var item } ? item.ServerRequestId : null;
+            if ((cached ?? claimedServerRequestId) is { } srid) ConcludeServerKey(srid);
+            _cache.Remove(key);
+        }
+    }
+
+    // Caller holds _lock.
+    void ConcludeServerKey(string serverRequestId) {
+        var key = PendingPermissionRequest.KeyFor(PermissionLane.Server, serverRequestId);
+        _tombstones.Add(key);
+        _shadowed.Remove(key);
+        _cache.Remove(key);
+    }
+
+    internal void UpsertServer(PendingPermissionRequest item) {
+        lock (_lock) {
+            if (_disposed || item.Lane != PermissionLane.Server || _tombstones.Contains(item.Key)) return;
+            item.AgentId = _sessionAgents.GetValueOrDefault(item.SessionId, "");
+            item.LiveSequence = ++_liveSequence;
+            if (IsClaimed(item.RequestId)) { _shadowed[item.Key] = item; return; }
+            if (_cache.Lookup(item.Key) is { HasValue: true, Value: var live }) {
+                live.LiveSequence = item.LiveSequence; // a live card keeps its instance, not its stamp
+                return;
+            }
+            _cache.AddOrUpdate(item);
+        }
+    }
+
+    /// A request id settles exactly one request, so it reaches across to the local claimant; a
+    /// null id is the session-wide bulk clear, which is unversioned and therefore server-lane only.
+    internal void SettleServer(string sessionId, string? requestId) {
+        lock (_lock) {
+            if (_disposed) return;
+            if (requestId is { } rid) {
+                ConcludeServerKey(rid);
+                foreach (var local in _cache.Items.Where(i => i.Lane == PermissionLane.Local && i.ServerRequestId == rid).ToList()) {
+                    _tombstones.Add(local.Key);
+                    _cache.Remove(local.Key);
+                }
+                return;
+            }
+            BumpGeneration(sessionId);
+            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId).ToList()) ConcludeServerKey(item.RequestId);
+            foreach (var (_, twin) in _shadowed.Where(kv => kv.Value.SessionId == sessionId).ToList()) ConcludeServerKey(twin.RequestId);
+        }
+    }
+
+    // Caller holds _lock. Every removal a reconciliation must not undo goes through this.
+    void BumpGeneration(string sessionId) =>
+        _sessionGenerations[sessionId] = _sessionGenerations.GetValueOrDefault(sessionId) + 1;
+
+    internal int SessionGeneration(string sessionId) { lock (_lock) return _sessionGenerations.GetValueOrDefault(sessionId); }
+
+    /// What a reconciliation must capture before it fetches: the generation whose removals it must
+    /// not undo, the point in the live stream its snapshot corresponds to, and the lane epoch that
+    /// says which signed-in subject asked for it.
+    internal (int Generation, long Sequence, long Epoch) SessionMarker(string sessionId) {
+        lock (_lock) return (_sessionGenerations.GetValueOrDefault(sessionId), _liveSequence, _laneEpoch);
+    }
+
+    /// The reconciliation's verdict for one session: adds what is missing, removes server items the
+    /// stream no longer holds. A generation that moved means a clear, a drop or a settlement ran
+    /// meanwhile, and an epoch that moved means another account asked — drop the whole result either
+    /// way. Items that landed after the marker are newer than the snapshot, so their absence from it
+    /// is not evidence of anything.
+    internal void ReplaceServerForSession(string sessionId, IReadOnlyList<PendingPermissionRequest> items, (int Generation, long Sequence, long Epoch) marker) {
+        lock (_lock) {
+            if (_disposed || marker.Epoch != _laneEpoch || marker.Generation != _sessionGenerations.GetValueOrDefault(sessionId)) return;
+            var keep = items.Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
+            bool Stale(PendingPermissionRequest item) => item.LiveSequence <= marker.Sequence && !keep.Contains(item.Key);
+            foreach (var stale in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId && Stale(i)).ToList())
+                _cache.Remove(stale.Key);
+            foreach (var stale in _shadowed.Where(kv => kv.Value.SessionId == sessionId && Stale(kv.Value)).Select(kv => kv.Key).ToList())
+                _shadowed.Remove(stale);
+            foreach (var item in items) UpsertServer(item);
+        }
+    }
+
+    /// Access revoked: the cards are unanswerable, but nothing is settled, so no tombstones. The
+    /// generation moves because a fetch that started while access still held must not restore them.
+    internal void DropServerForSession(string sessionId) {
+        lock (_lock) {
+            if (_disposed) return;
+            BumpGeneration(sessionId);
+            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId).ToList()) _cache.Remove(item.Key);
+            foreach (var key in _shadowed.Where(kv => kv.Value.SessionId == sessionId).Select(kv => kv.Key).ToList()) _shadowed.Remove(key);
+        }
+    }
+
+    /// The signed-in subject changed: nothing the previous account could see may survive, including
+    /// a fetch it started. The epoch retires every reconciliation in flight at once, whether or not
+    /// its session had a card or a generation of its own to move. Only the reconciliation is gated
+    /// on it — a live push already belongs to the new subject's lane.
+    internal void ClearServerLane() {
+        lock (_lock) {
+            if (_disposed) return;
+            _laneEpoch++;
+            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server).ToList()) _cache.Remove(item.Key);
+            _shadowed.Clear();
+        }
+    }
+
+    void OnSessionAgents(IReadOnlyDictionary<string, string> map) {
+        lock (_lock) {
+            if (_disposed) return;
+            _sessionAgents = map;
+            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server).ToList()) {
+                var agent = map.GetValueOrDefault(item.SessionId, "");
+                if (item.AgentId == agent) continue;
+                item.AgentId = agent;
+                _cache.Refresh(item);
+            }
         }
     }
 }

@@ -15,6 +15,28 @@ Replacing the menu at that point leaves macOS showing the disabled startup item 
 Settings works from the tray. The regression test retains that startup item through composition
 and checks both its enabled state and its action.
 
+## The npm wrapper waits for its platform packages
+
+`npm publish` returns while the registry is still processing a tarball, and a platform package carrying
+two native binaries took about ten minutes to become installable. A wrapper visible in that window
+installs without its binary, silently: npm skips an optional dependency it cannot resolve or download.
+The release now polls every platform package until it resolves and its tarball answers before
+publishing the wrapper, and the desktop
+publish reuses that poll before comparing its binaries with npm's. Every poll and every install the
+launcher runs passes `--prefer-online`, because npm serves a cached packument for five minutes and a
+plain retry re-reads the same miss.
+
+## `kcap update` stops at the server's version
+
+The update hint caps its target at the connected server's version on the stable channel, but
+`kcap update` followed the dist-tag, so the hint had to print a pinned `npm install` instead of the
+command users know. `kcap update --check` now resolves the same capped advisory and reports the
+server's version as `install_tag`; the launcher already installs whatever tag it is handed, so a
+launcher from any release follows the pin. A CLI at its server's version reads as up to date even
+when npm has newer. The cached server version changes only on an authenticated response, so
+`kcap update` sends one read-only probe before capping; without a credential it keeps the cached
+value.
+
 ## Desktop Settings use the profile and the mutation lane
 
 The Settings window edits the profile bound to the app's daemon graph and refuses a profile whose
@@ -234,6 +256,36 @@ route a launch nowhere the user intended. Ownership is re-verified at launch tim
 from the picker's own filtered list: `ReactiveCommand.Execute()` does not gate itself on
 `CanExecute`, so a selection whose daemon was reassigned to another owner between selection and
 launch is refused inside `StartAsync` itself, not left to the affordance alone.
+
+## Desktop shell: remote control — stop, permission and question cards
+
+A remote session's prompts are answerable in the app, a remote agent can be stopped, and a local
+ACP-hosted agent's questions (which never reach the local socket) render for the first time. Three
+invariants hold it together.
+
+**A pending request is answered only on the lane that delivered it.** A local-socket item carries
+the daemon's request id and settles over the socket; a server-lane item carries the server's id and
+settles over the permission-response route. The two ids are allocated independently and each
+transport rejects the other's, so `PermissionService` never cross-submits, whatever the agent row's
+origin says — an ACP question on a local agent is a server-lane item and goes over HTTP.
+
+**Dedup is by proven correlation, and it fails open.** The daemon publishes its local↔server mapping
+as `server_request_id` on the local permission wire, re-broadcasting the pending item when the
+server leg learns the id. A server-lane copy is shadowed only by a live local item claiming that
+exact id; no claim — an older daemon, a lost local subscription, the daemon's server-only path —
+leaves the server copy standing. The correlation update mutates the local item in place and
+refreshes it, so the card, its draft and an in-flight submit survive. A local settlement retires the
+claimed twin: the daemon has answered the hook, so the server copy is moot even when the relay
+fails.
+
+**Attention is a per-session set of request ids, never a boolean.** The org-wide pending ping names
+no request, so it marks the session dirty and a headless reconciliation of the session's stream
+fills the set; the dirty mark outlives disconnects and fetch failures until a reconciliation
+completes. A response removes one id, a response naming an id the set never held re-reconciles, and
+every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a prompt raised before
+the lane connected in a session never opened still need the server's pending-interrupts seed; until
+it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
+session discovers.
 
 ## A vendor update under a running daemon is re-advertised
 

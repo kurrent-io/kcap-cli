@@ -315,4 +315,113 @@ public class ServerConnectionServiceTests {
             new HttpRequestException("403", null, System.Net.HttpStatusCode.Forbidden))).IsFalse();
         await Assert.That(ServerConnectionService.IsUnauthorized(new InvalidOperationException("no http"))).IsFalse();
     }
+
+    [Test]
+    public async Task PermissionBroadcastsSurfaceTyped() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var pending = lane.PermissionPending.Take(1).ToTask();
+        var responded = lane.PermissionResponded.Take(2).ToList().ToTask();
+        var requests = lane.PermissionRequests.Take(2).ToList().ToTask();
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        var access = lane.SessionAccessChanged.Take(1).ToTask();
+
+        await host.BroadcastAsync(HubBroadcasts.PermissionPending, "s1");
+        await host.BroadcastAsync(HubBroadcasts.PermissionResponded, "s1", "r1");
+        await host.BroadcastAsync(HubBroadcasts.PermissionResponded, "s1", null);
+        await host.BroadcastAsync(HubBroadcasts.PermissionRequested, "s1", "r1", "Bash", new { command = "ls" }, null);
+        await host.BroadcastAsync(HubBroadcasts.PermissionRequested, "s1", "r2", "fs/write", null,
+            new[] { new AcpInteractionOption { OptionId = "allow-once", Label = "Allow", Kind = "allow_once" } });
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new[] { new AcpInteractionOption { OptionId = "a", Label = "A", MinSelections = 1, MaxSelections = 1 } }, false);
+        await host.BroadcastAsync(HubBroadcasts.SessionAccessChanged, "s1");
+
+        await Assert.That(await pending.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo("s1");
+        var pings = await responded.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(pings[0].RequestId).IsEqualTo("r1");
+        await Assert.That(pings[1].RequestId).IsNull();
+        var reqs = await requests.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(reqs[0].ToolInput!.Value.GetProperty("command").GetString()).IsEqualTo("ls");
+        await Assert.That(reqs[0].Options).IsNull();
+        await Assert.That(reqs[1].Options![0].OptionId).IsEqualTo("allow-once");
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Prompt).IsEqualTo("Pick one");
+        await Assert.That(q.Options[0].MaxSelections).IsEqualTo(1);
+        await Assert.That(await access.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo("s1");
+    }
+
+    /// One option missing its id must not cost the whole push, and no option may reach a card
+    /// without one: the malformed array reads as no options, which asks for free text.
+    [Test]
+    public async Task AnElicitationWithAMalformedOptionSurfacesWithNoOptions() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new object[] { new { option_id = "a", label = "A" }, new { label = "B" } }, false);
+
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Prompt).IsEqualTo("Pick one");
+        await Assert.That(q.Options).IsEmpty();
+    }
+
+    /// An empty option id is offered, not missing: the daemon accepts an empty-string enum value
+    /// and resolves by exact id, so dropping it would degrade a selection question into a
+    /// free-text card whose answer cannot satisfy that contract.
+    [Test]
+    public async Task AnElicitationOptionWithAnEmptyIdStillReachesTheCard() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var elicitations = lane.ElicitationRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.AcpElicitationRequested, "s1", "q1", "Pick one",
+            new object[] { new { option_id = "", label = "Default" }, new { option_id = "b", label = "B" } }, false);
+
+        var q = await elicitations.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(q.Options.Select(o => o.OptionId)).IsEquivalentTo(new[] { "", "b" });
+    }
+
+    [Test]
+    public async Task ToolInputSentAsAJsonStringIsParsed() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+        var request = lane.PermissionRequests.Take(1).ToTask();
+        await host.BroadcastAsync(HubBroadcasts.PermissionRequested, "s1", "r1", "Bash", "{\"command\":\"pwd\"}", null);
+        var r = await request.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(r.ToolInput!.Value.GetProperty("command").GetString()).IsEqualTo("pwd");
+    }
+
+    [Test]
+    public async Task InvokesRouteToTheHubAndClassifyDenial() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.ChatSubscribeHandler = sid => sid != "hidden";
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That(HubTestHost.StopCalls).Contains("a1");
+        await Assert.That((await lane.SubscribeToChatAsync("s1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That((await lane.SubscribeToChatAsync("hidden", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Denied);
+        await Assert.That((await lane.RegisterSessionAccessWatchAsync("hidden", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Denied);
+        await Assert.That((await lane.UnsubscribeFromChatAsync("s1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That(HubTestHost.ChatUnsubscribes).Contains("s1");
+    }
+
+    [Test]
+    public async Task InvokesReportNotConnectedWithoutALiveHub() {
+        await using var lane = new ServerConnectionService(serverUrl: null, () => Task.FromResult<string?>(null));
+        lane.Start();
+        await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.NotConnected);
+    }
 }

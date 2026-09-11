@@ -2121,7 +2121,9 @@ kcap feedback --feedback                               # send feedback; prompts 
 > registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
 > manager blocks install scripts. It exits early if you're already up to date,
-> and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
+> and tells you what to run instead for non-npm installs (e.g. Homebrew). On the
+> stable channel it stops at your connected server's version when the server
+> trails npm, so it never installs a CLI newer than the server it talks to. Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
 >
 > **Windows:** the update works even while Claude Code sessions (whose kcap MCP

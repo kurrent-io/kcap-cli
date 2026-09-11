@@ -1,0 +1,56 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             x:Class="Capacitor.App.Views.RemoteSessionView"
+             x:DataType="vm:RemoteSessionViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <!-- No chat, no terminal: this session's process lives on another machine, so the pane is the
+         header, whatever needs answering, and the two actions that reach across. -->
+    <Grid RowDefinitions="56,Auto,*">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,0,16,0">
+            <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,16,0">
+                <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
+                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
+                    <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="11.5"
+                               Foreground="{StaticResource KcapMutedBrush}" />
+                    <TextBlock x:Name="RemoteSubtitle" Text="{Binding RepoLabelText}" FontSize="11.5"
+                               Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </StackPanel>
+
+            <Button Grid.Column="1" Content="Open in web" Command="{Binding OpenInWebCommand}"
+                    Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
+                    Foreground="{StaticResource KcapMutedBrush}" Padding="10,5" FontSize="12.5" Margin="0,0,4,0" />
+            <Button Grid.Column="2" Content="Stop" Command="{Binding StopCommand}"
+                    Background="Transparent" BorderBrush="Transparent" CornerRadius="7"
+                    Foreground="{StaticResource KcapDangerBrush}" Padding="10,5" FontSize="12.5" />
+        </Grid>
+
+        <Border x:Name="AccessBanner" Grid.Row="1" Margin="20,0,20,10"
+                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                BorderThickness="1" CornerRadius="10" Padding="13,10"
+                IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
+                       FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" />
+        </Border>
+
+        <Border x:Name="NeedsYouPane" Grid.Row="2" Margin="20,0,20,18" IsVisible="{Binding ShowsCards}">
+            <StackPanel Spacing="6" VerticalAlignment="Top">
+                <TextBlock Text="NEEDS YOU" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource KcapMutedBrush}" />
+                <TextBlock x:Name="NoCardsNote" Text="Nothing needs you right now" FontSize="12.5"
+                           Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding !Cards.HasPendingCards}" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Cards.PendingCards}">
+                        <ItemsControl.DataTemplates>
+                            <StaticResource ResourceKey="PermissionCardTemplate" />
+                            <StaticResource ResourceKey="QuestionCardTemplate" />
+                            <StaticResource ResourceKey="AcpQuestionCardTemplate" />
+                        </ItemsControl.DataTemplates>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

@@ -60,7 +60,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// permission service still compile and render.
     public SessionRailViewModel(
             IAgentDirectory directory,
-            Action<string> openLocalSession, Action<string> openRemoteInWeb,
+            Action<string> openLocalSession, Action<string> openRemoteSession,
             Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null) {
         _directory = directory;
@@ -73,6 +73,9 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // it on the UI thread without adding its own ObserveOn.
         var pending = (agentsWithPending ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>()))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
+        // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
+        // the UI thread without its own ObserveOn.
+        var stale = directory.RemoteStale.ObserveOn(RxSchedulers.MainThreadScheduler);
 
         _isEmpty = directory.Rows.CountChanged
             .Select(c => c == 0)
@@ -90,7 +93,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, resolveRoot, openLocalSession, openRemoteInWeb))
+                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

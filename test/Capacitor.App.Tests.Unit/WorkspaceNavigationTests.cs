@@ -100,7 +100,7 @@ public class WorkspaceNavigationTests {
     static async Task<FakeTerminalAttachClient> OpenAttachedAsync(Nav nav, string agentId) {
         nav.Daemon.Agents.AddOrUpdate(Agent(agentId));
         nav.Vm.OpenSession(agentId);
-        await (nav.Vm.CurrentWorkspace!.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+        await (((WorkspaceViewModel)nav.Vm.CurrentWorkspace!).Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
         return nav.Attach.Created[^1];
     }
 
@@ -110,7 +110,7 @@ public class WorkspaceNavigationTests {
         nav.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
         nav.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         return new(nav.Daemon, new AppStateStore(statePath), launch, () => Task.FromResult(Array.Empty<string>()),
-            openSession: nav.Vm.OpenSession,
+            openSession: id => nav.Vm.OpenSession(id),
             navigationGeneration: () => nav.Vm.NavigationGeneration,
             openSessionIfCurrent: nav.Vm.OpenSessionIfCurrent);
     }

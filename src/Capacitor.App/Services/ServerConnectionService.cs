@@ -5,6 +5,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Remote.Models;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -27,6 +28,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
     readonly Subject<LaunchFailure> _launchFailures = new();
+    readonly Subject<string> _permissionPending = new();
+    readonly Subject<PermissionRespondedPing> _permissionResponded = new();
+    readonly Subject<ServerPermissionRequest> _permissionRequests = new();
+    readonly Subject<ServerElicitationRequest> _elicitations = new();
+    readonly Subject<string> _sessionAccessChanged = new();
     readonly SemaphoreSlim _restartGate = new(1, 1);
     // One lock owns the whole lane lifecycle: the generation, the current loop's cancellation
     // source, and EVERY status publish. A generation names one admitted connect loop; a park, a
@@ -62,6 +68,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<Unit> AgentInstancesChanged => _agentsChanged.AsObservable();
     public IObservable<Unit> DaemonsChanged => _daemonsChanged.AsObservable();
     public IObservable<LaunchFailure> LaunchFailures => _launchFailures.AsObservable();
+    public IObservable<string> PermissionPending => _permissionPending.AsObservable();
+    public IObservable<PermissionRespondedPing> PermissionResponded => _permissionResponded.AsObservable();
+    public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
+    public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
+    public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
 
     public void Start() {
         if (_serverUrl is null) return;
@@ -210,6 +221,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));
         hub.On<string, string>(HubBroadcasts.LaunchFailed, (agentId, reason) => _launchFailures.OnNext(new(agentId, reason)));
+        hub.On<string>(HubBroadcasts.PermissionPending, _permissionPending.OnNext);
+        hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
+        hub.On<string, string, string?, JsonElement?, JsonElement?>(HubBroadcasts.PermissionRequested,
+            (sid, rid, tool, input, options) => _permissionRequests.OnNext(ServerPermissionRequest.From(sid, rid, tool, input, options)));
+        // JsonElement, not the typed array: binding the options to a record with required members
+        // makes SignalR drop the WHOLE push over one malformed option, so it is parsed leniently
+        // instead — an array that does not read as options is no options, which asks for free text.
+        hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
+            (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
+        hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
         return hub;
     }
 
@@ -243,6 +264,29 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             return await hub.InvokeAsync<List<DaemonInfo>>(HubMethods.GetConnectedDaemons, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
+        }
+    }
+
+    public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.RequestStopAgent, ct, agentId);
+    public Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToChat, ct, sessionId);
+    public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
+    public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.RegisterSessionAccessWatch, ct, sessionId);
+
+    /// Denied is the server's session-visibility refusal (HubException carrying WireTokens.
+    /// SessionNotVisible); every other exception is Failed with its message, and a lane with no
+    /// live hub answers NotConnected without dialing.
+    async Task<HubCallOutcome> InvokeAsync(string method, CancellationToken ct, params object?[] args) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return HubCallOutcome.NotConnected;
+        try {
+            await hub.InvokeCoreAsync(method, args, ct).ConfigureAwait(false);
+            return HubCallOutcome.Ok;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (HubException ex) when (ex.Message.Contains(WireTokens.SessionNotVisible, StringComparison.Ordinal)) {
+            return HubCallOutcome.Denied(ex.Message);
+        } catch (Exception ex) {
+            return HubCallOutcome.Failed(ex.Message);
         }
     }
 
@@ -294,5 +338,10 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _agentsChanged.Dispose();
         _daemonsChanged.Dispose();
         _launchFailures.Dispose();
+        _permissionPending.Dispose();
+        _permissionResponded.Dispose();
+        _permissionRequests.Dispose();
+        _elicitations.Dispose();
+        _sessionAccessChanged.Dispose();
     }
 }

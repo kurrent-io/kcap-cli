@@ -19,13 +19,15 @@ public class RailWorktreeViewModelTests {
                 null, null, null, created ?? DateTime.UtcNow, null, null, AwaitingInput: awaitingInput),
             Repo);
 
+    static readonly IObservable<bool> NotStale = new BehaviorSubject<bool>(false);
+
     static RailWorktreeViewModel Build(
             SourceCache<AgentRow, string> cache, RailCollapseState? collapse = null,
             string path = "/repo/.claude/worktrees/wt-a", string root = "/repo", bool showHeader = true,
             IObservable<string?>? selected = null, IObservable<IReadOnlySet<string>>? pending = null) =>
         new(path, _ => root, showHeader, cache.AsObservableCache(),
             collapse ?? new RailCollapseState(), selected ?? new BehaviorSubject<string?>(null),
-            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), _ => { }, _ => { });
+            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { });
 
     [Test]
     [NotInParallel("AvaloniaSession")]

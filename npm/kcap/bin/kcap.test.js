@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const {
   resolveInstallSpec,
+  npmInstallArgs,
   probeArgs,
   trashDirFor,
   trashDirFromLauncher,
@@ -17,6 +18,14 @@ assert.strictEqual(resolveInstallSpec({ install_tag: "latest" }), "@kurrent/kcap
 assert.strictEqual(resolveInstallSpec({}), "@kurrent/kcap@latest");          // missing → latest
 assert.strictEqual(resolveInstallSpec(null), "@kurrent/kcap@latest");        // no probe → latest
 assert.strictEqual(resolveInstallSpec({ install_tag: "" }), "@kurrent/kcap@latest");
+assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@1.0.1");
+
+// Revalidates npm's cached packument, so a platform package published minutes ago is not skipped.
+assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online"]);
+{
+  const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
+  assert(src.includes('spawnSync("npm", npmInstallArgs('), "kcap update must install through npmInstallArgs");
+}
 
 assert.deepStrictEqual(probeArgs([]), ["update", "--check", "--no-update-check"]);
 assert.deepStrictEqual(probeArgs(["--beta"]), ["update", "--check", "--no-update-check", "--beta"]);

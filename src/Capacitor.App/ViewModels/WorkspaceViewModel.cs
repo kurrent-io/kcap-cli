@@ -15,7 +15,7 @@ public enum WorkspaceTab { Chat, Terminal, PullRequest }
 /// Owns the persistent Chat, Terminal and PR surfaces for one agent. Presence is
 /// replayed as accumulated state so each subscriber receives an already-cached agent.
 /// Ended or removed agents retain their last known session context.
-public sealed class WorkspaceViewModel : ReactiveObject {
+public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     const string UnresolvedKind = "unresolved";
 
     public string AgentId { get; }
@@ -78,6 +78,7 @@ public sealed class WorkspaceViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
 
     readonly CompositeDisposable _disposables = new();
+    readonly SerialDisposable _lease = new();
 
     // Read by StopCommand at click time -- the DTO's own Kind decides protected-ness
     // (AgentActionService.IsProtectedKind), so Stop must see whatever the LATEST resolved dto
@@ -88,9 +89,11 @@ public sealed class WorkspaceViewModel : ReactiveObject {
             string agentId, IDaemonClientService daemon, AgentActionService actions,
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
-            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null) {
+            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
+            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
+        _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -112,6 +115,23 @@ public sealed class WorkspaceViewModel : ReactiveObject {
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         presence.Select(p => p.Dto).Subscribe(dto => _latestDto = dto).DisposeWith(_disposables);
+
+        // Replays through presence, which the cards pipeline relies on: its filter admits nothing
+        // until a first session id arrives.
+        var sessionIds = presence.Select(p => p.Dto?.SessionId).DistinctUntilChanged();
+
+        // An ACP-hosted agent's question reaches the app only over the server lane, in this
+        // session's chat group, local agent or not — so a local workspace joins it too. A local
+        // agent the server never registered answers Denied; nothing here reads the verdict, which
+        // is what keeps that invisible. The join is scoped to the app's own server: on any other
+        // server this id names a different session, and joining its group would deliver that
+        // session's prompts into this pane.
+        if (access is not null)
+            sessionIds
+                .CombineLatest(localDaemonOnAppServer ?? Observable.Return(true), (sessionId, onAppServer) => onAppServer ? sessionId : null)
+                .DistinctUntilChanged()
+                .Subscribe(sessionId => _lease.Disposable = sessionId is null ? Disposable.Empty : access.Acquire(sessionId))
+                .DisposeWith(_disposables);
 
         _title = presence.Select(p => TitleFor(p.Dto))
             .ToProperty(this, x => x.Title, TitleFor(null))
@@ -135,7 +155,8 @@ public sealed class WorkspaceViewModel : ReactiveObject {
                 ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
                     ? new TerminalChatInput(Terminal)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
-                Chat = new ChatTabViewModel(agentId, daemon, input, projection, opener, time, permissions, note);
+                Chat = new ChatTabViewModel(
+                    agentId, daemon, input, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
             })
             .DisposeWith(_disposables);
 
@@ -149,8 +170,9 @@ public sealed class WorkspaceViewModel : ReactiveObject {
         OpenInWebCommand = ReactiveCommand.Create(() => actions.OpenInWeb(agentId));
         _disposables.Add(OpenInWebCommand);
 
+        var stopKey = AgentActionService.StopKey(AgentOrigin.Local, agentId);
         var canStop = presence.Select(p => !p.SessionEnded)
-            .CombineLatest(actions.StopsInFlight, (alive, inFlight) => alive && !inFlight.Contains(agentId));
+            .CombineLatest(actions.StopsInFlight, (alive, inFlight) => alive && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(() => {
             var dto = _latestDto;
             // UnresolvedKind fails safe as protected (AgentActionService.IsProtectedKind treats

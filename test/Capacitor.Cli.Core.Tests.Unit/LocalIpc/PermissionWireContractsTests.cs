@@ -99,6 +99,24 @@ public class PermissionWireContractsTests {
     }
 
     [Test]
+    public async Task Server_request_id_is_trailing_nullable_written_as_null_and_absent_decodes_null() {
+        var dto = new PermissionPendingDto("r1", "a1", "s1", "claude", "Bash", null, null, false, false, "t");
+        var json = JsonSerializer.Serialize(dto, PermissionIpcJsonContext.Default.PermissionPendingDto);
+        await Assert.That(json).Contains("\"server_request_id\":null");
+
+        var absent = JsonSerializer.Deserialize(
+            """{"request_id":"r1","agent_id":"a1","session_id":"s1","vendor":"claude","tool_name":"Bash","requested_at":"t"}""",
+            PermissionIpcJsonContext.Default.PermissionPendingDto)!;
+        await Assert.That(absent.ServerRequestId).IsNull();
+        await Assert.That(PermissionWire.IsPendingStructurallyValid(absent)).IsTrue();
+
+        var present = JsonSerializer.Deserialize(
+            json.Replace("\"server_request_id\":null", "\"server_request_id\":\"srv-1\""),
+            PermissionIpcJsonContext.Default.PermissionPendingDto)!;
+        await Assert.That(present.ServerRequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
     public async Task Decision_record_writes_snake_case() {
         var rec = new PermissionDecisionRecord("t", "a1", "s1", "claude", "Bash", "allow", "app");
         var json = JsonSerializer.Serialize(rec, PermissionDecisionJsonContext.Default.PermissionDecisionRecord);
