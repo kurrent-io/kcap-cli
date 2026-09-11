@@ -156,6 +156,25 @@ public class AgentStatusSnapshotTests {
         }
     }
 
+    /// <summary>A model learned after launch (Codex resolves it post-handshake from its config) is
+    /// written through <c>SetResolvedModel</c>, and the next snapshot re-reads it — so a local Codex
+    /// row's model chip fills in without a re-registration.</summary>
+    [Test]
+    public async Task SetResolvedModel_updates_the_model_the_snapshot_reports() {
+        var fixture = Build();
+        var orch    = fixture.Orchestrator;
+        try {
+            var agent = orch.SeedAgentForTest("codex-default", model: null);
+            await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "codex-default").Model).IsNull();
+
+            orch.SetResolvedModel(agent, "gpt-5-codex");
+
+            await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "codex-default").Model).IsEqualTo("gpt-5-codex");
+        } finally {
+            await fixture.CleanupAsync();
+        }
+    }
+
     /// <summary>
     /// Pins <see cref="AgentOrchestrator.SnapshotAgentsForStatus"/>'s stamping of
     /// <c>HasTerminal</c> from the agent's own runtime — a PTY runtime (<c>SeedAgentForTest</c>'s

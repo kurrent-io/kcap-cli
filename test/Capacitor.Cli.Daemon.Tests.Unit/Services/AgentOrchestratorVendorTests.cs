@@ -1664,6 +1664,9 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.ReportAgentResolvedModelCalls).Contains(("agent-legacy", "gpt-5-codex"));
         await Assert.That(server.ExplicitReviewerModelReports).IsEmpty();
 
+        // ...and the model reaches the LOCAL status frame too, so a local Codex row shows the chip.
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "agent-legacy").Model).IsEqualTo("gpt-5-codex");
+
         await orch.HandleStopAgentForTest("agent-legacy");
 
     }

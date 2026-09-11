@@ -93,6 +93,13 @@ internal record AgentInstance(
     /// <see cref="AgentOrchestrator.SetResolvedTitle"/> so the pulse cannot be forgotten.</summary>
     public string? ResolvedTitle { get; set; }
 
+    /// <summary>Settable override of the positional <c>Model</c> above, for runtimes that only learn
+    /// the running model after the handshake (Codex resolves it from its config). Written only
+    /// through <see cref="AgentOrchestrator.SetResolvedModel"/> so the status pulse cannot be
+    /// forgotten — the same discipline as <see cref="ResolvedTitle"/>. Initialized from the
+    /// positional parameter so every existing construction site still sets it.</summary>
+    public string? Model { get; set; } = Model;
+
     /// First non-blank line of the launch prompt, trimmed, capped at 80 chars total (ellipsis when
     /// cut, never splitting a surrogate pair) — the status payload is re-sent on every revision,
     /// so the full prompt never rides it.
@@ -902,6 +909,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal void SetResolvedTitle(AgentInstance agent, string title) {
         if (agent.ResolvedTitle == title) return;
         agent.ResolvedTitle = title;
+        _statusNotifier.Pulse();
+    }
+
+    /// The running model, learned after launch (Codex resolves it from its config). Mutate first,
+    /// pulse second — same ordering as SetResolvedTitle — so the local status frame re-pushes and
+    /// the desktop rail's model chip fills in.
+    internal void SetResolvedModel(AgentInstance agent, string model) {
+        if (agent.Model == model) return;
+        agent.Model = model;
         _statusNotifier.Pulse();
     }
 
@@ -2389,16 +2405,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogBridgeDefeatingPosture(agentId, applied.Sandbox, applied.Approval);
             }
 
-            // An ACP runtime confirms model application during its StartAsync handshake:
-            // Transcript.ResolvedModel is the id actually applied, or null when the request did not
-            // take (no availableModels match / the agent rejected the option — the vendor's default
-            // runs in every null case). Register the CONFIRMED value, never the request: agent.Model
+            // An ACP runtime confirms its running model during the StartAsync handshake:
+            // Transcript.ResolvedModel is the applied selection, or — when no model was requested —
+            // the handshake's current model. It is null when a REQUESTED model did not take (no
+            // availableModels match / the agent rejected it) OR when a no-request launch published no
+            // current marker; the vendor default runs with no known id in both. Register that
+            // CONFIRMED value (null included) rather than a requested-but-unconfirmed one: agent.Model
             // feeds AgentRegisteredAsync (live model chip + hosted_agent_started analytics),
-            // AgentRunStarted (agent_runs), every reconnect re-registration, and the local
-            // supervision status payload (SnapshotAgentsForStatus). Same requested-vs-running rule
-            // as ModelSelectionLaunchPolicy, applied per-request instead of per-capability. PTY
-            // runtimes have no confirmation seam (Transcript is null) and keep reporting
-            // effectiveModel.
+            // AgentRunStarted (agent_runs), every reconnect re-registration, and the local supervision
+            // status payload (SnapshotAgentsForStatus). Only PTY runtimes (Transcript is null) fall
+            // back to effectiveModel.
             var registeredModel = start.Transcript is { } confirmed ? confirmed.ResolvedModel : effectiveModel;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
@@ -2537,7 +2553,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
                 // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
                 // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
-                ReportResolvedModel(agentId, cmd.Vendor, model);
+                // updateLocal only on the PTY path: an app-server Codex (Transcript present) already
+                // registered its confirmed handshake model, which must not be overwritten locally.
+                ReportResolvedModel(agentId, cmd.Vendor, model, updateLocal: start.Transcript is null);
             }
 
             // Phase B2-b (sequenced-settlement design §4.2.2): the launch executed — the agent is registered.
@@ -2642,7 +2660,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
     /// failure must not break launch.
     /// </summary>
-    void ReportResolvedModel(string agentId, string vendor, string model) {
+    void ReportResolvedModel(string agentId, string vendor, string model, bool updateLocal) {
         try {
             var isDefault = string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase);
 
@@ -2651,6 +2669,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 : model;
 
             if (string.IsNullOrEmpty(resolved)) return;
+
+            // Surface it on the LOCAL status frame only for a runtime with no authoritative handshake
+            // model — the PTY path (updateLocal). An app-server Codex already registered the confirmed
+            // model at launch, so overwriting it with a config-derived value would show the wrong one;
+            // and the unresolved "default" sentinel is never a real model to display.
+            if (updateLocal
+             && !string.Equals(resolved, "default", StringComparison.OrdinalIgnoreCase)
+             && _agents.TryGetValue(agentId, out var agent))
+                SetResolvedModel(agent, resolved);
 
             _ = _server.ReportAgentResolvedModelAsync(agentId, resolved);
         } catch (Exception ex) {
