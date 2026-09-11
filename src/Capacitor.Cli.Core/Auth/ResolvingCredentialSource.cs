@@ -12,7 +12,8 @@ internal sealed class ResolvingCredentialSource(
         TokenStore           tokens,
         WorkOSClient         workos,
         AuthProviderDiscovery discovery,
-        MachineTokenProvider  minter) : ICredentialSource {
+        MachineTokenProvider  minter,
+        MachineAuth           machine) : ICredentialSource {
     ICredentialSource? _chosen;
 
     public async Task<CredentialState> ResolveAsync(CancellationToken ct) =>
@@ -45,8 +46,8 @@ internal sealed class ResolvingCredentialSource(
         // Before the token store: a runner has no profile, so that path would find nothing and advise
         // `kcap login`, which a runner cannot do. Gated on Intended, not on both variables, so a
         // half-configured one is told which is missing.
-        if (MachineAuth.Intended)
-            return MachineAuth.TryRead(out var problem) is { } credential
+        if (machine.Intended)
+            return machine.TryRead(out var problem) is { } credential
                 ? new MachineCredentials(minter, workos, credential)
                 : new Unusable(problem!);
 

@@ -419,7 +419,9 @@ public class SessionStartMemoryFoundationTests {
             IsTopLevel: true, ClassificationAuthoritative: true,
             SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
 
-    static SessionStartMemoryContextRequest KiroRequest(double seconds = 1) =>
+    // The budget is wall-clock and none of these tests assert on exhausting it, so it only has
+    // to outlast a loaded runner; the callers that do care pass their own.
+    static SessionStartMemoryContextRequest KiroRequest(double seconds = 20) =>
         new("https://example.test", null, false, TimeSpan.FromSeconds(seconds), CancellationToken.None);
 
     // THE Kiro acceptance criterion. Kiro has no once-per-session hook: agentSpawn fires on every
@@ -577,7 +579,9 @@ public class SessionStartMemoryFoundationTests {
             IsTopLevel: true, ClassificationAuthoritative: true,
             SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
 
-    static SessionStartMemoryContextRequest AntigravityRequest(double seconds = 1) =>
+    // The budget is wall-clock and none of these tests assert on exhausting it, so it only has
+    // to outlast a loaded runner; the callers that do care pass their own.
+    static SessionStartMemoryContextRequest AntigravityRequest(double seconds = 20) =>
         new("https://example.test", null, false, TimeSpan.FromSeconds(seconds), CancellationToken.None);
 
     // THE Antigravity acceptance criterion, mirroring Kiro's: without the lease the index would be

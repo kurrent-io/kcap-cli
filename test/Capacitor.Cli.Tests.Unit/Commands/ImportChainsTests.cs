@@ -301,16 +301,14 @@ public class ImportChainsTests : IDisposable {
             .ToList();
         await Assert.That(transcriptEntries.Count).IsEqualTo(4);
 
-        // If chains ran in parallel, all 4 transcript requests arrived close together.
-        // The spread between first and last arrival should be under 160ms
-        // (200ms serial gap × 0.8 margin — any overlap proves parallelism).
         var firstArrival = transcriptEntries.First().RequestMessage.DateTime;
         var lastArrival  = transcriptEntries.Last().RequestMessage.DateTime;
         var spreadMs     = (lastArrival - firstArrival).TotalMilliseconds;
 
-        // If serial, spread ≥ 3 × 200ms = 600ms (each chain waits for the previous).
-        // If parallel, spread < 100ms (all chains start simultaneously).
-        await Assert.That(spreadMs).IsLessThan(160);
+        // Serial dispatch spreads the four arrivals over 3 × 200ms, since each chain waits for the
+        // previous; parallel dispatch lands them in one window, which a loaded runner stretches to
+        // 171ms. 400 separates the two outcomes with room either side — a discriminator, not a budget.
+        await Assert.That(spreadMs).IsLessThan(400);
     }
 
     [Test]

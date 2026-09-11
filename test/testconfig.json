@@ -1,0 +1,13 @@
+{
+  "platformOptions": {
+    "resultDirectory": "TestResults"
+  },
+  "environmentVariables": {
+    "TUNIT_DISABLE_GITHUB_REPORTER": "true"
+  },
+  "commandLineOptions": {
+    "report-trx": true,
+    "report-gh": true,
+    "report-gh-slow-test-threshold": "60s"
+  }
+}

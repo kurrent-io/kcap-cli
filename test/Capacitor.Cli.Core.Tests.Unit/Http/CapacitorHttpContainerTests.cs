@@ -14,35 +14,23 @@ namespace Capacitor.Cli.Core.Tests.Unit.Http;
 /// server. <c>AddHttpMessageHandler</c> resolves each handler on the FIRST REQUEST, not at container
 /// build, so a missing registration cannot be caught by anything short of a real call.
 ///
-/// <para><c>[NotInParallel]</c>: the machine-credential variables are process-wide environment. The
-/// discovery memo and the machine-token cache are not — each container owns its own.</para>
+/// <para>Each container owns its own discovery memo and machine-token cache, and the credential it
+/// resolves against is the one handed in — only the two tests that capture stderr touch anything
+/// process-global, and they carry the exclusion themselves.</para>
 /// </summary>
-[NotInParallel]
 public class CapacitorHttpContainerTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     readonly WireMockServer _server = WireMockServer.Start();
 
-    EnvScope? _clientId;
-    EnvScope? _clientSecret;
-    string    _profile = "";
+    string _profile = "";
 
     string Url => _server.Urls[0];
 
     [Before(Test)]
-    public void Isolate() {
-        // Cleared so the credential source picks the token store: a runner's machine credential would
-        // otherwise win over it and mint against an endpoint no test here stubs.
-        _clientId     = EnvScope.Exclusive(MachineAuth.ClientIdVar, null);
-        _clientSecret = EnvScope.Exclusive(MachineAuth.ClientSecretVar, null);
-        _profile      = Resolutions.At(Url, Config.Root).Name;
-    }
+    public void Isolate() => _profile = Resolutions.At(Url, Config.Root).Name;
 
-    public void Dispose() {
-        _clientId?.Dispose();
-        _clientSecret?.Dispose();
-        _server.Stop();
-    }
+    public void Dispose() => _server.Stop();
 
     ServiceProvider Container(string? serverUrl = null) {
         var target   = serverUrl ?? Url;
@@ -53,7 +41,9 @@ public class CapacitorHttpContainerTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(target, Config.Root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        // None so the credential source picks the token store — a machine credential wins over it,
+        // and would mint against an endpoint no test here stubs.
+        services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
 
         return services.BuildServiceProvider();
     }
@@ -267,7 +257,9 @@ public class CapacitorHttpContainerTests : IDisposable {
     /// actionable line. One hint per flush on a stderr nobody reads is what the background verb
     /// exists to avoid.
     /// </summary>
+    // Console is process-global, so a capture cannot overlap another.
     [Test]
+    [NotInParallel]
     public async Task The_background_lane_is_silent_where_an_interactive_command_prints_the_hint() {
         StubProvider(AuthProvider.GitHubApp);
 
@@ -290,7 +282,9 @@ public class CapacitorHttpContainerTests : IDisposable {
     /// A vendor reads hook stderr as the hook's own result, so the lapse must reach the caller as a
     /// value and never as a line: the status is what lets a hook skip a send it would only lose.
     /// </summary>
+    /// <inheritdoc cref="The_background_lane_is_silent_where_an_interactive_command_prints_the_hint"/>
     [Test]
+    [NotInParallel]
     public async Task The_hook_lane_reports_a_lapse_as_a_status_and_never_on_stderr() {
         StubProvider(AuthProvider.GitHubApp);
 

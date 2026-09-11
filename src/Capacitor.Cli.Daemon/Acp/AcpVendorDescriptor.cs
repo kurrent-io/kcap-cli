@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Capacitor.Cli.Daemon.Harness.OpenCode;
 
@@ -108,9 +109,14 @@ internal enum AcpBorrowedReviewContainment {
 /// defensive — no observable behavior change.
 /// </summary>
 internal sealed record AcpVendorDescriptor {
-    public string                      Vendor                 { get; }
-    public Func<DaemonConfig, string>  ResolveBinaryPath     { get; }
-    public Func<DaemonConfig, string?> ResolveDefaultModel   { get; }
+    /// <summary>Which harness this row hosts. Everything a launch needs to find in
+    /// <see cref="DaemonConfig"/> — the binary, the default model — is keyed on it, so a row cannot
+    /// read one vendor's slot while the boot binder writes another's.</summary>
+    public HarnessId                   Harness                { get; }
+
+    /// <summary>How this vendor is spelled outside this build. Derived, so the descriptor holds no
+    /// second spelling that could drift from the one our payloads and ledgers carry.</summary>
+    public string                      Vendor                 => Harness.VendorId;
     public ImmutableArray<string>      Argv                   { get; }
     public ImmutableArray<string>      UnattendedTrustArgv    { get; }
 
@@ -148,9 +154,7 @@ internal sealed record AcpVendorDescriptor {
     public bool                        SupportsReconnectResume { get; }
 
     public AcpVendorDescriptor(
-            string                      Vendor,
-            Func<DaemonConfig, string>  ResolveBinaryPath,
-            Func<DaemonConfig, string?> ResolveDefaultModel,
+            HarnessId                   Harness,
             ImmutableArray<string>      Argv,
             ImmutableArray<string>      UnattendedTrustArgv,
             bool                        SupportsUnattended,
@@ -164,6 +168,11 @@ internal sealed record AcpVendorDescriptor {
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
                                         UnattendedTrustArgvBuilder = null
         ) {
+        // Before the checks below, every one of which names {Vendor} in its message: that is derived
+        // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
+        // enum's default happens to be.
+        this.Harness = Harness;
+
         var normalizedUnattendedTrustArgv = UnattendedTrustArgv.IsDefault ? ImmutableArray<string>.Empty : UnattendedTrustArgv;
 
         if (!SupportsUnattended && !normalizedUnattendedTrustArgv.IsEmpty)
@@ -203,9 +212,6 @@ internal sealed record AcpVendorDescriptor {
                 $"{nameof(UnattendedInteractionPolicy)} must be explicit when {nameof(SupportsUnattended)} is true (vendor: {Vendor}).",
                 nameof(UnattendedInteractionPolicy));
 
-        this.Vendor              = Vendor;
-        this.ResolveBinaryPath   = ResolveBinaryPath;
-        this.ResolveDefaultModel = ResolveDefaultModel;
         this.Argv                = Argv.IsDefault ? ImmutableArray<string>.Empty : Argv;
         this.UnattendedTrustArgv = normalizedUnattendedTrustArgv;
         this.UnattendedTrustArgvBuilder = UnattendedTrustArgvBuilder;
@@ -236,9 +242,7 @@ internal static class AcpVendorDescriptors {
     /// trust. kcap does not auto-approve a fallback frame: any permission, elicitation, or unknown
     /// interaction request is a contract violation and reaps the reviewer.</summary>
     public static readonly AcpVendorDescriptor Cursor = new(
-        Vendor:              "cursor",
-        ResolveBinaryPath:   cfg => cfg.CursorPath,
-        ResolveDefaultModel: cfg => cfg.CursorModel,
+        Harness:             HarnessId.Cursor,
         Argv:                ["acp"],
         UnattendedTrustArgv: ["--force", "--approve-mcps", "--trust"],
         SupportsUnattended:  true,
@@ -275,9 +279,7 @@ internal static class AcpVendorDescriptors {
     /// <para>Review flows therefore preload their validated stdio servers through Copilot's
     /// <c>--additional-mcp-config</c> process argument and clamp the visible tool surface.</para></summary>
     public static readonly AcpVendorDescriptor Copilot = new(
-        Vendor:              "copilot",
-        ResolveBinaryPath:   cfg => cfg.CopilotPath,
-        ResolveDefaultModel: _ => null,
+        Harness:             HarnessId.Copilot,
         Argv:                ["--acp", "--stdio"],
         UnattendedTrustArgv: ["--allow-all-tools", "--no-ask-user", "--no-custom-instructions", "--disable-builtin-mcps"],
         SupportsUnattended:  true,
@@ -334,7 +336,7 @@ internal static class AcpVendorDescriptors {
     /// <c>session/set_config_option</c> with <c>-32601 Method not found</c> but honours
     /// <c>session/set_model</c> at effect level — the evidence the earlier
     /// <see cref="NoOpModelSelector"/> deferral was waiting for (detail on
-    /// <see cref="SetModelSelector"/> and in the probe record). <c>ResolveDefaultModel</c> reads
+    /// <see cref="SetModelSelector"/> and in the probe record). The model slot reads
     /// <c>DaemonConfig.KiroModel</c> (<c>KCAP_KIRO_MODEL</c>), default NULL: a zero-configuration
     /// launch keeps Kiro's own default model with none reported; a per-launch
     /// <c>RuntimeStartContext.Model</c> takes precedence as for Cursor.</para>
@@ -343,9 +345,7 @@ internal static class AcpVendorDescriptors {
     /// diverges the hosted session from what the user gets interactively and buys an upgrade
     /// treadmill. Revisit only if a measured behavioural difference forces it.</para></summary>
     public static readonly AcpVendorDescriptor Kiro = new(
-        Vendor:              "kiro",
-        ResolveBinaryPath:   cfg => cfg.KiroPath,
-        ResolveDefaultModel: cfg => cfg.KiroModel,
+        Harness:             HarnessId.Kiro,
         Argv:                ["acp"],
         // Built PER LAUNCH from the same injected MCP specs and the same LaunchIdentity session/new
         // gets: a fixed list would omit the review's allowlist servers, and under the Fail policy
@@ -406,7 +406,7 @@ internal static class AcpVendorDescriptors {
     /// previous one. <c>session/set_model</c> also exists here (it answers <c>{}</c>, so not
     /// <c>-32601</c>) but is redundant — only the config-option surface has a matching read half.</para>
     ///
-    /// <para><b><c>ResolveDefaultModel</c> reads <c>DaemonConfig.OpenCodeModel</c></b>
+    /// <para><b>The model slot reads <c>DaemonConfig.OpenCodeModel</c></b>
     /// (<c>KCAP_OPENCODE_MODEL</c>), default NULL: a zero-configuration launch keeps OpenCode's own
     /// default with none reported, exactly as for Kiro.</para>
     ///
@@ -447,9 +447,7 @@ internal static class AcpVendorDescriptors {
     /// response-after-replay barrier. Flipping it requires a passing run of
     /// <c>docs/probes/2026-08-04-acp-reconnect-c0/</c>, not the advertisement.</para></summary>
     public static readonly AcpVendorDescriptor OpenCode = new(
-        Vendor:              "opencode",
-        ResolveBinaryPath:   cfg => cfg.OpenCodePath,
-        ResolveDefaultModel: cfg => cfg.OpenCodeModel,
+        Harness:             HarnessId.OpenCode,
         Argv:                ["acp"],
         // Empty, and not an oversight: OpenCode's trust vector is OPENCODE_PERMISSION, an env variable.
         // `opencode acp` accepts none of the global flags, so there is no argv form of it at all.
@@ -517,8 +515,8 @@ internal static class AcpVendorDescriptors {
     /// <para><see cref="NoOpModelSelector"/> because Gemini's model-selection WRITE half is
     /// unverified: <c>session/new</c> does return a <c>models</c> object, so a live selector's read
     /// half would fit, but both wire selectors fail SILENTLY when the write does not take — a
-    /// session that reports the requested model while running another. <c>ResolveDefaultModel:
-    /// null</c> alone is not enough, because <c>ResolveRequestedModel</c> prioritises a per-launch
+    /// session that reports the requested model while running another. A null model slot alone is
+    /// not enough, because <c>ResolveRequestedModel</c> prioritises a per-launch
     /// model and would reach a live selector anyway. Kiro's probe
     /// (<c>docs/probes/2026-08-05-kiro-model-override/</c>) is the template for flipping this: it
     /// found Kiro rejects <c>session/set_config_option</c> outright but honours
@@ -531,9 +529,7 @@ internal static class AcpVendorDescriptors {
     /// <c>DiagnosticBinary</c> needs no branch — the vendor key and the binary name are both
     /// <c>gemini</c>.</para></summary>
     public static readonly AcpVendorDescriptor Gemini = new(
-        Vendor:              "gemini",
-        ResolveBinaryPath:   cfg => cfg.GeminiPath,
-        ResolveDefaultModel: _ => null,
+        Harness:             HarnessId.Gemini,
         Argv:                ["--experimental-acp", "--skip-trust",
                               "--allowed-mcp-server-names", UnmatchableMcpNamePlaceholder],
         // --approval-mode yolo is REQUIRED for a reviewer, not a convenience: without it Gemini emits

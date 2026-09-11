@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,7 +20,7 @@ public class DaemonHttpServicesTests {
         return new ServiceCollection()
             .AddSingleton(Config.Root)
             .AddSingleton(profiles)
-            .AddDaemonHttp(Config.Root, new DaemonConfig { ServerUrl = serverUrl, Profiles = profiles }, ProfileOverrides.None)
+            .AddDaemonHttp(Config.Root, new DaemonConfig { ServerUrl = serverUrl, Profiles = profiles }, ProfileOverrides.None, MachineAuth.None)
             .BuildServiceProvider();
     }
 

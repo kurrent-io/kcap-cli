@@ -538,8 +538,9 @@ public class PiRpcHostedAgentRuntimeTests {
     public async Task Journal_matches_channel_order_under_concurrent_pump_and_send_time_writers() {
         using var tmp = new TempDir();
         // The stock completion grace bounds the writer against a hung disk, which turns an assertion
-        // over 400 fsynced appends into a throughput race the suite's own load can lose.
-        var journal = new TranscriptJournal(tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(1));
+        // over 400 fsynced appends into a throughput race the suite's own load can lose. A minute is
+        // not enough of one: a two-core runner has spent longer than that on these appends alone.
+        var journal = new TranscriptJournal(tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(3));
         journal.Open("/w", null);
         var (runtime, process) = NewRuntime(journal: journal);
         await using var _ = runtime;

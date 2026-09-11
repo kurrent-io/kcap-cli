@@ -84,11 +84,8 @@ public class VendorOverrideBindingTests {
         }
     }
 
-    /// <summary>
-    /// Exactly the vendors with a model accessor declare a model variable. One declared without an
-    /// accessor fails the daemon's boot; an accessor with no variable named is a knob the README
-    /// documents and nothing reads.
-    /// </summary>
+    /// <summary>Exactly the vendors with a model to set declare a model variable — a variable naming
+    /// a vendor that takes no model is a knob the README documents and nothing reads.</summary>
     [Test]
     public async Task Only_the_vendors_with_a_model_accessor_name_a_model_variable() {
         var declared = EveryVendor.Where(v => v.ModelEnvVar is not null).Order();
@@ -123,18 +120,5 @@ public class VendorOverrideBindingTests {
         foreach (var (vendor, _, readPath, bare) in Paths())
             await Assert.That(readPath(config)).IsEqualTo(bare)
                 .Because($"{vendor} keeps the command its harness ships");
-    }
-
-    /// <summary>A model variable with no accessor behind it fails the boot rather than shipping a
-    /// documented switch that does nothing.</summary>
-    [Test]
-    [Arguments(HarnessId.Claude)]
-    [Arguments(HarnessId.Codex)]
-    [Arguments(HarnessId.Copilot)]
-    [Arguments(HarnessId.Gemini)]
-    public async Task A_model_no_accessor_can_receive_is_refused_loudly(HarnessId vendor) {
-        await Assert.That(() => DaemonRunner.ModelApplier(new DaemonConfig(), vendor))
-            .Throws<NotSupportedException>()
-            .Because($"{vendor} takes no model from us, so naming one would silently do nothing");
     }
 }

@@ -95,8 +95,9 @@ public static partial class DaemonRunner {
         // Program.cs, but the daemon is a separate process so its statics start
         // empty. Skips repo discovery (the daemon isn't bound to a working dir);
         // honors --server-url, KCAP_URL, KCAP_PROFILE.
-        var serverEnv = ProfileOverrides.FromEnvironment();
-        var profiles  = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv);
+        var serverEnv  = ProfileOverrides.FromEnvironment();
+        var machineEnv = MachineAuth.FromEnvironment();
+        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv);
         config.Profiles  = profiles;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
@@ -337,7 +338,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(harnesses);
         builder.Services.AddSingleton(daemonLock);
-        builder.Services.AddDaemonHttp(configRoot, config, serverEnv);
+        builder.Services.AddDaemonHttp(configRoot, config, serverEnv, machineEnv);
         builder.Services.AddSingleton<ServerConnection>();
 
         // The owner consent gate — policy store + append-only decision log share the
@@ -1173,52 +1174,24 @@ public static partial class DaemonRunner {
     /// Applies every vendor's path and model override, over whatever the profile and the harness
     /// defaults have already put in <paramref name="config"/>.
     ///
-    /// <para>Ranges over the vendors rather than naming each variable, so a vendor cannot arrive with
-    /// an override <see cref="HarnessOverrides"/> declares and nothing applies: the
-    /// appliers below switch over the same closed set, and a new member of it fails the build
-    /// here.</para>
+    /// <para>Ranges over the vendors rather than naming each variable, so a vendor cannot arrive
+    /// with an override <see cref="HarnessOverrides"/> declares and nothing applies: the slots it
+    /// writes through switch over the same closed set, and a new member of it fails the build in
+    /// both places.</para>
     /// </summary>
     internal static void BindVendorOverrides(
             DaemonConfig config, IEnumerable<HarnessId> vendors, Func<string, string?> read) {
         foreach (var vendor in vendors) {
             if (read(vendor.PathEnvVar) is { Length: > 0 } path)
-                PathApplier(config, vendor)(path);
+                config.PathSlot(vendor).Write(path);
 
             if (vendor.ModelEnvVar is { } modelVar && read(modelVar) is { Length: > 0 } model)
-                ModelApplier(config, vendor)(model);
+                (config.ModelSlot(vendor)
+              ?? throw new NotSupportedException(
+                     $"{vendor} declares a model override variable but DaemonConfig holds no model "
+                   + "for it, so setting it would silently do nothing. Add the slot.")).Write(model);
         }
     }
-
-    internal static Action<string> PathApplier(DaemonConfig config, HarnessId vendor) => vendor switch {
-        HarnessId.Claude      => v => config.ClaudePath      = v,
-        HarnessId.Codex       => v => config.CodexPath       = v,
-        HarnessId.Cursor      => v => config.CursorPath      = v,
-        HarnessId.Copilot     => v => config.CopilotPath     = v,
-        HarnessId.Gemini      => v => config.GeminiPath      = v,
-        HarnessId.Kiro        => v => config.KiroPath        = v,
-        HarnessId.Pi          => v => config.PiPath          = v,
-        HarnessId.OpenCode    => v => config.OpenCodePath    = v,
-        HarnessId.Antigravity => v => config.AntigravityPath = v,
-    };
-
-    /// <summary>
-    /// The four vendors that pick their own model throw rather than being absent: the binder reaches
-    /// one only once <see cref="HarnessOverrides"/> names a variable for it, so arriving
-    /// here means a knob was declared without an accessor to receive it.
-    /// </summary>
-    internal static Action<string> ModelApplier(DaemonConfig config, HarnessId vendor) => vendor switch {
-        HarnessId.Cursor      => v => config.CursorModel      = v,
-        HarnessId.Kiro        => v => config.KiroModel        = v,
-        HarnessId.Pi          => v => config.PiModel          = v,
-        HarnessId.OpenCode    => v => config.OpenCodeModel    = v,
-        HarnessId.Antigravity => v => config.AntigravityModel = v,
-
-        HarnessId.Claude or HarnessId.Codex
-            or HarnessId.Copilot or HarnessId.Gemini =>
-            throw new NotSupportedException(
-                $"{vendor} declares a model override variable but no DaemonConfig accessor is wired to "
-              + "it, so setting it would silently do nothing. Add the accessor here."),
-    };
 
     /// <summary>
     /// Where a gated reviewer's opt-out lands on <see cref="DaemonConfig"/>.

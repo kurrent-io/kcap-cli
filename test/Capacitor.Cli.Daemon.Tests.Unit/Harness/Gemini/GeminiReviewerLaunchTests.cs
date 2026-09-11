@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -357,9 +358,7 @@ public class GeminiReviewerLaunchTests {
     // carrying an extra argv token is exactly what a fourth contributor would produce.
 
     static AcpVendorDescriptor GeminiWithExtraArgv(params string[] extra) => new(
-        Vendor:              AcpVendorDescriptors.Gemini.Vendor,
-        ResolveBinaryPath:   _ => "gemini",
-        ResolveDefaultModel: _ => null,
+        Harness:             HarnessId.Gemini,
         Argv:                [.. AcpVendorDescriptors.Gemini.Argv, .. extra],
         UnattendedTrustArgv: AcpVendorDescriptors.Gemini.UnattendedTrustArgv,
         SupportsUnattended:  true,

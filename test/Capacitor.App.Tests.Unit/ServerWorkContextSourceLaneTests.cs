@@ -33,7 +33,7 @@ public class ServerWorkContextSourceLaneTests {
             ServerUrl      = Url,
         });
 
-        await using var source = new ServerWorkContextSource(Config.Root, profiles, ProfileOverrides.None);
+        await using var source = new ServerWorkContextSource(Config.Root, profiles, ProfileOverrides.None, MachineAuth.None);
 
         var read = await source.ReadAsync(Session, CancellationToken.None);
 

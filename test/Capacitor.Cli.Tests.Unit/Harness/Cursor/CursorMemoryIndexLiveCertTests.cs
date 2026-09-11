@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
@@ -51,7 +52,7 @@ public class CursorMemoryIndexLiveCertTests {
         services.AddSingleton(root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(baseUrl, root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
 
         return services.BuildServiceProvider();
     }

@@ -95,6 +95,7 @@ if (isHook && args.Contains("--claude")) {
 var daemonPaths = DaemonStore.FromEnvironment();
 
 var serverEnv = ProfileOverrides.FromEnvironment();
+var machineEnv = MachineAuth.FromEnvironment();
 
 var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
@@ -102,7 +103,7 @@ var baseUrl  = profiles.Resolution.ServerUrl;
 // Composition root. Every context resolved above is registered once here; the dispatch switch below
 // asks for a command rather than handing each one its arguments.
 var services = new ServiceCollection()
-    .AddCapacitorCli(config, home, daemonPaths, profiles, serverEnv, clock, baseUrl);
+    .AddCapacitorCli(config, home, daemonPaths, profiles, serverEnv, machineEnv, clock, baseUrl);
 
 await using var sp = services.BuildValidated();
 
