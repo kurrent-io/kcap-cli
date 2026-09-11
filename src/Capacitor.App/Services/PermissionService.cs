@@ -42,6 +42,7 @@ public sealed class PermissionService : IPermissionService {
     readonly IDisposable? _agentsSub;
     IReadOnlyDictionary<string, string> _sessionAgents = new Dictionary<string, string>();
     CancellationTokenSource? _loopCts;
+    long _liveSequence;
     bool _disposed;
 
     public PermissionService(
@@ -137,7 +138,7 @@ public sealed class PermissionService : IPermissionService {
             return new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, ex.Message);
         }
 
-        ConcludeLocal(target.RequestId);
+        ConcludeLocal(target.RequestId, target.ServerRequestId);
         return new PermissionResolveOutcome(ack.Ok ? PermissionResolveKind.Applied : PermissionResolveKind.AlreadyDecided, ack.Error);
     }
 
@@ -270,13 +271,19 @@ public sealed class PermissionService : IPermissionService {
         }
     }
 
-    void ConcludeLocal(string requestId) {
+    /// <param name="claimedServerRequestId">
+    /// The answering caller's own view of the mapping, for the case where the local entry has
+    /// already left the cache (a lost subscription resurfaces the twin mid-answer) and the lookup
+    /// below can no longer supply it.
+    /// </param>
+    void ConcludeLocal(string requestId, string? claimedServerRequestId = null) {
         lock (_lock) {
             if (_disposed) return;
             var key = PendingPermissionRequest.KeyFor(PermissionLane.Local, requestId);
             _tombstones.Add(key);
             // The daemon has answered the hook, so the server copy is moot even if its relay fails.
-            if (_cache.Lookup(key) is { HasValue: true, Value: var item } && item.ServerRequestId is { } srid) ConcludeServerKey(srid);
+            var cached = _cache.Lookup(key) is { HasValue: true, Value: var item } ? item.ServerRequestId : null;
+            if ((cached ?? claimedServerRequestId) is { } srid) ConcludeServerKey(srid);
             _cache.Remove(key);
         }
     }
@@ -293,8 +300,12 @@ public sealed class PermissionService : IPermissionService {
         lock (_lock) {
             if (_disposed || item.Lane != PermissionLane.Server || _tombstones.Contains(item.Key)) return;
             item.AgentId = _sessionAgents.GetValueOrDefault(item.SessionId, "");
+            item.LiveSequence = ++_liveSequence;
             if (IsClaimed(item.RequestId)) { _shadowed[item.Key] = item; return; }
-            if (_cache.Lookup(item.Key).HasValue) return; // a live card keeps its instance
+            if (_cache.Lookup(item.Key) is { HasValue: true, Value: var live }) {
+                live.LiveSequence = item.LiveSequence; // a live card keeps its instance, not its stamp
+                return;
+            }
             _cache.AddOrUpdate(item);
         }
     }
@@ -312,40 +323,62 @@ public sealed class PermissionService : IPermissionService {
                 }
                 return;
             }
-            _sessionGenerations[sessionId] = SessionGeneration(sessionId) + 1;
+            BumpGeneration(sessionId);
             foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId).ToList()) ConcludeServerKey(item.RequestId);
             foreach (var (_, twin) in _shadowed.Where(kv => kv.Value.SessionId == sessionId).ToList()) ConcludeServerKey(twin.RequestId);
         }
     }
 
+    // Caller holds _lock. Every removal a reconciliation must not undo goes through this.
+    void BumpGeneration(string sessionId) =>
+        _sessionGenerations[sessionId] = _sessionGenerations.GetValueOrDefault(sessionId) + 1;
+
     internal int SessionGeneration(string sessionId) { lock (_lock) return _sessionGenerations.GetValueOrDefault(sessionId); }
 
+    /// What a reconciliation must capture before it fetches: the generation whose removals it must
+    /// not undo, and the point in the live stream its snapshot corresponds to.
+    internal (int Generation, long Sequence) SessionMarker(string sessionId) {
+        lock (_lock) return (_sessionGenerations.GetValueOrDefault(sessionId), _liveSequence);
+    }
+
     /// The reconciliation's verdict for one session: adds what is missing, removes server items the
-    /// stream no longer holds. Stale by generation means a clear ran meanwhile — drop the result.
-    internal void ReplaceServerForSession(string sessionId, IReadOnlyList<PendingPermissionRequest> items, int generation) {
+    /// stream no longer holds. A generation that moved means a clear, a drop or a settlement ran
+    /// meanwhile — drop the whole result. Items that landed after the marker are newer than the
+    /// snapshot, so their absence from it is not evidence of anything.
+    internal void ReplaceServerForSession(string sessionId, IReadOnlyList<PendingPermissionRequest> items, (int Generation, long Sequence) marker) {
         lock (_lock) {
-            if (_disposed || generation != SessionGeneration(sessionId)) return;
+            if (_disposed || marker.Generation != _sessionGenerations.GetValueOrDefault(sessionId)) return;
             var keep = items.Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
-            foreach (var stale in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId && !keep.Contains(i.Key)).ToList())
+            bool Stale(PendingPermissionRequest item) => item.LiveSequence <= marker.Sequence && !keep.Contains(item.Key);
+            foreach (var stale in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId && Stale(i)).ToList())
                 _cache.Remove(stale.Key);
-            foreach (var stale in _shadowed.Where(kv => kv.Value.SessionId == sessionId && !keep.Contains(kv.Key)).Select(kv => kv.Key).ToList())
+            foreach (var stale in _shadowed.Where(kv => kv.Value.SessionId == sessionId && Stale(kv.Value)).Select(kv => kv.Key).ToList())
                 _shadowed.Remove(stale);
             foreach (var item in items) UpsertServer(item);
         }
     }
 
-    /// Access revoked: the cards are unanswerable, but nothing is settled, so no tombstones.
+    /// Access revoked: the cards are unanswerable, but nothing is settled, so no tombstones. The
+    /// generation moves because a fetch that started while access still held must not restore them.
     internal void DropServerForSession(string sessionId) {
         lock (_lock) {
             if (_disposed) return;
+            BumpGeneration(sessionId);
             foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId).ToList()) _cache.Remove(item.Key);
             foreach (var key in _shadowed.Where(kv => kv.Value.SessionId == sessionId).Select(kv => kv.Key).ToList()) _shadowed.Remove(key);
         }
     }
 
+    /// The signed-in subject changed: nothing the previous account could see may survive, including
+    /// a fetch it started. Every session that could name one in flight moves its generation.
     internal void ClearServerLane() {
         lock (_lock) {
             if (_disposed) return;
+            var sessions = _cache.Items.Where(i => i.Lane == PermissionLane.Server).Select(i => i.SessionId)
+                .Concat(_shadowed.Values.Select(i => i.SessionId))
+                .Concat(_sessionGenerations.Keys)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var sessionId in sessions) BumpGeneration(sessionId);
             foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server).ToList()) _cache.Remove(item.Key);
             _shadowed.Clear();
         }

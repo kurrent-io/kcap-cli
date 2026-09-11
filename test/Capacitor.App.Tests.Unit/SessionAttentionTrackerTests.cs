@@ -12,10 +12,12 @@ public class SessionAttentionTrackerTests {
         public readonly SessionAttentionTracker Tracker;
         public IReadOnlySet<string> Sessions = new HashSet<string>();
         public Func<string, SessionDetailFetch> Detail = _ => new(null, NotFound: true);
+        /// Set instead of Detail when the test needs to hold the fetch open.
+        public Func<string, Task<SessionDetailFetch>>? DetailTask;
         public int Fetches;
 
         public Harness() {
-            Tracker = new SessionAttentionTracker(Lane, (sid, _) => { Fetches++; return Task.FromResult(Detail(sid)); }, Time, TimeSpan.FromMilliseconds(100));
+            Tracker = new SessionAttentionTracker(Lane, (sid, _) => { Fetches++; return DetailTask?.Invoke(sid) ?? Task.FromResult(Detail(sid)); }, Time, TimeSpan.FromMilliseconds(100));
             Tracker.SessionsWithAttention.Subscribe(s => Sessions = s);
         }
 
@@ -83,6 +85,25 @@ public class SessionAttentionTrackerTests {
         await Assert.That(h.Sessions).DoesNotContain("s1");
         h.Time.Advance(TimeSpan.FromSeconds(1));
         await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "retry succeeded");
+    }
+
+    /// The response is newer than the snapshot the reconciliation already holds, so the ids it
+    /// settled must not come back with that snapshot.
+    [Test]
+    public async Task A_response_supersedes_a_reconciliation_that_started_before_it() {
+        using var h = new Harness();
+        h.Connect();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.DetailTask = async _ => { await gate.Task; return Pending("r1"); };
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the fetch");
+
+        h.Lane.PermissionRespondedSubject.OnNext(new PermissionRespondedPing("s1", null));
+        gate.SetResult();
+        await Task.Delay(100);
+
+        await Assert.That(h.Sessions).DoesNotContain("s1");
     }
 
     [Test]

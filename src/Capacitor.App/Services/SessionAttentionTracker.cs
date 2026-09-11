@@ -57,14 +57,39 @@ public sealed class SessionAttentionTracker : IDisposable {
         lock (_lock) {
             if (_disposed) return;
             if (ping.RequestId is null) {
-                if (_sessions.TryGetValue(ping.SessionId, out var known) && known.Ids.Count > 0) { known.Ids.Clear(); Publish(); }
+                if (!_sessions.TryGetValue(ping.SessionId, out var known)) return;
+                known.Ids.Clear();
+                Supersede(ping.SessionId, known);
+                Prune(ping.SessionId, known);
+                Publish();
                 return;
             }
             var s = Get(ping.SessionId);
-            if (s.Ids.Remove(ping.RequestId)) { Publish(); return; }
+            if (s.Ids.Remove(ping.RequestId)) {
+                Supersede(ping.SessionId, s);
+                Prune(ping.SessionId, s);
+                Publish();
+                return;
+            }
             s.Dirty = true;
             Schedule(ping.SessionId, s, _debounce);
         }
+    }
+
+    // Caller holds _lock. A reconciliation already in flight took its snapshot before this
+    // response, so applying it would put the settled ids straight back; the session is still owed
+    // a reconciliation if it was marked dirty, and re-arming is what keeps that owed one alive.
+    void Supersede(string sessionId, Session s) {
+        s.Attempt++;
+        if (s.Dirty) Schedule(sessionId, s, _debounce);
+    }
+
+    // Caller holds _lock. Nothing waiting and nothing owed, same terms ReconcileAsync prunes on.
+    void Prune(string sessionId, Session s) {
+        if (s.Ids.Count > 0 || s.Dirty) return;
+        s.Timer?.Dispose();
+        s.Timer = null;
+        _sessions.Remove(sessionId);
     }
 
     void OnLane(bool connected) {

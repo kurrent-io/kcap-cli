@@ -414,13 +414,41 @@ public class PermissionServiceTests {
     public async Task Reconciliation_results_apply_only_under_the_generation_they_started_with() {
         using var h = new Harness();
         await h.StartAsync();
-        var generation = h.Service.SessionGeneration("s1");
+        var marker = h.Service.SessionMarker("s1");
         h.Service.SettleServer("s1", null);
 
-        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], generation);
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], marker);
         await Assert.That(h.View.Count).IsEqualTo(0);
-        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], h.Service.SessionGeneration("s1"));
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], h.Service.SessionMarker("s1"));
         await Assert.That(h.View.Count).IsEqualTo(1);
+    }
+
+    /// A revocation settles nothing, so only the generation keeps the fetch that was already
+    /// running from handing the revoked session's cards straight back.
+    [Test]
+    public async Task A_drop_supersedes_a_reconciliation_that_started_before_it() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var marker = h.Service.SessionMarker("s1");
+
+        h.Service.DropServerForSession("s1");
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], marker);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
+    /// Same for the signed-in subject changing: a fetch the previous account started must not
+    /// deliver its cards to the new one.
+    [Test]
+    public async Task Clearing_the_lane_supersedes_a_reconciliation_that_started_before_it() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        var marker = h.Service.SessionMarker("s1");
+
+        h.Service.ClearServerLane();
+        h.Service.ReplaceServerForSession("s1", [ServerPermission("srv-1")], marker);
+        await Assert.That(h.View.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -486,6 +514,26 @@ public class PermissionServiceTests {
         h.SessionAgents.OnNext(new Dictionary<string, string> { ["s1"] = "agent-1" });
         await WaitUntilAsync(() => h.Agents.Contains("agent-1"), what: "agent resolved");
         await Assert.That(h.View.Lookup("server:srv-1").Value.AgentId).IsEqualTo("agent-1");
+    }
+
+    /// The local entry can leave the cache while its answer is in flight — a lost subscription
+    /// hands the twin back — and the twin is still settled by the ack that follows.
+    [Test]
+    public async Task A_resolve_that_outlives_its_local_entry_still_retires_the_twin() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var local = await h.EmitAsync(Dto("l1", serverRequestId: "srv-1"));
+        h.Service.UpsertServer(ServerPermission("srv-1"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        var gate = h.Ops.ArmPermissionResolve();
+        var run = h.Service.ResolveAsync(local, PermissionAnswer.Allow, CancellationToken.None);
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-1").HasValue, what: "the twin handed back");
+
+        gate.SetResult(new PermissionAckDto(true, null));
+        await run;
+        await Assert.That(h.View.Count).IsEqualTo(0);
     }
 
     [Test]

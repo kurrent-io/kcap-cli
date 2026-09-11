@@ -84,6 +84,51 @@ public class ServerPermissionFeedTests {
         await Assert.That(h.View.Count).IsEqualTo(0);
     }
 
+    /// The fetch's own snapshot still lists the cards access was revoked over, so only the
+    /// generation stops the reconciliation from handing them back.
+    [Test]
+    public async Task A_denial_racing_the_fetch_wins() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Detail = async _ => {
+            await gate.Task;
+            return DetailWith("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}}]""");
+        };
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "p1", "Bash", null, null));
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "fetch started");
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Lane.SessionAccessChangedSubject.OnNext("s1");
+        await WaitUntilAsync(() => h.View.Count == 0, what: "cards dropped on denial");
+
+        gate.SetResult();
+        await Task.Delay(100);
+        await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
+    /// A push that lands after the snapshot was taken is newer than it, so its absence from the
+    /// snapshot is not evidence of anything.
+    [Test]
+    public async Task A_push_racing_the_fetch_outlives_the_snapshot() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Detail = async _ => {
+            await gate.Task;
+            return DetailWith("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}}]""");
+        };
+        h.Connect();
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "fetch started");
+
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "r2", "Bash", null, null));
+        gate.SetResult();
+        await WaitUntilAsync(() => h.View.Lookup("server:p1").HasValue, what: "the snapshot applied");
+
+        await Assert.That(h.View.Lookup("server:r2").HasValue).IsTrue();
+    }
+
     [Test]
     public async Task Denial_drops_the_sessions_cards_without_settling_them() {
         using var h = new Harness();

@@ -6,8 +6,8 @@ namespace Capacitor.App.Services;
 
 /// Feeds the permission cache's server lane: live pushes for sessions the app has joined, a
 /// reconciliation of each session's event stream every time its access is established, and the
-/// org-wide settlement pings. Every reconciliation carries the session generation it started
-/// under, so a clear that lands mid-fetch wins.
+/// org-wide settlement pings. Every reconciliation carries the marker it started under, so a clear
+/// or a revocation landing mid-fetch wins and a push landing mid-fetch outlives the snapshot.
 public sealed class ServerPermissionFeed : IDisposable {
     readonly PermissionService _permissions;
     readonly SessionDetailReader _readDetail;
@@ -48,13 +48,13 @@ public sealed class ServerPermissionFeed : IDisposable {
     }
 
     async Task ReconcileAsync(string sessionId) {
-        var generation = _permissions.SessionGeneration(sessionId);
+        var marker = _permissions.SessionMarker(sessionId);
         try {
             var fetch = await _readDetail(sessionId, _lifetime.Token).ConfigureAwait(false);
             // A fetch that merely failed says nothing about the session, so its cards stand; only
             // a 404 is evidence there is nothing to hold.
             if (fetch.Detail is null) {
-                if (fetch.NotFound) _permissions.ReplaceServerForSession(sessionId, [], generation);
+                if (fetch.NotFound) _permissions.ReplaceServerForSession(sessionId, [], marker);
                 return;
             }
             var reconciled = InterruptReconciliation.FromDetail(fetch.Detail);
@@ -63,7 +63,7 @@ public sealed class ServerPermissionFeed : IDisposable {
                 : [.. reconciled.Pending.Where(p => p.IsAnswerableOverHttp)
                     .Select(p => PendingPermissionRequest.FromReconciled(sessionId, p))
                     .OfType<PendingPermissionRequest>()];
-            _permissions.ReplaceServerForSession(sessionId, items, generation);
+            _permissions.ReplaceServerForSession(sessionId, items, marker);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: session reconciliation failed: {ex.Message}");

@@ -85,6 +85,10 @@ public sealed class PendingPermissionRequest {
     public AcpElicitation? AcpQuestion { get; }
     public IReadOnlyList<AcpInteractionOption>? Options { get; }
     public string? ServerRequestId { get => Volatile.Read(ref _serverRequestId); internal set => Volatile.Write(ref _serverRequestId, value); }
+    /// When this server item last landed, on PermissionService's own counter — read and written
+    /// under that service's lock, and only there. It is what tells a reconciliation whether an
+    /// item it does not hold is stale or newer than the snapshot it fetched.
+    internal long LiveSequence { get; set; }
     public bool IsQuestion => Questions is not null || AcpQuestion is not null;
 
     static DateTimeOffset ParseTime(string s) =>
