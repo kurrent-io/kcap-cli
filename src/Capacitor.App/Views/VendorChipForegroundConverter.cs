@@ -6,7 +6,6 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
-/// The vendor chip's text brush, paired with VendorChipBackgroundConverter for contrast on the fill.
 public sealed class VendorChipForegroundConverter : IValueConverter {
     public static readonly VendorChipForegroundConverter Instance = new();
 

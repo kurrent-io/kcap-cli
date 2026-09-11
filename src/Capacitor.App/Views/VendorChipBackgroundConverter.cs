@@ -6,7 +6,6 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
-/// The vendor chip's fill brush, from the vendor string via VendorChipPalette.
 public sealed class VendorChipBackgroundConverter : IValueConverter {
     public static readonly VendorChipBackgroundConverter Instance = new();
 
