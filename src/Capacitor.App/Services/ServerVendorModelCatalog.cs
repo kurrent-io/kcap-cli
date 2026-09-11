@@ -18,6 +18,9 @@ public sealed class ServerVendorModelCatalog : IDisposable {
 
     readonly Func<CancellationToken, Task<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?>> _fetch;
     readonly BehaviorSubject<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>> _catalog = new(Empty);
+    // Guards the generation counter AND the post-fetch check+publish as one critical section, so a
+    // newer load can never slip its publish between an older load's check and its OnNext.
+    readonly Lock _gate = new();
     int _generation;
 
     public ServerVendorModelCatalog(
@@ -33,11 +36,12 @@ public sealed class ServerVendorModelCatalog : IDisposable {
     /// only the newest-started load publishes, so a slow earlier fetch cannot overwrite a newer
     /// snapshot with a stale one.
     public async Task LoadAsync(CancellationToken ct = default) {
-        var generation = Interlocked.Increment(ref _generation);
+        int generation;
+        lock (_gate) generation = ++_generation;
         try {
-            if (await _fetch(ct).ConfigureAwait(false) is { } catalog
-                && Volatile.Read(ref _generation) == generation)
-                _catalog.OnNext(catalog);
+            if (await _fetch(ct).ConfigureAwait(false) is { } catalog)
+                lock (_gate)
+                    if (_generation == generation) _catalog.OnNext(catalog);
         } catch (OperationCanceledException) {
             // Shutdown or a superseded reload — not a failure.
         } catch (Exception ex) {
