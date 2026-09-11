@@ -95,6 +95,8 @@ Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/
 
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
 
+Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself.
+
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
 ### 2. Run setup

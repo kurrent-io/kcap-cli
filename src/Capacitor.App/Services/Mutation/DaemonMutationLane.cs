@@ -247,7 +247,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     static Task<ProcessResult> Dispatch(IKcapCli executor, MutationRequest request, string? attemptId, CancellationToken ct) =>
         request.Verb switch {
             MutationVerb.Install       => executor.ServiceInstallVerifiedAsync(replace: false, ct),
-            MutationVerb.Replace       => executor.ServiceInstallVerifiedAsync(replace: true, ct),
+            MutationVerb.Replace       => executor.ServiceInstallVerifiedAsync(replace: true, ct, request.RetireServiceId),
             MutationVerb.StartVerified => executor.ServiceStartVerifiedAsync(ct),
             MutationVerb.DetachedStart => executor.DetachedStartAsync(attemptId!, ct),
             // Fail closed, never permissive: an unnamed enum value must halt, not silently pick a verb.
@@ -272,6 +272,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
 
         if (result.ExitCode == 0) return await ClassifyServiceSuccessAsync(request, executor, observation, ct).ConfigureAwait(false);
+
+        if (result.ExitCode == VerifyExitCodes.RetireRefused)
+            return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "retire_reason="), RecoverySurface.Attention);
 
         if (result.ExitCode == VerifyExitCodes.StartGate) {
             var token = ReasonLine.TrySingle(result.Stderr, "start_gate_reason=");

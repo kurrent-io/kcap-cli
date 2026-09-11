@@ -50,6 +50,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
             LifecyclePrompt.KindQuarantine  => "Acknowledge",
             LifecyclePrompt.KindUpdateInfo  => "OK",
             LifecyclePrompt.KindUpdateReady => "Restart now",
+            LifecyclePrompt.KindRename      => "Rename and restart",
             _                               => "Continue",
         };
 
@@ -72,6 +73,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         LifecyclePrompt.KindQuarantine    => "Corrupted consent claims file",
         LifecyclePrompt.KindUpdateReady   => "Update ready",
         LifecyclePrompt.KindUpdateInfo    => "Software update",
+        LifecyclePrompt.KindRename        => "Rename daemon",
         _                                 => "Repair daemon service", // KindRepair and any future kind
     };
 }

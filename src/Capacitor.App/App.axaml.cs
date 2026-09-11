@@ -29,10 +29,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Capacitor.App;
 
 public partial class App : Application {
-    // spec §3.6: app shutdown WAITS (does not cancel) for an in-flight lifecycle mutation, but
-    // only up to this cap — an internally-triggered mutation (startup matrix, skew, txn-requery)
-    // has no other shutdown-token wiring, so an uncapped wait could hang shutdown forever.
-    static readonly TimeSpan QuiesceShutdownCap = TimeSpan.FromSeconds(60);
+    // Allows the rename transaction's 100s budget plus CLI discovery and evidence checks to settle.
+    static readonly TimeSpan QuiesceShutdownCap = TimeSpan.FromSeconds(150);
 
     // One socket dial's bound inside DaemonMutationLane's own confirmation polling (its
     // DetachedPollInterval is 1s) — short enough that a handful of polls still fit inside the
@@ -166,6 +164,7 @@ public partial class App : Application {
     // cancelled (or a commit past the boundary finishes) before the process exits — the dialog's
     // counterpart of the wizard sign-in quiesce.
     SignInWindow? _signInWindow;
+    SettingsWindow? _settingsWindow;
     Task? _reauthSettle;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
@@ -574,6 +573,11 @@ public partial class App : Application {
         _home = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Home;
         _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
 
+        Action? openSettings = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
+            ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier)
+            : null;
+        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel, openSettings));
+
         // LAST, deliberately (spec §9): anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
         _trayVm = new TrayViewModel(
@@ -583,8 +587,45 @@ public partial class App : Application {
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory),
             updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
-            restartPending: restartPending.Pending);
+            restartPending: restartPending.Pending, openSettings: openSettings);
         _tray = new TrayIconManager(this, _trayVm);
+    }
+
+    void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
+            IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier) {
+        if (_shutdownStarted) return;
+        if (_settingsWindow is { } open) {
+            if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
+            open.Activate();
+            return;
+        }
+
+        SettingsViewModel vm;
+        try {
+            vm = new SettingsViewModel(settings, service, ops,
+                async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, OneShotProbeTimeout, ct)).Reachable,
+                lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
+                ct => RelaunchForSettingsAsync(desktop, ct), OperatingSystem.IsMacOS(), _shutdown.Token);
+        } catch (Exception ex) {
+            notifier.Notify($"Could not open settings: {ex.Message}");
+            return;
+        }
+
+        var window = new SettingsWindow { DataContext = vm };
+        _settingsWindow = window;
+        window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
+        window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
+        window.Show();
+        window.Activate();
+    }
+
+    static async Task<bool> RelaunchForSettingsAsync(IClassicDesktopStyleApplicationLifetime desktop, CancellationToken ct) {
+        if (InstallLocation.BundleRoot(Environment.ProcessPath) is not { } bundle) return false;
+        var result = await new ProcessRunner().RunAsync("/usr/bin/open", ["-n", bundle],
+            new RunOptions(Timeout: TimeSpan.FromSeconds(10)), ct);
+        if (result.TimedOut || result.ExitCode != 0) return false;
+        desktop.TryShutdown();
+        return true;
     }
 
     /// Home's Sign in action: the re-auth dialog over a fresh ReauthComposition graph, pinned to
@@ -1187,6 +1228,12 @@ public partial class App : Application {
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
             HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null) {
+        if (envelope.Request.RetireServiceId is not null &&
+            envelope.Outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) {
+            surface.Attention(SettingsRenameMessage.For(envelope.Request, envelope.Outcome));
+            markPresented?.Invoke();
+            return;
+        }
         if (envelope.Outcome is MutationOutcome.UnconfirmedNoAttach) {
             surface.Attention($"The daemon {VerbDisplay(envelope.Request.Verb)} is not yet confirmed — check status.");
             markPresented?.Invoke();
@@ -1506,6 +1553,7 @@ public partial class App : Application {
         // boundary finish — and the await stops the process exiting under it. Closed assigns
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
+        if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
         if (_reauthSettle is { } reauthSettle) await reauthSettle.ConfigureAwait(false);
 
         // spec §3.6 + decision 2: an in-flight sign-in always settles, mutations get a bounded chance

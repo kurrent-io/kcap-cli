@@ -453,6 +453,18 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    public async Task Rename_dispatches_the_retired_id_and_preserves_the_refusal_reason() {
+        var cli = new FakeKcapCli {
+            InstallVerifiedBehavior = (_, _) => Task.FromResult(new ProcessResult(30, "", "retire_reason=foreign_profile\nverify_retire_refused", false))
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        var request = Req(MutationVerb.Replace) with { RetireServiceId = "old-name" };
+        var outcome = await lane.RunAsync(request, CancellationToken.None);
+        await Assert.That(cli.LastRetireServiceId).IsEqualTo("old-name");
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(30, "foreign_profile", RecoverySurface.Attention));
+    }
+
+    [Test]
     public async Task StartVerified_verb_calls_ServiceStartVerifiedAsync() {
         var cli = new FakeKcapCli();
         var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };

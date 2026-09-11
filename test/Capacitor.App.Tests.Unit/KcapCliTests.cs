@@ -154,6 +154,34 @@ public class KcapCliTests {
     }
 
     [Test]
+    public async Task Rename_forwards_retire_and_allows_both_transaction_budgets() {
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, "--retire ID", "", false)) };
+        await MakeCli(runner).ServiceInstallVerifiedAsync(true, CancellationToken.None, "old-name");
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace", "--retire", "old-name"],
+            CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(100));
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Rename_refuses_an_older_or_unresponsive_cli_without_installing(bool timedOut) {
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, "service install --replace --verify", "", timedOut)) };
+        var result = await MakeCli(runner).ServiceInstallVerifiedAsync(true, CancellationToken.None, "old-name");
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(["daemon", "--help", "--no-update-check"], CollectionOrdering.Matching);
+        await Assert.That(result.ExitCode).IsEqualTo(VerifyExitCodes.RetireRefused);
+        await Assert.That(result.Stderr).Contains("cli_unsupported");
+    }
+
+    [Test]
+    public async Task Retire_without_replace_never_spawns() {
+        var runner = new FakeProcessRunner();
+        await Assert.ThrowsAsync<ArgumentException>(() => MakeCli(runner).ServiceInstallVerifiedAsync(false, CancellationToken.None, "old-name"));
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
     public async Task ServiceInstallVerifiedAsync_without_replace_omits_the_flag() {
         var runner = new FakeProcessRunner();
         var cli = MakeCli(runner);

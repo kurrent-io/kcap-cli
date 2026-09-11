@@ -6,6 +6,18 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Desktop Settings use the profile and the mutation lane
+
+The Settings window edits the profile bound to the app's daemon graph and refuses a profile whose
+server has changed. Capacity persists before its live push, so a lost connection cannot lose the
+saved limit. Rename waits for idle evidence, probes the target name, and asks for confirmation before
+saving the name and sending one Replace request with the old service id through the mutation lane.
+Its 100-second CLI bound includes the retire lock and budget, and shutdown allows the transaction
+and its evidence checks to settle. A help probe confirms the CLI understands `--retire`, since
+an older installer can silently ignore an unknown flag. The app relaunches only after the
+lane independently verifies the new daemon; failure keeps the saved name and shows recovery in
+both Settings and Attention. An unbundled process asks for a manual app restart.
+
 ## Capacity changes live; a rename restarts the daemon
 
 A client changes the running daemon's agent cap over a new local frame pair, `DaemonSettingsPut`

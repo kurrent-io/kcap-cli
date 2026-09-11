@@ -952,11 +952,13 @@ sealed class FakeKcapCli : IKcapCli {
 
     public int InstallVerifiedCallCount;
     public bool? LastInstallReplace;
+    public string? LastRetireServiceId;
     public Func<bool, CancellationToken, Task<ProcessResult>> InstallVerifiedBehavior =
         (_, _) => Task.FromResult(new ProcessResult(0, "", "", false));
-    public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct) {
+    public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null) {
         InstallVerifiedCallCount++;
         LastInstallReplace = replace;
+        LastRetireServiceId = retireServiceId;
         return InstallVerifiedBehavior(replace, ct);
     }
 
@@ -994,4 +996,3 @@ sealed class FakeKcapCli : IKcapCli {
 // FakeLoginShellProbe is shared via Capacitor.Tests.Helpers (the controller only ever calls
 // TerminalPathAsync — the install precondition; KcapOnPathAsync serves the ShimOfferCoordinator
 // tests, and the fresh-answer seam scripts the post-install re-probe).
-

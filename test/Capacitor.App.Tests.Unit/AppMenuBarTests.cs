@@ -200,7 +200,7 @@ public class AppMenuBarTests {
             return Layout(menu);
         });
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor");
+        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…");
         await Assert.That(opened).IsEqualTo(1);
     }
 
@@ -210,7 +210,23 @@ public class AppMenuBarTests {
     public async Task The_app_brings_its_own_app_menu() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(NativeMenu.GetMenu(Avalonia.Application.Current!)!));
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor");
+        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Settings_has_Command_comma_and_is_enabled_only_after_composition() {
+        var opened = 0;
+        var (before, after, gesture) = await AvaloniaSession.DispatchAsync(() => {
+            var disabled = Item(AppMenuBar.BuildAppMenu(() => { }), "Settings…");
+            var enabled = Item(AppMenuBar.BuildAppMenu(() => { }, () => opened++), "Settings…");
+            Click(enabled);
+            return (disabled.IsEnabled, enabled.IsEnabled, enabled.Gesture);
+        });
+        await Assert.That(before).IsFalse();
+        await Assert.That(after).IsTrue();
+        await Assert.That(gesture).IsEqualTo(new KeyGesture(Key.OemComma, KeyModifiers.Meta));
+        await Assert.That(opened).IsEqualTo(1);
     }
 
     [Test]

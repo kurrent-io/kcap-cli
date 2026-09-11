@@ -48,7 +48,7 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
 
-    Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct);
+    Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
     /// <c>daemon start -d --name &lt;name&gt;</c>, bounded + ProcessOnly-kill, stamped with a boot-attempt id
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
@@ -63,12 +63,10 @@ public interface IKcapCli {
 }
 
 public sealed class KcapCli : IKcapCli {
-    // Strictly above the CLI transaction's true worst case: 20s forward + 10s rollback reserve
-    // (spec §3.4) plus up to ~10s lock-wait and ~10s crash-recovery pre-phase, plus a 5s KillWait
-    // outside the 30s envelope on the manual-owner branch — ~50s worst case. 60s keeps margin
-    // above that without the caller's safety-net kill racing a legitimately still-working
-    // transaction.
+    // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+    // Retiring spends up to another 20s forward budget and 10s lock wait before installation.
+    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(100);
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can
     // never block the §3.2 per-mutation gate forever once the lifecycle controller polls this.
@@ -142,18 +140,29 @@ public sealed class KcapCli : IKcapCli {
                 new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
     }
 
-    // The interface's `replace` is the only per-call knob; the profile is pinned once at
-    // construction (spec decision 7) and reused verbatim for both the `--profile` flag and the
-    // KCAP_PROFILE overlay below, so the two can never disagree.
-    public async Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct) {
+    // The profile flag and environment overlay must agree with the identity the lane verifies.
+    public async Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null) {
+        if (retireServiceId is not null && !replace)
+            throw new ArgumentException("Retiring a service requires replacement.", nameof(retireServiceId));
         var mutation = MutationEnv(); // throws before any spawn if the instance carries no server
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
 
+        if (retireServiceId is not null) {
+            // Older CLIs ignore unknown install flags, so their ordinary version floor is insufficient.
+            var help = await Run(cliPath, ["daemon", "--help", "--no-update-check"],
+                new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct).ConfigureAwait(false);
+            if (help.TimedOut || help.ExitCode != 0 ||
+                !(help.Stdout.Contains("--retire", StringComparison.Ordinal) || help.Stderr.Contains("--retire", StringComparison.Ordinal)))
+                return new ProcessResult(VerifyExitCodes.RetireRefused, "", "retire_reason=cli_unsupported", false);
+        }
+
         List<string> args = ["daemon", "service", "install", "--name", _daemonName, "--profile", _profileName, "--verify"];
         if (replace) args.Add("--replace");
+        if (retireServiceId is not null) args.AddRange(["--retire", retireServiceId]);
 
         var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
-        return await Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct).ConfigureAwait(false);
+        return await Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: env,
+            Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
     public Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
