@@ -61,12 +61,21 @@ public sealed class PendingPermissionRequest {
 
     /// Null for a transcript-recorded question: nothing the response route can settle.
     internal static PendingPermissionRequest? FromReconciled(string sessionId, PendingInterrupt p) => p.Kind switch {
-        PendingInterruptKind.ClaudePermission => new(p.RequestId, sessionId, "claude", p.ToolName, p.ToolInput?.GetRawText(), p.RequestedAt, null, null, null),
+        PendingInterruptKind.ClaudePermission => FromReconciledClaude(sessionId, p),
         PendingInterruptKind.AcpPermission => new(p.RequestId, sessionId, "", p.ToolName, p.ToolInput?.GetRawText(), p.RequestedAt, null, null, p.Options),
         PendingInterruptKind.AcpQuestion => new(p.RequestId, sessionId, "", ClaudeElicitation.ToolName, null, p.RequestedAt, null,
             new AcpElicitation(p.Prompt, p.Options, p.IsMultiSelect, p.MinSelections, p.MaxSelections), null),
         _ => null,
     };
+
+    /// A permission-kind interrupt naming the elicitation tool still carries the questions payload,
+    /// and its answer has to be an updated_input: rendered as a generic Allow it would settle the
+    /// request with no answer in it at all. Classified here the same way the live factory does.
+    static PendingPermissionRequest FromReconciledClaude(string sessionId, PendingInterrupt p) {
+        var inputJson = p.ToolInput?.GetRawText();
+        return new(p.RequestId, sessionId, "claude", p.ToolName, inputJson, p.RequestedAt,
+            p.ToolName == ClaudeElicitation.ToolName ? ClaudeElicitation.TryParse(inputJson) : null, null, null);
+    }
 
     public static string KeyFor(PermissionLane lane, string requestId) => lane == PermissionLane.Local ? $"local:{requestId}" : $"server:{requestId}";
 

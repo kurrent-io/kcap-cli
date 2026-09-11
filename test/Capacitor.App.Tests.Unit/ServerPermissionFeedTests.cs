@@ -67,6 +67,23 @@ public class ServerPermissionFeedTests {
         await Assert.That(h.View.Count).IsEqualTo(1);
     }
 
+    /// A permission-kind interrupt naming the elicitation tool is still a question: answered as a
+    /// generic Allow it would settle with no updated_input, so the reconciled card has to classify
+    /// it the way the live push does.
+    [Test]
+    public async Task A_reconciled_permission_kind_elicitation_is_still_a_question() {
+        using var h = new Harness();
+        h.Detail = _ => Task.FromResult(DetailWith("""
+            [
+            {"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"q1","kind":"permission","tool_name":"AskUserQuestion","extensions":{"claude_code":{"permission":{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}}}}}}
+            ]
+            """));
+        h.Connect();
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.View.Lookup("server:q1").HasValue, what: "the reconciled card");
+        await Assert.That(h.View.Lookup("server:q1").Value.IsQuestion).IsTrue();
+    }
+
     [Test]
     public async Task A_settlement_racing_the_fetch_wins() {
         using var h = new Harness();
