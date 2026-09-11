@@ -48,10 +48,19 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public bool SessionEnded {
         get => _sessionEnded;
         private set {
+            if (_sessionEnded == value) return;
             this.RaiseAndSetIfChanged(ref _sessionEnded, value);
             this.RaisePropertyChanged(nameof(ShowsCards));
             _sessionEndedChanges.OnNext(value);
         }
+    }
+
+    bool _originChangedToLocal;
+    /// The local daemon has proven this row is its twin: the remote row is gone but the agent is
+    /// not, so the window replaces this host with the local workspace for the same id.
+    public bool OriginChangedToLocal {
+        get => _originChangedToLocal;
+        private set => this.RaiseAndSetIfChanged(ref _originChangedToLocal, value);
     }
 
     RemoteSessionAccess _accessState = RemoteSessionAccess.NoSession;
@@ -90,7 +99,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             .Subscribe(changes => {
                 foreach (var change in changes) {
                     if (change.Key != row.Key) continue;
-                    if (change.Reason == ChangeReason.Remove) { SessionEnded = true; Release(); continue; }
+                    if (change.Reason == ChangeReason.Remove) {
+                        // A local row under the same id means the local daemon proved the twin and
+                        // took the agent over: the row ended, the session did not.
+                        if (directory.Rows.Lookup($"local:{row.Id}").HasValue) OriginChangedToLocal = true;
+                        else SessionEnded = true;
+                        Release();
+                        continue;
+                    }
                     Apply(change.Current);
                 }
             })
@@ -114,6 +130,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         StatusText = row.Status;
         StatusDot = SessionStatusDots.For(row.Status);
         if (SessionStatusDots.IsTerminal(row.Status)) { SessionEnded = true; Release(); return; }
+        // The row can come back: a transient empty registry snapshot removes it and the refresh
+        // that follows re-adds the same live session, which must not stay hidden behind the
+        // removal's verdict. Release() cleared the leased id, so the lease is re-acquired below.
+        SessionEnded = false;
+        OriginChangedToLocal = false;
 
         var sessionId = row.SessionId;
         if (sessionId == _leasedSession) return;

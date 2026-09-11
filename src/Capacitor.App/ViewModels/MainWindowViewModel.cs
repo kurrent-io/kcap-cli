@@ -429,8 +429,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void OpenSession(string agentId) {
         if (_navigation.ShutdownLatched) return;
         CurrentView = ShellView.Sessions;
-        // Re-clicking the open session must not tear down and rebuild a live attach.
-        if (CurrentWorkspace?.AgentId == agentId) return;
+        // Re-clicking the open session must not tear down and rebuild a live attach — but a remote
+        // host whose row the local daemon has taken over no longer owns the id, so the same id is
+        // a real swap there rather than a re-click.
+        if (CurrentWorkspace?.AgentId == agentId
+            && CurrentWorkspace is not RemoteSessionViewModel { OriginChangedToLocal: true }) return;
 
         // Neither lane holds the id: opening the local workspace for it would attach a terminal to
         // an agent this machine never ran.

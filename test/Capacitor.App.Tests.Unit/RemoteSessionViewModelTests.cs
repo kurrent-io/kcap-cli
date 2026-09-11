@@ -126,6 +126,48 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A registry snapshot that briefly holds no rows removes this one; the refresh behind it
+    /// re-adds the same live session, and the pane has to come back with it.
+    [Test]
+    public async Task A_row_that_comes_back_reopens_the_session_it_was_showing() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.Rows.Remove("remote:a1");
+            await Assert.That(vm.SessionEnded).IsTrue();
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row());
+
+            await Assert.That(vm.SessionEnded).IsFalse();
+            await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count == 2, what: "the lease re-acquired");
+            await WaitUntilAsync(() => vm.ShowsCards, what: "the cards back");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The local daemon proving the twin retires the remote row while the agent keeps running:
+    /// nothing ended, and the window opens the local workspace for the same id instead.
+    [Test]
+    public async Task A_row_replaced_by_its_local_twin_reports_the_origin_change_rather_than_an_end() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            h.Directory.Rows.Remove("remote:a1");
+
+            await Assert.That(vm.OriginChangedToLocal).IsTrue();
+            await Assert.That(vm.SessionEnded).IsFalse();
+            await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "the lease released");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A row that leaves the directory takes its hub subscriptions with it, whether or not the
     /// pane is torn down afterwards.
     [Test]

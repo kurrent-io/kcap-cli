@@ -45,21 +45,24 @@ public class MainWindowViewModelTests {
         readonly FakeServerLane _lane = new();
         readonly SessionAccessService _access;
         readonly FakePermissionService _permissions = new();
-        readonly FakeAgentDirectory _directory = new();
 
         public RemoteHost() => _access = new SessionAccessService(_lane, new FakeTimeProvider());
 
-        public RemoteSessionViewModel New(string agentId) => new(
-            AgentRow.FromRemote(new AgentInstanceDto {
+        public FakeAgentDirectory Directory { get; } = new();
+
+        public RemoteSessionViewModel New(string agentId) {
+            var row = AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = agentId, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
                 Vendor = "claude", RegisteredAt = DateTime.UtcNow,
-            }),
-            _directory, _access, _permissions, WorkspaceFixtures.NewActions());
+            });
+            Directory.Rows.AddOrUpdate(row);
+            return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions());
+        }
 
         public void Dispose() {
             _access.Dispose();
             _permissions.Dispose();
-            _directory.Dispose();
+            Directory.Dispose();
         }
     }
 
@@ -698,6 +701,36 @@ public class MainWindowViewModelTests {
 
             await Assert.That(vm.CurrentWorkspace).IsNull();
             await Assert.That(localBuilt).IsEqualTo(0);
+        });
+    }
+
+    /// The local daemon proving the twin swaps the id from one lane to the other while its host is
+    /// open: the same id must then open the local workspace instead of reading as a re-click.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_remote_host_whose_row_moved_to_this_machine_reopens_as_the_local_workspace() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var origin = AgentOrigin.Remote;
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => origin,
+                remoteWorkspaceFactory: host.New,
+                trackWorkspaceTeardown: teardown => _ = teardown());
+
+            vm.OpenSession("r1");
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            host.Directory.Rows.Remove("remote:r1");
+            origin = AgentOrigin.Local;
+
+            await Assert.That(((RemoteSessionViewModel)vm.CurrentWorkspace!).OriginChangedToLocal).IsTrue();
+            vm.OpenSession("r1");
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
         });
     }
 
