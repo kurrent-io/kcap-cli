@@ -11,9 +11,6 @@
                      Width="1200" MinWidth="1200" Height="760" MinHeight="560"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
-    <!-- New session: deselect the workspace (the launcher pane IS the empty state). The rail's
-         New session button carries the same command; this makes the advertised ⌘N fire, and
-         Ctrl+N covers Windows/Linux. -->
     <Window.KeyBindings>
         <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
         <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
