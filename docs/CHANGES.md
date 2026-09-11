@@ -6,6 +6,40 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Desktop Settings use the profile and the mutation lane
+
+The Settings window edits the profile bound to the app's daemon graph and refuses a profile whose
+server has changed. Capacity persists before its live push, so a lost connection cannot lose the
+saved limit. Rename waits for idle evidence, probes the target name, and asks for confirmation before
+saving the name and sending one Replace request with the old service id through the mutation lane.
+Its 100-second CLI bound includes the retire lock and budget, and shutdown allows the transaction
+and its evidence checks to settle. A help probe confirms the CLI understands `--retire`, since
+an older installer can silently ignore an unknown flag. The app relaunches only after the
+lane independently verifies the new daemon; failure keeps the saved name and shows recovery in
+both Settings and Attention. An unbundled process asks for a manual app restart.
+Rename waits for the startup phase. After a rename outcome, the lane refuses later actions for
+the old name until app restart, including when the transaction is uncertain. Only an unsupported
+CLI that never spawned the transaction leaves the old graph usable. An environment-controlled
+name cannot be changed in Settings.
+The CLI capability probe runs before saving; if the CLI loses support before execution, only
+the name this attempt wrote is restored, preserving concurrent settings edits.
+
+## Capacity changes live; a rename restarts the daemon
+
+A client changes the running daemon's agent cap over a new local frame pair, `DaemonSettingsPut`
+23 and `DaemonSettingsAck` 81 behind `settings/1`, because the daemon reads the cap per launch off
+a mutable field and the server overwrites a repeat connect on the same connection: no restart, and
+the server learns through the same single-flighted re-register the vendor-CLI watcher uses. The
+caller persists the value itself, to the profile, before the push, so a push that fails leaves a
+durable value rather than a live one the next start forgets. The name gets no frame. It keys the
+lock, pid, socket and state paths, the launchd label and the server's slot, and the unit bakes it
+in as `--name`, so a rename is a reinstall under a new label. `install --replace --verify --retire
+<old-id>` removes the old unit inside that transaction, refusing a unit pinned to another profile
+and treating a live daemon under the new name as contended rather than as a takeover, so the app
+issues one verb and never sequences two destructive commands itself. The daemon now applies the
+profile's `max_agents` whenever `--max-agents` is absent; comparing the live value with the
+default 5 had made a profile of exactly 5 read as unset.
+
 ## The desktop app has Window, Help and About menus
 
 Every window carries its own Window and Help menus rather than the app carrying one set. On macOS
@@ -158,7 +192,9 @@ also available on ended sessions and sessions without a terminal.
 
 The tenant server owns GitHub reads and current user/repository admission. The
 desktop negotiates a versioned contract, subtracts network time from short access
-leases and masks protected content when the workspace loses foreground. A transient
+leases and masks protected content while the workspace is off screen: the window
+hidden to the tray or minimized. Losing keyboard focus alone keeps the reader
+readable and its lease renewed, so it can sit beside another app's window. A transient
 failure can retain the already visible view temporarily; a denial clears it.
 Frozen pages keep stable ordering, expose incomplete coverage and bound retained
 content. Markdown uses native controls with explicit safe links and no remote images.

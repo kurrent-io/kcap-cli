@@ -9,12 +9,11 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// </summary>
 public class DaemonConfigProfileTests {
     // Helper: simulate the DaemonRunner profile-wiring block in isolation.
-    static DaemonConfig ApplyProfileSettings(DaemonConfig config, DaemonSettings? profileDaemon) {
+    static DaemonConfig ApplyProfileSettings(DaemonConfig config, DaemonSettings? profileDaemon, bool maxAgentsFromArgs = false) {
         if (string.IsNullOrEmpty(config.Name) && !string.IsNullOrEmpty(profileDaemon?.Name))
             config.Name = profileDaemon.Name;
 
-        if (config.MaxConcurrentAgents == 5 && profileDaemon is { MaxAgents: var mx and not 5 })
-            config.MaxConcurrentAgents = mx;
+        DaemonRunner.ApplyProfileCapacity(config, profileDaemon, maxAgentsFromArgs);
 
         if (!string.IsNullOrEmpty(profileDaemon?.ClaudePath))
             config.ClaudePath = profileDaemon.ClaudePath;
@@ -23,6 +22,37 @@ public class DaemonConfigProfileTests {
             config.CodexPath = profileDaemon.CodexPath;
 
         return config;
+    }
+
+    // ── max_agents from profile ──────────────────────────────────────────────
+
+    [Test]
+    public async Task MaxAgents_FromProfile_Applies() {
+        var config = ApplyProfileSettings(new DaemonConfig(), new DaemonSettings { MaxAgents = 3 });
+
+        await Assert.That(config.MaxConcurrentAgents).IsEqualTo(3);
+    }
+
+    /// A profile value equal to the default must still be the profile's value, not "unset".
+    [Test]
+    public async Task MaxAgents_FromProfile_Applies_when_it_equals_the_default() {
+        var config = ApplyProfileSettings(new DaemonConfig { MaxConcurrentAgents = 8 }, new DaemonSettings { MaxAgents = 5 });
+
+        await Assert.That(config.MaxConcurrentAgents).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task MaxAgents_FromArgs_WinsOverProfile() {
+        var config = ApplyProfileSettings(new DaemonConfig { MaxConcurrentAgents = 7 }, new DaemonSettings { MaxAgents = 3 }, maxAgentsFromArgs: true);
+
+        await Assert.That(config.MaxConcurrentAgents).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task MaxAgents_NullProfile_KeepsDefault() {
+        var config = ApplyProfileSettings(new DaemonConfig(), profileDaemon: null);
+
+        await Assert.That(config.MaxConcurrentAgents).IsEqualTo(5);
     }
 
     // ── claude_path from profile ─────────────────────────────────────────────

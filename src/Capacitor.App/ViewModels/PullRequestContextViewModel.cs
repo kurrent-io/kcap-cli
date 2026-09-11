@@ -117,7 +117,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _openReader = openReader;
         _primaryRepo = primaryRepo;
         _readers = source as IPullRequestReaders;
-        RefreshCommand = ReactiveCommand.Create(() => RequestRefresh(manual: true));
+        RefreshCommand = ReactiveCommand.Create(Refresh);
         OpenReaderCommand = ReactiveCommand.Create(() => { _openReader(); SetReaderVisible(true); });
         ShowSectionCommand = ReactiveCommand.Create<string>(ShowSection);
         LoadMoreCommand = ReactiveCommand.Create(() => { if (CurrentSection?.Next is { } cursor) RequestPage(cursor); });
@@ -183,6 +183,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _refreshDiscovery = true;
         RequestRefresh();
     }
+    /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
+    public void Refresh() => RequestRefresh(manual: true);
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
         _readerVisible = visible;

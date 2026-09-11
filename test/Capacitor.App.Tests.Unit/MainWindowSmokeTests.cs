@@ -373,6 +373,70 @@ public class MainWindowSmokeTests {
         await Assert.That(reads.afterReshow).IsEqualTo(4);
     }
 
+    /// What the OS does when another app takes focus. The platform layer's Deactivated hook is
+    /// internal to Avalonia, so it is reached through the interface map by member name.
+    static void LoseKeyboardFocus(Window window) {
+        var impl = window.PlatformImpl!;
+        var contract = impl.GetType().GetInterfaces().First(i => i.Name == "IWindowBaseImpl");
+        var map = impl.GetType().GetInterfaceMap(contract);
+        var getter = Array.FindIndex(map.InterfaceMethods, m => m.Name == "get_Deactivated");
+        (map.TargetMethods[getter].Invoke(impl, null) as Action)?.Invoke();
+    }
+
+    /// PR context follows the window being on screen: an open workspace in a visible window loads
+    /// and shows its pull request while another app holds keyboard focus, and only minimizing or
+    /// hiding the window masks it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pull_request_context_follows_the_window_being_on_screen_not_keyboard_focus() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var service = new FakeDaemonClientService();
+            var (actions, _) = NewActions(service);
+            var time = new FakeTimeProvider();
+            var source = new FakePullRequestSource(time);
+            var attach = new FakeTerminalAttachClientFactory();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(),
+                workspaceFactory: agentId => new WorkspaceViewModel(
+                    agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source));
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            try {
+                vm.OpenSession("agent");
+                Dispatcher.UIThread.RunJobs();
+                var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
+                var pullRequests = workspace.PullRequests!;
+                service.Agents.AddOrUpdate(WorkspaceFixtures.Agent("agent", "claude", hasTerminal: false, sessionId: "session"));
+                await (workspace.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+                await WorkspaceFixtures.WaitUntilAsync(() => pullRequests.CanReveal, what: "PR shown in the visible window");
+
+                await Assert.That(window.IsActive).IsTrue();
+                LoseKeyboardFocus(window);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(window.IsActive).IsFalse();
+                await Assert.That(pullRequests.CanReveal).IsTrue();
+
+                window.WindowState = WindowState.Minimized;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(pullRequests.CanReveal).IsFalse();
+
+                window.WindowState = WindowState.Normal;
+                Dispatcher.UIThread.RunJobs();
+                await WorkspaceFixtures.WaitUntilAsync(() => pullRequests.CanReveal, what: "PR shown again after restoring");
+
+                window.Hide();
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(pullRequests.CanReveal).IsFalse();
+            } finally {
+                vm.CloseWorkspace();
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
     /// The surface swap itself (spec §3) — the XAML side of what WorkspaceNavigationTests pins on
     /// the ViewModel. WorkspaceView is materialized from a template rather than always present, so
     /// this also proves the terminal control is CONSTRUCTED only once a workspace exists; closing

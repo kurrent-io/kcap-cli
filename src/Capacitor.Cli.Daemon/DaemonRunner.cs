@@ -103,6 +103,7 @@ public static partial class DaemonRunner {
         // CLI arg overrides for daemon-specific settings — parse before host builder.
         // --name is consumed below by DaemonNameResolver (shared with the CLI
         // supervisor), so we don't parse it here.
+        var maxAgentsFromArgs = false;
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
                 case "--log-file": logFile = args[++i]; break;
@@ -110,6 +111,7 @@ public static partial class DaemonRunner {
                 case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
+                    maxAgentsFromArgs = true;
                     i++;
 
                     break;
@@ -166,8 +168,7 @@ public static partial class DaemonRunner {
         // Daemon settings from the active profile, with env overrides
         var profileDaemon = profiles.Resolution.Profile?.Daemon;
 
-        if (config.MaxConcurrentAgents == 5 && profileDaemon is { MaxAgents: var mx and not 5 })
-            config.MaxConcurrentAgents = mx;
+        ApplyProfileCapacity(config, profileDaemon, maxAgentsFromArgs);
 
         if (!string.IsNullOrEmpty(profileDaemon?.ClaudePath))
             config.ClaudePath = profileDaemon.ClaudePath;
@@ -365,6 +366,7 @@ public static partial class DaemonRunner {
         // Local-socket consent frames — the same broker instance the gate above prompts through, so
         // a subscriber connected via ConsentSubscribe sees the gate's own pending requests.
         builder.Services.AddSingleton<LaunchConsentIpc>();
+        builder.Services.AddSingleton<DaemonSettingsIpc>();
 
         builder.Services.AddSingleton<PermissionPromptBroker>();
         builder.Services.AddSingleton<PermissionIpc>();
@@ -1036,6 +1038,12 @@ public static partial class DaemonRunner {
     /// </summary>
     internal static bool ExpectationSatisfied(string? expected, string resolved) =>
         expected is null || (!string.IsNullOrEmpty(expected) && ServerIdentity.Matches(expected, resolved));
+
+    /// The profile's max_agents applies whenever --max-agents was not passed; the flag wins when it was.
+    internal static void ApplyProfileCapacity(DaemonConfig config, DaemonSettings? profileDaemon, bool maxAgentsFromArgs) {
+        if (maxAgentsFromArgs || profileDaemon is null) return;
+        config.MaxConcurrentAgents = profileDaemon.MaxAgents;
+    }
 
     /// <summary>Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
     /// (<c>0</c> → <see cref="TimeSpan.Zero"/>, which disables the bound). Unset/blank/invalid/negative

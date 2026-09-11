@@ -25,6 +25,7 @@ public interface ILocalControlOps {
     Task<ConsentAckDto>    ResolveConsentAsync(ConsentResolveDto resolve, CancellationToken ct);
     Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct);
     Task<SendTextResult>   SendTextAsync(string agentId, string text, CancellationToken ct);
+    Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct);
 }
 
 /// One-shot Core IPC operations behind a fresh socket per call — no Hello negotiation (callers
@@ -159,6 +160,21 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
                 return new SendTextResult(false, SendTextReasons.Transport, reply.Text, null);
             default:
                 return new SendTextResult(false, SendTextReasons.Transport, $"unexpected daemon response to send text ({reply.Type})", null);
+        }
+    }
+
+    public async Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
+        var json  = JsonSerializer.Serialize(put, SettingsIpcJsonContext.Default.DaemonSettingsPutDto);
+        var reply = await ExchangeAsync(LocalFrame.SettingsJson(FrameType.DaemonSettingsPut, json), ReplyTimeout, ct);
+        switch (reply.Type) {
+            case FrameType.DaemonSettingsAck:
+                var ack = DeserializeOrThrow(reply.Text, SettingsIpcJsonContext.Default.DaemonSettingsAckDto, "malformed daemon settings ack reply");
+                if (ack is null) throw new LocalControlOpsException(UnexpectedReply, "malformed daemon settings ack reply");
+                return ack; // Ok=false with a reason is returned as-is, never thrown
+            case FrameType.Error:
+                throw new LocalControlOpsException(DaemonRejected, reply.Text);
+            default:
+                throw new LocalControlOpsException(UnexpectedReply, $"unexpected daemon response to daemon settings put ({reply.Type})");
         }
     }
 

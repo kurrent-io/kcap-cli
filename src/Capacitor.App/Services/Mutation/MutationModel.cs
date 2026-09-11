@@ -5,9 +5,9 @@ namespace Capacitor.App.Services.Mutation;
 public enum MutationVerb { Install, Replace, StartVerified, DetachedStart }
 
 public sealed record MutationRequest(
-    MutationVerb Verb, string Profile, string CanonicalServer, string DaemonName);
+    MutationVerb Verb, string Profile, string CanonicalServer, string DaemonName, string? RetireServiceId = null);
 
-/// One classified result of a daemon-mutation attempt (spec §3/§4); the mutation lane maps every raw outcome onto exactly one case.
+/// The mutation lane maps every raw outcome onto exactly one case.
 public abstract record MutationOutcome {
     public sealed record Succeeded : MutationOutcome;
     public sealed record SucceededAfterTimeout : MutationOutcome;

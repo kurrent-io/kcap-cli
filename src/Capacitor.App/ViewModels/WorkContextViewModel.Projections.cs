@@ -19,6 +19,13 @@ public sealed partial class WorkContextViewModel {
     // rather than the assignment's; the requested id stands in when a read carried no item.
     string? _primaryId;
     string? _requestedId;
+    string? PrimaryId {
+        get => _primaryId;
+        set {
+            _primaryId = value;
+            _canOpenWorkItem.OnNext(WorkContextIds.ValidWorkItemId(value) is not null && _openWorkItem is not null);
+        }
+    }
 
     public IAvaloniaReadOnlyList<WorkContextPartViewModel> Parts => _parts;
     public IAvaloniaReadOnlyList<string> BlockedBy => _blockedBy;
@@ -155,7 +162,7 @@ public sealed partial class WorkContextViewModel {
     }
 
     void ClearCard() {
-        _primaryId = null;
+        PrimaryId = null;
         _requestedId = null;
         ClearItem();
         ClearTopology();
@@ -200,11 +207,11 @@ public sealed partial class WorkContextViewModel {
         var requested = read.Primary.WorkItemId;
         var served = read.Item?.WorkItemId;
         var samePrimary = served is not null
-            ? Same(served, _primaryId)
-            : Same(requested, _requestedId) || Same(requested, _primaryId);
+            ? Same(served, PrimaryId)
+            : Same(requested, _requestedId) || Same(requested, PrimaryId);
         _requestedId = requested;
-        if (served is not null) _primaryId = served;
-        else if (!samePrimary) _primaryId = requested;
+        if (served is not null) PrimaryId = served;
+        else if (!samePrimary) PrimaryId = requested;
 
         if (read.Item is { } item) ApplyItem(item, read.Assignments);
         else if (!samePrimary) {

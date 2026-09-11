@@ -95,6 +95,8 @@ Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/
 
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
 
+Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
+
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
 ### 2. Run setup
@@ -852,6 +854,7 @@ kcap daemon service install                # launchd (macOS) / systemd --user (L
 kcap daemon service install --name laptop  # a service per daemon name
 kcap daemon service install --verify       # install, then verify version/readiness/ownership before exiting 0
 kcap daemon service install --replace --verify  # take over a foreign/loaded unit, then verify
+kcap daemon service install --replace --verify --retire OLD   # also remove the unit OLD, e.g. after a rename
 kcap daemon service status                 # installed / running state
 kcap daemon service status --json          # machine-readable status (pids, binary paths, txn-marker state)
 kcap daemon service stop                   # stop the running service (stays installed)
@@ -872,6 +875,8 @@ kcap daemon service uninstall              # stop and remove the service
 `install --verify` (fresh installs only — a service that's already installed exits with the coded `verify_contended`, since clearing an existing label is `--replace`'s job) additionally requires the started daemon's reported version, protocol version, and reported name to match the installing CLI's own expectations, and rechecks the unit file on disk against a fingerprint taken at write time — so a foreign writer replacing the file between install and the recheck is detected (`verify_restore_verification`) rather than silently accepted. On any failure it rolls back by uninstalling the unit it just wrote (never a foreign one) and exits with a coded stderr token. **`--verify` is macOS/launchd only in this release** — `install --verify` is rejected on Linux/Windows.
 
 `install --replace --verify` (requires `--verify`) takes over an existing label/unit instead of refusing on contention: it clears a foreign or already-loaded label, stops a validated live owner if one is running, then installs and verifies as above — one transaction, rolling back to a verified-safe absent state on any failure rather than leaving a half-replaced unit.
+
+`install --replace --verify --retire <id>` additionally removes the unit `<id>` inside the same transaction — the unit a daemon rename leaves behind. The retired unit must be pinned to the same profile as the one being installed (`KCAP_PROFILE` in its plist), or the command refuses with `verify_retire_refused` and touches nothing; an absent unit is a no-op. With `--retire`, a live daemon already running under the *new* name is `verify_contended` rather than taken over.
 
 **App-managed starts are gated; plain terminal use is not.** When the invoking launcher carries the `KCAP_CONSENT_SEED_DEFAULT` environment directive — the desktop supervisor or a self-respawn, never a bare `kcap daemon service start --verify`/`kcap daemon start -d` typed at a terminal — `start --verify` pre-mutation-checks the installed unit's baked directive, binary digest, and identity evidence before touching anything, and exits `28` (`verify_start_gate`) with one `start_gate_reason=<token>` line naming which check failed: `directive_missing`, `directive_invalid`, `identity_mismatch`, `foreign_binary`, `package_inconsistent`, or `evidence_unreadable`. A gate that passes is re-checked immediately before bootstrap; if the evidence changed in between (a foreign writer, a swapped binary), it rolls back the same way a forward-phase failure does and exits `29` (`verify_start_gate_drift`) instead of proceeding on stale authorization. No directive means no gate — this only ever fires for an app-managed start.
 

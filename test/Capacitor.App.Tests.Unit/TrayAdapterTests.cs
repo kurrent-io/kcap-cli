@@ -175,8 +175,7 @@ public class TrayAdapterTests {
                 return (menu.Items.Count, menu.Items.OfType<NativeMenuItemSeparator>().Count());
             });
 
-            // header, sep, pause, open, sep, quit — no agent submenu items, exactly 2 separators.
-            await Assert.That(itemCount).IsEqualTo(6);
+            await Assert.That(itemCount).IsEqualTo(7);
             await Assert.That(separatorCount).IsEqualTo(2);
         });
     }
@@ -224,7 +223,7 @@ public class TrayAdapterTests {
             await Assert.That(result.Item8).IsEqualTo("Local:a1");
             await Assert.That(result.Item9).IsTrue();
             await Assert.That(result.Item10).IsFalse(); // stop2.IsEnabled — StopEnabled: false
-            await Assert.That(result.Item11).IsEqualTo(9); // header, sep, 2 agents, sep, pause, open, sep, quit
+            await Assert.That(result.Item11).IsEqualTo(10);
         });
     }
 
@@ -352,6 +351,23 @@ public class TrayAdapterTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task Settings_follows_Open_and_invokes_its_command() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        var opened = 0;
+        using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(),
+            openSettings: () => opened++);
+        var menu = new NativeMenu();
+        new TrayMenuBuilder(vm).Rebuild(menu, Model());
+        var items = menu.Items.OfType<NativeMenuItem>().ToList();
+        var settings = items.Single(i => i.Header == "Settings…");
+        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Open Kurrent Capacitor") + 1);
+        await Assert.That(settings.IsEnabled).IsTrue();
+        ((INativeMenuItemExporterEventsImplBridge)settings).RaiseClicked();
+        await Assert.That(opened).IsEqualTo(1);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Rebuild_omits_the_shim_item_when_not_offerable() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var hasShimItem = await AvaloniaSession.DispatchAsync(() => {
@@ -395,7 +411,7 @@ public class TrayAdapterTests {
             });
 
             await Assert.That(header).IsEqualTo("Install command-line tool…");
-            await Assert.That(shimIndex).IsEqualTo(openIndex + 1); // immediately after "Open Kurrent Capacitor"
+            await Assert.That(shimIndex).IsEqualTo(openIndex + 2);
             await Assert.That(shimIndex).IsLessThan(quitIndex); // still before the trailing separator + Quit
             await Assert.That(commandMatches).IsTrue();
         });

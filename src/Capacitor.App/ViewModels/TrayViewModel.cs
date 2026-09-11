@@ -52,6 +52,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     // VM owns the commands so tests can assert delegation without a live window/desktop lifetime.
     // No-op defaults so this VM stays constructible before Task 7 supplies the real callbacks.
     public ReactiveCommand<Unit, Unit> OpenMainWindowCommand { get; }
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
     public ReactiveCommand<Unit, Unit> QuitCommand { get; }
 
     // The tray menu's "Review pending launches…" target (spec §8); the coordinator itself
@@ -92,7 +93,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             Func<Task>? installShim = null, IPermissionService? permissions = null,
             IObservable<RemoteTraySummary>? remote = null,
             IObservable<UpdateMenuItem>? updateMenu = null, Func<Task>? updateAction = null,
-            IObservable<bool>? restartPending = null) {
+            IObservable<bool>? restartPending = null, Action? openSettings = null) {
         _pause = pause;
 
         TogglePauseCommand = ReactiveCommand.Create<bool>(pause.RequestToggle);
@@ -109,6 +110,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             else actions.OpenInWeb(clicked.Id);
         });
         OpenMainWindowCommand = ReactiveCommand.Create(openMainWindow ?? (() => { }));
+        OpenSettingsCommand = ReactiveCommand.Create(openSettings ?? (() => { }), Observable.Return(openSettings is not null))
+            .DisposeWith(_disposables);
         QuitCommand = ReactiveCommand.Create(quit ?? (() => { }));
         ReviewPendingCommand = ReactiveCommand.Create(openReviewPrompts ?? (() => { }));
         InstallShimCommand = ReactiveCommand.CreateFromTask(installShim ?? (() => Task.CompletedTask));

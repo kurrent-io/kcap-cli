@@ -102,12 +102,13 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         // first Show(), but this keeps the check correct even if a caller (a test) does it the
         // other way around.
         if (change.Property == IsVisibleProperty || change.Property == DataContextProperty
-            || change.Property == IsActiveProperty || change.Property == WindowStateProperty) UpdateActivityVisibility();
+            || change.Property == WindowStateProperty) UpdateActivityVisibility();
     }
 
-    // Activity polls only when it is ACTUALLY on screen: window visible AND the launcher pane
-    // showing (Sessions surface, no workspace open) AND the flyout open — the same contract the
-    // Activity tab's selection used to carry.
+    // Activity polls only while it is actually on screen: window visible AND the launcher pane
+    // showing (Sessions surface, no workspace open) AND the flyout open. PR context follows the
+    // window being on screen — visible and not minimized — never keyboard focus: a reader left
+    // beside another app's window stays readable and keeps its access lease renewed.
     void UpdateActivityVisibility() {
         if (DataContext is MainWindowViewModel vm) {
             vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.IsSessionsView && vm.CurrentWorkspace is null);
@@ -115,7 +116,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             var workspace = vm.IsSessionsView ? vm.CurrentWorkspace as WorkspaceViewModel : null;
             if (_foregroundWorkspace != workspace) _foregroundWorkspace?.PullRequests?.SetForeground(false);
             _foregroundWorkspace = workspace;
-            workspace?.PullRequests?.SetForeground(IsVisible && IsActive && WindowState != Avalonia.Controls.WindowState.Minimized);
+            workspace?.PullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);
         } else {
             _foregroundWorkspace?.PullRequests?.SetForeground(false);
             _foregroundWorkspace = null;

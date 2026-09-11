@@ -9,6 +9,15 @@ namespace Capacitor.App.Tests.Unit;
 /// injected start delegate) routes through.
 public class MutationRequestFactoryTests {
     [Test]
+    [Arguments(MutationVerb.Install, "old-name")]
+    [Arguments(MutationVerb.Replace, " NEW-name ")]
+    public async Task Invalid_retire_request_is_refused(MutationVerb verb, string oldName) {
+        var refusal = MutationRequestFactory.TryBuild(verb, "work", "https://work.example", "new-name", out var request, oldName);
+        await Assert.That(request).IsNull();
+        await Assert.That(refusal).IsTypeOf<MutationOutcome.Refused>();
+    }
+
+    [Test]
     public async Task Valid_profile_and_server_builds_a_request() {
         var refusal = MutationRequestFactory.TryBuild(
             MutationVerb.StartVerified, "default", "https://kcap.example.com", "daemon-a", out var request);

@@ -40,6 +40,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     readonly object _gate = new();
     ActionSlot? _owned;
     readonly List<ActionSlot> _queue = [];
+    readonly HashSet<string> _retiredServiceIds = new(StringComparer.Ordinal);
     TaskCompletionSource _quiescent = CompletedSignal();
     bool _disposed;
 
@@ -69,6 +70,18 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             DetachWaiter(slot); // this waiter only — the owned action keeps running under the lane's own token
             throw;
         }
+    }
+
+    public bool IsRetired(string daemonName) {
+        lock (_gate) return _retiredServiceIds.Contains(DaemonStore.Sanitize(daemonName));
+    }
+
+    public async Task<bool> CanRetireAsync(MutationRequest request, CancellationToken ct) {
+        var path = await ResolvePathAsync(ct).ConfigureAwait(false);
+        if (path is null) return false;
+        var cli = _executorFactory(request, path);
+        return KcapCliCompatibility.Satisfies(await cli.VersionAsync(ct).ConfigureAwait(false)) &&
+            await cli.SupportsServiceRetireAsync(ct).ConfigureAwait(false);
     }
 
     public async Task QuiescedAsync(CancellationToken ct) {
@@ -158,6 +171,10 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             fault = ex;
         }
 
+        if (slot.Request.RetireServiceId is { } retired && outcome is not MutationOutcome.Failed { Reason: "cli_unsupported" }) {
+            lock (_gate) _retiredServiceIds.Add(retired);
+        }
+
         // Detach BEFORE resolving the outcome below: closes the window where a fresh RunAsync for
         // the SAME request could coalesce onto a slot whose result is already decided.
         var next = DetachAndAdmitNext(slot);
@@ -221,13 +238,13 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     async Task<MutationOutcome> ExecuteActionAsync(MutationRequest request, CancellationToken ct) {
         ct.ThrowIfCancellationRequested(); // a disposed lane's cancelled token must stop admission before any spawn
 
+        if (IsRetired(request.DaemonName) || request.RetireServiceId is { } retired && IsRetired(retired))
+            return new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention);
+
         // Pinned before the first await (spec pin-once rule): evidence is always a fresh socket dial, never a live-graph replay.
         var observation = _oneShotFactory(request);
 
-        var pinnedPath = _cliOverride() ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: false).ConfigureAwait(false);
-        // A cached negative must not refuse forever: one forced re-probe lets a CLI installed after
-        // the cache went negative recover on the very next action, instead of requiring an app restart.
-        pinnedPath ??= await _shellProbe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+        var pinnedPath = await ResolvePathAsync(ct).ConfigureAwait(false);
         if (pinnedPath is null) return new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention);
 
         var executor = _executorFactory(request, pinnedPath); // built ONCE; the same instance runs the probe and the mutation
@@ -244,10 +261,16 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return await Classify(request, result, executor, observation, attemptId, ct).ConfigureAwait(false);
     }
 
+    async Task<string?> ResolvePathAsync(CancellationToken ct) {
+        var path = _cliOverride() ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: false).ConfigureAwait(false);
+        // Retry a cached miss so installing the CLI does not require an app restart.
+        return path ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+    }
+
     static Task<ProcessResult> Dispatch(IKcapCli executor, MutationRequest request, string? attemptId, CancellationToken ct) =>
         request.Verb switch {
             MutationVerb.Install       => executor.ServiceInstallVerifiedAsync(replace: false, ct),
-            MutationVerb.Replace       => executor.ServiceInstallVerifiedAsync(replace: true, ct),
+            MutationVerb.Replace       => executor.ServiceInstallVerifiedAsync(replace: true, ct, request.RetireServiceId),
             MutationVerb.StartVerified => executor.ServiceStartVerifiedAsync(ct),
             MutationVerb.DetachedStart => executor.DetachedStartAsync(attemptId!, ct),
             // Fail closed, never permissive: an unnamed enum value must halt, not silently pick a verb.
@@ -272,6 +295,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
 
         if (result.ExitCode == 0) return await ClassifyServiceSuccessAsync(request, executor, observation, ct).ConfigureAwait(false);
+
+        if (result.ExitCode == VerifyExitCodes.RetireRefused)
+            return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "retire_reason="), RecoverySurface.Attention);
 
         if (result.ExitCode == VerifyExitCodes.StartGate) {
             var token = ReasonLine.TrySingle(result.Stderr, "start_gate_reason=");

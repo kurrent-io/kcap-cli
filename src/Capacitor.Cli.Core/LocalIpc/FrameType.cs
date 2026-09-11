@@ -30,6 +30,8 @@ public enum FrameType : byte {
     PermissionResolve   = 21, // one-shot: settle a pending request (Text = PermissionResolveDto JSON)
     // Composer input for a hosted agent — one-shot; the ack lands when the daemon's delivery settles.
     SendText = 22, // Text = SendTextDto JSON
+    // Daemon settings — one-shot; the ack carries the value in effect.
+    DaemonSettingsPut = 23, // Text = DaemonSettingsPutDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -49,4 +51,5 @@ public enum FrameType : byte {
     PermissionResolved = 78, // Text = PermissionResolvedDto JSON, pushed on every settlement
     PermissionAck      = 79, // Text = PermissionAckDto JSON, reply to PermissionResolve
     SendTextAck = 80, // Text = SendTextAckDto JSON, reply to SendText
+    DaemonSettingsAck = 81, // Text = DaemonSettingsAckDto JSON, reply to DaemonSettingsPut
 }

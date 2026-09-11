@@ -29,6 +29,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) =>
         bind().SendTextAsync(agentId, text, ct);
+
+    public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) =>
+        bind().PutDaemonSettingsAsync(put, ct);
 }
 
 /// <summary>
@@ -44,10 +47,12 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) => bind().ServiceStatusAsync(ct);
 
+    public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => bind().SupportsServiceRetireAsync(ct);
+
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) => bind().ServiceStartVerifiedAsync(ct);
 
-    public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct) =>
-        bind().ServiceInstallVerifiedAsync(replace, ct);
+    public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null) =>
+        bind().ServiceInstallVerifiedAsync(replace, ct, retireServiceId);
 
     public Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) =>
         bind().DetachedStartAsync(bootAttemptId, ct);

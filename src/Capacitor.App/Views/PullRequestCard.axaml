@@ -50,18 +50,16 @@
                 <Button Content="{Binding InstallToolLabel}" Command="{Binding InstallToolCommand}" IsVisible="{Binding ShowsInstallTool}" Classes="prButton prPrimary" Margin="0,0,8,0" />
                 <Button Content="Recheck" Command="{Binding RefreshCommand}" Classes="prButton" />
             </WrapPanel>
-            <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
-                    <Button Content="View PR" Command="{Binding OpenReaderCommand}" IsVisible="{Binding HasChoice}"
+            <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0" IsVisible="{Binding HasChoice}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                    <Button Content="View PR" Command="{Binding OpenReaderCommand}"
                             IsEnabled="{Binding !IsLegacy}" Classes="prButton prPrimary" HorizontalAlignment="Left" />
-                    <Button Grid.Column="1" Command="{Binding RefreshCommand}" Classes="prButton" ToolTip.Tip="{Binding RefreshTip}"
-                            AutomationProperties.Name="Refresh pull request">
-                        <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round"
-                              Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
-                    </Button>
-                    <Button Grid.Column="2" Command="{Binding OpenGitHubCommand}" IsVisible="{Binding HasChoice}" IsEnabled="{Binding CanOpenSource}"
+                    <Button Grid.Column="1" Command="{Binding OpenGitHubCommand}" IsEnabled="{Binding CanOpenSource}"
                             Classes="prButton" AutomationProperties.Name="Open pull request in browser">
-                        <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="{Binding ProviderLabel}" /><Path Classes="prExternal" /></StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
+                            <Path Classes="prExternal prAfterLabel" />
+                        </StackPanel>
                     </Button>
                 </Grid>
             </Border>
