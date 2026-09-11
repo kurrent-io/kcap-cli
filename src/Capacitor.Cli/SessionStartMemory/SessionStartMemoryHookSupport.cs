@@ -29,12 +29,13 @@ internal static class SessionStartMemoryHookSupport {
     public static ISessionStartContextProvider CompositeProvider(
             ConfigRoot config,
             Func<CancellationToken, Task<HttpClient>> client,
+            TimeProvider time,
             ISessionStartMemoryScopeResolver? scopeResolver = null) {
-        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(config);
+        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(config, time);
 
-        var memory     = new SessionStartMemoryContextProvider(resolver, client);
+        var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
         var guidelines = new SessionStartGuidelinesLane(client);
-        return new SessionStartCompositeContextProvider(resolver, memory, guidelines);
+        return new SessionStartCompositeContextProvider(resolver, memory, guidelines, time);
     }
 
     /// <summary>
@@ -55,7 +56,7 @@ internal static class SessionStartMemoryHookSupport {
             if (remaining <= TimeSpan.Zero)
                 return task.IsCompletedSuccessfully ? task.Result : null;
 
-            return await task.WaitAsync(remaining);
+            return await task.WaitAsync(remaining, budget.Time);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

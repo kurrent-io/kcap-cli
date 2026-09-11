@@ -6,13 +6,14 @@ namespace Capacitor.Cli.SessionStartMemory;
 internal sealed class SessionStartMemoryContextProvider(
     ISessionStartMemoryScopeResolver scopeResolver,
     Func<CancellationToken, Task<HttpClient>> client,
+    TimeProvider time,
     Action<string>? diagnostic = null) : ISessionStartContextProvider {
 
     public async Task<SessionStartMemoryContextResult> GetAsync(SessionStartMemoryContextRequest request) {
         if (request.Disabled) return SessionStartMemoryContextResult.Empty;
         if (request.Budget <= TimeSpan.Zero) return SessionStartMemoryContextResult.Retry;
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken);
-        cts.CancelAfter(request.Budget);
+        using var expiry = new CancellationTokenSource(request.Budget, time);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken, expiry.Token);
         try {
             var scope = await scopeResolver.ResolveAsync(request.Cwd, request.Budget, cts.Token);
             return await FetchWithScopeAsync(scope, request, cts.Token);

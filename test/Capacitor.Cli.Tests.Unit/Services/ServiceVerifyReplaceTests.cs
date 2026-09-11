@@ -9,6 +9,10 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// finds first. See <see cref="ServiceVerifyInstallTests"/> for the fresh-path/entry-recovery
 /// coverage this builds on.</summary>
 public class ServiceVerifyReplaceTests {
+    /// <summary>A clock nothing advances: these tests resolve on their first probe, and a loaded
+    /// runner stalled between entry and that probe would otherwise spend the whole forward budget.</summary>
+    static FakeTimeProvider Stopped() => new();
+
     [TempHome] public required TempHome Home { get; init; }
 
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -121,7 +125,7 @@ public class ServiceVerifyReplaceTests {
             : manager.Uninstalled ? null
             : ManualOwnerPid;
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -167,7 +171,7 @@ public class ServiceVerifyReplaceTests {
             : helloCalls == 0 ? ManualOwnerPid
             : null;
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -194,7 +198,7 @@ public class ServiceVerifyReplaceTests {
 
         int? ValidatedPid(string _) => manager.Bootstrapped ? manager.RunningPid : null;
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -225,7 +229,7 @@ public class ServiceVerifyReplaceTests {
             : helloCalls == 0 ? ManualOwnerPid
             : null;
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -259,7 +263,7 @@ public class ServiceVerifyReplaceTests {
             : manager.Uninstalled ? null
             : ManualOwnerPid;
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, ValidatedPid, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -329,7 +333,7 @@ public class ServiceVerifyReplaceTests {
     public async Task Unknown_probe_aborts_before_the_matrix_runs_anything_destructive() {
         var (_, daemonPath) = SetUpViableInstall();
         var manager = new FakeServiceManager(Home) { InitialProbe = LabelProbe.Unknown };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => ManualOwnerPid, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => ManualOwnerPid, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -371,7 +375,7 @@ public class ServiceVerifyReplaceTests {
         // cleared — never destroy the working unit and only then discover the new one can't render.
         var manager = new ThrowingRenderManager(Home);
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => ManualOwnerPid, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System, readPlist: OwnPlist);
+            Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 
@@ -385,7 +389,7 @@ public class ServiceVerifyReplaceTests {
         var (_, daemonPath) = SetUpViableInstall();
         var manager = new FakeServiceManager(Home) { InitialProbe = LabelProbe.Loaded, InitialUnitPresent = true, InitialJobPid = ManualOwnerPid };
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => ManualOwnerPid, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System, readPlist: OwnPlist, profileViable: () => false);
+            Stopped(), readPlist: OwnPlist, profileViable: () => false);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: true, ExpectedVersion);
 

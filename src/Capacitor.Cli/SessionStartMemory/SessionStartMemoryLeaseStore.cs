@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Capacitor.Cli.Core;
 using System.Security.Cryptography;
 using System.Text;
@@ -32,7 +31,7 @@ internal sealed partial class SessionStartMemoryLeaseStore {
     public async Task<SessionStartMemoryLeaseHandle?> TryBeginAsync(
         string key, TimeSpan budget, CancellationToken ct = default) {
         if (!KeyRegex().IsMatch(key) || budget <= TimeSpan.Zero) return null;
-        var started = Stopwatch.GetTimestamp();
+        var started = _time.GetTimestamp();
         TimeSpan Remaining() => RemainingBudget(budget, started);
         try {
             using var gate = await AcquireAsync(Remaining(), ct);
@@ -86,7 +85,7 @@ internal sealed partial class SessionStartMemoryLeaseStore {
     async Task<bool> MutateAsync(SessionStartMemoryLeaseHandle handle, SessionStartMemoryDisposition disposition,
         TimeSpan? retryAfter, TimeSpan budget, CancellationToken ct) {
         if (budget <= TimeSpan.Zero) return false;
-        var started = Stopwatch.GetTimestamp();
+        var started = _time.GetTimestamp();
         try {
             using var gate = await AcquireAsync(RemainingBudget(budget, started), ct);
             if (gate is null) return false;
@@ -131,7 +130,7 @@ internal sealed partial class SessionStartMemoryLeaseStore {
 
     public async Task SweepAsync(TimeSpan budget, int maxEntries = 5_000, CancellationToken ct = default) {
         if (budget <= TimeSpan.Zero || maxEntries <= 0) return;
-        var started = Stopwatch.GetTimestamp();
+        var started = _time.GetTimestamp();
         try {
             using var gate = await AcquireAsync(RemainingBudget(budget, started), ct);
             if (gate is null) return;
@@ -144,7 +143,7 @@ internal sealed partial class SessionStartMemoryLeaseStore {
 
     void SweepUnderLock(TimeSpan budget, int maxEntries, bool force) {
         if (budget <= TimeSpan.Zero) return;
-        var started = Stopwatch.GetTimestamp();
+        var started = _time.GetTimestamp();
         var now = _time.GetUtcNow();
         var metadata = ReadMetadata();
         if (!force && metadata.LastSweepAt is { } last && now >= last && now - last < NormalSweepInterval)
@@ -157,7 +156,7 @@ internal sealed partial class SessionStartMemoryLeaseStore {
         var seekingCursor = cursor is not null;
 
         foreach (var entry in Directory.EnumerateFileSystemEntries(_root)) {
-            if (processed >= maxEntries || Stopwatch.GetElapsedTime(started) >= budget) {
+            if (processed >= maxEntries || _time.GetElapsedTime(started) >= budget) {
                 reachedEnd = false;
                 break;
             }
@@ -225,16 +224,16 @@ internal sealed partial class SessionStartMemoryLeaseStore {
     }
 
     async Task<FileStream?> AcquireAsync(TimeSpan budget, CancellationToken ct) {
-        var started = Stopwatch.GetTimestamp();
-        while (Stopwatch.GetElapsedTime(started) < budget && !ct.IsCancellationRequested) {
+        var started = _time.GetTimestamp();
+        while (_time.GetElapsedTime(started) < budget && !ct.IsCancellationRequested) {
             try {
                 var stream = new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 SetOwnerOnly(_lockPath);
                 return stream;
             } catch (IOException) {
-                var remaining = budget - Stopwatch.GetElapsedTime(started);
+                var remaining = budget - _time.GetElapsedTime(started);
                 if (remaining <= TimeSpan.Zero) break;
-                await Task.Delay(remaining < TimeSpan.FromMilliseconds(5) ? remaining : TimeSpan.FromMilliseconds(5), ct);
+                await Task.Delay(remaining < TimeSpan.FromMilliseconds(5) ? remaining : TimeSpan.FromMilliseconds(5), _time, ct);
             }
         }
         return null;
@@ -266,7 +265,7 @@ internal sealed partial class SessionStartMemoryLeaseStore {
 
     bool EnsureWriteCapacity(bool creatingRecord, TimeSpan budget) {
         if (budget <= TimeSpan.Zero) return false;
-        var started = Stopwatch.GetTimestamp();
+        var started = _time.GetTimestamp();
         if (!TryCountEntries(RemainingBudget(budget, started), creatingRecord, out var total, out var records)) return false;
         if (total < SessionStartMemoryConstants.TotalEntryCap &&
             (!creatingRecord || records < SessionStartMemoryConstants.NormalRecordCap)) return true;
@@ -283,9 +282,9 @@ internal sealed partial class SessionStartMemoryLeaseStore {
         total = 0;
         records = 0;
         if (budget <= TimeSpan.Zero) return false;
-        var started = Stopwatch.GetTimestamp();
+        var started = _time.GetTimestamp();
         foreach (var path in Directory.EnumerateFileSystemEntries(_root)) {
-            if (Stopwatch.GetElapsedTime(started) >= budget) return false;
+            if (_time.GetElapsedTime(started) >= budget) return false;
             var name = Path.GetFileName(path);
             if (name is "store.lock" or MetadataName) continue;
             total++;
@@ -296,8 +295,8 @@ internal sealed partial class SessionStartMemoryLeaseStore {
         return true;
     }
 
-    static TimeSpan RemainingBudget(TimeSpan budget, long started) {
-        var remaining = budget - Stopwatch.GetElapsedTime(started);
+    TimeSpan RemainingBudget(TimeSpan budget, long started) {
+        var remaining = budget - _time.GetElapsedTime(started);
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 

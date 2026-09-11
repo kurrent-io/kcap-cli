@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using Capacitor.Cli.SessionStartMemory;
 
+using Microsoft.Extensions.Time.Testing;
+
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 
 /// <summary>
@@ -108,9 +110,12 @@ public class GuidelinesLaneAndCompositeTests {
         var scope    = new FixedScope("repo", "machine");
         var memH     = memoryHandler ?? new Handler(memory.status, memory.body, memory.retryAfter);
         var guideH   = guidelinesHandler ?? new Handler(guidelines.status, guidelines.body, guidelines.retryAfter);
-        var memory2  = new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(memH)));
+        // One stopped clock for both lanes and the composite: the budget they share must not be
+        // spendable by a loaded runner between arming it and the handler answering.
+        var time     = new FakeTimeProvider();
+        var memory2  = new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(memH)), time);
         var guide2   = new SessionStartGuidelinesLane(Lazy(new HttpClient(guideH)));
-        return new SessionStartCompositeContextProvider(scope, memory2, guide2);
+        return new SessionStartCompositeContextProvider(scope, memory2, guide2, time);
     }
 
     [Test]

@@ -98,6 +98,10 @@ public class ServiceVerifyInstallTests {
         return await task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    /// <summary>A clock nothing advances: these tests resolve on their first probe, and a loaded
+    /// runner stalled between entry and that probe would otherwise spend the whole forward budget.</summary>
+    static FakeTimeProvider Stopped() => new();
+
     (string Dir, string DaemonPath) SetUpViableInstall() {
         var dir = Tmp.CreateDir(Guid.NewGuid().ToString("N"));
         var daemonPath = dir.PathTo("kcap-daemon");
@@ -116,7 +120,7 @@ public class ServiceVerifyInstallTests {
     public async Task Viability_abort_missing_binary_touches_nothing() {
         var manager = new FakeServiceManager(Home);
         var missingPath = Daemons.PathTo("does-not-exist-kcap-daemon");
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(missingPath), replace: false, ExpectedVersion);
 
@@ -129,7 +133,7 @@ public class ServiceVerifyInstallTests {
     public async Task PreQuery_loaded_is_contended_not_bootout_unknown() {
         var (dir, daemonPath) = SetUpViableInstall();
         var manager = new FakeServiceManager(Home) { InitialProbe = LabelProbe.Loaded };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -143,7 +147,7 @@ public class ServiceVerifyInstallTests {
     public async Task PreQuery_unknown_is_bootout_unknown_distinct_from_loaded() {
         var (dir, daemonPath) = SetUpViableInstall();
         var manager = new FakeServiceManager(Home) { InitialProbe = LabelProbe.Unknown };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -171,7 +175,7 @@ public class ServiceVerifyInstallTests {
             return Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -195,7 +199,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -217,7 +221,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -240,7 +244,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -262,7 +266,7 @@ public class ServiceVerifyInstallTests {
         var manager = new FakeServiceManager(Home);
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242,
             (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System,
+            Stopped(),
             readPlist: _ => null,     // simulates a read failure, not absence
             plistExists: _ => true);  // ...but the file IS there
 
@@ -303,7 +307,7 @@ public class ServiceVerifyInstallTests {
         ServiceTxnMarker.Write(Daemons.Store, Id, new TxnMarker(1, "install", "written", "stale", "no-unit", "stale-fingerprint"));
 
         var manager = new FakeServiceManager(Home);
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -391,7 +395,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "whatever-version-nobody-checks", Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, expectedVersion: null);
 
@@ -409,7 +413,7 @@ public class ServiceVerifyInstallTests {
 
         // A different writer's plist text is on disk by the time the final recheck reads it —
         // the fingerprint can never match what WriteAndBootstrap wrote.
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System, readPlist: _ => "<plist>someone-else</plist>");
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(), readPlist: _ => "<plist>someone-else</plist>");
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -424,7 +428,7 @@ public class ServiceVerifyInstallTests {
         // `service stop` retains the plist by design — a stopped-but-installed service must be
         // treated the same as Loaded, not as a fresh Absent slot to overwrite.
         var manager = new FakeServiceManager(Home) { InitialProbe = LabelProbe.Absent, InitialUnitPresent = true };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -438,7 +442,7 @@ public class ServiceVerifyInstallTests {
     public async Task GenerateFiles_throwing_is_a_viability_abort_before_any_destructive_step() {
         var (dir, daemonPath) = SetUpViableInstall();
         var manager = new FakeServiceManager(Home) { GenerateFilesThrows = new InvalidOperationException("invalid captured env value") };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -456,7 +460,7 @@ public class ServiceVerifyInstallTests {
         var (dir, daemonPath) = SetUpViableInstall();
         var manager = new FakeServiceManager(Home);
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System, readPlist: OwnPlist, profileViable: () => false);
+            Stopped(), readPlist: OwnPlist, profileViable: () => false);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -471,7 +475,7 @@ public class ServiceVerifyInstallTests {
         // launchctl bootstrap can throw (EPERM under MDM, I/O error) AFTER WriteUnitFiles has
         // already put the plist on disk — readPlist reflects that with matching ("own") content.
         var manager = new FakeServiceManager(Home) { WriteAndBootstrapThrows = new InvalidOperationException("launchctl bootstrap failed (exit 5): Input/output error") };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), TimeProvider.System, readPlist: OwnPlist);
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)), Stopped(), readPlist: OwnPlist);
 
         var exit = await sut.InstallVerifiedAsync(Spec(daemonPath), replace: false, ExpectedVersion);
 
@@ -590,7 +594,7 @@ public class ServiceVerifyInstallTests {
         var manager = new FakeServiceManager(Home) { WriteAndBootstrapThrows = new InvalidOperationException("launchctl bootstrap failed (exit 5)") };
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242,
             (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System,
+            Stopped(),
             readPlist: _ => null,     // present but unreadable — cannot be fingerprinted
             plistExists: _ => true);
 
@@ -614,7 +618,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: OwnPlist,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             digestMatches: _ => false); // viability digest check fails
@@ -642,7 +646,7 @@ public class ServiceVerifyInstallTests {
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
         var digestCalls = 0;
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: OwnPlist,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             digestMatches: _ => Interlocked.Increment(ref digestCalls) == 1); // pass viability, fail pre-bootstrap
@@ -666,7 +670,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: OwnPlist,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             digestMatches: _ => true);
@@ -688,7 +692,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: OwnPlist,
             digestMatches: _ => false); // no gateEnv wired at all — must never be consulted
 
@@ -716,7 +720,7 @@ public class ServiceVerifyInstallTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, ExpectedVersion, Id));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: OwnPlist,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             digestMatches: _ => false);
@@ -750,7 +754,7 @@ public class ServiceVerifyInstallTests {
 
         var digestCalls = 0;
         var committedInvoked = false;
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: OwnPlist,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             // pass(1)=viability, pass(2)=pre-bootstrap, fail(3)=post-readiness.
@@ -774,7 +778,7 @@ public class ServiceVerifyInstallTests {
         var manager = new FakeServiceManager(Home) { WriteAndBootstrapThrows = new InvalidOperationException("launchctl bootstrap failed (exit 5)") };
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242,
             (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System,
+            Stopped(),
             readPlist: _ => null,
             plistExists: _ => false);
 
