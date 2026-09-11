@@ -10,7 +10,7 @@ Subcommands:
 Config keys:
   server_url              Server URL
   daemon.name                 Daemon name
-  daemon.max_agents           Max concurrent hosted coding agents
+  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)
   daemon.claude_path          Path to claude binary (default: claude)
   daemon.codex_path           Path to codex binary (default: codex)
   default_visibility          Default session visibility (private, project, org_public, public)

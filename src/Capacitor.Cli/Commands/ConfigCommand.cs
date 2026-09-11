@@ -208,7 +208,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
         Console.Error.WriteLine("Keys:");
         Console.Error.WriteLine("  server_url                  Server URL");
         Console.Error.WriteLine("  daemon.name                 Daemon name");
-        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents");
+        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)");
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
         Console.Error.WriteLine("  update_check                All kcap update nudging: stderr hint, server headers (banner/notification), in-agent nudge (true/false)");

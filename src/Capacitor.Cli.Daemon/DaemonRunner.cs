@@ -111,14 +111,14 @@ public static partial class DaemonRunner {
                 case "--log-file": logFile = args[++i]; break;
                 case "--stderr-file": stderrFile = args[++i]; break;
                 case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
-                case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
+                case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 0:
                     config.MaxConcurrentAgents = n;
                     maxAgentsFromArgs = true;
                     i++;
 
                     break;
                 case "--max-agents":
-                    await Console.Error.WriteLineAsync($"Invalid --max-agents value: {args[i + 1]} (must be a positive integer)");
+                    await Console.Error.WriteLineAsync($"Invalid --max-agents value: {args[i + 1]} (must be 0 for unlimited, or a positive integer)");
 
                     return 1;
             }
@@ -179,7 +179,7 @@ public static partial class DaemonRunner {
             config.CodexPath = profileDaemon.CodexPath;
 
         if (Environment.GetEnvironmentVariable("KCAP_MAX_AGENTS") is { } maxAgents) {
-            if (int.TryParse(maxAgents, out var n) && n >= 1)
+            if (int.TryParse(maxAgents, out var n) && n >= 0)
                 config.MaxConcurrentAgents = n;
             else
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");

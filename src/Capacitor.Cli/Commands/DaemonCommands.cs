@@ -1026,7 +1026,7 @@ public sealed class DaemonCommands(
         Console.Error.WriteLine("Options for start:");
         Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
         Console.Error.WriteLine("  --server-url <url>    Server URL");
-        Console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5)");
+        Console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5; 0 = unlimited)");
         Console.Error.WriteLine("  --log-file <path>     Log to file instead of console");
         Console.Error.WriteLine("  -d, --detach          Run in background (logs to file automatically)");
 

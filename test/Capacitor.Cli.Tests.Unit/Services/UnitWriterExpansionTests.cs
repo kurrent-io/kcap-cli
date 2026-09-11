@@ -304,13 +304,18 @@ public class UnitWriterExpansionTests {
     [Arguments("8;calc")]
     [Arguments("abc")]
     [Arguments("")]
-    [Arguments("0")]
     [Arguments("-1")]
     [Arguments("8.5")]
-    public async Task ServiceExtraArgs_rejects_a_non_positive_integer(string bad) {
+    public async Task ServiceExtraArgs_rejects_a_negative_or_non_integer(string bad) {
         var ex = Assert.Throws<ArgumentException>(() => DaemonServiceCommands.ExtraArgs(bad));
 
         await Assert.That(ex!.Message).Contains("positive integer");
+    }
+
+    /// 0 is the unlimited sentinel and must round-trip into the persisted unit, not be rejected.
+    [Test]
+    public async Task ServiceExtraArgs_accepts_zero_as_unlimited() {
+        await Assert.That(DaemonServiceCommands.ExtraArgs("0")).IsEquivalentTo(["--max-agents", "0"]);
     }
 
     [Test]

@@ -81,8 +81,8 @@ sealed class DaemonServiceCommands(
     internal static List<string> ExtraArgs(string? maxAgentsFlag) {
         if (maxAgentsFlag is null) return [];
 
-        if (!int.TryParse(maxAgentsFlag, out var maxAgents) || maxAgents < 1)
-            throw new ArgumentException($"--max-agents must be a positive integer (got '{maxAgentsFlag}').");
+        if (!int.TryParse(maxAgentsFlag, out var maxAgents) || maxAgents < 0)
+            throw new ArgumentException($"--max-agents must be 0 (unlimited) or a positive integer (got '{maxAgentsFlag}').");
 
         return ["--max-agents", maxAgents.ToString()];
     }

@@ -459,8 +459,8 @@ public class DaemonConfig {
             errors.Add($"ServerUrl must be a valid http/https URL, got: {UnusableUrlDiagnostic.Sanitize(ServerUrl)}");
         }
 
-        if (MaxConcurrentAgents < 1) {
-            errors.Add("MaxConcurrentAgents must be at least 1");
+        if (MaxConcurrentAgents < 0) {
+            errors.Add("MaxConcurrentAgents must be 0 (unlimited) or a positive number");
         }
 
         if (string.IsNullOrWhiteSpace(WorktreeRoot)) {
