@@ -6,6 +6,25 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The npm wrapper waits for its platform packages
+
+`npm publish` returns while the registry is still processing a tarball, and a platform package carrying
+two native binaries took about ten minutes to become installable. A wrapper visible in that window
+installs without its binary, silently: npm skips an optional dependency it cannot resolve. The release
+now polls every platform package until it resolves before publishing the wrapper, and the desktop
+publish reuses that poll before comparing its binaries with npm's. Every poll and every install the
+launcher runs passes `--prefer-online`, because npm serves a cached packument for five minutes and a
+plain retry re-reads the same miss.
+
+## `kcap update` stops at the server's version
+
+The update hint caps its target at the connected server's version on the stable channel, but
+`kcap update` followed the dist-tag, so the hint had to print a pinned `npm install` instead of the
+command users know. `kcap update --check` now resolves the same capped advisory and reports the
+server's version as `install_tag`; the launcher already installs whatever tag it is handed, so a
+launcher from any release follows the pin. A CLI at its server's version reads as up to date even
+when npm has newer.
+
 ## Desktop Settings use the profile and the mutation lane
 
 The Settings window edits the profile bound to the app's daemon graph and refuses a profile whose

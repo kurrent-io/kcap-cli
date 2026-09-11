@@ -619,6 +619,13 @@ jobs:
       - name: Copy license into wrapper package
         run: cp LICENSE.md npm/kcap/LICENSE.md
 
+      # A wrapper installable before its platform packages installs without them, silently: npm
+      # skips an optional dependency it cannot resolve.
+      - name: Wait for the platform packages to become installable
+        run: |
+          read -ra pkgs <<< "$(node -p "Object.keys(require('./npm/kcap/package.json').optionalDependencies).join(' ')")"
+          bash scripts/wait-npm-available.sh "${{ steps.version.outputs.VERSION }}" "${pkgs[@]}"
+
       - name: Publish wrapper package
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}

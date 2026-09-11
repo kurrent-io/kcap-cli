@@ -80,29 +80,12 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles, NpmR
         }
 
         var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, npm);
-        var (latest, current) = (checkResult.Latest, checkResult.Current);
+        var advisory          = UpdateAdvisoryResolver.Resolve(checkResult, channel, profiles.Resolution.ServerUrl, root);
+        var (latest, current) = (advisory.Target, advisory.Current);
 
         if (checkOnly) {
-            // Machine-readable probe consumed by the npm launcher (kcap.js).
-            // One JSON line on stdout; exit 1 only when the check itself failed.
-            //
-            // `newer` is a tri-state: true => upgrade, false => confidently up to
-            // date, null => can't tell (current version unknown or registry check
-            // failed). The launcher must NOT skip on null — otherwise a binary
-            // that reports "unknown" would strand the user on a stale CLI.
-            bool? newer = string.IsNullOrEmpty(current) || latest is null
-                ? null
-                : IsNewer(latest, current);
-
-            var obj = new JsonObject {
-                ["current"]     = current,
-                ["latest"]      = latest,
-                ["newer"]       = newer,
-                ["channel"]     = channel,
-                ["install_tag"] = channel,
-            };
-
-            await Console.Out.WriteLineAsync(obj.ToJsonString());
+            // One JSON line for the npm launcher (kcap.js); exit 1 only when the check itself failed.
+            await Console.Out.WriteLineAsync(CheckJson(advisory, channel));
 
             return latest is null ? 1 : 0;
         }
@@ -131,7 +114,7 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles, NpmR
         await Console.Out.WriteLineAsync($"Update available: {current} {Arrow} {latest}");
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteLineAsync("Run `kcap update` to update, or upgrade directly:");
-        await Console.Out.WriteLineAsync("  npm install -g @kurrent/kcap@latest");
+        await Console.Out.WriteLineAsync($"  npm install -g @kurrent/kcap@{InstallTag(advisory, channel)}");
 
         return 0;
     }
@@ -363,6 +346,24 @@ public sealed class UpdateCommand(ConfigRoot root, ProfileContext profiles, NpmR
     }
 
     static bool IsNewer(string? latest, string? current) => PrereleaseSemver.IsNewer(latest, current);
+
+    /// <summary>
+    /// The `--check` contract the npm launcher installs from. <c>newer</c> is null when either version
+    /// is unknown, which the launcher must not read as "up to date" — that would strand a stale CLI.
+    /// </summary>
+    internal static string CheckJson(UpdateAdvisory advisory, string channel) =>
+        new JsonObject {
+            ["current"]     = advisory.Current,
+            ["latest"]      = advisory.Target,
+            ["newer"]       = string.IsNullOrEmpty(advisory.Current) || advisory.Target is null ? (bool?)null : advisory.Newer,
+            ["channel"]     = channel,
+            ["install_tag"] = InstallTag(advisory, channel),
+        }.ToJsonString();
+
+    /// <summary>The server's version when it caps the target, so an update never installs a CLI newer
+    /// than the server it talks to; otherwise the channel's dist-tag.</summary>
+    internal static string InstallTag(UpdateAdvisory advisory, string channel) =>
+        advisory is { ServerCapped: true, Target: { } target } ? target : channel;
 
     /// <summary>
     /// The `--check` contract for a bundled CLI: the launcher must see "confidently up to date",
