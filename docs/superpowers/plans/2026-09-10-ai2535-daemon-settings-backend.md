@@ -1140,21 +1140,91 @@ Change the signature at line 695 to:
     public async Task<int> InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId = null) {
 ```
 
-After `var preState = DescribeQuery(pre);` and before `if (!replace) {`, insert:
+After the leftover-marker recovery block and before the forward cutoff (`var forward = time.GetUtcNow() + _forwardBudget;`), insert:
 
 ```csharp
         if (retireServiceId is not null) {
+            if (retireServiceId == spec.ServiceId)
+                throw new ArgumentException("retireServiceId must differ from the service being installed");
+
             // A rename's target must be free: a live daemon under the new name is another daemon,
-            // not a stale unit for --replace to take over.
+            // not a stale unit for --replace to take over. No pre-query needed for this check.
             if (validatedDaemonPid(serviceId) is not null) {
                 Say(VerifyExit.ContendedToken);
                 return VerifyExit.Contended;
             }
-            if (await RetireAsync(retireServiceId, spec, forward) is { } retireExit) return retireExit;
+            // Retire spends its OWN forward budget — never the install's — so a late-but-successful
+            // retire can never starve the install's own readiness poll and strand the operator with
+            // no daemon at all (a retired unit is never restored on the install's own timeout).
+            if (await RetireAsync(retireServiceId, spec) is { } retireExit) return retireExit;
+
+            // A daemon can claim the new name WHILE the old unit was being retired — the pre-retire
+            // snapshot above is stale by the time retirement settles.
+            if (validatedDaemonPid(serviceId) is not null) {
+                Say(VerifyExit.ContendedToken);
+                return VerifyExit.Contended;
+            }
         }
 ```
 
-Add the method directly above `ApplyReplaceMatrixAsync`:
+Give `ApplyReplaceMatrixAsync` a trailing `refuseLiveOwner` parameter, and pass `retireServiceId is not null` at its call site in the `else` (replace) branch:
+
+```csharp
+            if (await ApplyReplaceMatrixAsync(serviceId, pre, preState, op, forward, retireServiceId is not null) is { } stopExit) {
+                return stopExit;
+            }
+```
+
+Inside `ApplyReplaceMatrixAsync`, refuse a live owner under the new name at both points the matrix would otherwise act on one:
+
+```csharp
+    /// <param name="refuseLiveOwner">A rename never takes over a daemon that owns the new name.</param>
+    async Task<int?> ApplyReplaceMatrixAsync(string serviceId, ServiceQuery pre, string preState, string op, DateTimeOffset deadline, bool refuseLiveOwner) {
+        var validatedPid = validatedDaemonPid(serviceId);
+        var owning       = pre.Probe == LabelProbe.Loaded && pre.JobPid is not null && pre.JobPid == validatedPid;
+
+        if (owning) {
+            if (refuseLiveOwner) {
+                Say(VerifyExit.ContendedToken);
+                return VerifyExit.Contended;
+            }
+
+            // The label's own bootout terminates the process it owns — no separate kill needed. But the
+            // old job may still be terminating and holding the name lock, so confirm its validated pid
+            // is gone before writing/bootstrapping the replacement, else the new job hits a
+            // deliberate-refusal exit and the replacement spuriously fails.
+            if (await ClearLabelAsync(serviceId, deadline) is { } clearExit) return clearExit;
+            ServiceTxnMarker.Write(store, serviceId, new TxnMarker(1, op, "label-cleared", preState, "no-unit", null));
+
+            if (!await WaitForPidGoneAsync(serviceId, deadline)) {
+                Say(VerifyExit.StopUnconfirmedToken);
+                return VerifyExit.StopUnconfirmed;
+            }
+            return null;
+        }
+
+        if (pre.Probe == LabelProbe.Loaded || pre.UnitPresent) {
+            // A non-owning/orphan label, or a stopped-but-installed unit — --replace may clear it.
+            if (await ClearLabelAsync(serviceId, deadline) is { } clearExit) return clearExit;
+            ServiceTxnMarker.Write(store, serviceId, new TxnMarker(1, op, "label-cleared", preState, "no-unit", null));
+        }
+
+        // Re-read AFTER any clearing: bootout can terminate the true owner as a side effect of
+        // unloading its label, so the pre-clear pid may be stale — kill the validated owner only if one
+        // still remains.
+        var liveOwner = validatedDaemonPid(serviceId);
+        if (liveOwner is null) return null;
+
+        if (refuseLiveOwner) {
+            Say(VerifyExit.ContendedToken);
+            return VerifyExit.Contended;
+        }
+
+        if (!DaemonKill.KillValidatedOwner(store, serviceId, liveOwner.Value, KillWait))
+            Say($"replace: kill of validated owner (PID {liveOwner}) did not confirm gone immediately");
+```
+
+Add the retire method directly above `ApplyReplaceMatrixAsync`:
 
 ```csharp
     /// <summary>
@@ -1162,7 +1232,19 @@ Add the method directly above `ApplyReplaceMatrixAsync`:
     /// not provably pinned to the profile being installed is refused untouched; a bootout that
     /// cannot be confirmed stops the transaction before anything is written for the new id.
     /// </summary>
-    async Task<int?> RetireAsync(string retireId, ServiceSpec spec, DateTimeOffset deadline) {
+    async Task<int?> RetireAsync(string retireId, ServiceSpec spec) {
+        // The lock must be held BEFORE reading the plist and deciding "same profile, mine to
+        // destroy" — reading first would let a concurrent install/verify on this same id replace
+        // the unit in the window between that read and acquiring the lock.
+        using var retireTxn = ServiceTxnLock.TryAcquire(store, retireId, LockWait);
+        if (retireTxn is null) {
+            Say(VerifyExit.ContendedToken);
+            return VerifyExit.Contended;
+        }
+
+        // Started only once the lock is held — a contended lock must never eat into this budget.
+        var deadline = time.GetUtcNow() + _forwardBudget;
+
         var (status, content) = _discriminatedPlistRead(manager.UnitPath(retireId));
         if (status == LaunchdUnit.PlistRead.Absent) return null;
 
@@ -1177,12 +1259,6 @@ Add the method directly above `ApplyReplaceMatrixAsync`:
         spec.Environment.TryGetValue(ProfileVar, out var pinnedProfile);
         if (string.IsNullOrEmpty(pinnedProfile) || !string.Equals(retiredProfile, pinnedProfile, StringComparison.Ordinal))
             return RetireRefusal("foreign_profile");
-
-        using var retireTxn = ServiceTxnLock.TryAcquire(store, retireId, LockWait);
-        if (retireTxn is null) {
-            Say(VerifyExit.ContendedToken);
-            return VerifyExit.Contended;
-        }
 
         if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
         if (!await WaitForStopConfirmedAsync(retireId, deadline)) {
