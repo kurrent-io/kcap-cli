@@ -384,6 +384,41 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_from_the_composer_sends_a_control_key_and_preserves_the_draft() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var client = await host.AttachAsync(Tmp.CreateFile("escape.jsonl", [UserLine]));
+            host.Type("keep this draft");
+            host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+            host.Settle();
+            await Assert.That(client.SentInput).Count().IsEqualTo(1);
+            await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+            await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_queue_banner_shows_sent_text_until_the_transcript_echoes_it() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("queue.jsonl", [UserLine]);
+            await host.AttachAsync(path);
+            host.Type("queued follow-up");
+            host.PressEnter(RawInputModifiers.None);
+            host.Settle();
+            var banner = host.View.FindControl<Border>("QueuedMessagesBanner")!;
+            await Assert.That(banner.IsVisible).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "queued follow-up")).IsTrue();
+            await host.AppendLinesAndTickAsync(path, UserLine.Replace("hello", "queued follow-up"));
+            await Assert.That(banner.IsVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the other half of the key contract: Shift+Enter stays the TextBox's own newline and
     /// sends nothing.
     [Test]

@@ -44,6 +44,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
     // token it can ask without an ObjectDisposedException.
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
+    readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
     readonly Dictionary<string, ToolCallItem> _pendingTools = new(StringComparer.Ordinal);
     // Every tool id with a result, not only the running ones: a replayed request can arrive after
     // the transcript's initial load, and then only this set can tell that its tool is done.
@@ -85,6 +86,15 @@ public sealed class ChatTabViewModel : ReactiveObject {
     readonly BehaviorSubject<string?> _rootSubject = new(null);
 
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
+    public IAvaloniaReadOnlyList<QueuedChatMessage> QueuedMessages => _queuedMessages;
+    public bool HasQueuedMessages => _queuedMessages.Count > 0;
+    public string QueueSummary => $"{_queuedMessages.Count} message{(_queuedMessages.Count == 1 ? "" : "s")} "
+        + (SessionStatusDots.IsTerminal(_status) ? "unconfirmed" : "queued");
+
+    void RefreshQueue() {
+        this.RaisePropertyChanged(nameof(HasQueuedMessages));
+        this.RaisePropertyChanged(nameof(QueueSummary));
+    }
 
     public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards { get; }
     public IObservable<string?> Root => _rootSubject;
@@ -122,6 +132,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
     }
 
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
+    public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
 
     readonly ObservableAsPropertyHelper<string> _composerHint;
@@ -145,34 +156,26 @@ public sealed class ChatTabViewModel : ReactiveObject {
     public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
 
     string _activityNote = "";
-    /// One line under the rows for the stretches the transcript itself shows nothing: the agent
-    /// starting, or a turn in flight before its first output. "" whenever the rows speak for themselves.
+    /// Live elapsed time throughout a busy turn, including while output is streaming.
     public string ActivityNote { get => _activityNote; private set => this.RaiseAndSetIfChanged(ref _activityNote, value); }
 
     string _status = "";
     bool? _awaitingInput;
-    string? _transcriptFormat;
+    long? _workingSince;
 
-    void RefreshActivityNote() =>
-        ActivityNote = ActivityNoteFor(
-            Phase, _status, _awaitingInput, _transcriptFormat,
-            _items.Count > 0 && _items[^1] is UserTurnItem, HasPendingCards, VendorLabel);
+    void RefreshActivityNote() {
+        var working = _status == "Running" && _awaitingInput == false;
+        if (working) _workingSince ??= _time.GetTimestamp();
+        else _workingSince = null;
+        ActivityNote = _status == "Starting"
+            ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
+            : working && !HasPendingCards && _workingSince is { } since
+                ? WorkingNote(_time.GetElapsedTime(since)) : "";
+    }
 
-    /// The working line is offered only for the daemon's own journal: there the awaiting flag flips
-    /// on every turn end, whereas a PTY vendor's comes from hooks that may never fire, and a note
-    /// that never clears is worse than none. It shows only while the tail row is the user's own
-    /// prompt — the agent has been given something and produced nothing yet. The first assistant or
-    /// tool row makes the transcript itself the sign of life, so the note clears rather than sitting
-    /// beside the output.
-    internal static string ActivityNoteFor(
-            ChatTabPhase phase, string status, bool? awaitingInput, string? transcriptFormat,
-            bool awaitingFirstOutput, bool hasPendingCards, string vendorLabel) {
-        if (phase != ChatTabPhase.Reading) return "";
-        if (status == "Starting") return vendorLabel.Length > 0 ? $"Starting {vendorLabel}…" : "Starting…";
-        var working = status == "Running" && transcriptFormat == TranscriptFormats.Envelopes
-                   && awaitingInput == false && awaitingFirstOutput && !hasPendingCards;
-        if (!working) return "";
-        return vendorLabel.Length > 0 ? $"{vendorLabel} is working…" : "Working…";
+    static string WorkingNote(TimeSpan elapsed) {
+        var seconds = Math.Max(0, (long)elapsed.TotalSeconds);
+        return $"Working for {seconds / 60}m {seconds % 60}s";
     }
 
     bool _isReadOnlyParticipant;
@@ -281,14 +284,14 @@ public sealed class ChatTabViewModel : ReactiveObject {
             .Subscribe(OnAgentsChanged)
             .DisposeWith(_disposables);
 
-        if (projection is not null)
-            _timer = time.CreateTimer(_ => OnTick(), null, PollInterval, PollInterval);
+        _timer = time.CreateTimer(_ => OnTick(), null, PollInterval, PollInterval);
 
         daemon.Snapshots
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(snapshot => {
                 _options = HostedHarnessCatalog.Build(snapshot.Daemon.SupportedVendors);
                 VendorLabel = HostedHarnessCatalog.LabelFor(_options, _vendor);
+                RefreshActivityNote();
             })
             .DisposeWith(_disposables);
 
@@ -321,12 +324,28 @@ public sealed class ChatTabViewModel : ReactiveObject {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
-            bool committed;
+            var queued = new QueuedChatMessage(snapshot, _path);
+            _queuedMessages.Add(queued);
+            RefreshQueue();
+            var committed = false;
             try { committed = await _input.SendAsync(snapshot, _lifetimeToken); }
             catch (OperationCanceledException) { return; }
+            finally {
+                // Without a transcript there is no later echo to observe; the channel's ack is
+                // the only delivery evidence available. Refusals keep the original draft below.
+                if (!committed || _projection is null) _queuedMessages.Remove(queued);
+                RefreshQueue();
+            }
             if (committed && _composerEdits == edits && ComposerText == snapshot) ComposerText = "";
         }, canSend);
         _disposables.Add(SendCommand);
+
+        var canInterrupt = Observable.CombineLatest(
+            _input.WhenAnyValue(i => i.CanInterrupt),
+            this.WhenAnyValue(x => x.IsReadOnlyParticipant),
+            (can, readOnly) => can && !readOnly);
+        InterruptCommand = ReactiveCommand.CreateFromTask(() => _input.InterruptAsync(_lifetimeToken), canInterrupt);
+        _disposables.Add(InterruptCommand);
 
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
         _disposables.Add(OpenLinkCommand);
@@ -334,6 +353,11 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
     void OnAgentsChanged(IChangeSet<AgentStatusDto, string> changes) {
         foreach (var change in changes) {
+            if (change.Key == _agentId && change.Reason == ChangeReason.Remove) {
+                _status = "Completed";
+                RefreshActivityNote();
+                RefreshQueue();
+            }
             if (change.Key != _agentId || change.Reason is not (ChangeReason.Add or ChangeReason.Update)) continue;
             OnDto(change.Current);
         }
@@ -356,9 +380,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
         StatusDot = SessionStatusDots.For(dto.Status);
         _status = dto.Status;
         _awaitingInput = dto.AwaitingInput;
-        _transcriptFormat = dto.TranscriptFormat;
         if (_projection is not null && dto.TranscriptPath is { } path && path != _path) SwitchPath(path);
         RefreshActivityNote();
+        RefreshQueue();
     }
 
     void SwitchPath(string path) {
@@ -378,6 +402,12 @@ public sealed class ChatTabViewModel : ReactiveObject {
     }
 
     void OnTick() {
+        if (!Dispatcher.UIThread.CheckAccess()) {
+            Dispatcher.UIThread.Post(OnTick);
+            return;
+        }
+        if (_lifetimeToken.IsCancellationRequested) return;
+        RefreshActivityNote();
         if (_lease is not { } lease || _projection is not { } projection) return;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return;
         _pendingRead = ReadAndApplyAsync(lease, projection);
@@ -388,14 +418,18 @@ public sealed class ChatTabViewModel : ReactiveObject {
             var (read, envelopes) = await Task.Run(() => {
                 var result = lease.Tail.ReadAppended();
                 if (result.Status == TailStatus.Reset) lease.Reset();
-                var list = new List<AcpEventEnvelope>();
+                var list = new List<(AcpEventEnvelope Envelope, long Offset)>();
                 if (result.Lines.Count > 0) {
                     var context = lease.ContextFor(projection, _agentId);
                     context.BeginBatch();
                     var receivedAt = _time.GetUtcNow();
-                    foreach (var line in result.Lines) {
+                    for (var index = 0; index < result.Lines.Count; index++) {
+                        var line = result.Lines[index];
                         var lineNumber = lease.NextLine();
-                        try { list.AddRange(projection.Project(line, lineNumber, receivedAt, context)); }
+                        try {
+                            foreach (var envelope in projection.Project(line, lineNumber, receivedAt, context))
+                                list.Add((envelope, result.LineEndOffsets[index]));
+                        }
                         catch (Exception ex) { LogOnce($"projection: {ex.Message}"); }
                     }
                 }
@@ -410,7 +444,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
-    void Apply(int generation, TailRead read, List<AcpEventEnvelope> envelopes) {
+    void Apply(int generation, TailRead read, List<(AcpEventEnvelope Envelope, long Offset)> envelopes) {
         if (generation != Volatile.Read(ref _generation)) return;
 
         switch (read.Status) {
@@ -436,9 +470,11 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
 
         var fresh = new List<ChatItemViewModel>();
-        foreach (var e in envelopes) {
+        foreach (var (e, offset) in envelopes) {
             switch (e.Kind) {
                 case AcpEventKind.UserMessage:
+                    var acknowledged = _queuedMessages.FirstOrDefault(q => q.Matches(e.Text ?? "", _path, offset));
+                    if (acknowledged is not null) _queuedMessages.Remove(acknowledged);
                     _openGroup = null;
                     fresh.Add(new UserTurnItem(e.Text ?? ""));
                     break;
@@ -470,6 +506,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
             }
         }
         if (fresh.Count > 0) _items.AddRange(fresh);
+        RefreshQueue();
         Reconcile();
         RefreshActivityNote();
     }

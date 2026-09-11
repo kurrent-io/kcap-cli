@@ -805,9 +805,7 @@ public class ChatTabViewModelTests {
             TranscriptPath = path, TranscriptFormat = TranscriptFormats.Envelopes, Status = status, AwaitingInput = awaitingInput,
         };
 
-    /// The note is the only sign of life before the first envelope: a starting agent, then a turn
-    /// in flight once a prompt row exists, then nothing once the daemon says the agent waits on
-    /// the user. A running agent with no row yet has nothing in flight, so it gets no note either.
+    /// Busy state comes from the daemon, so the note remains visible before and during output.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Activity_note_reads_starting_then_working_and_clears_when_the_agent_waits() {
@@ -823,23 +821,22 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("Starting Pi…");
 
             await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
 
             File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")) + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
 
             // The awaiting-input flag hides it (the turn ended and the agent waits on the user)…
             await h.PushAsync(Hosted(path, "Running", awaitingInput: true));
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
             await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
 
-            // …and so does the agent's first output row, mid-turn: the transcript is now the sign of
-            // life, so the note clears instead of sitting beside the streaming answer.
+            // Output does not end the timer; only a turn verdict does.
             File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "on it")) + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
             await h.TeardownAsync();
         });
     }
@@ -856,7 +853,7 @@ public class ChatTabViewModelTests {
             var h = new Harness(TranscriptChat.Journal);
             await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
             await h.TickAsync();
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
 
             h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
             await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the card");
@@ -864,16 +861,15 @@ public class ChatTabViewModelTests {
 
             h.Permissions.Remove("r1");
             await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card gone");
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Pi is working…");
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
             await h.TeardownAsync();
         });
     }
 
-    /// A PTY session's awaiting flag comes from vendor hooks that may never fire, so the working
-    /// note is not offered there: its terminal already shows the activity.
+    /// PTY chats use the same busy verdict as the rail and hosted chats.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_pty_session_shows_no_working_note() {
+    public async Task A_pty_session_shows_the_working_note() {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var path = Tmp.CreateFile("t.jsonl", [UserLine]);
@@ -881,7 +877,91 @@ public class ChatTabViewModelTests {
             await h.TickAsync();
 
             await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for ");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Working_time_ticks_without_a_transcript_and_resets_for_each_turn() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            var dto = Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false };
+            await h.PushAsync(dto);
+            h.Time.Advance(TimeSpan.FromSeconds(65));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+            await h.PushAsync(dto); // repeated snapshots must not restart the clock
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+            await h.PushAsync(dto with { AwaitingInput = true });
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await h.PushAsync(dto);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+            await h.PushAsync(dto with { AwaitingInput = null });
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await h.PushAsync(dto);
+            h.Daemon.Agents.Remove("a1");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+            await h.TeardownAsync();
+            h.Time.Advance(TimeSpan.FromSeconds(5));
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_messages_ignore_old_echoes_and_acknowledge_repeated_text_one_at_a_time() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("queued.jsonl", [UserLine]);
+            await h.PushAsync(Dto(path));
+            // Unread history with identical text is older than both sends.
+            File.AppendAllText(path, UserLine + "\n");
+            h.Chat.ComposerText = "hello";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
+            input.Pending!.SetResult(true);
+            await send;
+            h.Chat.ComposerText = "hello";
+            send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(true);
+            await send;
+            await h.TickAsync();
+            await Assert.That(h.Chat.QueueSummary).IsEqualTo("2 messages queued");
+            File.AppendAllText(path, UserLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
+            File.AppendAllText(path, UserLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_echo_before_the_send_ack_is_not_requeued_and_a_refusal_keeps_the_draft() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("queued.jsonl", []);
+            await h.PushAsync(Dto(path));
+            h.Chat.ComposerText = "hello";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            File.AppendAllText(path, UserLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            input.Pending!.SetResult(true);
+            await send;
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            h.Chat.ComposerText = "refused";
+            send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(false);
+            await send;
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("refused");
             await h.TeardownAsync();
         });
     }

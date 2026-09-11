@@ -11,5 +11,7 @@ public abstract class ChatInput : ReactiveObject, IDisposable {
     public abstract string Hint { get; }
     /// Completes when the channel considers the text committed: true to clear the composer.
     public abstract Task<bool> SendAsync(string text, CancellationToken ct);
+    public virtual bool CanInterrupt => false;
+    public virtual Task InterruptAsync(CancellationToken ct) => Task.CompletedTask;
     public abstract void Dispose();
 }

@@ -4,7 +4,7 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
-    <Grid RowDefinitions="*,Auto,Auto,Auto">
+    <Grid RowDefinitions="*,Auto,Auto,Auto,Auto">
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An
              ItemsControl inside an external ScrollViewer is measured at infinite height. -->
         <ItemsControl x:Name="ChatItems" Grid.Row="0" ItemsSource="{Binding Items}">
@@ -360,7 +360,27 @@
             </StackPanel>
         </Border>
 
-        <Border Grid.Row="3" Margin="22,8,22,18"
+        <Border x:Name="QueuedMessagesBanner" Grid.Row="3" Margin="22,4,22,0" Padding="13,10"
+                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasQueuedMessages}">
+            <StackPanel Spacing="6">
+                <TextBlock Text="{Binding QueueSummary}" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource KcapTextBrush}" />
+                <ScrollViewer MaxHeight="120" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding QueuedMessages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:QueuedChatMessage">
+                                <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="12"
+                                           Margin="0,2" TextTrimming="CharacterEllipsis" MaxLines="1"
+                                           Foreground="{StaticResource KcapMutedBrush}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="4" Margin="22,8,22,18"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">

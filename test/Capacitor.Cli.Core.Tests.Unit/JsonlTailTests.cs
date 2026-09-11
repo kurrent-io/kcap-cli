@@ -28,6 +28,16 @@ public class JsonlTailTests {
         var read = new JsonlTail(path).ReadAppended();
 
         await Assert.That(read.Lines).IsEquivalentTo(new[] { "{\"a\":1}", "{\"b\":2}" });
+        await Assert.That(read.LineEndOffsets).IsEquivalentTo(new long[] { 9, 23 });
+    }
+
+    [Test]
+    public async Task Line_offsets_count_utf8_bytes_and_remain_absolute_across_reads() {
+        var path = Tmp.CreateFile("offsets.jsonl", "é\r\n\n");
+        var tail = new JsonlTail(path);
+        await Assert.That(tail.ReadAppended().LineEndOffsets).IsEquivalentTo(new long[] { 4 });
+        File.AppendAllText(path, "ok\n");
+        await Assert.That(tail.ReadAppended().LineEndOffsets).IsEquivalentTo(new long[] { 8 });
     }
 
     [Test]

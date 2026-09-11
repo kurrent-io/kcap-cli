@@ -4,7 +4,10 @@ namespace Capacitor.Cli.Core;
 
 public enum TailStatus { Ok, Reset, Missing, Failed }
 
-public sealed record TailRead(IReadOnlyList<string> Lines, TailStatus Status, string? Failure = null);
+public sealed record TailRead(IReadOnlyList<string> Lines, TailStatus Status, string? Failure = null) {
+    /// Byte positions immediately after each returned line, for correlating newly appended input.
+    public IReadOnlyList<long> LineEndOffsets { get; init; } = [];
+}
 
 /// Appended-lines reader over a JSONL file another process is writing. Every open shares
 /// read/write/delete: a FileShare.Read open would deny the agent its own write handle on
@@ -40,9 +43,10 @@ public sealed class JsonlTail(string path) {
                 read += n;
             }
 
-            var lines = SplitCompleteLines(buffer.AsSpan(0, read), out var consumed);
+            var offsets = new List<long>();
+            var lines = SplitCompleteLines(buffer.AsSpan(0, read), out var consumed, offsets, origin);
             _cursor = origin + consumed;
-            return new TailRead(lines, status);
+            return new TailRead(lines, status) { LineEndOffsets = offsets };
         } catch (FileNotFoundException) {
             return new TailRead([], TailStatus.Missing);
         } catch (DirectoryNotFoundException) {
@@ -54,7 +58,10 @@ public sealed class JsonlTail(string path) {
 
     /// Complete lines only; `consumed` stops after the last '\n' so an unterminated tail is
     /// re-read whole once its newline lands.
-    public static List<string> SplitCompleteLines(ReadOnlySpan<byte> bytes, out int consumed) {
+    public static List<string> SplitCompleteLines(ReadOnlySpan<byte> bytes, out int consumed) =>
+        SplitCompleteLines(bytes, out consumed, null, 0);
+
+    static List<string> SplitCompleteLines(ReadOnlySpan<byte> bytes, out int consumed, List<long>? offsets, long origin) {
         var lines = new List<string>();
         consumed = 0;
         var start = 0;
@@ -62,7 +69,10 @@ public sealed class JsonlTail(string path) {
             if (bytes[i] != (byte)'\n') continue;
             var line = bytes[start..i];
             if (line.Length > 0 && line[^1] == (byte)'\r') line = line[..^1];
-            if (!IsBlank(line)) lines.Add(Encoding.UTF8.GetString(line));
+            if (!IsBlank(line)) {
+                lines.Add(Encoding.UTF8.GetString(line));
+                offsets?.Add(origin + i + 1);
+            }
             start = i + 1;
             consumed = start;
         }
