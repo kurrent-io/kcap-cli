@@ -18,6 +18,7 @@ public sealed class ServerVendorModelCatalog : IDisposable {
 
     readonly Func<CancellationToken, Task<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?>> _fetch;
     readonly BehaviorSubject<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>> _catalog = new(Empty);
+    int _generation;
 
     public ServerVendorModelCatalog(
             Func<CancellationToken, Task<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?>> fetch) =>
@@ -28,10 +29,15 @@ public sealed class ServerVendorModelCatalog : IDisposable {
     /// Fetches and publishes on success; a null result (offline / signed out / non-success) leaves
     /// the current snapshot untouched. Cancellation (shutdown) is silent; an unexpected fault is
     /// logged rather than swallowed, but never propagates — the launcher's curated fallback covers a
-    /// miss either way. Safe to call more than once (e.g. a reload after sign-in).
+    /// miss either way. Safe to call more than once concurrently (startup plus a reload per sign-in):
+    /// only the newest-started load publishes, so a slow earlier fetch cannot overwrite a newer
+    /// snapshot with a stale one.
     public async Task LoadAsync(CancellationToken ct = default) {
+        var generation = Interlocked.Increment(ref _generation);
         try {
-            if (await _fetch(ct).ConfigureAwait(false) is { } catalog) _catalog.OnNext(catalog);
+            if (await _fetch(ct).ConfigureAwait(false) is { } catalog
+                && Volatile.Read(ref _generation) == generation)
+                _catalog.OnNext(catalog);
         } catch (OperationCanceledException) {
             // Shutdown or a superseded reload — not a failure.
         } catch (Exception ex) {
