@@ -29,7 +29,7 @@ public class DaemonHeartbeatLoopTests {
         public int                                  ReRegisterCalls;
         public int                                  ForceReconnectCalls;
         public int                                  PingCalls;
-        // Defaults to the Connected steady state every pre-existing test exercises.
+        // Defaults to the Connected steady state the ping and force-reconnect cases assume.
         public bool                                 IsConnected { get; set; } = true;
 
         public Task<bool> PingAsync(CancellationToken ct) {
@@ -147,16 +147,18 @@ public class DaemonHeartbeatLoopTests {
     }
 
     [Test]
-    public async Task Tick_PingThrows_ForcesReconnect() {
+    public async Task Tick_PingThrows_StandsDownForAutomaticReconnect() {
+        // A ping that throws means SignalR already knows the connection is unusable; OnClosed and
+        // automatic reconnect own recovery. Forcing here would race that, so the loop stands down.
         var port = new FakePort {
-            PingHandler = _ => Task.FromException<bool>(new InvalidOperationException("hub closed"))
+            PingHandler = _ => Task.FromException<bool>(new InvalidOperationException("connection is not active"))
         };
         var loop = CreateLoop(port);
 
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(port.ReRegisterCalls).IsEqualTo(0);
-        await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
     }
 
     [Test]
@@ -181,16 +183,20 @@ public class DaemonHeartbeatLoopTests {
 
     [Test]
     public async Task Tick_ForceReconnectThrows_DoesNotRethrow() {
-        // Qodo finding: ForceReconnectAsync ultimately calls _hub.StopAsync,
-        // which can throw (invalid state, transient SignalR cancellation).
-        // The heartbeat loop runs as an unobserved background Task — if
-        // TickAsync rethrows, the loop dies and the daemon stops probing
-        // for liveness forever. TickAsync must be total.
+        // ForceReconnectAsync ultimately calls _hub.StopAsync, which can throw (invalid state,
+        // transient SignalR cancellation). The heartbeat loop runs as an unobserved background Task —
+        // if TickAsync rethrows, the loop dies and the daemon stops probing for liveness forever.
+        // TickAsync must be total. A hung ping (deadline) is the path that forces a reconnect.
         var port = new FakePort {
-            PingHandler           = _ => Task.FromException<bool>(new InvalidOperationException("hub closed")),
+            PingHandler = ct => {
+                var tcs = new TaskCompletionSource<bool>();
+                ct.Register(() => tcs.TrySetCanceled(ct));
+
+                return tcs.Task;
+            },
             ForceReconnectHandler = () => Task.FromException(new InvalidOperationException("StopAsync from invalid state"))
         };
-        var loop = CreateLoop(port);
+        var loop = CreateLoop(port, deadline: TimeSpan.FromMilliseconds(50));
 
         await loop.TickAsync(CancellationToken.None);
 
@@ -219,9 +225,9 @@ public class DaemonHeartbeatLoopTests {
 
     [Test]
     public async Task Tick_HubReconnecting_SkipsWithoutPingingOrForcing() {
-        // THE storm fix: while the hub is not Connected, SignalR's automatic reconnect (and OnClosed)
-        // own recovery. A ping would throw "connection is not active" every tick and the loop would
-        // force a reconnect that races the one already in flight — the self-sustaining storm. The
+        // While the hub is not Connected, SignalR's automatic reconnect (and OnClosed) own recovery.
+        // A ping would throw "connection is not active" every tick and the loop would force a
+        // reconnect that races the one already in flight, so the connection never converges. The
         // heartbeat must stand down: no ping, no force-reconnect.
         var port = new FakePort {
             IsConnected = false,
@@ -237,15 +243,12 @@ public class DaemonHeartbeatLoopTests {
     }
 
     [Test]
-    public async Task Tick_ConnectionDropsDuringPing_DoesNotForceReconnect() {
-        // The hub was Connected at the top of the tick but dropped mid-ping (the invoke throws
-        // "connection is not active"). Recovery is now in flight, so the loop must not force its own.
+    public async Task Tick_PingThrowsWhileStateStillReadsConnected_DoesNotForceReconnect() {
+        // The invoke failure can be observed before HubState transitions, so IsConnected still reads
+        // true when the throw is handled. The stand-down must key on the throw itself, not on that
+        // sampled state, or the guard passes and the force races the reconnect SignalR is starting.
         var port = new FakePort { IsConnected = true };
-        port.PingHandler = _ => {
-            port.IsConnected = false;
-
-            return Task.FromException<bool>(new InvalidOperationException("connection is not active"));
-        };
+        port.PingHandler = _ => Task.FromException<bool>(new InvalidOperationException("connection is not active"));
         var loop = CreateLoop(port);
 
         await loop.TickAsync(CancellationToken.None);

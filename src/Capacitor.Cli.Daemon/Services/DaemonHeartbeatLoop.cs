@@ -106,8 +106,14 @@ internal sealed class DaemonHeartbeatLoop(
             // Outer cancellation (process shutting down) — let the loop exit.
         } catch (Exception ex) {
             sw.Stop();
-            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — forcing reconnect", sw.Elapsed.TotalMilliseconds);
-            await SafeForceReconnectAsync();
+            // A ping that THROWS (as opposed to hanging until the deadline) means the SignalR client
+            // already knows the connection is unusable — "connection is not active" is exactly its
+            // signal that the hub has dropped — and OnClosed plus automatic reconnect are already
+            // reacting to the same condition. Forcing a reconnect here only races that recovery, and
+            // reading HubState to decide is unsafe because the invoke failure can be observed before
+            // the state transitions. Only a hung ping (the deadline above) needs the heartbeat, since
+            // SignalR still believes a half-open transport is fine. So stand down on any throw.
+            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — standing down for automatic reconnect", sw.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -131,15 +137,10 @@ internal sealed class DaemonHeartbeatLoop(
     }
 
     async Task SafeForceReconnectAsync() {
-        // The connection can drop between the ping and here (the invoke threw "connection is not
-        // active"). Recovery is then already in flight, so forcing another reconnect only races it —
-        // force only while the hub still believes it is Connected (a hung-but-live transport).
-        if (!port.IsConnected) {
-            logger.LogDebug("Heartbeat: reconnect already in progress — not forcing");
-
-            return;
-        }
-
+        // Reached only from the two live-connection paths — a hung ping (deadline) and a failed
+        // re-register — so a reconnect is genuinely wanted here; the ping-threw path stands down
+        // before reaching this. No state sample gates the force, since a hung transport must be
+        // reconnected whatever HubState momentarily reads.
         try {
             await port.ForceReconnectAsync();
         } catch (Exception ex) {
