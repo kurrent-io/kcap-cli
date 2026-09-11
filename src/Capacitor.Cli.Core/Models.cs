@@ -782,6 +782,65 @@ public record RepoEntry {
     public required DateTimeOffset LastUsed { get; init; }
 }
 
+// ── Entity registry (`kcap entities`) — mirrors the server's RepoEntityRegistryResponse
+// (src/Capacitor.Api.Public.Abstractions/WorkItems/) ──
+
+/// <summary>The body of <c>GET/POST /api/work-items/entities</c>. <see cref="Curated"/> is whether
+/// anyone has declared a name for the repo yet: until they have, the registry decides nothing there
+/// and <see cref="Candidates"/> is empty because every proposed name still counts.</summary>
+public sealed record CliEntityRegistry {
+    [JsonPropertyName("curated")]
+    public bool Curated { get; init; }
+
+    [JsonPropertyName("registered")]
+    public List<CliRegisteredEntity> Registered { get; init; } = [];
+
+    [JsonPropertyName("candidates")]
+    public List<CliEntityCandidate> Candidates { get; init; } = [];
+}
+
+/// <summary><see cref="Source"/> is <c>declared</c> or the configuration the row was derived from;
+/// only a declared row can be withdrawn.</summary>
+public sealed record CliRegisteredEntity {
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
+
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    [JsonPropertyName("source")]
+    public required string Source { get; init; }
+}
+
+/// <summary>A name sessions proposed that the registry does not carry, with how many visible
+/// sessions are waiting on the answer.</summary>
+public sealed record CliEntityCandidate {
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
+
+    [JsonPropertyName("sessions")]
+    public int Sessions { get; init; }
+}
+
+public sealed record CliRegisterEntityRequest {
+    [JsonPropertyName("repo_hash")]
+    public required string RepoHash { get; init; }
+
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
+
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+}
+
+public sealed record CliWithdrawEntityRequest {
+    [JsonPropertyName("repo_hash")]
+    public required string RepoHash { get; init; }
+
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
+}
+
 // ── Projects (`kcap projects` / `kcap project <slug>`) — mirrors the server's
 // ProjectSummaryDto / ProjectDetailDto (src/Capacitor.Server.Core/Projects/ProjectContracts.cs) ──
 
@@ -981,6 +1040,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCatalogQuestionDto))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
+[JsonSerializable(typeof(CliEntityRegistry))]
+[JsonSerializable(typeof(CliRegisterEntityRequest))]
+[JsonSerializable(typeof(CliWithdrawEntityRequest))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
 [JsonSerializable(typeof(CliProjectDetail))]
 [JsonSerializable(typeof(CliProjectError))]

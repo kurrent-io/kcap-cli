@@ -86,6 +86,7 @@ public static class CommandServices {
         services.AddTransient<PluginCommand>();
         services.AddTransient<ProfileCommand>();
         services.AddTransient<ProjectsCommand>();
+        services.AddTransient<EntitiesCommand>();
         services.AddTransient<RecapCommand>();
         services.AddTransient<RemapCommand>();
         services.AddTransient<ReportVersionCommand>();

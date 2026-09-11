@@ -383,6 +383,8 @@ switch (command) {
         return await Run<ReposCommand>().HandleAsync(args);
     case "projects":
         return await Run<ProjectsCommand>().HandleList();
+    case "entities":
+        return await Run<EntitiesCommand>().HandleAsync(args);
     case "project": {
         if (args.Length < 2) {
             Console.Error.WriteLine("Usage: kcap project <slug>");

@@ -312,6 +312,7 @@ At a glance — each links to its section below:
 | [`kcap agent`](#local-agents-kcap-agent) | Start, list, attach to, and stop daemon-hosted agents |
 | [`kcap repos`](#repository-paths) | Manage known repo paths for the launch dialog |
 | [`kcap projects` / `project`](#projects) | List and inspect projects |
+| [`kcap entities`](#entity-registry) | Declare the things this repo deploys, so sessions group on them |
 | [`kcap profile` / `use`](#profiles) | Manage and switch between servers/profiles |
 | [`kcap machine`](#machine-credentials-headless-recording) | Create credentials for CI runners and agent sandboxes |
 | [`kcap config`](#configuration) | Show and set configuration |
@@ -1862,6 +1863,32 @@ kcap project <slug>      # metadata, repo list, member list, and (owner/admin) p
 ```
 
 Requires the Team or Enterprise plan — the server 403s on Free with a message telling you so.
+
+### Entity registry
+
+The registry is the list of things a repo deploys — tenants, services, environments. Sessions group
+together when their transcripts mention the same registered name, so what is in it decides what gets
+grouped. The names usually live in a deployment repo's values rather than in any session, which is
+why this is a command and not only a dialog.
+
+```bash
+kcap entities                              # what's registered, and what's waiting for an answer
+kcap entities add acme-prod tenant         # declare a name
+kcap entities remove acme-prod             # withdraw it
+```
+
+Kinds are `tenant`, `service`, `environment`, `resource`, `config` and `team`.
+
+Declaring a name also groups the sessions that already mentioned it, not just future ones — so
+answering late costs nothing. Some names are registered for you: the repo's own owner and name, its
+projects, and any environment its deployments report.
+
+Until the first name is declared, every name a session proposes still counts, exactly as before.
+Declaring one makes the registry the decision for that repo: from then on an unregistered name is
+*waiting*, not rejected, and `kcap entities` ranks what is waiting by how many sessions each is
+holding up.
+
+Requires the Team or Enterprise plan.
 
 ### Profiles
 
