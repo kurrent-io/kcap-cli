@@ -267,6 +267,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// </summary>
     readonly object _aggregationLock = new();
 
+    /// Serializes <see cref="EnqueueTurn"/> so a turn's user-message emit, its capacity check, and its
+    /// write to <see cref="_pendingTurns"/> are one atomic step: concurrent senders cannot both pass a
+    /// stale count and have one write silently dropped, and the emit always precedes the write.
+    readonly object _enqueueLock = new();
+
     AcpUpdateKind?  _openRunKind;
     StringBuilder?  _openRunText;
 
@@ -1183,31 +1188,40 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         var written = acknowledgeWrite
             ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             : null;
-        if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
-            var dropped = Interlocked.Increment(ref _droppedPendingTurns);
-            _logger.LogWarning(
-                "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
-                _pendingTurnsCapacity, dropped);
+        // The capacity check, the user-message emit, and the write are one critical section. The
+        // emit precedes the write, so the worker — which cannot see the turn until it is written —
+        // never sends a prompt whose user row is not yet recorded (the row shows in send order the
+        // moment the turn is accepted, even queued behind an in-flight one). And because no
+        // concurrent sender can fill the queue between the check and the write under this lock, the
+        // write cannot be DropWrite-dropped, so a row is never left for a turn that never queued. A
+        // held turn re-admitted after a reconnect is re-processed without re-enqueueing, so this is
+        // the single emit per turn — the worker's admission path emits none.
+        lock (_enqueueLock) {
+            if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
+                var dropped = Interlocked.Increment(ref _droppedPendingTurns);
+                _logger.LogWarning(
+                    "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
+                    _pendingTurnsCapacity, dropped);
 
-            var full = new InputNotAdmittedException("ACP pending-turns queue is full.");
-            if (written is null) throw full;
-            written.TrySetException(full);
-            return written.Task;
+                var full = new InputNotAdmittedException("ACP pending-turns queue is full.");
+                if (written is null) throw full;
+                written.TrySetException(full);
+                return written.Task;
+            }
+
+            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text));
+
+            if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
+                // The channel was completed (the runtime went terminal) — the only way a not-full
+                // write fails. Rare, and the row above is harmless on a transcript that is ending;
+                // fault the caller so it is not left awaiting a turn that will never run.
+                _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
+                var closed = new InputNotAdmittedException("ACP runtime is terminal; this input was not queued.");
+                if (written is null) throw closed;
+                written.TrySetException(closed);
+            }
         }
 
-        if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
-            _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
-            var closed = new InputNotAdmittedException("ACP runtime is terminal; this input was not queued.");
-            if (written is null) throw closed;
-            written.TrySetException(closed);
-            return written.Task;
-        }
-
-        // Emit the user's message the moment the turn is accepted onto the queue, so a prompt queued
-        // behind an in-flight turn shows in send order immediately instead of only when the worker
-        // dequeues it. A held turn re-admitted after a reconnect is re-processed without
-        // re-enqueueing, so this is the single emit per turn — the worker's admission path emits none.
-        EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text));
         return written?.Task ?? Task.CompletedTask;
     }
 
