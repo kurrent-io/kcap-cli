@@ -179,8 +179,8 @@
                                     <TextBlock x:Name="WorkContextKey" Text="{Binding Key}" FontSize="13" FontWeight="SemiBold"
                                                Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center"
                                                IsVisible="{Binding Key, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    <Button x:Name="InlineIssueButton" Classes="prButton" Command="{Binding Issue.OpenCommand}" IsVisible="{Binding HasInlineIssue}"
-                                            AutomationProperties.Name="Open work item issue" ToolTip.Tip="Open issue in browser" Padding="4">
+                                    <Button x:Name="OpenWorkItemButton" Classes="prButton" Command="{Binding OpenWorkItemCommand}"
+                                            AutomationProperties.Name="Open work item in web" ToolTip.Tip="Open in web" Padding="4">
                                         <Path Classes="prExternal" />
                                     </Button>
                                 </StackPanel>

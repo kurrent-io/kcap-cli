@@ -113,6 +113,10 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Data" Value="M9,2 H14 V7 M14,2 L7,9 M6,3 H3 Q2,3 2,4 V13 Q2,14 3,14 H12 Q13,14 13,13 V10" />
     </Style>
+    <!-- Beside a label: centred on the line box the icon lands a pixel under the glyphs' visual centre. -->
+    <Style Selector="Path.prExternal.prAfterLabel">
+        <Setter Property="RenderTransform" Value="translateY(-1px)" />
+    </Style>
     <Style Selector="Path.prChevron">
         <Setter Property="Width" Value="10" /><Setter Property="Height" Value="10" />
         <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" /><Setter Property="StrokeThickness" Value="1.4" />

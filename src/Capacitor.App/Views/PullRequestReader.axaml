@@ -21,7 +21,10 @@
             <DockPanel Margin="0,3,0,0" LastChildFill="True">
                 <Button DockPanel.Dock="Right" Command="{Binding OpenGitHubCommand}" Classes="prButton" IsEnabled="{Binding CanOpenSource}"
                         AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Top">
-                    <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="{Binding ProviderLabel}" /><Path Classes="prExternal" /></StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
+                        <Path Classes="prExternal prAfterLabel" />
+                    </StackPanel>
                 </Button>
                 <WrapPanel IsVisible="{Binding CanDisplay}">
                     <Button Classes="prButton prStatusButton" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
