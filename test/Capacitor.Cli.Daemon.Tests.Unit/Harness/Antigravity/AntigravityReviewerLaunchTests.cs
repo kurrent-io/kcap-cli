@@ -1136,6 +1136,10 @@ public class AntigravityReviewerLaunchTests {
         // And it must say WHY the path is needed despite ADC having a default — without that an
         // operator reasonably deletes it as redundant.
         await Assert.That(ex.Message).Contains("HOME");
+
+        // The actionable step is a kcap command, not "go set three env vars yourself" — every
+        // CLI-driven daemon start now derives the trio the same way `service install` does.
+        await Assert.That(ex.Message).Contains("kcap daemon start");
     }
 
     /// <summary>
