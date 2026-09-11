@@ -57,9 +57,13 @@ public sealed class ServerPermissionFeed : IDisposable {
                         _ = Task.Run(() => ReconcileAsync(t.SessionId, attempt));
                         break;
                     }
+                    // The drop carries the attempt it was raised under, exactly like a
+                    // reconciliation: a grant that replaced this denial owns the session's cards,
+                    // and dropping them — or moving the cache generation under that grant's own
+                    // fetch — would discard a result the server still says is pending.
                     case SessionAccessState.Denied: {
-                        Bump(t.SessionId);
-                        _ = Task.Run(() => permissions.DropServerForSession(t.SessionId));
+                        var attempt = Bump(t.SessionId);
+                        _ = Task.Run(() => CommitAsync(t.SessionId, attempt, () => permissions.DropServerForSession(t.SessionId)));
                         break;
                     }
                 }

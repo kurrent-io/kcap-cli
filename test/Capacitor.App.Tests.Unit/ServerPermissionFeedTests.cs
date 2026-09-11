@@ -36,6 +36,12 @@ public class ServerPermissionFeedTests {
         public void Dispose() { Feed.Dispose(); Access.Dispose(); Permissions.Dispose(); View.Dispose(); }
     }
 
+    static SessionAccessState Current(SessionAccessLease lease) {
+        SessionAccessState? state = null;
+        using (lease.State.Subscribe(s => state = s)) { }
+        return state!.Value;
+    }
+
     static SessionDetailFetch DetailWith(string eventsJson) => new(JsonSerializer.Deserialize(
         $$"""{"session_id":"s1","ended_at":null,"last_event_number":1,"events":{{eventsJson}}}""", RemoteModelsJsonContext.Default.SessionDetailDto));
 
@@ -157,6 +163,33 @@ public class ServerPermissionFeedTests {
         // The same id landing again proves the drop left no tombstone behind.
         h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "r1", "Bash", null, null));
         await Assert.That(h.View.Count).IsEqualTo(1);
+    }
+
+    /// A denial speaks only for the attempt it was raised under. Held behind a grant that replaced
+    /// it, its drop would otherwise delete cards that grant's own reconciliation proved pending.
+    [Test]
+    public async Task A_superseded_denial_leaves_the_grant_that_replaced_it_alone() {
+        using var h = new Harness();
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "p1", "Bash", null, null));
+
+        using var held = await h.Feed.CommitGates.EnterAsync("s1");
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => Current(lease) == SessionAccessState.Denied, what: "the denial");
+        await Task.Delay(100); // the drop, were it not ordered, lands here
+        await Assert.That(h.View.Lookup("server:p1").HasValue).IsTrue();
+
+        // Access comes back, and the grant's own fetch is authoritative that the card is pending.
+        h.Detail = _ => Task.FromResult(DetailWith("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}}]"""));
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        h.Lane.SessionAccessChangedSubject.OnNext("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the grant's fetch");
+
+        held.Dispose();
+
+        await Task.Delay(100); // the superseded drop resumes here, behind the grant
+        await Assert.That(h.View.Lookup("server:p1").HasValue).IsTrue();
     }
 
     /// A fetch that merely failed is not evidence the session has no cards — only a 404 is.
