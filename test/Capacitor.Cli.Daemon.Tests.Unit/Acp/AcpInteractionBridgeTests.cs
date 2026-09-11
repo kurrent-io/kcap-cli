@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 /// <see cref="AcpInteractionBridge"/> parses an inbound <c>session/request_permission</c>
 /// (spec-derived shape, NOT probe-confirmed — see <c>docs/acp-probe-findings.md</c>) or capability-
 /// gated <c>elicitation/create</c> server request, forwards it to an injected
-/// "ask the server" delegate (standing in for <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync"/>),
+/// "ask the server" delegate (standing in for <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync(Capacitor.Cli.Core.AcpInteractionRequest, System.Threading.CancellationToken)"/>),
 /// and maps the returned <see cref="AcpInteractionDecision"/> back to the ACP JSON-RPC result
 /// shape. Unit-tested against the delegate directly — no real SignalR connection involved.
 /// </summary>

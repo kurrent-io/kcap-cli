@@ -148,7 +148,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     }
 
     /// <summary>
-    /// Records whether <see cref="ServerConnection.RequestAcpInteractionAsync"/> was actually
+    /// Records whether <see cref="ServerConnection.RequestAcpInteractionAsync(Capacitor.Cli.Core.AcpInteractionRequest, System.Threading.CancellationToken)"/> was actually
     /// invoked BY THE RUNTIME THE FACTORY PRODUCED (not by the test calling it directly) — a real
     /// (non-connecting) <see cref="ServerConnection"/> subclass, matching the established
     /// <c>CaptureServerConnection</c>-style pattern used elsewhere in this test project (e.g.

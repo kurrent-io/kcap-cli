@@ -23,18 +23,15 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <see cref="AcpHostedAgentRuntime.StartAsync"/>. Cursor and Copilot descriptors share this path;
 /// each descriptor declares its own unattended and MCP transport capabilities.
 ///
-/// <b>Spec-review Finding 4:</b> gained a <see cref="ServerConnection"/> constructor
-/// dependency so every runtime this factory produces has the real permission/elicitation bridge
-/// wired — <see cref="StartAsync"/> passes <c>ctx.AgentId</c> and
-/// <see cref="ServerConnection.RequestAcpInteractionAsync"/> into <see cref="AcpHostedAgentRuntime"/>'s
-/// optional parameters instead of leaving them at their <c>""</c>/<see langword="null"/> defaults.
+/// <para>The <see cref="ServerConnection"/> dependency wires the permission/elicitation bridge into
+/// every runtime this factory produces: <see cref="StartAsync"/> passes <c>ctx.AgentId</c> and the
+/// interaction delegate into <see cref="AcpHostedAgentRuntime"/> rather than leaving them at their
+/// <c>""</c>/<see langword="null"/> defaults.</para>
 ///
-/// <b>Round-4 Finding 3:</b> process-spawning + stream construction is extracted into
-/// <paramref name="connectionSource"/> (defaulting to <see cref="StartRealProcess"/>) purely so
-/// <c>AcpHostedAgentRuntimeFactoryTests</c> can construct THIS class for real and drive its
-/// REAL <see cref="StartAsync"/> against an in-memory <c>FakeAcpAgent</c> peer instead of a real
-/// <c>cursor-agent acp</c> child process (unavailable and non-portable in CI) — the seam changes
-/// nothing about production behavior, since the default IS the real `Process.Start`-backed path.
+/// <para><paramref name="connectionSource"/> (defaulting to <see cref="StartRealProcess"/>) is a test
+/// seam: it lets a test drive the real <see cref="StartAsync"/> against an in-memory
+/// <c>FakeAcpAgent</c> peer instead of a real <c>cursor-agent acp</c> child, unavailable in CI. The
+/// default is the real <c>Process.Start</c>-backed path, so production behavior is unchanged.</para>
 /// </summary>
 internal sealed partial class AcpHostedAgentRuntimeFactory(
         AcpVendorDescriptor                                                            descriptor,
@@ -52,18 +49,23 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         TimeProvider? timeProvider = null,
         // The desktop app's local permission surface. Non-null (production) presents a permission on
         // it alongside the server's web card, first answer wins; null leaves every launch server-only.
-        PermissionPromptBroker? permissionBroker = null
+        PermissionPromptBroker? permissionBroker = null,
+        // Audit sink for locally-settled permissions; null (tests) skips the record.
+        PermissionDecisionLog? permissionDecisionLog = null
     ) : IHostedAgentRuntimeFactory {
     readonly Func<string, string?>? _resolveVendorVersion = resolveVendorVersion;
     readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     readonly PermissionPromptBroker? _permissionBroker = permissionBroker;
+    readonly PermissionDecisionLog? _permissionDecisionLog = permissionDecisionLog;
 
     /// <summary>The delegate the interaction bridge calls to answer a request. With a desktop
     /// surface wired, a permission is raced across the web card and the desktop card (first wins);
     /// without one it is the raw server request, unchanged.</summary>
     Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> RequestInteraction =>
         _permissionBroker is { } broker
-            ? new AcpPermissionSurface(broker, descriptor.Vendor, connection.RequestAcpInteractionAsync, _timeProvider).RequestAsync
+            ? new AcpPermissionSurface(
+                    broker, descriptor.Vendor, connection.RequestAcpInteractionAsync,
+                    _permissionDecisionLog, _timeProvider).RequestAsync
             : connection.RequestAcpInteractionAsync;
 
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =

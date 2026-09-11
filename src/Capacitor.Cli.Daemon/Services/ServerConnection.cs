@@ -1098,9 +1098,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// see that method's remarks for why the invoke returns a requestId immediately rather than
     /// blocking the connection's parallel-invocation slot for the whole interaction wait.
     /// </summary>
-    public virtual async Task<AcpInteractionDecision> RequestAcpInteractionAsync(
+    public virtual Task<AcpInteractionDecision> RequestAcpInteractionAsync(
             AcpInteractionRequest request,
             CancellationToken     ct = default
+        ) => RequestAcpInteractionAsync(request, onServerRequestId: null, ct);
+
+    /// <summary><paramref name="onServerRequestId"/> fires once the server has minted its id for this
+    /// interaction, before the decision wait — the seam a second local surface uses to pair its own
+    /// card with the server's so a client seeing both lanes coalesces them.</summary>
+    public virtual async Task<AcpInteractionDecision> RequestAcpInteractionAsync(
+            AcpInteractionRequest request,
+            Action<string>?       onServerRequestId,
+            CancellationToken     ct
         ) {
         var requestId = await ConnectionRetry.InvokeWithConnectionRetryAsync(
             () => _hub.InvokeAsync<string>("AcpRequestInteraction", request, ct),
@@ -1112,6 +1121,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             maxServerErrorRetries: OwnershipNotReadyMaxRetries
         );
 
+        onServerRequestId?.Invoke(requestId);
         return await AwaitInteractionDecisionAsync(request, requestId, ct);
     }
 

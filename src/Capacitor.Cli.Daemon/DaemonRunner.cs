@@ -463,7 +463,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(),
-                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>()
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -472,7 +473,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(),
-                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>()
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -481,7 +483,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(),
-                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>()
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -490,7 +493,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(),
-                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>()
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -499,7 +503,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(),
-                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>()
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
 
