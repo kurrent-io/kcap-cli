@@ -16,6 +16,14 @@ public sealed class DaemonCommands(
         HarnessRegistry harnesses, BinaryProbe binaries) {
     string LogPath { get; } = config.Path("daemon.log");
 
+    /// <summary>The sibling capture for the daemon's raw stderr/stdout — where a detached start points
+    /// the child's fds (<c>--stderr-file</c>) and the launchd unit its <c>StandardErrorPath</c>. It
+    /// holds what the primary log cannot: native fatal messages written straight to fd 2, and the
+    /// pre-host startup breadcrumbs <c>DaemonRunner.StartupPhase</c> writes before the logger exists.
+    /// So <c>daemon logs</c> surfaces it too — a startup that never reached the logger still leaves a
+    /// trace here.</summary>
+    string StderrCapturePath => Path.ChangeExtension(LogPath, null) + ".out.log";
+
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             PrintUsage();
@@ -217,7 +225,7 @@ public sealed class DaemonCommands(
         // daemon's fds at a sibling capture file so those messages survive. Same
         // ".out.log" convention as the launchd unit's StandardErrorPath.
         psi.ArgumentList.Add("--stderr-file");
-        psi.ArgumentList.Add(Path.ChangeExtension(LogPath, null) + ".out.log");
+        psi.ArgumentList.Add(StderrCapturePath);
 
         foreach (var arg in args.Where(a => a is not "-d" and not "--detach")) {
             psi.ArgumentList.Add(arg);
@@ -585,18 +593,19 @@ public sealed class DaemonCommands(
 
     // ── status ──────────────────────────────────────────────────────────────
 
-    /// <summary>How long <c>status</c> waits for a daemon's Hello before reporting it as still
-    /// starting. Short: a bound daemon answers immediately, and an unbound one refuses the connection
-    /// at once — the timeout only bounds the rare mid-bind race.</summary>
+    /// <summary>How long <c>status</c> waits for a daemon's control socket before reporting it as still
+    /// starting. Short: a bound daemon accepts the connection immediately, and an unbound one refuses
+    /// it at once — the timeout only bounds the rare mid-bind race.</summary>
     static readonly TimeSpan ServingProbeTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// The running daemon's status line, distinguishing a daemon that is actually serving from one
-    /// whose PID is live but whose local control socket does not yet answer. A validated PID proves
-    /// only that the process exists; a well-formed Hello proves it has bound its socket and can answer.
-    /// A live process that is not yet answering has acquired its lock but has not finished binding its
-    /// listener and connecting — it is starting, not serving — which a PID alone reports as flatly
-    /// "running".
+    /// whose PID is live but whose local control socket does not yet accept a connection. A validated
+    /// PID proves only that the process exists; a reachable control socket proves the daemon has bound
+    /// its listener. A live process whose socket is not yet reachable has acquired its lock but has not
+    /// finished binding — it is starting, not serving — which a PID alone reports as flatly "running".
+    /// Reachability, not a well-formed Hello, is the signal: an older daemon accepts the connection and
+    /// drops the unknown Hello frame, and it is serving all the same.
     /// </summary>
     internal static string DescribeRunningDaemon(int pid, bool serving) =>
         serving
@@ -627,16 +636,28 @@ public sealed class DaemonCommands(
             return 0;
         }
 
-        foreach (var name in names) {
-            if (DaemonPidProbe.ReadPidFile(store, name) is not { } entry) {
+        // Read each name's PID entry once, then probe every validated-live daemon AT ONCE. Each probe
+        // carries its own ServingProbeTimeout, so a status over several daemons whose sockets accept
+        // but stay silent costs one timeout rather than one per daemon; results are rendered below in
+        // the original name order.
+        var entries = names.Select(n => (Name: n, Entry: DaemonPidProbe.ReadPidFile(store, n))).ToList();
+
+        var servingProbes = entries
+            .Where(e => e.Entry is { } pe && DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken))
+            .ToDictionary(e => e.Name, e => HelloProbe.RunAsync(store, e.Name, ServingProbeTimeout));
+
+        await Task.WhenAll(servingProbes.Values);
+
+        foreach (var (name, entry) in entries) {
+            if (entry is not { } pe) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
-            } else if (DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
-                // Socket-bound is the serving signal: a Hello over the local control socket answers
-                // only once the daemon has bound its listener, which happens after the lock and boot
-                // checks it may still be working through. A validated PID alone cannot tell a
-                // still-starting daemon from a serving one.
-                var hello = await HelloProbe.RunAsync(store, name, ServingProbeTimeout);
-                await Console.Out.WriteLineAsync($"Daemon '{name}': {DescribeRunningDaemon(entry.Pid, hello.WellFormed)}");
+            } else if (DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken)) {
+                // Socket-reachable is the serving signal: a daemon that accepts the control-socket
+                // connection has bound its listener, so it is serving even if it is an older build
+                // that cannot answer the Hello frame. Only a refused or timed-out connection —
+                // unreachable — is the still-starting daemon a validated PID alone cannot tell apart.
+                var serving = servingProbes.TryGetValue(name, out var probe) && probe.Result.Reachable;
+                await Console.Out.WriteLineAsync($"Daemon '{name}': {DescribeRunningDaemon(pe.Pid, serving)}");
 
                 // Version of the *running* daemon (from the marker it wrote at
                 // startup), so the user can confirm a self-update took effect.
@@ -877,22 +898,42 @@ public sealed class DaemonCommands(
     }
 
     async Task<int> Logs() {
-        if (!File.Exists(LogPath)) {
+        var shown = await TailAsync(LogPath);
+
+        // The stderr capture holds what the primary log cannot — native fatal messages and the
+        // pre-host startup breadcrumbs — so a startup that never reached the logger still leaves a
+        // trace an operator can find here rather than in an undocumented sibling file. Surfaced only
+        // when it has content: a clean run leaves it empty.
+        shown |= await TailAsync(StderrCapturePath, skipIfEmpty: true);
+
+        if (!shown) {
             await Console.Error.WriteLineAsync("No log file found.");
 
             return 1;
         }
 
-        var lines = await File.ReadAllLinesAsync(LogPath);
-        var start = Math.Max(0, lines.Length - 50);
-
-        for (var i = start; i < lines.Length; i++) {
-            await Console.Out.WriteLineAsync(lines[i]);
-        }
-
-        await Console.Error.WriteLineAsync($"\n--- {LogPath} ({lines.Length} lines total) ---");
-
         return 0;
+    }
+
+    /// <summary>Prints the last 50 lines of <paramref name="path"/> with a trailing banner, or returns
+    /// false if it is absent (or empty, when <paramref name="skipIfEmpty"/>). Read write-sharing: the
+    /// daemon holds both this log and the stderr capture open for its whole life, and a plain read
+    /// denies it Write on Windows.</summary>
+    static async Task<bool> TailAsync(string path, bool skipIfEmpty = false) {
+        if (!File.Exists(path)) return false;
+        if (skipIfEmpty && new FileInfo(path).Length == 0) return false;
+
+        var lines = (await File.ReadAllTextSharedAsync(path)).Split('\n');
+        // A trailing newline yields a final empty element that is not a line.
+        var count = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
+        var start = Math.Max(0, count - 50);
+
+        for (var i = start; i < count; i++)
+            await Console.Out.WriteLineAsync(lines[i].TrimEnd('\r'));
+
+        await Console.Error.WriteLineAsync($"\n--- {path} ({count} lines total) ---");
+
+        return true;
     }
 
     // ── service evidence for status/doctor (the verbs live in DaemonServiceCommands) ──

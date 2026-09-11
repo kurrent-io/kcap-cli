@@ -4,11 +4,11 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
 /// <c>kcap daemon status</c> must distinguish a daemon that is actually serving from one whose PID is
-/// live but whose local control socket does not yet answer — it has taken its lock but has not
-/// finished binding and connecting. <see cref="DaemonCommands.DescribeRunningDaemon"/> is the pure
-/// classifier that maps the two liveness signals (validated PID, well-formed Hello) to the reported
-/// line, so the distinction is testable without a real socket (the socket leg is
-/// <c>HelloProbeTests</c>).
+/// live but whose local control socket does not yet accept a connection — it has taken its lock but
+/// has not finished binding. <see cref="DaemonCommands.DescribeRunningDaemon"/> is the pure classifier
+/// that maps the two liveness signals (validated PID, reachable control socket) to the reported line,
+/// so the distinction is testable without a real socket (the socket leg — including that an older
+/// daemon which cannot answer Hello is still reachable — is <c>HelloProbeTests</c>).
 /// </summary>
 public class DaemonStatusServingTests {
     [Test]
