@@ -169,6 +169,27 @@ public class ServerPermissionFeedTests {
         await WaitUntilAsync(() => h.View.Count == 0, what: "cards replaced with none");
     }
 
+    /// A session with nothing cached has no generation of its own to move, so only the lane epoch
+    /// can tell the previous account's fetch that it is answering for someone else.
+    [Test]
+    public async Task An_identity_change_racing_a_fetch_for_an_empty_session_wins() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Detail = async _ => {
+            await gate.Task;
+            return DetailWith("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}}]""");
+        };
+        h.Connect("u1");
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "fetch started");
+
+        h.Connect("u2");
+        gate.SetResult();
+        await Task.Delay(100);
+
+        await Assert.That(h.View.Count).IsEqualTo(0);
+    }
+
     [Test]
     public async Task An_identity_change_clears_the_server_lane() {
         using var h = new Harness();

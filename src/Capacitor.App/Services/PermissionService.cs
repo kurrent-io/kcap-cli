@@ -43,6 +43,7 @@ public sealed class PermissionService : IPermissionService {
     IReadOnlyDictionary<string, string> _sessionAgents = new Dictionary<string, string>();
     CancellationTokenSource? _loopCts;
     long _liveSequence;
+    long _laneEpoch;
     bool _disposed;
 
     public PermissionService(
@@ -336,18 +337,20 @@ public sealed class PermissionService : IPermissionService {
     internal int SessionGeneration(string sessionId) { lock (_lock) return _sessionGenerations.GetValueOrDefault(sessionId); }
 
     /// What a reconciliation must capture before it fetches: the generation whose removals it must
-    /// not undo, and the point in the live stream its snapshot corresponds to.
-    internal (int Generation, long Sequence) SessionMarker(string sessionId) {
-        lock (_lock) return (_sessionGenerations.GetValueOrDefault(sessionId), _liveSequence);
+    /// not undo, the point in the live stream its snapshot corresponds to, and the lane epoch that
+    /// says which signed-in subject asked for it.
+    internal (int Generation, long Sequence, long Epoch) SessionMarker(string sessionId) {
+        lock (_lock) return (_sessionGenerations.GetValueOrDefault(sessionId), _liveSequence, _laneEpoch);
     }
 
     /// The reconciliation's verdict for one session: adds what is missing, removes server items the
     /// stream no longer holds. A generation that moved means a clear, a drop or a settlement ran
-    /// meanwhile — drop the whole result. Items that landed after the marker are newer than the
-    /// snapshot, so their absence from it is not evidence of anything.
-    internal void ReplaceServerForSession(string sessionId, IReadOnlyList<PendingPermissionRequest> items, (int Generation, long Sequence) marker) {
+    /// meanwhile, and an epoch that moved means another account asked — drop the whole result either
+    /// way. Items that landed after the marker are newer than the snapshot, so their absence from it
+    /// is not evidence of anything.
+    internal void ReplaceServerForSession(string sessionId, IReadOnlyList<PendingPermissionRequest> items, (int Generation, long Sequence, long Epoch) marker) {
         lock (_lock) {
-            if (_disposed || marker.Generation != _sessionGenerations.GetValueOrDefault(sessionId)) return;
+            if (_disposed || marker.Epoch != _laneEpoch || marker.Generation != _sessionGenerations.GetValueOrDefault(sessionId)) return;
             var keep = items.Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
             bool Stale(PendingPermissionRequest item) => item.LiveSequence <= marker.Sequence && !keep.Contains(item.Key);
             foreach (var stale in _cache.Items.Where(i => i.Lane == PermissionLane.Server && i.SessionId == sessionId && Stale(i)).ToList())
@@ -370,15 +373,13 @@ public sealed class PermissionService : IPermissionService {
     }
 
     /// The signed-in subject changed: nothing the previous account could see may survive, including
-    /// a fetch it started. Every session that could name one in flight moves its generation.
+    /// a fetch it started. The epoch retires every reconciliation in flight at once, whether or not
+    /// its session had a card or a generation of its own to move. Only the reconciliation is gated
+    /// on it — a live push already belongs to the new subject's lane.
     internal void ClearServerLane() {
         lock (_lock) {
             if (_disposed) return;
-            var sessions = _cache.Items.Where(i => i.Lane == PermissionLane.Server).Select(i => i.SessionId)
-                .Concat(_shadowed.Values.Select(i => i.SessionId))
-                .Concat(_sessionGenerations.Keys)
-                .ToHashSet(StringComparer.Ordinal);
-            foreach (var sessionId in sessions) BumpGeneration(sessionId);
+            _laneEpoch++;
             foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Server).ToList()) _cache.Remove(item.Key);
             _shadowed.Clear();
         }
