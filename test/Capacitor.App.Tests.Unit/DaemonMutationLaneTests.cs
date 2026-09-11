@@ -137,6 +137,40 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    [Arguments("unsupported")]
+    [Arguments("unconfirmed")]
+    [Arguments("rollback")]
+    [Arguments("skew")]
+    [Arguments("repair")]
+    [Arguments("refused")]
+    [Arguments("fault")]
+    public async Task Rename_outcomes_require_a_fresh_graph_except_known_untouched_unsupported_CLI(string mode) {
+        var gate = new TaskCompletionSource<string?>();
+        var cli = new FakeKcapCli { VersionBehavior = _ => gate.Task };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        MutationOutcome result = mode switch {
+            "unsupported" => new MutationOutcome.Failed(30, "cli_unsupported", RecoverySurface.Attention),
+            "unconfirmed" => new MutationOutcome.UnconfirmedNoAttach(),
+            "rollback" => new MutationOutcome.Failed(VerifyExitCodes.RollbackBudget, null, RecoverySurface.Attention),
+            "skew" => new MutationOutcome.AttentionSkew("ownership_unknown"),
+            "repair" => new MutationOutcome.AttentionRepair("stale_txn_marker"),
+            _ => new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention),
+        };
+        await using var lane = MakeLane(factory, classify: (request, _, _, _, _, _) =>
+            request.RetireServiceId is null ? Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded())
+                : mode == "fault" ? Task.FromException<MutationOutcome>(new IOException("probe failed")) : Task.FromResult(result));
+        var rename = lane.RunAsync(Req(MutationVerb.Replace, daemonName: "new-name") with { RetireServiceId = "daemon-a" }, CancellationToken.None);
+        var queued = lane.RunAsync(Req(), CancellationToken.None);
+        gate.SetResult("9.9.9");
+        await rename;
+        var after = await queued;
+        await Assert.That(lane.IsRetired("daemon-a")).IsEqualTo(mode != "unsupported");
+        if (mode == "unsupported") await Assert.That(after).IsTypeOf<MutationOutcome.Succeeded>();
+        else await Assert.That(after).IsEqualTo(new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention));
+        await Assert.That(factory.Calls.Count).IsEqualTo(mode == "unsupported" ? 2 : 1);
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public async Task Retire_preflight_uses_the_lane_CLI_without_mutating(bool supported) {

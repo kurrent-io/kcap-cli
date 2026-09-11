@@ -129,8 +129,9 @@ Then, in order:
    A known pre-spawn `cli_unsupported` refusal is the exception: restore the
    previous name only if the profile still contains the name this attempt wrote.
 
-After a confirmed rename, the lane refuses queued and future actions targeting
-the retired service id, including another rename from that id. Reopening Settings
+After any rename outcome except the known-untouched unsupported-CLI case, the
+lane refuses queued and future actions targeting the old service id, including
+another rename from that id. A failed transaction may already have retired it. Reopening Settings
 in the old process requires an app restart before editing.
 
 The rename runs whether or not the daemon is attached. A stopped but installed

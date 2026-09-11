@@ -110,6 +110,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
         : !_startupSettled.IsCompletedSuccessfully ? "Waiting for daemon startup to finish…"
+        : Name == DaemonStore.Sanitize(_runningName) ? "This is already the daemon’s service id."
         : _status.State == AttachState.Connected && _snapshot?.Daemon.ActiveAgents > 0
             ? $"Wait for the {_snapshot.Daemon.ActiveAgents} active agents to finish before renaming."
             : !Idle ? "Waiting for the daemon’s current agent count…" : "Renaming restarts the daemon and relaunches this app.";
@@ -189,11 +190,11 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
                 Message = "The CLI no longer supports renaming. Update kcap and try again; the saved name was restored unless another edit changed it.";
                 return;
             }
+            _needsAppRestart = true;
             if (outcome is not MutationOutcome.Succeeded) {
                 Message = SettingsRenameMessage.For(request!, outcome);
                 return;
             }
-            _needsAppRestart = true;
             Message = "Daemon renamed. Restart this app to connect using the new name.";
             if (await _relaunch(_lifetime.Token)) Message = "Daemon renamed. Relaunching the app…";
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {

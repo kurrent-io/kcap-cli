@@ -429,7 +429,7 @@ public partial class App : Application {
         // first terminal outcome it hinges on (DaemonLifecycleController.Start's own comment).
         var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe) = BuildLifecycleController(
             service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext, lifecycleAttention.OnNext,
-            lane.RunAsync, profiles?.Resolution);
+            lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
         lifecycle.Start();
         _lifecycle = lifecycle;
         // Subscribe-before-run doesn't matter here (Offerable replays); always started so manual install keeps working in Incomplete mode — autoOfferSuppressed skips only the dialog.
@@ -1074,7 +1074,7 @@ public partial class App : Application {
             DaemonClientService service, ILocalControlOps ops, bool autoActionsPermanentlyClosed,
             Action<string> setLifecycleStatus, Action<string> setLifecycleAttention,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            ResolvedProfile? profile) {
+            ResolvedProfile? profile, Func<bool> requiresAppRestart) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
         var runner  = new ProcessRunner();
         var probe   = new LoginShellProbe(runner, Environment.GetEnvironmentVariable);
@@ -1088,7 +1088,7 @@ public partial class App : Application {
 
         var lifecycle = new DaemonLifecycleController(
             service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), TimeProvider.System,
-            canonicalServer, runMutation, autoActionsPermanentlyClosed);
+            canonicalServer, runMutation, autoActionsPermanentlyClosed, requiresAppRestart);
 
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off

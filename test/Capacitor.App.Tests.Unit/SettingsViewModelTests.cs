@@ -77,6 +77,7 @@ public class SettingsViewModelTests {
         vm.Name = "work-laptop";
         await Assert.That(vm.NameError).IsNull();
         await Assert.That(vm.CanRename).IsFalse();
+        await Assert.That(vm.RenameHint!).Contains("already the daemon’s service id");
     });
 
     [Test]
@@ -285,5 +286,6 @@ public class SettingsViewModelTests {
         await Assert.That(relaunches).IsEqualTo(0);
         await Assert.That(vm.Message!).Contains("belongs to another profile");
         await Assert.That(vm.Message!).Contains("uninstall --name daemon-a");
+        await Assert.That(vm.CanEdit).IsFalse();
     });
 }
