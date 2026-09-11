@@ -85,8 +85,8 @@ public class AgentOrchestratorJournalTests {
         await Assert.That(JournalFiles.ReadLines(existing.Path).Length).IsEqualTo(2); // its header plus the failed launch's header
     }
 
-    sealed class FailingAfterOpenFactory : IHostedAgentRuntimeFactory {
-        public string CliPath => "x"; public string Vendor => "cursor"; public bool SupportsUnattended => false;
+    sealed class FailingAfterOpenFactory(string vendor = "cursor") : IHostedAgentRuntimeFactory {
+        public string CliPath => "x"; public string Vendor => vendor; public bool SupportsUnattended => false;
         public TranscriptJournal? LastJournal { get; private set; }
         public bool IsAvailable() => true;
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
@@ -94,6 +94,30 @@ public class AgentOrchestratorJournalTests {
             ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
             throw new InvalidOperationException("boom");
         }
+    }
+
+    [Test]
+    public async Task Failed_launch_completes_its_own_journal_when_the_id_collides_with_a_live_agent() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var server = new CaptureServerConnection();
+        var liveFactory = new OpeningAcpFactory();
+        var failingFactory = new FailingAfterOpenFactory("cursor-collide");
+        // No allowedRepoPath: BorrowAuthorizer compares the CANONICAL cwd against it, and the
+        // macOS temp root (/var, a symlink into /private) would fail that match against the raw path.
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [liveFactory, failingFactory]);
+
+        // A live agent already holds "agent-collide" when the second, doomed launch for the SAME
+        // id starts — the pre-publish failure below must not route through the live agent's
+        // CleanupAgentAsync teardown.
+        await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("agent-collide", repoPath));
+
+        await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("agent-collide", repoPath) with {
+            Vendor = failingFactory.Vendor, Borrowed = true, BorrowCwd = repoPath
+        });
+
+        await Assert.That(failingFactory.LastJournal!.Drained).IsTrue();
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "agent-collide").Vendor).IsEqualTo("cursor");
     }
 
     [Test]

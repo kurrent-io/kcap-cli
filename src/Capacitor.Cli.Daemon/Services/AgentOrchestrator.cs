@@ -875,6 +875,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
 
+    /// <see cref="TranscriptJournalSweep"/>'s live-agent check: a hashed transcript/PID-record file
+    /// stem is live when some agent still in <see cref="_agents"/> hashes to it — true between an
+    /// Antigravity turn's child exiting and the next one starting, when no PID record exists.
+    internal bool IsLiveJournalStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
+
     /// Mutation FIRST, Pulse() second — always (a pulse published before its mutation lets a
     /// subscriber read the new version, snapshot the OLD state, and wait forever). These
     /// helpers are the only writers of agent status and registry membership, so the ordering
@@ -2019,6 +2024,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // be able to complete it, and remove a file no other incarnation has written to.
         TranscriptJournal? journal = null;
 
+        // Set the instant PublishAgent makes _agents[agentId] THIS launch's own instance. Without
+        // it, the catch below can't tell "_agents already holds agentId" apart from "a different,
+        // already-live incarnation holds it" — a pre-publish failure on the latter would route
+        // through CleanupAgentAsync for the WRONG agent and leave this launch's own journal parked.
+        var published = false;
+
         // Created here, ahead of the reviewer-token mint and the AgentInstance that will own it, so the
         // SAME instance reaches the permission-bridge grant, the ACP runtime and the AgentInstance —
         // one clock per launch, never three.
@@ -2410,6 +2421,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 InactivityBoundSeconds = cmd.InactivityBoundSeconds
             };
             PublishAgent(agent);
+            published = true;
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after
@@ -2530,10 +2542,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
-            // Phase B (D1): a post-insert failure (agent already in _agents — e.g. a throwing
-            // RegisterAgentAsync) routes teardown through the single-flight CleanupAgentAsync so it
-            // can't strand a live child; a pre-insert failure falls through to the transient cleanup below.
-            if (_agents.ContainsKey(agentId)) {
+            // Phase B (D1): a post-insert failure (this launch's own agent already in _agents — e.g. a
+            // throwing RegisterAgentAsync) routes teardown through the single-flight CleanupAgentAsync
+            // so it can't strand a live child. `published`, not ContainsKey: a pre-publish failure can
+            // find agentId already occupied by a DIFFERENT, live incarnation, and CleanupAgentAsync
+            // would then tear down that unrelated agent while leaking this launch's own journal.
+            if (published) {
                 await CleanupAgentAsync(agentId);
                 // §3.5: never forward a null/whitespace ex.Message raw.
                 await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));

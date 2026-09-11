@@ -6,7 +6,15 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Reaps envelope journals kcap owns: older than the retention and with no PID record under the
 /// same name. Runs once after the startup orphan reap (which removes a prior epoch's records) and
 /// then every 24 hours. Never throws — a sweep fault must not block the daemon's connect.
-internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time, ILogger<TranscriptJournalSweep> logger, JournalPathLocks? locks = null) : BackgroundService {
+internal sealed class TranscriptJournalSweep(
+        string                          stateDir,
+        TimeProvider                    time,
+        ILogger<TranscriptJournalSweep> logger,
+        JournalPathLocks?               locks  = null,
+        // A runtime that spawns one child per turn (Antigravity) has no PID record BETWEEN turns —
+        // that gap alone must never look like "no live owner" to a 30-day-old idle session, or the
+        // sweep deletes the journal and the runtime's next append latches the writer off.
+        Func<string, bool>?             isLive = null) : BackgroundService {
     public static readonly TimeSpan Retention = TimeSpan.FromDays(30);
     public static readonly TimeSpan Interval  = TimeSpan.FromHours(24);
 
@@ -57,7 +65,9 @@ internal sealed class TranscriptJournalSweep(string stateDir, TimeProvider time,
             // on is read after it is held: a check made while waiting would be about a stale file.
             if (!File.Exists(path)) return;
             if (File.GetLastWriteTimeUtc(path) >= cutoff.UtcDateTime) return;
-            var record = Path.Combine(stateDir, "agents", Path.GetFileNameWithoutExtension(path) + ".json");
+            var stem = Path.GetFileNameWithoutExtension(path);
+            if (isLive?.Invoke(stem) == true) return;
+            var record = Path.Combine(stateDir, "agents", stem + ".json");
             if (File.Exists(record)) return;
             File.Delete(path);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
