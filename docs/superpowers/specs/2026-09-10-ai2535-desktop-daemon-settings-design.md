@@ -103,6 +103,7 @@ the daemon runs under exactly the typed name; anything else shows an inline
 error. A changed name enables a separate action, **Rename and restart daemon**,
 gated on all of:
 
+- the startup phase has settled and `KCAP_DAEMON_NAME` does not override the profile;
 - the last status snapshot reports zero active agents, an unreachable daemon
   counting as idle (otherwise the action is disabled and the form says how many
   are running);
@@ -113,7 +114,8 @@ gated on all of:
 
 Then, in order:
 
-1. Write `daemon.name` on the active profile.
+1. Probe the lane-selected CLI for retire support, recheck idle, then write
+   `daemon.name` on the active profile. An unsupported CLI leaves the name unchanged.
 2. Run the mutation lane's `Replace` verb for the new name with the old sanitized
    id as `RetireServiceId`, a new optional field on `MutationRequest` that only
    the factory sets and only the `Replace` dispatch forwards to
@@ -124,6 +126,12 @@ Then, in order:
 4. Any other outcome goes through the lane's existing outcome consumer and is
    also shown in the form. The profile keeps the new name: the next app start's
    `ensure` installs the new unit.
+   A known pre-spawn `cli_unsupported` refusal is the exception: restore the
+   previous name only if the profile still contains the name this attempt wrote.
+
+After a confirmed rename, the lane refuses queued and future actions targeting
+the retired service id, including another rename from that id. Reopening Settings
+in the old process requires an app restart before editing.
 
 The rename runs whether or not the daemon is attached. A stopped but installed
 unit under the old name would otherwise start at login beside the new one.

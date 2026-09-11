@@ -28,10 +28,13 @@ public class SettingsViewModelTests {
             Func<string, CancellationToken, Task<bool>>? target = null,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>>? run = null,
             Func<LifecyclePrompt, CancellationToken, Task<bool>>? confirm = null,
-            Func<CancellationToken, Task<bool>>? relaunch = null, bool mac = true) =>
+            Func<CancellationToken, Task<bool>>? relaunch = null, bool mac = true,
+            Task? startup = null, bool nameOverride = false, bool needsRestart = false,
+            Func<MutationRequest, CancellationToken, Task<bool>>? canRetire = null) =>
         new(store, service, ops ?? new ScriptedLocalControlOps(), target ?? ((_, _) => Task.FromResult(false)),
             run ?? ((_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded())),
-            confirm ?? ((_, _) => Task.FromResult(true)), relaunch ?? (_ => Task.FromResult(false)), mac);
+            confirm ?? ((_, _) => Task.FromResult(true)), relaunch ?? (_ => Task.FromResult(false)), mac,
+            startup ?? Task.CompletedTask, canRetire ?? ((_, _) => Task.FromResult(true)), nameOverride, needsRestart);
 
     static FakeDaemonClientService Connected(int active = 0, bool supportsSettings = true) {
         var service = new FakeDaemonClientService();
@@ -39,6 +42,87 @@ public class SettingsViewModelTests {
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(active: active));
         return service;
     }
+
+    [Test]
+    public Task Rename_waits_for_startup_even_when_unreachable() => AvaloniaSession.RunOnUiAsync(async () => {
+        var startup = new TaskCompletionSource();
+        var service = Connected();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        using var vm = Make(Seed(), service, startup: startup.Task);
+        vm.Name = "renamed";
+        vm.Capacity = 8;
+        await Assert.That(vm.CanSave).IsTrue();
+        await Assert.That(vm.CanRename).IsFalse();
+        await Assert.That(vm.RenameHint!).Contains("startup");
+        startup.SetResult();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Assert.That(vm.CanRename).IsTrue();
+    });
+
+    [Test]
+    public Task Environment_name_override_blocks_only_rename() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var vm = Make(Seed(), Connected(), nameOverride: true);
+        vm.Name = "renamed";
+        vm.Capacity = 8;
+        await Assert.That(vm.CanRename).IsFalse();
+        await Assert.That(vm.CanSave).IsTrue();
+        await Assert.That(vm.RenameHint!).Contains("KCAP_DAEMON_NAME");
+    });
+
+    [Test]
+    public Task A_case_only_service_id_change_does_not_offer_rename() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = Connected();
+        service.DaemonName = "Work-Laptop";
+        using var vm = Make(Seed(), service);
+        vm.Name = "work-laptop";
+        await Assert.That(vm.NameError).IsNull();
+        await Assert.That(vm.CanRename).IsFalse();
+    });
+
+    [Test]
+    public Task Reopening_settings_for_a_retired_graph_requires_restart() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var vm = Make(Seed(), Connected(), needsRestart: true);
+        vm.Name = "renamed";
+        vm.Capacity = 8;
+        await Assert.That(vm.CanRename).IsFalse();
+        await Assert.That(vm.CanSave).IsFalse();
+        await Assert.That(vm.RenameHint!).Contains("Restart this app");
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task Failed_capability_probe_or_agents_starting_during_it_preserves_the_profile(bool becameBusy) => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        var service = Connected();
+        var runs = 0;
+        using var vm = Make(store, service, canRetire: (_, _) => {
+            if (becameBusy) service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(active: 1));
+            return Task.FromResult(becameBusy);
+        }, run: (_, _) => { runs++; return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()); });
+        vm.Name = "renamed";
+        await vm.RenameCommand.Execute();
+        await Assert.That(store.Load().Name).IsEqualTo("daemon-a");
+        await Assert.That(runs).IsEqualTo(0);
+        await Assert.That(vm.Message!).Contains(becameBusy ? "idle" : "saved name is unchanged");
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_changed_CLI_restores_only_the_name_it_wrote(bool concurrentName) => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = Make(store, Connected(), run: async (_, ct) => {
+            await store.SaveCapacityAsync(9, ct);
+            if (concurrentName) await store.SaveNameAsync("concurrent", ct);
+            return new MutationOutcome.Failed(30, "cli_unsupported", RecoverySurface.Attention);
+        });
+        vm.Name = "renamed";
+        await vm.RenameCommand.Execute();
+        await Assert.That(store.Load().Name).IsEqualTo(concurrentName ? "concurrent" : "daemon-a");
+        await Assert.That(store.Load().MaxAgents).IsEqualTo(9);
+        await Assert.That(vm.Message!).Contains("CLI no longer supports");
+    });
 
     [Test]
     public Task Editing_gates_commands_without_saving() => AvaloniaSession.RunOnUiAsync(async () => {

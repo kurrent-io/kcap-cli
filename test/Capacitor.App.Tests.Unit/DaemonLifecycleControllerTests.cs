@@ -943,6 +943,9 @@ sealed class FakeKcapCli : IKcapCli {
         return StatusBehavior(ct);
     }
 
+    public bool SupportsRetire = true;
+    public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => Task.FromResult(SupportsRetire);
+
     public int StartVerifiedCallCount;
     public Func<CancellationToken, Task<ProcessResult>> StartVerifiedBehavior = _ => Task.FromResult(new ProcessResult(0, "", "", false));
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {

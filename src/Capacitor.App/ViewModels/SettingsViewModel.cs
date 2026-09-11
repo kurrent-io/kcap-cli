@@ -19,6 +19,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     readonly Func<LifecyclePrompt, CancellationToken, Task<bool>> _confirm;
     readonly Func<CancellationToken, Task<bool>> _relaunch;
     readonly bool _canRenameOnPlatform;
+    readonly Task _startupSettled;
+    readonly bool _nameOverridden;
+    readonly Func<MutationRequest, CancellationToken, Task<bool>> _canRetire;
     readonly CancellationTokenSource _lifetime;
     readonly CompositeDisposable _subscriptions = new();
     AttachStatus _status = new(AttachState.Connecting, null, null);
@@ -36,7 +39,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<LifecyclePrompt, CancellationToken, Task<bool>> confirm,
             Func<CancellationToken, Task<bool>> relaunch, bool canRenameOnPlatform,
-            CancellationToken appLifetime = default) {
+            Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
+            bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -45,11 +49,18 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _confirm = confirm;
         _relaunch = relaunch;
         _canRenameOnPlatform = canRenameOnPlatform;
+        _startupSettled = startupSettled;
+        _canRetire = canRetire;
+        _nameOverridden = nameOverridden;
+        _needsAppRestart = needsAppRestart;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
 
         var saved = settings.Load();
         _name = saved.Name ?? service.DaemonName;
         _capacity = _savedCapacity = saved.MaxAgents;
+
+        Observable.FromAsync(startupSettled.WaitAsync).ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => Refresh(), _ => Refresh()).DisposeWith(_subscriptions);
 
         SaveCommand = ReactiveCommand.CreateFromTask(SaveAsync, this.WhenAnyValue(x => x.CanSave)).DisposeWith(_subscriptions);
         RenameCommand = ReactiveCommand.CreateFromTask(RenameAsync, this.WhenAnyValue(x => x.CanRename)).DisposeWith(_subscriptions);
@@ -86,7 +97,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public bool CanEdit => !IsBusy && !_needsAppRestart;
     public bool CanSave => CanEdit && CapacityError is null && Capacity != _savedCapacity;
-    public bool CanRename => CanEdit && _canRenameOnPlatform && NameError is null && Name != _runningName && Idle;
+    public bool CanRename => CanEdit && _canRenameOnPlatform && !_nameOverridden && _startupSettled.IsCompletedSuccessfully &&
+        NameError is null && Name != DaemonStore.Sanitize(_runningName) && Idle;
     bool Idle => _status.State == AttachState.Unreachable ||
         (_status.State == AttachState.Connected && _snapshot?.Daemon.ActiveAgents == 0);
 
@@ -95,6 +107,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? CapacityError => Capacity is not { } value || value < 1 || value > int.MaxValue || decimal.Truncate(value) != value
         ? "Enter a whole number of at least 1." : null;
     public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS."
+        : _needsAppRestart ? "Restart this app to manage the renamed daemon."
+        : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
+        : !_startupSettled.IsCompletedSuccessfully ? "Waiting for daemon startup to finish…"
         : _status.State == AttachState.Connected && _snapshot?.Daemon.ActiveAgents > 0
             ? $"Wait for the {_snapshot.Daemon.ActiveAgents} active agents to finish before renaming."
             : !Idle ? "Waiting for the daemon’s current agent count…" : "Renaming restarts the daemon and relaunches this app.";
@@ -148,8 +163,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindRename, null, null, false,
                     $"Rename {_runningName} to {name}? The daemon will restart and this app will relaunch. " +
                     "Only the saved capacity is used; save any capacity change first."), _lifetime.Token)) return;
-            if (!Idle) {
-                Message = "The daemon’s agent count changed. Wait until it is idle before renaming.";
+            if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
+                Message = "Wait until startup has finished and the daemon is idle before renaming.";
                 return;
             }
             var refused = MutationRequestFactory.TryBuild(MutationVerb.Replace, _settings.ProfileName,
@@ -158,9 +173,22 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
                 Message = "Could not resolve the profile for this rename. Restart the app and try again.";
                 return;
             }
-            await _settings.SaveNameAsync(name, _lifetime.Token);
+            if (!await _canRetire(request!, _lifetime.Token)) {
+                Message = "Update the kcap command-line tool before renaming; it could not confirm support for retiring the old service. The saved name is unchanged.";
+                return;
+            }
+            if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
+                Message = "Wait until startup has finished and the daemon is idle before renaming.";
+                return;
+            }
+            var previous = await _settings.SaveNameAsync(name, _lifetime.Token);
             Message = "Name saved. Restarting the daemon…";
             var outcome = await _runMutation(request!, _lifetime.Token);
+            if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {
+                await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
+                Message = "The CLI no longer supports renaming. Update kcap and try again; the saved name was restored unless another edit changed it.";
+                return;
+            }
             if (outcome is not MutationOutcome.Succeeded) {
                 Message = SettingsRenameMessage.For(request!, outcome);
                 return;

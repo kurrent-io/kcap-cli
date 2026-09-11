@@ -46,6 +46,8 @@ public interface IKcapCli {
     /// timeout, or a parse failure) — never a fabricated snapshot.
     Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct);
 
+    Task<bool> SupportsServiceRetireAsync(CancellationToken ct);
+
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
 
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
@@ -132,6 +134,15 @@ public sealed class KcapCli : IKcapCli {
         }
     }
 
+    // Older CLIs ignore unknown install flags, so their ordinary version floor is insufficient.
+    public async Task<bool> SupportsServiceRetireAsync(CancellationToken ct) {
+        if (CliPath is not { } cliPath) return false;
+        var help = await Run(cliPath, ["daemon", "--help", "--no-update-check"],
+            new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct).ConfigureAwait(false);
+        return !help.TimedOut && help.ExitCode == 0 &&
+            (help.Stdout.Contains("--retire", StringComparison.Ordinal) || help.Stderr.Contains("--retire", StringComparison.Ordinal));
+    }
+
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         return CliPath is not { } cliPath
@@ -147,14 +158,8 @@ public sealed class KcapCli : IKcapCli {
         var mutation = MutationEnv(); // throws before any spawn if the instance carries no server
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
 
-        if (retireServiceId is not null) {
-            // Older CLIs ignore unknown install flags, so their ordinary version floor is insufficient.
-            var help = await Run(cliPath, ["daemon", "--help", "--no-update-check"],
-                new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct).ConfigureAwait(false);
-            if (help.TimedOut || help.ExitCode != 0 ||
-                !(help.Stdout.Contains("--retire", StringComparison.Ordinal) || help.Stderr.Contains("--retire", StringComparison.Ordinal)))
-                return new ProcessResult(VerifyExitCodes.RetireRefused, "", "retire_reason=cli_unsupported", false);
-        }
+        if (retireServiceId is not null && !await SupportsServiceRetireAsync(ct).ConfigureAwait(false))
+            return new ProcessResult(VerifyExitCodes.RetireRefused, "", "retire_reason=cli_unsupported", false);
 
         List<string> args = ["daemon", "service", "install", "--name", _daemonName, "--profile", _profileName, "--verify"];
         if (replace) args.Add("--replace");

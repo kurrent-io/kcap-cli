@@ -574,7 +574,7 @@ public partial class App : Application {
         _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
 
         Action? openSettings = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
-            ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier)
+            ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier, lifecycle.PhaseClosed)
             : null;
         NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel, openSettings));
 
@@ -592,7 +592,7 @@ public partial class App : Application {
     }
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
-            IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier) {
+            IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled) {
         if (_shutdownStarted) return;
         if (_settingsWindow is { } open) {
             if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
@@ -605,7 +605,9 @@ public partial class App : Application {
             vm = new SettingsViewModel(settings, service, ops,
                 async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, OneShotProbeTimeout, ct)).Reachable,
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
-                ct => RelaunchForSettingsAsync(desktop, ct), OperatingSystem.IsMacOS(), _shutdown.Token);
+                ct => RelaunchForSettingsAsync(desktop, ct), OperatingSystem.IsMacOS(), startupSettled, lane.CanRetireAsync,
+                nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
+                needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token);
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -1305,6 +1307,7 @@ public partial class App : Application {
     /// User-facing line for Attention/Storage outcomes. Null means log-only — never surface a
     /// machine token the operator cannot act on.
     internal static string? AttentionCopyFor(string token) => token switch {
+        "daemon_renamed_restart_app" => "The daemon was renamed. Restart this app before managing it.",
         "cli_not_found"            => "kcap CLI not found. Can't manage the daemon from this app.",
         // App↔CLI floor — never "for the daemon"; this gate runs before any daemon contact.
         "cli_below_floor"          => "This kcap is too old for this app. Update kcap, then press Start daemon.",

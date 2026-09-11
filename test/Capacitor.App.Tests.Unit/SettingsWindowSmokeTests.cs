@@ -23,7 +23,7 @@ public class SettingsWindowSmokeTests {
         using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
             service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
             (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
-            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true);
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true));
         var window = new SettingsWindow { DataContext = vm };
         try {
             window.Show();

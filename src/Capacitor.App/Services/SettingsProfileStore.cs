@@ -18,8 +18,17 @@ public sealed class SettingsProfileStore(ConfigRoot config, string profileName, 
     public Task SaveCapacityAsync(int capacity, CancellationToken ct) =>
         SaveAsync(settings => settings with { MaxAgents = capacity }, ct);
 
-    public Task SaveNameAsync(string name, CancellationToken ct) =>
-        SaveAsync(settings => settings with { Name = name }, ct);
+    public async Task<string?> SaveNameAsync(string name, CancellationToken ct) {
+        string? previous = null;
+        await SaveAsync(settings => {
+            previous = settings.Name;
+            return settings with { Name = name };
+        }, ct);
+        return previous;
+    }
+
+    public Task RestoreNameAsync(string expected, string? previous, CancellationToken ct) =>
+        SaveAsync(settings => settings.Name == expected ? settings with { Name = previous } : settings, ct);
 
     Task SaveAsync(Func<DaemonSettings, DaemonSettings> update, CancellationToken ct) =>
         ConfigMutator.MutateAsync(config, current => {

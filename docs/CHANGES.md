@@ -17,6 +17,10 @@ and its evidence checks to settle. A help probe confirms the CLI understands `--
 an older installer can silently ignore an unknown flag. The app relaunches only after the
 lane independently verifies the new daemon; failure keeps the saved name and shows recovery in
 both Settings and Attention. An unbundled process asks for a manual app restart.
+Rename waits for the startup phase, and the lane refuses any later action for a successfully
+retired name until app restart. An environment-controlled name cannot be changed in Settings.
+The CLI capability probe runs before saving; if the CLI loses support before execution, only
+the name this attempt wrote is restored, preserving concurrent settings edits.
 
 ## Capacity changes live; a rename restarts the daemon
 

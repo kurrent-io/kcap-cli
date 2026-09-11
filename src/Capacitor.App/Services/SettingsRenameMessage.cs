@@ -11,8 +11,11 @@ public static class SettingsRenameMessage {
             MutationOutcome.AttentionRepair(var detail) => detail,
             _ => "unconfirmed",
         };
+        if (reason == "cli_unsupported")
+            return "The CLI cannot retire the old service. Update kcap before renaming; the old daemon was left unchanged.";
+        if (reason == "daemon_renamed_restart_app")
+            return "The daemon was already renamed. Restart this app before managing it.";
         var explanation = reason switch {
-            "cli_unsupported" => "Update the kcap command-line tool before renaming; it cannot retire the old service.",
             "foreign_profile" => "The old service belongs to another profile and was left in place.",
             "unit_unreadable" => "The old service could not be read and was left in place.",
             "verify_contended" => "The daemon name or service is in use.",
