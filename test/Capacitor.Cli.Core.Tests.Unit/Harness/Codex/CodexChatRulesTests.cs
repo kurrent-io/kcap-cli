@@ -8,6 +8,17 @@ public class CodexChatRulesTests {
         return chat.Project(line, 1, Received, chat.CreateContext("a1", null));
     }
 
+    [Test]
+    [Arguments("hello", true)]
+    [Arguments("<environment_context>", false)]
+    [Arguments("# AGENTS.md instructions", false)]
+    public async Task Only_visible_human_prompts_acknowledge_submitted_input(string text, bool human) {
+        var chat = TranscriptChat.For("codex")!;
+        var result = chat.ProjectWithInputs(Item($$"""{"type":"message","role":"user","content":[{"type":"input_text","text":"{{text}}"}]}"""), 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(human ? new[] { text } : Array.Empty<string>());
+        await Assert.That(result.Envelopes.Count).IsEqualTo(human ? 1 : 0);
+    }
+
     static string Item(string payload, string ts = "2026-08-25T00:00:00Z") =>
         $$$"""{"timestamp":"{{{ts}}}","ordinal":1,"type":"response_item","payload":{{{payload}}}}""";
 

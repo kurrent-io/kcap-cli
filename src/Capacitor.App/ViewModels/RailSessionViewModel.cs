@@ -32,6 +32,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
+    readonly ObservableAsPropertyHelper<string> _statusBadge;
+    public string StatusBadge => _statusBadge.Value;
+
     readonly CompositeDisposable _disposables = new();
 
     public RailSessionViewModel(
@@ -61,6 +64,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var byStatus = SessionStatusDots.NeedsAttention(row);
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
+            .DisposeWith(_disposables);
+        _statusBadge = agentsWithPending.Select(set => row.Status == "Failed" || set.Contains(row.Id)
+                ? "!" : SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
+            .ToProperty(this, x => x.StatusBadge, initialValue: SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
             .DisposeWith(_disposables);
 
         // Remote rows are read-only in-app; opening deep-links to the web.

@@ -33,7 +33,7 @@ public class LocalFrameChatInputTests {
             rig.Running();
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Unsupported);
             await Assert.That(rig.Input.Hint).IsEqualTo("Update the daemon to send messages from the app");
-            await Assert.That(await rig.Input.SendAsync("x", CancellationToken.None)).IsFalse();
+            await Assert.That(await rig.Input.SendAsync("x", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
 
             rig.Connected("status/1", "input/1");
@@ -56,9 +56,9 @@ public class LocalFrameChatInputTests {
             var pending = rig.Input.SendAsync("hello", CancellationToken.None);
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Sending);
             await Assert.That(rig.Input.CanAcceptText).IsFalse();
-            await Assert.That(await rig.Input.SendAsync("second", CancellationToken.None)).IsFalse();
+            await Assert.That(await rig.Input.SendAsync("second", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             gate.SetResult(new SendTextResult(true, null, null, SendTextOutcomes.Delivered));
-            await Assert.That(await pending).IsTrue();
+            await Assert.That(await pending).IsEqualTo(ChatSendOutcome.Accepted);
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ready);
             await Assert.That(rig.Ops.SendTextPayloads).IsEquivalentTo(new[] { ("a1", "hello") });
         });
@@ -80,7 +80,8 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(false, reason, error, null));
-            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsFalse();
+            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(
+                reason == SendTextReasons.Transport ? ChatSendOutcome.Unconfirmed : ChatSendOutcome.Rejected);
             await Assert.That(rig.Input.Hint).IsEqualTo(hint);
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ready);
             rig.Ops.ArmSendText();
@@ -95,9 +96,9 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(true, null, null, SendTextOutcomes.Stopped));
-            await Assert.That(await rig.Input.SendAsync("/quit", CancellationToken.None)).IsTrue();
+            await Assert.That(await rig.Input.SendAsync("/quit", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
             rig.Ops.QueueSendText(new SendTextResult(true, null, null, "future_outcome"));
-            await Assert.That(await rig.Input.SendAsync("x", CancellationToken.None)).IsTrue();
+            await Assert.That(await rig.Input.SendAsync("x", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
         });
     }
 
@@ -110,7 +111,7 @@ public class LocalFrameChatInputTests {
             using var cts = new CancellationTokenSource();
             var pending = rig.Input.SendAsync("hello", cts.Token);
             await cts.CancelAsync();
-            await Assert.That(await pending).IsFalse();
+            await Assert.That(await pending).IsEqualTo(ChatSendOutcome.Unconfirmed);
             await Assert.That(rig.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ready);
         });
@@ -122,7 +123,7 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(false, "queue_full", null, null));
-            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsFalse();
+            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
 
             rig.Presence.OnNext(new AgentPresence(rig.Presence.Value.Dto, true));
@@ -133,11 +134,38 @@ public class LocalFrameChatInputTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Cancellation_before_send_does_not_attempt_delivery() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig(); rig.Connected("input/1"); rig.Running();
+            await Assert.That(await rig.Input.SendAsync("hello", new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
+            rig.Input.Dispose();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_transport_exception_is_unconfirmed_until_delivery_is_confirmed() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig(); rig.Connected("input/1"); rig.Running();
+            var gate = rig.Ops.ArmSendText();
+            var send = rig.Input.SendAsync("hello", CancellationToken.None);
+            gate.SetException(new IOException("connection closed"));
+            await Assert.That(await send).IsEqualTo(ChatSendOutcome.Unconfirmed);
+            await Assert.That(rig.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
+            rig.Input.ConfirmLastSend();
+            await Assert.That(rig.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+            rig.Input.Dispose();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_status_reemission_that_does_not_change_availability_keeps_the_notice() {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(false, "queue_full", null, null));
-            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsFalse();
+            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
 
             rig.Connected("input/1");
@@ -157,7 +185,7 @@ public class LocalFrameChatInputTests {
             var raised = 0;
             rig.Input.PropertyChanged += (_, _) => raised++;
             gate.SetResult(new SendTextResult(false, "queue_full", null, null));
-            await Assert.That(await pending).IsFalse();
+            await Assert.That(await pending).IsEqualTo(ChatSendOutcome.Rejected);
             rig.Connected("input/1"); rig.Running();
             rig.Presence.OnNext(new AgentPresence(null, true));
             await Assert.That(raised).IsEqualTo(0);
@@ -174,7 +202,7 @@ public class LocalFrameChatInputTests {
             rig.Input.Dispose();
 
             await Assert.That(rig.Input.CanAcceptText).IsTrue();
-            await Assert.That(await rig.Input.SendAsync("after", CancellationToken.None)).IsFalse();
+            await Assert.That(await rig.Input.SendAsync("after", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
         });
     }

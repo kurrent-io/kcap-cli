@@ -6,20 +6,32 @@ namespace Capacitor.Cli.Core;
 /// A vendor's say over how its stored events read in the chat: drop one, or rewrite the envelope.
 public interface IChatDisplayRules {
     AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope);
+
+    /// Most receipts are visible user turns. Vendors may also record hidden command receipts;
+    /// injected prompts and background notifications must never acknowledge submitted input.
+    string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) =>
+        displayed is { Kind: AcpEventKind.UserMessage } user ? user.Text : null;
 }
 
 /// The chat's view of a transcript: the leaf projection, the envelope mapping, one vendor's rules.
 public sealed class TranscriptChatProjection(ITranscriptProjection projection, IChatDisplayRules rules) : IChatTranscriptProjection {
     public TranscriptContext CreateContext(string sessionId, string? agentId) => projection.CreateContext(sessionId, agentId);
 
-    public IReadOnlyList<AcpEventEnvelope> Project(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) {
+    public IReadOnlyList<AcpEventEnvelope> Project(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) =>
+        ProjectWithInputs(line, lineNumber, receivedAt, context).Envelopes;
+
+    public ChatProjectionResult ProjectWithInputs(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) {
         var result = projection.Project(line, lineNumber, receivedAt, context);
-        if (result.Events.Count == 0) return [];
+        if (result.Events.Count == 0) return new([], []);
         var shown = new List<AcpEventEnvelope>(result.Events.Count);
+        var submitted = new List<string>();
         foreach (var evt in result.Events)
-            foreach (var envelope in TranscriptEnvelopes.From(evt))
-                if (rules.Filter(evt, envelope) is { } kept) shown.Add(kept);
-        return shown;
+            foreach (var envelope in TranscriptEnvelopes.From(evt)) {
+                var kept = rules.Filter(evt, envelope);
+                if (kept is { } visible) shown.Add(visible);
+                if (rules.SubmittedInput(evt, envelope, kept) is { Length: > 0 } text) submitted.Add(text);
+            }
+        return new(shown, submitted);
     }
 }
 

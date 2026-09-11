@@ -11,6 +11,22 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     ClaudeChatRules() { }
 
+    public string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) {
+        if (raw.Kind != AcpEventKind.UserMessage) return null;
+        var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
+            || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
+            || SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) == "task-notification") return null;
+
+        var text = raw.Text ?? "";
+        var name = CommandName().Match(text).Groups[1].Value.Trim();
+        if (name.StartsWith('/')) {
+            var args = CommandArgs().Match(text).Groups[1].Value.Trim();
+            return args.Length == 0 ? name : $"{name} {args}";
+        }
+        return displayed is { Kind: AcpEventKind.UserMessage } user ? user.Text : null;
+    }
+
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain) || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)) return null;
@@ -47,6 +63,12 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     /// Removes the blocks Claude Code injects around a user turn: reminders and slash-command
     /// echoes.
     internal static string StripWrappers(string text) => Wrappers().Replace(text, "").Trim();
+
+    [GeneratedRegex(@"<command-name>(.*?)</command-name>", RegexOptions.Singleline)]
+    private static partial Regex CommandName();
+
+    [GeneratedRegex(@"<command-args>(.*?)</command-args>", RegexOptions.Singleline)]
+    private static partial Regex CommandArgs();
 
     [GeneratedRegex(@"<summary>(.*?)</summary>", RegexOptions.Singleline)]
     private static partial Regex TaskSummary();

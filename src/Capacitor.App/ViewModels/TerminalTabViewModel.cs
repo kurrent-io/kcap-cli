@@ -112,6 +112,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// Bound; the one authority TrySendText itself consults, so can-execute and acceptance can
     /// never disagree.
     public bool CanAcceptText => GateOpen && !SendInFlight;
+    public bool CanInterrupt => GateOpen && State is { Phase: TerminalSessionPhase.Attached, ReadOnly: false };
 
     /// Bound; the gate folded into the state, so a hint built from it is true in every window.
     public SendAvailability SendAvailability {
@@ -136,6 +137,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     void RaiseSendProjections() {
         this.RaisePropertyChanged(nameof(SendInFlight));
         this.RaisePropertyChanged(nameof(CanAcceptText));
+        this.RaisePropertyChanged(nameof(CanInterrupt));
         this.RaisePropertyChanged(nameof(SendAvailability));
     }
 
@@ -209,6 +211,21 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         RaiseSendProjections();
         _delivery = DeliverAsync(client, token, TerminalInputEncoder.Paste(text));
         return true;
+    }
+
+    /// A control key bypasses bracketed paste and submit. The same attach gate protects it from
+    /// reaching a retired or read-only client, and an in-flight paste must finish before Escape.
+    public async Task SendEscapeAsync(CancellationToken ct) {
+        var token = Volatile.Read(ref _openingToken);
+        if (!CanInterrupt || _client is not { } client || ct.IsCancellationRequested) return;
+        if (Volatile.Read(ref _openingToken) != token) return;
+        try {
+            while (_delivery is { IsCompleted: false } delivery) await delivery.WaitAsync(ct);
+            if (!CanInterrupt || Volatile.Read(ref _openingToken) != token || ct.IsCancellationRequested) return;
+            await client.SendInputAsync(new byte[] { 0x1b });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { Console.Error.WriteLine($"kcap: composer interrupt failed: {ex.Message}"); }
     }
 
     // Paste, wait out the TUI's post-paste Enter suppression, then one CR -- only if nothing

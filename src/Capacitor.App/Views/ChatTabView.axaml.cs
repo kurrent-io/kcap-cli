@@ -67,6 +67,12 @@ public partial class ChatTabView : UserControl {
     /// nothing, leaving the text and the hint that says why. Shift+Enter falls through to the
     /// TextBox's own newline.
     void OnComposerKeyDown(object? sender, KeyEventArgs e) {
+        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None) {
+            e.Handled = true;
+            if (DataContext is ChatTabViewModel chat && ((ICommand)chat.InterruptCommand).CanExecute(null))
+                chat.InterruptCommand.Execute().Subscribe();
+            return;
+        }
         if (e.Key != Key.Enter || e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
         e.Handled = true;
         if (DataContext is ChatTabViewModel vm && ((ICommand)vm.SendCommand).CanExecute(null))
