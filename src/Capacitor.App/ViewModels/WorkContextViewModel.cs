@@ -164,7 +164,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             },
             _hasSessionChanges);
         _disposables.Add(RefreshCommand);
-        OpenWorkItemCommand = ReactiveCommand.Create(() => { if (PrimaryId is { } id) _openWorkItem?.Invoke(id); }, _canOpenWorkItem);
+        OpenWorkItemCommand = ReactiveCommand.Create(
+            () => { if (WorkContextIds.ValidWorkItemId(PrimaryId) is { } id) _openWorkItem?.Invoke(id); },
+            _canOpenWorkItem);
         _disposables.Add(OpenWorkItemCommand);
         SignInCommand = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         _disposables.Add(SignInCommand);

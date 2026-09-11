@@ -23,7 +23,7 @@ public sealed partial class WorkContextViewModel {
         get => _primaryId;
         set {
             _primaryId = value;
-            _canOpenWorkItem.OnNext(value is not null && _openWorkItem is not null);
+            _canOpenWorkItem.OnNext(WorkContextIds.ValidWorkItemId(value) is not null && _openWorkItem is not null);
         }
     }
 

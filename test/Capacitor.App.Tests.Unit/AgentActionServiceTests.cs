@@ -307,10 +307,23 @@ public class AgentActionServiceTests {
         var service = NewService(ops, notifier, opener, snapshots, fallbackServerUrl: "https://a.kcap.ai/");
         snapshots.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://b.kcap.ai"));
 
-        service.OpenWorkItemInWeb("w/1");
+        service.OpenWorkItemInWeb(" w/1 ");
 
         await Assert.That(opener.Opened).IsEquivalentTo(["https://a.kcap.ai/work-items/w%2F1"], CollectionOrdering.Matching);
         await Assert.That(notifier.Notified).IsEmpty();
+    }
+
+    [Test]
+    public async Task OpenWorkItemInWeb_refuses_an_id_the_api_client_would_refuse() {
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var opener = new RecordingOpener();
+        var service = NewService(ops, notifier, opener, fallbackServerUrl: "https://a.kcap.ai");
+
+        service.OpenWorkItemInWeb("..");
+
+        await Assert.That(opener.Opened).IsEmpty();
+        await Assert.That(notifier.Notified).IsEquivalentTo(["This work item has no usable id"], CollectionOrdering.Matching);
     }
 
     [Test]

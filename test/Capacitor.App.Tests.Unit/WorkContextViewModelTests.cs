@@ -443,6 +443,32 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// The browser route escapes but never normalizes, so an id the API client refuses stays
+    /// closed here too, and a padded one opens canonical.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("..", null)]
+    [Arguments("", null)]
+    [Arguments(" ", null)]
+    [Arguments(" w1 ", "w1")]
+    public async Task The_open_action_applies_the_work_item_id_rules(string assigned, string? opened) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row(assigned, "WK-2198")));
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Ready);
+                await Assert.That(await h.Vm.OpenWorkItemCommand.CanExecute.FirstAsync()).IsEqualTo(opened is not null);
+                if (opened is not null) {
+                    await h.Vm.OpenWorkItemCommand.Execute();
+                    await Assert.That(h.OpenedWorkItems).IsEquivalentTo(new[] { opened });
+                }
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     static SessionWorkItemAssignmentDto Row(string id, string label, bool primary = true) =>
         new() { WorkItemId = id, Label = label, Source = "mcp", Confidence = 1, IsPrimary = primary };
 
