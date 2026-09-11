@@ -424,21 +424,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     }
 
     /// Card and rail click: swaps to this session's workspace — the local one, or the remote card
-    /// host when the id belongs to another machine. Refused once shutdown has latched — a new
-    /// workspace is a new attach, and quiesce is already running.
-    public void OpenSession(string agentId) {
+    /// host when the id belongs to another machine. A caller that knows which row was clicked says
+    /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
+    /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
+    /// running.
+    public void OpenSession(string agentId, AgentOrigin? origin = null) {
         if (_navigation.ShutdownLatched) return;
         CurrentView = ShellView.Sessions;
-        // Re-clicking the open session must not tear down and rebuild a live attach — but a remote
-        // host whose row the local daemon has taken over no longer owns the id, so the same id is
-        // a real swap there rather than a re-click.
-        if (CurrentWorkspace?.AgentId == agentId
-            && CurrentWorkspace is not RemoteSessionViewModel { OriginChangedToLocal: true }) return;
 
         // Neither lane holds the id: opening the local workspace for it would attach a terminal to
         // an agent this machine never ran.
-        if (_originOf(agentId) is not { } origin) return;
-        ISessionWorkspace? next = origin == AgentOrigin.Remote && _remoteFactory is { } remote
+        if ((origin ?? _originOf(agentId)) is not { } lane) return;
+
+        // Re-clicking the open session must not tear down and rebuild a live attach. The other
+        // lane's same-id agent is a different agent, and a remote host the local daemon has taken
+        // over no longer owns the id at all: both are a real swap.
+        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return;
+
+        ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
             ? remote(agentId)
             : _workspaceFactory is { } local ? local(agentId) : null;
         if (next is null) return;
@@ -446,6 +449,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         SwapTo(next);
         Rail?.NotifySessionOpened(agentId);
     }
+
+    static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
+        open is RemoteSessionViewModel remote
+            ? lane != AgentOrigin.Remote || remote.OriginChangedToLocal
+            : lane != AgentOrigin.Local;
 
     /// The launch auto-open. `generation` is what the launch captured BEFORE its call: a success
     /// arriving after any navigation (closing the workspace, another session, close-to-hide, the

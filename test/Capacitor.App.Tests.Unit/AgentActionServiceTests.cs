@@ -169,7 +169,7 @@ public class AgentActionServiceTests {
 
         service.RequestStop("a", "agent-a", "agent"); // already in flight: no-op — no second call, no second push
         await Assert.That(ops.StopCalls).IsEqualTo(1);
-        await Assert.That(states.Count).IsEqualTo(2); // seed(empty) + add("a") only
+        await Assert.That(states.Count).IsEqualTo(2); // seed(empty) + the one add only
 
         gate.SetResult(new StopAgentResult(true, "stopped", null));
         await WaitUntilAsync(() => states[^1].Count == 0, what: "in-flight cleared");
@@ -190,7 +190,7 @@ public class AgentActionServiceTests {
         service.RequestStop("b", "agent-b", "agent");
 
         await WaitUntilAsync(() => ops.StopCalls >= 2, what: "both stops issued");
-        await WaitUntilAsync(() => states[^1].Contains("a") && states[^1].Contains("b"), what: "both in flight");
+        await WaitUntilAsync(() => states[^1].Contains("Local:a") && states[^1].Contains("Local:b"), what: "both in flight");
 
         gateA.SetResult(new StopAgentResult(true, "stopped", null));
         gateB.SetResult(new StopAgentResult(true, "stopped", null));
@@ -213,7 +213,7 @@ public class AgentActionServiceTests {
         var gate = ops.ArmStop();
         service.RequestStop("a", "agent-a", "agent");
         await WaitUntilAsync(() => states.Count >= 2, what: "add pushed");
-        await Assert.That(states[1]).IsEquivalentTo(["a"], CollectionOrdering.Matching);
+        await Assert.That(states[1]).IsEquivalentTo(["Local:a"], CollectionOrdering.Matching);
 
         gate.SetResult(new StopAgentResult(true, "stopped", null));
         await WaitUntilAsync(() => states.Count >= 3, what: "remove pushed");
@@ -458,6 +458,30 @@ public class AgentActionServiceTests {
         await WaitUntilAsync(() => states[^1].Count == 0, what: "cleared");
     }
 
+    /// The two lanes allocate ids independently, so one id on each names two agents: stopping the
+    /// remote one must leave the local one's Stop live.
+    [Test]
+    public async Task A_remote_stop_does_not_gate_the_local_agent_of_the_same_id() {
+        var gate = new TaskCompletionSource<HubCallOutcome>();
+        var lane = new FakeServerLane { StopHandler = _ => gate.Task };
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var service = NewService(ops, notifier, new RecordingOpener(), lane: lane);
+        var states = new StopStateRecorder();
+        using var sub = service.StopsInFlight.Subscribe(states.Add);
+
+        service.RequestStop("a", "remote a", "agent", AgentOrigin.Remote);
+        await WaitUntilAsync(() => lane.Stops.Count == 1, what: "the hub stop");
+
+        ops.QueueStop(new StopAgentResult(true, "stopped", null));
+        service.RequestStop("a", "local a", "agent");
+
+        await WaitUntilAsync(() => ops.StopCalls == 1, what: "the local stop");
+        gate.SetResult(HubCallOutcome.Ok);
+        await WaitUntilAsync(() => states[^1].Count == 0, what: "both cleared");
+        await Assert.That(notifier.Notified).IsEmpty();
+    }
+
     // A second RequestStop for the same id while the confirmation dialog is still open (the
     // confirm Task not yet resolved) must no-op — the id has been in-flight since the FIRST
     // RequestStop's synchronous lock, before the dialog was ever awaited.
@@ -476,7 +500,7 @@ public class AgentActionServiceTests {
 
         service.RequestStop("a", "agent-a", "review"); // dialog still open: no-op
         await Assert.That(confirmer.Prompted.Count).IsEqualTo(1); // never prompted a second time
-        await Assert.That(states.Count).IsEqualTo(2); // seed(empty) + add("a") only
+        await Assert.That(states.Count).IsEqualTo(2); // seed(empty) + the one add only
 
         ops.QueueStop(new StopAgentResult(true, "stopped", null));
         gate.SetResult(true);

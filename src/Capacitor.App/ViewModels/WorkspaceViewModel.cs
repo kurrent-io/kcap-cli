@@ -149,8 +149,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         OpenInWebCommand = ReactiveCommand.Create(() => actions.OpenInWeb(agentId));
         _disposables.Add(OpenInWebCommand);
 
+        var stopKey = AgentActionService.StopKey(AgentOrigin.Local, agentId);
         var canStop = presence.Select(p => !p.SessionEnded)
-            .CombineLatest(actions.StopsInFlight, (alive, inFlight) => alive && !inFlight.Contains(agentId));
+            .CombineLatest(actions.StopsInFlight, (alive, inFlight) => alive && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(() => {
             var dto = _latestDto;
             // UnresolvedKind fails safe as protected (AgentActionService.IsProtectedKind treats

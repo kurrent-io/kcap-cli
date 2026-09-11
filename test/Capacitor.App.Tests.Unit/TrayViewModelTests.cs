@@ -911,7 +911,7 @@ public class TrayViewModelTests {
             service.SnapshotsSubject.OnNext(Snap("connected", 1, agents));
 
             ops.QueueStop(new StopAgentResult(false, "failed", null));
-            await vm.StopAgentCommand.Execute("a").ToTask();
+            await vm.StopAgentCommand.Execute("Local:a").ToTask();
 
             await WaitUntilAsync(() => notifier.Notified.Count >= 1, what: "stop banner");
             await Assert.That(notifier.Notified).IsEquivalentTo(["Couldn't stop agent · claude · kcap-cli"], CollectionOrdering.Matching);
@@ -942,7 +942,7 @@ public class TrayViewModelTests {
 
             confirmer.Queue(true);
             ops.QueueStop(new StopAgentResult(true, "stopped", null));
-            await vm.StopAgentCommand.Execute("a").ToTask();
+            await vm.StopAgentCommand.Execute("Local:a").ToTask();
 
             await WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued after confirm");
             await Assert.That(confirmer.Prompted).IsEquivalentTo(["review-flow · codex · kcap-cli"], CollectionOrdering.Matching);
@@ -964,9 +964,40 @@ public class TrayViewModelTests {
 
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://x.kcap.ai"));
 
-            await vm.OpenInWebCommand.Execute("agent-1").ToTask();
+            await vm.OpenInWebCommand.Execute("Local:agent-1").ToTask();
 
             await Assert.That(opener.Opened).IsEquivalentTo(["https://x.kcap.ai/agents/agent-1"], CollectionOrdering.Matching);
+        });
+    }
+
+    // Two lanes, one agent id, two different agents: the entry's key is what says which of them a
+    // menu item names, and the remote one's Stop must reach the hub rather than the local socket.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task StopAgentCommand_stops_the_entry_the_key_names_when_two_lanes_share_an_id() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var ops = new ScriptedLocalControlOps();
+            var lane = new FakeServerLane();
+            var actions = new AgentActionService(ops, new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject,
+                CancellationToken.None, NeverConfirm.Confirm, lane: lane);
+            var consent = new FakeConsentService();
+            var remote = Observable.Return(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+                AttentionEntries: [new TrayAgentEntry("a", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)]));
+            using var vm = new TrayViewModel(service, pause, actions, consent, remote: remote);
+
+            var agents = new List<AgentStatusDto> {
+                new("a", "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null, null),
+            };
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(Snap("connected", 1, agents));
+            await Assert.That(vm.MenuModel.Agents.Select(e => e.Key)).IsEquivalentTo(["Local:a", "Remote:a"], CollectionOrdering.Matching);
+
+            await vm.StopAgentCommand.Execute("Remote:a").ToTask();
+
+            await WaitUntilAsync(() => lane.Stops.Contains("a"), what: "the hub stop");
+            await Assert.That(ops.StopCalls).IsEqualTo(0);
         });
     }
 
@@ -991,7 +1022,7 @@ public class TrayViewModelTests {
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://local-daemon.kcap.ai"));
             await Assert.That(vm.MenuModel.Agents.Single().Origin).IsEqualTo(AgentOrigin.Remote);
 
-            await vm.OpenInWebCommand.Execute("r1").ToTask();
+            await vm.OpenInWebCommand.Execute("Remote:r1").ToTask();
 
             await Assert.That(opener.Opened).IsEquivalentTo(["https://app.kcap.ai/agents/r1"], CollectionOrdering.Matching);
         });

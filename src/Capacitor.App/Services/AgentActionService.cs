@@ -64,9 +64,13 @@ public sealed class AgentActionService {
         snapshots.Subscribe(s => { lock (_lock) _serverUrl = s.Daemon.ServerUrl; });
     }
 
-    /// Replay-1, starts empty. Consumed by TrayViewModel (and later the main-window grid) to
-    /// disable a Stop control while its op is pending (spec §7).
+    /// Replay-1, starts empty. Consumed by the tray menu and the workspace headers to disable a
+    /// Stop control while its op is pending. Membership is StopKey, never a bare agent id.
     public IObservable<IReadOnlySet<string>> StopsInFlight => _stopsInFlight.AsObservable();
+
+    /// How a stop is named in StopsInFlight. The two lanes allocate agent ids independently, so
+    /// the same id on each is two different agents and neither may gate the other.
+    public static string StopKey(AgentOrigin origin, string agentId) => $"{origin}:{agentId}";
 
     /// A kind other than exactly "agent" is protected (KindText vocabulary: agent|review|
     /// review-flow). Any non-"agent" value — including one this build doesn't recognise — fails
@@ -74,24 +78,24 @@ public sealed class AgentActionService {
     /// CLI's `IsProtectedKind`.
     internal static bool IsProtectedKind(string kind) => kind is not "agent";
 
-    /// Per-id gating: a second Stop for the same id no-ops while one is pending — including while
-    /// a protected kind's confirm-then-force dialog is still open, since the id stays in-flight
-    /// for the whole RunStopAsync call — different ids run concurrently. The same gate covers a
-    /// remote stop, whatever origin either RequestStop call carried.
+    /// Per-agent gating: a second Stop for the same agent no-ops while one is pending — including
+    /// while a protected kind's confirm-then-force dialog is still open, since the agent stays
+    /// in-flight for the whole RunStopAsync call — other agents run concurrently.
     /// Never throws — this is a UI command target, not a Task the caller awaits.
     public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local) {
+        var key = StopKey(origin, agentId);
         lock (_lock) {
-            if (_inFlight.Contains(agentId)) return;
-            _inFlight = _inFlight.Add(agentId);
+            if (_inFlight.Contains(key)) return;
+            _inFlight = _inFlight.Add(key);
             _stopsInFlight.OnNext(_inFlight);
         }
-        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label) : RunStopAsync(agentId, label, kind));
+        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label, key) : RunStopAsync(agentId, label, kind, key));
     }
 
     /// A remote row's stop never reaches ILocalControlOps — it goes to the server hub, which
     /// forwards it to the owning daemon. Ok is silent: the row's disappearance comes from the
     /// next registry update, same as a local stop's confirmation-by-absence.
-    async Task RunRemoteStopAsync(string agentId, string label) {
+    async Task RunRemoteStopAsync(string agentId, string label, string key) {
         try {
             if (_lane is null) { _notifier.Notify("Not signed in to a server"); return; }
             var outcome = await _lane.RequestStopAgentAsync(agentId, _shutdownToken).ConfigureAwait(false);
@@ -107,13 +111,13 @@ public sealed class AgentActionService {
             _notifier.Notify($"Couldn't stop {label}: {ex.Message}");
         } finally {
             lock (_lock) {
-                _inFlight = _inFlight.Remove(agentId);
+                _inFlight = _inFlight.Remove(key);
                 _stopsInFlight.OnNext(_inFlight);
             }
         }
     }
 
-    async Task RunStopAsync(string agentId, string label, string kind) {
+    async Task RunStopAsync(string agentId, string label, string kind, string key) {
         try {
             var force = false;
             if (IsProtectedKind(kind)) {
@@ -151,7 +155,7 @@ public sealed class AgentActionService {
             // A completion into an already-vanished row/entry is naturally a no-op — the set
             // just loses a member nothing is rendering against anymore.
             lock (_lock) {
-                _inFlight = _inFlight.Remove(agentId);
+                _inFlight = _inFlight.Remove(key);
                 _stopsInFlight.OnNext(_inFlight);
             }
         }

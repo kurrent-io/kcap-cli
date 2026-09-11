@@ -113,8 +113,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             .DisposeWith(_disposables);
 
         OpenInWebCommand = ReactiveCommand.Create(() => actions.OpenInWebRemote(row.Id));
+        var stopKey = AgentActionService.StopKey(AgentOrigin.Remote, row.Id);
         var canStop = _sessionEndedChanges
-            .CombineLatest(actions.StopsInFlight, (ended, inFlight) => !ended && !inFlight.Contains(row.Id));
+            .CombineLatest(actions.StopsInFlight, (ended, inFlight) => !ended && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);

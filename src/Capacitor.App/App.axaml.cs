@@ -1063,11 +1063,12 @@ public partial class App : Application {
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory);
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
-        // Both rail actions route through the one call: the VM's origin lookup is what decides
-        // whether an id opens the local workspace or the remote card host.
+        // Both rail actions route through the one call, each naming the lane of the row that was
+        // clicked: an unproven twin pair keeps a row on each lane under the same id, and the VM's
+        // own lookup would open the local one for both.
         var rail = new SessionRailViewModel(
-            resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId),
-            openRemoteSession: agentId => vm?.OpenSession(agentId), agentsWithPending: agentsWithPending);
+            resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
+            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), agentsWithPending: agentsWithPending);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,

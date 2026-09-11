@@ -31,7 +31,12 @@ public static class CheckoutLabel {
 // pass it to AgentActionService.RequestStop, which decides protected-ness. Origin (default
 // Local) is threaded through to the same RequestStop call so a remote entry's stop reaches the
 // server lane rather than the local socket.
-public sealed record TrayAgentEntry(string Id, string Label, string Kind, bool StopEnabled, AgentOrigin Origin = AgentOrigin.Local);
+public sealed record TrayAgentEntry(string Id, string Label, string Kind, bool StopEnabled, AgentOrigin Origin = AgentOrigin.Local) {
+    /// What the menu items carry as their command parameter, and how this entry's stop is named in
+    /// AgentActionService.StopsInFlight: a local and a remote entry can share an agent id, and only
+    /// this tells the two apart.
+    public string Key => AgentActionService.StopKey(Origin, Id);
+}
 public sealed record TrayPauseItem(bool Enabled, bool Checked);
 
 /// The server lane's contribution to the tray verdict: live remote agents (twin-suppressed

@@ -38,13 +38,13 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     // not track in-flight state.
     public ReactiveCommand<bool, Unit> TogglePauseCommand { get; }
 
-    // The parameter is an agent id; RequestStop's label/kind come from the CURRENT MenuModel
-    // (the TrayAgentEntry for this id, consistent with spec §7's one code path for both the tray
-    // menu item and the main-window row button), not a captured value, so they reflect whatever
-    // is rendered at click time. A missing entry (defensive only — cannot happen from a live
-    // menu) falls back to a kind that IsProtectedKind treats as protected, fail-safe rather than
-    // silently allowing an unforced stop. Fire-and-forget: AgentActionService never throws and
-    // tracks its own in-flight state (StopsInFlight below).
+    // The parameter is a TrayAgentEntry.Key, not a bare agent id — a local and a remote entry can
+    // share one id, and the key is what says which was clicked. RequestStop's label/kind come from
+    // the entry under that key in the CURRENT MenuModel, not a captured value, so they reflect
+    // whatever is rendered at click time. A missing entry (defensive only — cannot happen from a
+    // live menu) falls back to a kind that IsProtectedKind treats as protected, fail-safe rather
+    // than silently allowing an unforced stop. Fire-and-forget: AgentActionService never throws
+    // and tracks its own in-flight state (StopsInFlight below).
     public ReactiveCommand<string, Unit> StopAgentCommand { get; }
     public ReactiveCommand<string, Unit> OpenInWebCommand  { get; }
 
@@ -96,14 +96,16 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         _pause = pause;
 
         TogglePauseCommand = ReactiveCommand.Create<bool>(pause.RequestToggle);
-        StopAgentCommand = ReactiveCommand.Create<string>(id => {
-            var entry = MenuModel.Agents.FirstOrDefault(a => a.Id == id);
+        StopAgentCommand = ReactiveCommand.Create<string>(key => {
+            var entry = EntryFor(key);
+            var id = entry?.Id ?? IdFromKey(key);
             actions.RequestStop(id, entry?.Label ?? id, entry?.Kind ?? "", entry?.Origin ?? AgentOrigin.Local);
         });
         // Same origin dispatch as StopAgentCommand above: a remote entry's URL is the app's own
         // server, never the local daemon's snapshot — see AgentActionService.OpenInWebRemote.
-        OpenInWebCommand = ReactiveCommand.Create<string>(id => {
-            var entry = MenuModel.Agents.FirstOrDefault(a => a.Id == id);
+        OpenInWebCommand = ReactiveCommand.Create<string>(key => {
+            var entry = EntryFor(key);
+            var id = entry?.Id ?? IdFromKey(key);
             if (entry?.Origin == AgentOrigin.Remote) actions.OpenInWebRemote(id);
             else actions.OpenInWeb(id);
         });
@@ -184,6 +186,12 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             .Subscribe(_ => pause.RequestRefresh())
             .DisposeWith(_disposables);
     }
+
+    TrayAgentEntry? EntryFor(string key) => MenuModel.Agents.FirstOrDefault(a => a.Key == key);
+
+    /// The agent a key names, for the entry that left the model between the rebuild that rendered
+    /// it and the click. A parameter with no lane prefix reads as the whole id.
+    static string IdFromKey(string key) => key[(key.IndexOf(':') + 1)..];
 
     /// IPauseController owns the drop-while-busy rule.
     public void RequestPauseRefresh() => _pause.RequestRefresh();
@@ -361,10 +369,12 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
                 .Where(a => a.Status is "Starting" or "Running")
                 .OrderBy(a => a.CreatedAt)
                 .ThenBy(a => a.Id, StringComparer.Ordinal)
-                .Select(a => new TrayAgentEntry(a.Id, Label(a), a.Kind, StopEnabled: !stopsInFlight.Contains(a.Id)));
+                .Select(a => new TrayAgentEntry(
+                    a.Id, Label(a), a.Kind,
+                    StopEnabled: !stopsInFlight.Contains(AgentActionService.StopKey(AgentOrigin.Local, a.Id))));
 
         var remoteEntries = (remote.AttentionEntries ?? [])
-            .Select(e => e with { StopEnabled = !stopsInFlight.Contains(e.Id) });
+            .Select(e => e with { StopEnabled = !stopsInFlight.Contains(e.Key) });
 
         return [.. local, .. remoteEntries];
     }

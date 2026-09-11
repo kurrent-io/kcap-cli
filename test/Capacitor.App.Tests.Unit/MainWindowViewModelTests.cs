@@ -704,6 +704,29 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// An unproven twin pair keeps a row on each lane under one id, and the id alone resolves
+    /// local: the rail's remote row says which lane it is, and the click must honour that — and
+    /// then the local row's click must still swap back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_explicit_origin_wins_over_the_id_lookup_for_a_row_on_both_lanes() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local,
+                remoteWorkspaceFactory: host.New,
+                trackWorkspaceTeardown: teardown => _ = teardown());
+
+            vm.OpenSession("a1", AgentOrigin.Remote);
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+
+            vm.OpenSession("a1", AgentOrigin.Local);
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
+        });
+    }
+
     /// The local daemon proving the twin swaps the id from one lane to the other while its host is
     /// open: the same id must then open the local workspace instead of reading as a re-click.
     [Test]
