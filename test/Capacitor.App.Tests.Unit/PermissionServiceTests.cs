@@ -387,8 +387,10 @@ public class PermissionServiceTests {
         await WaitUntilAsync(() => h.View.Count == 0, what: "local claimant concluded");
 
         h.Stream.EmitPending(Dto("l1", serverRequestId: "srv-1"));
-        await Task.Delay(50);
-        await Assert.That(h.View.Count).IsEqualTo(0);
+        // One stream, one loop, in order: the sentinel behind the replay can only be cached once
+        // the replay itself has been handled and dropped.
+        await h.EmitAsync(Dto("l2"));
+        await Assert.That(h.View.Lookup("local:l1").HasValue).IsFalse();
     }
 
     [Test]

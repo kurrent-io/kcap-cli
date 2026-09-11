@@ -107,9 +107,13 @@ sealed class FakePermissionService : IPermissionService {
         return await SettleAsync(target, "pick");
     }
 
-    public async Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) {
+    public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) {
         Withdrawn.Add(target.RequestId);
-        return await SettleAsync(target, "withdraw");
+        // The response route has no withdraw, so the real service refuses a server-lane target
+        // outright: no outcome is consumed and the entry stays.
+        return target.Lane == PermissionLane.Server
+            ? Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, "withdraw_unsupported"))
+            : SettleAsync(target, "withdraw");
     }
 
     async Task<PermissionResolveOutcome> SettleAsync(PendingPermissionRequest target, string what) {

@@ -1407,7 +1407,6 @@ public class HomeViewModelTests {
 
         public IObservable<bool> RemoteStale => Observable.Return(false);
 
-        // Not exercised by this fake's one test (the read-order race is the whole point of it).
         public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
             Observable.Return((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
         public string? VendorOfSession(string sessionId) => null;

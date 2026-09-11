@@ -17,13 +17,20 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
     IObservable<bool> IAgentDirectory.RemoteStale => RemoteStale;
 
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
-        Rows.Connect().QueryWhenChanged(q => (IReadOnlyDictionary<string, string>)q.Items
-                .Where(r => r.SessionId is { Length: > 0 })
-                .ToDictionary(r => r.SessionId!, r => r.Id, StringComparer.Ordinal))
+        Rows.Connect().QueryWhenChanged(q => SessionMap(q.Items))
             .StartWith((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
 
     public string? VendorOfSession(string sessionId) =>
-        Rows.Items.FirstOrDefault(r => r.SessionId == sessionId)?.Vendor;
+        Rows.Items.Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
+
+    /// AgentDirectory's own rule: Local sorts before Remote, so a session an unproven twin pair
+    /// claims on both lanes resolves to the local row rather than throwing on the duplicate.
+    static IReadOnlyDictionary<string, string> SessionMap(IEnumerable<AgentRow> rows) {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var row in rows.OrderBy(r => r.Origin))
+            if (row.SessionId is { Length: > 0 } sid) map.TryAdd(sid, row.Id);
+        return map;
+    }
 
     public void Dispose() {
         Rows.Dispose();
