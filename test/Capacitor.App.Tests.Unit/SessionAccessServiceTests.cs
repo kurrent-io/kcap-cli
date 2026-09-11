@@ -108,6 +108,33 @@ public class SessionAccessServiceTests {
         await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Count(s => s == "s1") == 2, what: "late subscribe triggers a follow-up unsubscribe");
     }
 
+    /// Closing and reopening the same workspace while the first attempt is still in flight: the
+    /// new entry establishes first, and the stale attempt landing behind it must not hand back the
+    /// group the live lease is receiving payloads on — that leaves the lease Established, with no
+    /// retry armed, while nothing arrives.
+    [Test]
+    public async Task A_stale_attempt_leaves_the_chat_a_live_lease_holds_alone() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource<HubCallOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Lane.SubscribeChatHandler = _ => gate.Task;
+        h.Connect();
+        var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s1"), what: "the first chat subscribe");
+
+        first.Dispose();
+        h.Lane.SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        using var live = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(live) == SessionAccessState.Established, "the reopened lease established");
+
+        // The release gave the group back once, legitimately; nothing may follow it.
+        var given = h.Lane.ChatUnsubscribes.Count(s => s == "s1");
+        gate.SetResult(HubCallOutcome.Ok);
+        await Task.Delay(100);
+
+        await Assert.That(h.Lane.ChatUnsubscribes.Count(s => s == "s1")).IsEqualTo(given);
+        await Assert.That(await Harness.Current(live)).IsEqualTo(SessionAccessState.Established);
+    }
+
     /// A hub failure is otherwise indistinguishable from the lane being down: the state is
     /// Unavailable either way, and the retry ladder keeps trying in silence. The reason is
     /// reported once per entry, not once per retry tick.

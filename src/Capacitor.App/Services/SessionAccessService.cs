@@ -8,7 +8,8 @@ namespace Capacitor.App.Services;
 /// revocation signal) and the chat group (where permission payloads arrive). One attempt at a
 /// time per session, numbered so a superseded attempt's result is dropped; every attempt is
 /// re-run on a reconnect and on the server's access-changed ping, and a transient failure
-/// retries on a fixed ladder while the lane stays up.
+/// retries on a fixed ladder while the lane stays up. The chat group is shared per session
+/// rather than per attempt, so giving it back is gated on ownership, not on staleness alone.
 public sealed class SessionAccessService : IDisposable {
     static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
 
@@ -25,6 +26,9 @@ public sealed class SessionAccessService : IDisposable {
     readonly IServerLane _lane;
     readonly TimeProvider _time;
     readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    /// Which attempt currently holds each session's chat subscription — keyed by session, because
+    /// the group is shared: two entries for one session are two claims on one membership.
+    readonly Dictionary<string, (Entry Entry, int Attempt)> _chatOwners = new(StringComparer.Ordinal);
     readonly Subject<(string SessionId, SessionAccessState State)> _transitions = new();
     readonly Lock _lock = new();
     readonly IDisposable _subscriptions;
@@ -68,6 +72,7 @@ public sealed class SessionAccessService : IDisposable {
             if (!_entries.TryGetValue(lease.SessionId, out var entry)) return;
             if (--entry.Leases > 0) return;
             _entries.Remove(lease.SessionId);
+            _chatOwners.Remove(lease.SessionId);
             entry.Attempt++;
             entry.RetryTimer?.Dispose();
             gone = entry;
@@ -109,6 +114,7 @@ public sealed class SessionAccessService : IDisposable {
         try {
             var watch = await _lane.RegisterSessionAccessWatchAsync(entry.SessionId, CancellationToken.None).ConfigureAwait(false);
             if (watch.Result == HubCallResult.Ok) {
+                ClaimChat(entry, attempt);
                 var chat = await _lane.SubscribeToChatAsync(entry.SessionId, CancellationToken.None).ConfigureAwait(false);
                 verdict = Classify(chat);
                 diagnostic = Diagnose(entry.SessionId, chat);
@@ -125,12 +131,13 @@ public sealed class SessionAccessService : IDisposable {
         // A lease released (or the service disposed) while the chat subscribe above was still in
         // flight already fired its own cleanup unsubscribe, which can reach the server before
         // this subscribe does. Firing a second one here, strictly after the subscribe resolved,
-        // is what guarantees the group membership ends up dropped regardless of that ordering.
+        // is what guarantees the group membership ends up dropped regardless of that ordering —
+        // but only when this attempt is the one still holding it.
         var unsubscribeStale = false;
         string? report = null;
         lock (_lock) {
             if (_disposed || entry.Attempt != attempt) {
-                unsubscribeStale = subscribed;
+                unsubscribeStale = subscribed && OwnsChat(entry, attempt);
             } else {
                 // The retry ladder re-runs this every few seconds, so only a CHANGE of reason is
                 // worth a line; a recovery re-arms the next one.
@@ -147,6 +154,26 @@ public sealed class SessionAccessService : IDisposable {
         }
         if (report is not null) Console.Error.WriteLine(report);
         if (unsubscribeStale) _ = _lane.UnsubscribeFromChatAsync(entry.SessionId, CancellationToken.None);
+    }
+
+    // Claimed BEFORE the subscribe it describes, not after: a slower watch call would otherwise
+    // let a superseded attempt record its claim over a newer attempt's.
+    void ClaimChat(Entry entry, int attempt) {
+        lock (_lock) {
+            if (_disposed || entry.Attempt != attempt) return;
+            _chatOwners[entry.SessionId] = (entry, attempt);
+        }
+    }
+
+    // Caller holds _lock. A superseded attempt did join the group, but the membership is the
+    // session's, not the attempt's: handing it back while a live entry is relying on it stops the
+    // payloads with the lease still reading Established and no retry armed. It is this attempt's
+    // to give back only when no live entry holds the session, or when the claim on record is its own.
+    bool OwnsChat(Entry entry, int attempt) {
+        if (!_entries.ContainsKey(entry.SessionId)) return true;
+        if (!_chatOwners.TryGetValue(entry.SessionId, out var owner) || !ReferenceEquals(owner.Entry, entry) || owner.Attempt != attempt) return false;
+        _chatOwners.Remove(entry.SessionId);
+        return true;
     }
 
     static SessionAccessState Classify(HubCallOutcome outcome) => outcome.Result switch {
@@ -178,6 +205,7 @@ public sealed class SessionAccessService : IDisposable {
             entries = [.. _entries.Values];
             foreach (var e in entries) { e.Attempt++; e.RetryTimer?.Dispose(); }
             _entries.Clear();
+            _chatOwners.Clear();
         }
         foreach (var e in entries) e.State.OnCompleted();
         _subscriptions.Dispose();
