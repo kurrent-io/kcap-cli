@@ -105,18 +105,12 @@ internal static class UpdateNotice {
 
             _reported = true;
 
-            await Console.Error.WriteLineAsync();
+            var marker = advisory.ServerCapped ? " (server version)" : "";
 
-            if (advisory.ServerCapped) {
-                // The server is behind npm latest; plain `kcap update` follows the dist-tag and would
-                // overshoot the cap, so recommend the pinned install of the server's version.
-                await Console.Error.WriteLineAsync(
-                    $"Update available: {advisory.Current} {UpdateCommand.Arrow} {advisory.Target} (server version)");
-                await Console.Error.WriteLineAsync($"Run: npm install -g @kurrent/kcap@{advisory.Target}");
-            } else {
-                await Console.Error.WriteLineAsync($"Update available: {advisory.Current} {UpdateCommand.Arrow} {advisory.Target}");
-                await Console.Error.WriteLineAsync("Run `kcap update` to update");
-            }
+            await Console.Error.WriteLineAsync();
+            await Console.Error.WriteLineAsync($"Update available: {advisory.Current} {UpdateCommand.Arrow} {advisory.Target}{marker}");
+            // `kcap update` applies the same cap, so it installs this target rather than npm latest.
+            await Console.Error.WriteLineAsync("Run `kcap update` to update");
         } catch {
             // Best effort — an update notice must never break the command it's attached to.
         }

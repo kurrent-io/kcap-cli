@@ -14,17 +14,8 @@ tarball="${5:-}"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 if [ "${4:-}" != "--tarball" ]; then
-  # npm pack runs seconds after publish-npm finished; the registry needs a moment to propagate.
-  packed=0
-  for attempt in 1 2 3 4 5 6; do
-    if (cd "$tmp" && npm pack "@kurrent/kcap-darwin-arm64@$version" --registry https://registry.npmjs.org --pack-destination "$tmp" >/dev/null 2>"$tmp/npm.err"); then
-      packed=1
-      break
-    fi
-    echo "npm pack attempt $attempt/6 failed: $(tail -1 "$tmp/npm.err")" >&2
-    [ "$attempt" -lt 6 ] && sleep 20
-  done
-  [ "$packed" -eq 1 ] || { echo "npm pack failed after 6 attempts" >&2; exit 1; }
+  NPM_WAIT_TIMEOUT="${NPM_WAIT_TIMEOUT:-600}" bash "$here/wait-npm-available.sh" "$version" @kurrent/kcap-darwin-arm64
+  (cd "$tmp" && npm pack "@kurrent/kcap-darwin-arm64@$version" --prefer-online --registry https://registry.npmjs.org --pack-destination "$tmp" >/dev/null)
   tarball="$(ls "$tmp"/*.tgz | head -1)"
 fi
 [ -f "$tarball" ] || { echo "no tarball for @kurrent/kcap-darwin-arm64@$version" >&2; exit 1; }

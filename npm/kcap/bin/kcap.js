@@ -11,15 +11,20 @@ const fs = require("fs");
 // module.exports below, so it would see partial exports).
 const { PLATFORM_PACKAGES, platformKey } = require("./resolve");
 
-// Resolves the npm dist-tag to install for `kcap update`, based on the
-// resolved channel reported by `kcap update --check`'s `install_tag` field.
-// Falls back to "latest" when the probe is missing, failed, or has no tag,
-// preserving today's default behavior.
+// The package spec `kcap update` installs, from `kcap update --check`'s `install_tag`: the channel's
+// dist-tag, or an exact version when the connected server caps the update. Falls back to "latest"
+// when the probe is missing, failed, or has no tag.
 function resolveInstallSpec(info) {
   const tag = info && typeof info.install_tag === "string" && info.install_tag
     ? info.install_tag
     : "latest";
   return `@kurrent/kcap@${tag}`;
+}
+
+// npm serves a packument from its cache for five minutes; within that window an install can
+// resolve against a listing that predates the platform package's version and silently skip it.
+function npmInstallArgs(spec) {
+  return ["install", "-g", spec, "--prefer-online"];
 }
 
 // Builds the arg list for the `kcap update --check` probe, forwarding only
@@ -201,7 +206,7 @@ if (require.main === module) {
     binaryDir = path.dirname(require.resolve(`${packageName}/package.json`));
   } catch {
     console.error(`Platform package ${packageName} is not installed.`);
-    console.error(`Try: npm install -g @kurrent/kcap`);
+    console.error(`Try: npm ${npmInstallArgs(`@kurrent/kcap@${require("../package.json").version}`).join(" ")}`);
     process.exit(1);
   }
 
@@ -354,7 +359,7 @@ function runUpdate(binaryPath, updArgs) {
     }
   }
 
-  const res = spawnSync("npm", ["install", "-g", resolveInstallSpec(info)], {
+  const res = spawnSync("npm", npmInstallArgs(resolveInstallSpec(info)), {
     stdio: "inherit",
     windowsHide: true,
     ...npmOpts,
@@ -400,6 +405,7 @@ function runUpdate(binaryPath, updArgs) {
 
 module.exports = {
   resolveInstallSpec,
+  npmInstallArgs,
   probeArgs,
   trashDirFor,
   trashDirFromLauncher,

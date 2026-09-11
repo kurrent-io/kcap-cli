@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -49,6 +50,29 @@ public class UpdateNoticeDeliveryTests : IDisposable {
         await Assert.That(r.Stderr).Contains($"Update available:");
         await Assert.That(r.Stderr).Contains(NewerVersion);
         await Assert.That(r.Stderr).Contains("Run `kcap update` to update");
+    }
+
+    /// <summary>
+    /// A server trailing npm latest caps the target at its own version; the hint still names
+    /// <c>kcap update</c>, which installs that same capped version, never a raw npm command.
+    /// </summary>
+    [Test]
+    public async Task ServerCappedHint_NamesTheServerVersion_AndAdvisesKcapUpdate() {
+        const string server        = "https://tenant.example";
+        const string serverVersion = "998.0.0";
+
+        var cfgDir = SeedFreshNewerCache();
+        cfgDir.CreateFile("config.json", $$$"""
+            {"version":2,"active_profile":"default","profiles":{"default":{"server_url":"{{{server}}}"}},"profile_bindings":{},"cwd_remap":[]}
+            """);
+        ServerVersionStore.Set(server, serverVersion, cfgDir.Root);
+
+        var r = await RunAsync(["config", "show"], cfgDir);
+
+        await Assert.That(r.ExitCode).IsEqualTo(0);
+        await Assert.That(r.Stderr).Contains($"{serverVersion} (server version)");
+        await Assert.That(r.Stderr).Contains("Run `kcap update` to update");
+        await Assert.That(r.Stderr).DoesNotContain("npm install");
     }
 
     // --- Structural: --help and the no-server path fall through the same finally ---
