@@ -1565,8 +1565,12 @@ public static partial class DaemonRunner {
             IEnumerable<string> vendors, Func<string, T> probe, T timedOut,
             int ceilingMs = ConcurrentProbeCeilingMs) {
         var tasks = new Dictionary<string, Task<T>>(StringComparer.Ordinal);
+        // A probe blocks its thread for its whole budget, so each gets a dedicated one. Queued on the
+        // thread pool they start only as the pool grows — one thread a second once it is saturated —
+        // which serializes the very pass this seam exists to overlap.
         foreach (var vendor in vendors)
-            tasks.TryAdd(vendor, Task.Run(() => probe(vendor)));
+            tasks.TryAdd(vendor, Task.Factory.StartNew(
+                () => probe(vendor), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
 
         if (tasks.Count == 0) return FrozenDictionary<string, T>.Empty;
 

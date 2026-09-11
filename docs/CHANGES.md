@@ -6,6 +6,16 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Vendor probes run on dedicated threads
+
+A startup probe pass overlaps N vendor `--version` probes so they cost one budget rather than the
+sum, but each probe blocks its thread on `WaitForExit` for up to its whole budget, and the thread
+pool is not told about that kind of block. Queued on the pool, the probes start only as the pool
+grows, about one thread a second once it is saturated, and the pass serializes again. Every probe
+therefore runs on its own long-running thread. The test that pins this saturates the pool first
+with the same silent kind of wait; a `Task.Wait` there would be compensated by the pool and prove
+nothing.
+
 ## The application menu keeps its exported Settings item
 
 Avalonia's macOS exporter captures the application menu after initialization and observes its
