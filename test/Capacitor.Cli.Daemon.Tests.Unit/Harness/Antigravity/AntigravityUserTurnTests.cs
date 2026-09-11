@@ -62,18 +62,24 @@ public class AntigravityUserTurnTests {
     [Test]
     public async Task Journal_matches_channel_order_under_worker_and_queue_full_notice_writers() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance);
+        // The stock completion grace bounds the writer against a hung disk, which turns an assertion
+        // over fifty fsynced appends into a throughput race the suite's own load can lose.
+        var journal = new TranscriptJournal(
+            tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(1));
         journal.Open("/w", null);
         await using var rt = AntigravityRuntimeFakes.FakeRuntime(FakeTurn.NeverEnds, queueCap: 1, time: Time, journal: journal);
         await rt.SendUserInputAsync("first");
         await rt.WaitForConversationIdAsync(CancellationToken.None);
         await rt.SendUserInputAsync("queued");
-        var refusals = Task.Run(async () => { for (var i = 0; i < 50; i++) { try { await rt.SendUserInputAsync($"r{i}"); } catch { } } });
+        const int refused = 50;
+        var refusals = Task.Run(async () => { for (var i = 0; i < refused; i++) { try { await rt.SendUserInputAsync($"r{i}"); } catch { } } });
         await refusals;
-        await Task.Delay(200);
-        var drained = new List<AcpEventEnvelope>();
-        while (rt.Envelopes.TryRead(out var e)) drained.Add(e);
-        await journal.CompleteAsync();
+
+        // user("first"), session_started, then one note per refusal. Counted, not waited for: a loaded
+        // runner emits the tail of the notes past any fixed delay this test could pick.
+        var drained = await Drain(rt, 2 + refused);
+        await Assert.That(await journal.CompleteAsync()).IsTrue()
+            .Because("an abandoned writer would surface below as a whole-journal diff instead");
 
         var journaled = JournalFiles.ReadLines(journal.Path).Skip(1).Select(l => { EnvelopeJournalFormat.TryRead(l, out var e); return (e.Kind, e.Text); });
         await Assert.That(journaled).IsEquivalentTo(drained.Select(e => (e.Kind, e.Text)), CollectionOrdering.Matching);

@@ -17,22 +17,29 @@ on:
     tags:
       - 'v*'
 
+# A new commit supersedes an older run for the same PR. Pushes to main and tag builds key on their
+# own ref and are never cancelled, so a release build always finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Roughly 2.5x the longest observed leg (17m); this only has to catch a wedge, and GitHub's
+    # kill takes the uploaded reports with it.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        # linux-x64 + windows-x64. macOS is NOT in this matrix: the unit suite has
-        # a known cluster of macOS-local temp-path/parallel-load flakes that would
-        # make a macOS leg permanently red. macOS arm64 is covered by maintainer
-        # runs; macOS x64 is intentionally untested. Platform-sensitive daemon
-        # behavior that must hold everywhere (e.g. the borrowed-review capability
-        # advertisement, which no longer carries any OS/arch precondition) is
-        # additionally pinned by host-independent source guards in the unit suite —
-        # see DaemonRunnerCursorAvailabilityTests' platform coverage matrix.
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest,  modules: 3, tests: 4 }
+          - { os: macos-latest,   modules: 3, tests: 4 }
+          # Narrower, because this is the leg that loses the wall-clock budgets inside the code under
+          # test: at three-by-four it spent a 20s service-readiness budget and a 1s memory-fetch
+          # budget with nothing actually slow, and each one reads as a product failure.
+          - { os: windows-latest, modules: 2, tests: 2 }
 
     steps:
       - uses: actions/checkout@v7
@@ -55,7 +62,7 @@ jobs:
       - name: Run npm wrapper tests
         # Plain-Node assertion scripts for the npm launcher/refresh/resolve
         # modules (no test framework, no npm install). `shell: bash` gives
-        # fail-fast -e semantics on both matrix legs.
+        # fail-fast -e semantics on every matrix leg.
         shell: bash
         run: |
           node npm/kcap/bin/kcap.test.js
@@ -67,19 +74,38 @@ jobs:
         run: bash scripts/run-shell-tests.sh
 
       - name: Run tests
-        # --max-parallel-test-modules 1 runs one assembly at a time. Two things block lifting it,
-        # both measured with it off: five concurrent assemblies starve the tests that assert a
-        # wall-clock budget on the two-core Windows runner (a 1s cap measured 1.004s), and an
-        # Integration test's temp working directory vanished mid-test on Linux — a cross-assembly
-        # sharing point no in-assembly [NotInParallel] key can serialise. It halves CI wall-clock,
-        # so it is worth another attempt once budget assertions take an injected clock.
-        # --maximum-parallel-tests caps only TUnit's unkeyed bucket — keyed
-        # [NotInParallel] tests still run concurrently with disjoint-key classes, so
-        # anything touching process-global state must hold the SAME key as every other
-        # toucher. A cap of 1 narrows race windows rather than closing them, so it hides
-        # a missing key instead of failing on it; 4 is wide enough to surface one.
-        # Local dev runs stay parallel; both flags live only in CI.
-        run: dotnet test --solution Capacitor.slnx --no-build --max-parallel-test-modules 1 -- --maximum-parallel-tests 4
+        # Assemblies and per-assembly width are per-leg, above: the ceiling is what the runner can
+        # carry without the wall-clock budgets inside the code under test expiring. Five modules was
+        # measured to starve those and to vanish an Integration test's temp working directory on
+        # Linux — a cross-assembly sharing point no in-assembly [NotInParallel] key can serialise.
+        # A keyed [NotInParallel] test still runs concurrently with every disjoint-key class, so
+        # anything touching process-global state must hold the SAME key as every other toucher. A
+        # width this narrow surfaces a missing key less readily than a dev machine does, where the
+        # default is four times the core count.
+        run: >
+          dotnet test --solution Capacitor.slnx --no-build
+          --max-parallel-test-modules ${{ matrix.modules }}
+          -- --maximum-parallel-tests ${{ matrix.tests }}
+
+      # Kept on success too: the console prints nothing between banner and summary, so these are the
+      # only per-test timing record. File kinds and not the directory — upload-artifact roots the
+      # archive at the common ancestor of its paths — which also excludes the TRX attachment folder,
+      # a second copy of the HTML report.
+      #
+      # continue-on-error: a diagnostic must never decide whether the tests passed. An artifact-service
+      # 403 is classed non-retryable, so without this it reddens a run that reported `failed: 0`.
+      - name: Upload test reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-${{ matrix.os }}-attempt-${{ github.run_attempt }}
+          path: |
+            TestResults/*.html
+            TestResults/*.trx
+            TestResults/*.tunit-report.json
+          retention-days: 3
+          if-no-files-found: ignore
 
   lint-linear-ids:
     name: No Linear issue IDs in C# source
