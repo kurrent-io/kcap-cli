@@ -10,6 +10,27 @@ public class ClaudeChatRulesTests {
     }
 
     [Test]
+    [Arguments("")]
+    [Arguments(" inspect the queue ")]
+    public async Task Hidden_slash_commands_acknowledge_the_submitted_command_and_arguments(string args) {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs($$$"""{"type":"user","message":{"content":"<command-name>/review</command-name><command-message>review</command-message><command-args>{{{args}}}</command-args>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).IsEmpty();
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { args.Trim().Length == 0 ? "/review" : $"/review {args.Trim()}" });
+    }
+
+    [Test]
+    [Arguments("\"isMeta\":true")]
+    [Arguments("\"isSidechain\":true")]
+    [Arguments("\"origin\":{\"kind\":\"task-notification\"}")]
+    public async Task Injected_command_wrappers_never_acknowledge_user_input(string flags) {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs($$$"""{"type":"user",{{{flags}}},"message":{"content":"<command-name>/clear</command-name><local-command-stdout>ok</local-command-stdout>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+        await Assert.That(result.Envelopes.Any(e => e.Kind == AcpEventKind.UserMessage)).IsFalse();
+    }
+
+    [Test]
     public async Task String_user_content_is_one_user_message_with_its_timestamp() {
         var e = P("""{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-08-26T12:00:00Z"}""");
         await Assert.That(e).Count().IsEqualTo(1);

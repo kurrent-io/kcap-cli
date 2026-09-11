@@ -36,6 +36,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     /// A remote row greys out while the lane is stale; a local row is never stale.
     public bool IsStale => _isStale.Value;
 
+    readonly ObservableAsPropertyHelper<string> _statusBadge;
+    public string StatusBadge => _statusBadge.Value;
+
     readonly CompositeDisposable _disposables = new();
 
     public RailSessionViewModel(
@@ -65,6 +68,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var byStatus = SessionStatusDots.NeedsAttention(row);
         _needsYou = agentsWithPending.Select(set => byStatus || set.Contains(row.Id))
             .ToProperty(this, x => x.NeedsYou, initialValue: byStatus)
+            .DisposeWith(_disposables);
+        _statusBadge = agentsWithPending.Select(set => row.Status == "Failed" || set.Contains(row.Id)
+                ? "!" : SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
+            .ToProperty(this, x => x.StatusBadge, initialValue: SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
             .DisposeWith(_disposables);
 
         _isStale = (IsRemote ? remoteStale : Observable.Return(false))

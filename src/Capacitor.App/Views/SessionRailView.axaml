@@ -135,7 +135,7 @@
                                                                            Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                                                                 <Border Background="{StaticResource KcapWarningDimBrush}" CornerRadius="999"
                                                                         Padding="6,0" IsVisible="{Binding NeedsYou}" VerticalAlignment="Center">
-                                                                    <TextBlock Text="!" FontSize="9" FontWeight="Bold"
+                                                                    <TextBlock Text="{Binding StatusBadge}" FontSize="9" FontWeight="Bold"
                                                                                Foreground="{StaticResource KcapWarningBrush}" />
                                                                 </Border>
                                                             </StackPanel>
@@ -177,7 +177,7 @@
                                                                             <Border DockPanel.Dock="Right" Background="{StaticResource KcapWarningDimBrush}"
                                                                                     CornerRadius="999" Padding="7,1" IsVisible="{Binding NeedsYou}"
                                                                                     VerticalAlignment="Top">
-                                                                                <TextBlock Text="!" FontSize="9" FontWeight="Bold"
+                                                                                <TextBlock Text="{Binding StatusBadge}" FontSize="9" FontWeight="Bold"
                                                                                            Foreground="{StaticResource KcapWarningBrush}" />
                                                                             </Border>
                                                                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">

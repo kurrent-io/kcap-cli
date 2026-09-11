@@ -17,16 +17,21 @@ public sealed class TerminalChatInput : ChatInput {
                 this.RaisePropertyChanged(nameof(Availability));
                 this.RaisePropertyChanged(nameof(CanAcceptText));
                 this.RaisePropertyChanged(nameof(Hint));
+                this.RaisePropertyChanged(nameof(CanInterrupt));
             });
     }
 
     public override SendAvailability Availability => _disposed ? SendAvailability.Ended : _terminal.SendAvailability;
     public override bool CanAcceptText => !_disposed && _terminal.CanAcceptText;
+    public override bool CanInterrupt => !_disposed && _terminal.CanInterrupt;
+    public override Task InterruptAsync(CancellationToken ct) =>
+        CanInterrupt ? _terminal.SendEscapeAsync(ct) : Task.CompletedTask;
     public override string Hint => HintFor(_terminal.SendAvailability, _terminal.State);
 
     /// The terminal path has nothing to cancel: acceptance is synchronous.
-    public override Task<bool> SendAsync(string text, CancellationToken ct) =>
-        Task.FromResult(!_disposed && _terminal.TrySendText(text));
+    public override Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) =>
+        Task.FromResult(!_disposed && !ct.IsCancellationRequested && _terminal.TrySendText(text)
+            ? ChatSendOutcome.Accepted : ChatSendOutcome.Rejected);
 
     public override void Dispose() {
         if (_disposed) return;

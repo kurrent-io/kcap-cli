@@ -35,7 +35,7 @@ public class TerminalChatInputTests {
 
             var raised = new List<string>();
             input.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
-            await Assert.That(await input.SendAsync("hello", CancellationToken.None)).IsTrue();
+            await Assert.That(await input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
             await Assert.That(input.Availability).IsEqualTo(SendAvailability.Sending);
             await Assert.That(input.Hint).IsEqualTo("Sending…");
             await Assert.That(raised).Contains(nameof(ChatInput.Availability));
@@ -60,7 +60,44 @@ public class TerminalChatInputTests {
             client.Result.SetResult(new AttachOutcome.Exited(0));
             await terminal.CurrentRunForTesting!;
             await Assert.That(raised).IsEqualTo(0);
-            await Assert.That(await input.SendAsync("x", CancellationToken.None)).IsFalse();
+            await Assert.That(await input.SendAsync("x", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await terminal.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_waits_for_submit_and_does_not_paste_or_submit_an_extra_message() {
+        await RunOnUiAsync(async () => {
+            var (terminal, input, client, time) = await BuildAttachedAsync();
+            await input.SendAsync("follow-up", CancellationToken.None);
+            await Assert.That(input.CanInterrupt).IsTrue();
+            var interrupt = input.InterruptAsync(CancellationToken.None);
+            await Assert.That(client.SentInput).Count().IsEqualTo(1);
+            time.Advance(TimeSpan.FromMilliseconds(150));
+            await interrupt;
+            await Assert.That(client.SentInput).Count().IsEqualTo(3);
+            await Assert.That(client.SentInput[1]).IsEquivalentTo(new byte[] { 0x0d });
+            await Assert.That(client.SentInput[2]).IsEquivalentTo(new byte[] { 0x1b });
+            input.Dispose();
+            await terminal.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Detaching_during_submit_prevents_the_waiting_escape_from_reaching_the_old_client() {
+        await RunOnUiAsync(async () => {
+            var (terminal, input, client, time) = await BuildAttachedAsync();
+            await input.SendAsync("follow-up", CancellationToken.None);
+            var interrupt = input.InterruptAsync(CancellationToken.None);
+            client.Result.SetResult(new AttachOutcome.Detached());
+            await terminal.CurrentRunForTesting!;
+            time.Advance(TimeSpan.FromMilliseconds(150));
+            await interrupt;
+            await Assert.That(client.SentInput).Count().IsEqualTo(1);
+            await Assert.That(input.CanInterrupt).IsFalse();
+            input.Dispose();
             await terminal.TeardownAsync();
         });
     }

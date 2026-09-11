@@ -103,8 +103,10 @@ public class RailSessionViewModelTests {
             using var working = new RailSessionViewModel(Row(awaitingInput: false), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(waiting.NeedsYou).IsTrue();
+            await Assert.That(waiting.StatusBadge).IsEqualTo("zzz");
             await Assert.That(waiting.Tooltip).Contains("waiting for input");
             await Assert.That(working.NeedsYou).IsFalse();
+            await Assert.That(working.StatusBadge).IsEqualTo("");
             await Assert.That(working.Tooltip).DoesNotContain("waiting for input");
             await Assert.That(older.NeedsYou).IsFalse();
         });
@@ -181,6 +183,14 @@ public class RailSessionViewModelTests {
 
             using var failed = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { });
             await Assert.That(failed.NeedsYou).IsTrue();
+            await Assert.That(failed.StatusBadge).IsEqualTo("!");
+
+            using var idle = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { });
+            await Assert.That(idle.StatusBadge).IsEqualTo("zzz");
+            pending.OnNext(new HashSet<string> { "a1" });
+            await Assert.That(idle.StatusBadge).IsEqualTo("!");
+            pending.OnNext(new HashSet<string>());
+            await Assert.That(idle.StatusBadge).IsEqualTo("zzz");
         });
     }
 

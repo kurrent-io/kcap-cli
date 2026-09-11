@@ -163,6 +163,7 @@ public class ChatComposerTests {
             chat.ComposerText = "hello";
             await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
             await Assert.That(chat.ComposerHint).IsEqualTo("");
+            await Assert.That(await chat.InterruptCommand.CanExecute.FirstAsync()).IsFalse();
             await chat.TeardownAsync();
         });
     }
