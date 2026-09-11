@@ -42,6 +42,7 @@ public static class HubBroadcasts {
 public static class ApiRoutes {
     public const string AgentInstances = "api/agent-instances";
     public const string Daemons        = "api/daemons";
+    public const string ModelOptions   = "api/agents/model-options";
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
     public static string PermissionResponse(string sessionId, string requestId) =>

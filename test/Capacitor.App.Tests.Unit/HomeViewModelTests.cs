@@ -45,6 +45,29 @@ public class HomeViewModelTests {
         return new HomeViewModel(daemon, store, launch, Known());
     }
 
+    /// The launcher's model list prefers the server catalog per vendor and falls back to the
+    /// curated list where the server offers none — so an empty or unreachable catalog never blocks
+    /// a launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Model_choices_prefer_the_server_catalog_and_fall_back_to_the_curated_list() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var catalog = new Dictionary<string, IReadOnlyList<ModelChoice>>(StringComparer.OrdinalIgnoreCase) {
+                ["gemini"] = [new("gemini-3-pro", "Gemini 3 Pro")],
+            };
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                modelCatalog: Observable.Return<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>(catalog));
+
+            await Assert.That(vm.ModelChoicesFor("gemini").Select(m => m.Slug)).Contains("gemini-3-pro");
+            await Assert.That(vm.ModelChoicesFor("claude").Select(m => m.Slug)).Contains("claude-opus-5");
+            await Assert.That(vm.ModelChoicesFor("cursor")).IsEmpty();
+        });
+    }
+
     /// Repo keys compare the way the filesystem does — so the SAME repository reached under
     /// different casing restores its harness on Windows/macOS, and stays distinct on Linux where
     /// two such paths really are two repositories. Asserting the platform's own answer rather than

@@ -111,6 +111,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         set => this.RaiseAndSetIfChanged(ref _selectedModel, value);
     }
 
+    /// The server's model catalog snapshot (empty until fetched); the agent chip resolves a
+    /// selected model's label against it.
+    public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> ModelCatalog => _modelCatalog;
+
+    /// The model choices to offer for a vendor: the server catalog when it has any, else the
+    /// curated fallback. So a launch is never blocked by an empty or unreachable catalog.
+    public IReadOnlyList<ModelChoice> ModelChoicesFor(string vendor) =>
+        _modelCatalog.TryGetValue(vendor, out var models) && models.Count > 0
+            ? models
+            : HostedHarnessCatalog.ModelChoicesFor(vendor);
+
     string? _selectedEffort;
     /// null = vendor default. Survives vendor changes — the effort vocabulary is shared enough
     /// (low/medium/high/xhigh) that the choice usually still means what the user meant.
@@ -261,6 +272,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     static readonly TimeSpan RecentFailureTtl = TimeSpan.FromSeconds(30);
     readonly IAgentDirectory? _directory;
 
+    /// The server's per-vendor model catalog (empty until the first fetch lands). The launcher's
+    /// model picker prefers it and falls back to HostedHarnessCatalog's curated list per vendor.
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> _modelCatalog = ServerVendorModelCatalog.Empty;
+
     /// knownRepos is RepoPathStore.GetSortedPathsAsync in production — the same persisted list
     /// DaemonConnect.RepoPaths feeds the server's launch dialog. Required (no defaulted overload)
     /// so a test can never silently read the developer's own ~/.config/kcap/repos.json.
@@ -301,7 +316,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlyList<DaemonInfo>>? daemons = null,
             Func<CancellationToken, Task<string?>>? viewerId = null,
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
-            IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null) {
+            IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
+            IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null) {
         _daemon = daemon;
         _state = state;
         _launch = launch;
@@ -332,6 +348,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
                 (localVendors, remoteVendors, sel) => HostedHarnessCatalog.Build(sel.Remote ? remoteVendors : localVendors))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.Harnesses, HostedHarnessCatalog.Build(null))
+            .DisposeWith(_disposables);
+
+        // The server model catalog arrives asynchronously; a change re-renders the agent chip and
+        // the next flyout open reads the new list (RebuildRows runs per open).
+        (modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(catalog => { _modelCatalog = catalog; this.RaisePropertyChanged(nameof(ModelCatalog)); })
             .DisposeWith(_disposables);
 
         // A throw from viewerId (e.g. a claims-file read fault) is a missed visibility recompute,
