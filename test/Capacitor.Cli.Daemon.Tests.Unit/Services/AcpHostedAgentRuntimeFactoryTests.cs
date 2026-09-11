@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Harness;
 using System.Runtime.InteropServices;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
@@ -741,9 +742,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             bool borrowedReview = false,
             AcpBorrowedReviewContainment containment = AcpBorrowedReviewContainment.None,
             IAcpModelSelector? modelSelector = null) => new(
-        Vendor:              "test-acp-vendor",
-        ResolveBinaryPath:   _ => "test-acp-vendor-cli",
-        ResolveDefaultModel: _ => null,
+        Harness:             HarnessId.Pi,
         Argv:                ["acp", "--flag-a"],
         UnattendedTrustArgv: ["--trust"],
         SupportsUnattended:  true,
@@ -755,9 +754,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     );
 
     static AcpVendorDescriptor NonUnattendedDescriptor() => new(
-        Vendor:              "interactive-only",
-        ResolveBinaryPath:   _ => "interactive-only",
-        ResolveDefaultModel: _ => null,
+        Harness:             HarnessId.Pi,
         Argv:                ["acp"],
         UnattendedTrustArgv: [],
         SupportsUnattended:  false,
@@ -2453,9 +2450,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         // Built explicitly rather than cloned from a shipped descriptor: SupportsUnattended carries
         // construction-time invariants that must be re-run against this argv pairing.
         var neverUnattended = new AcpVendorDescriptor(
-            Vendor:              "probe-vendor",
-            ResolveBinaryPath:   _ => "probe-vendor",
-            ResolveDefaultModel: _ => null,
+            Harness:             HarnessId.Pi,
             Argv:                ["acp"],
             UnattendedTrustArgv: [],
             SupportsUnattended:  false,

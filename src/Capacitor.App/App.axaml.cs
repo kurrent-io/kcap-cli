@@ -48,7 +48,8 @@ public partial class App : Application {
     readonly ConfigRoot _config = ConfigRoot.FromEnvironment();
 
     // And its one read of KCAP_URL / KCAP_PROFILE.
-    readonly ProfileOverrides _serverEnv = ProfileOverrides.FromEnvironment();
+    readonly ProfileOverrides _serverEnv  = ProfileOverrides.FromEnvironment();
+    readonly MachineAuth      _machineEnv = MachineAuth.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
 
     /// Process-lifetime rather than per wizard run — a provisioning poll can outlive the window that
@@ -70,7 +71,7 @@ public partial class App : Application {
             .AddSingleton(_config)
             .AddSingleton(profiles)
             .AddSingleton(new CapacitorServer(url, _config, profiles))
-            .AddCapacitorHttp(_serverEnv)
+            .AddCapacitorHttp(_serverEnv, _machineEnv)
             .BuildValidated();
 
         return _serverHttp.GetRequiredService<ICapacitorHttpClient>();
@@ -498,8 +499,8 @@ public partial class App : Application {
         // disposed at teardown.
         var serverLane = new ServerConnectionService(profiles, _foreignHttp.GetRequiredService<TokenStore>());
         serverLane.Start();
-        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv);
-        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv);
+        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv);
+        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv);
         var ghRunner = new ProcessRunner();
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.

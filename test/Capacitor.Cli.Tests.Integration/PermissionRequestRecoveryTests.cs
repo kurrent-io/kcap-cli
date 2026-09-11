@@ -75,7 +75,7 @@ public class PermissionRequestRecoveryTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(Url, Config.Root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
 
         var sp = services.BuildServiceProvider();
         _containers.Add(sp);

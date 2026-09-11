@@ -13,17 +13,13 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// <summary>
 /// Machine-credential authentication for headless runners.
 ///
-/// <para>These tests deliberately go through the REAL HTTP exchange against a stub server rather than
-/// asserting shapes around it. The immediately preceding work on this feature shipped a `kcap machine`
-/// whose every subcommand threw before a request left the process, with a clean build, sixteen green
-/// tests and a clean review — because every test exercised help text. The thing that has to work here is
-/// the exchange, so the exchange is what is tested, including the wire format, which is precisely what
-/// would be silently wrong.</para>
+/// <para>These go through the REAL HTTP exchange against a stub server rather than asserting shapes
+/// around it: the thing that has to work is the exchange, including the wire format, which is
+/// precisely what would be silently wrong while everything around it looked healthy.</para>
 ///
-/// <para><c>[NotInParallel]</c> throughout: these manipulate process-wide environment variables and the
-/// provider/token caches are process-wide statics.</para>
+/// <para>The credential is a value handed in, the way a composition root hands production one, so
+/// nothing here touches the environment and none of it needs exclusion.</para>
 /// </summary>
-[NotInParallel]
 public class MachineAuthTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -33,19 +29,14 @@ public class MachineAuthTests : IDisposable {
     // against a stub: no credential of ours, no observation headers.
     static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
 
-    public void Dispose() {
-        _server.Stop();
-        Clear();
-    }
+    public void Dispose() => _server.Stop();
 
-    static void Clear() {
-        Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, null);
-        Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, null);
-        Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, null);
-    }
+    /// <summary>Pointed at the stub's token endpoint, carrying no credential — enough to mint with
+    /// one passed to <c>GetTokenAsync</c> directly.</summary>
+    MachineAuth StubEndpoint => new(null, null, $"{_server.Urls[0]}/oauth2/token");
 
-    void UseStubTokenEndpoint() =>
-        Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, $"{_server.Urls[0]}/oauth2/token");
+    /// <summary>What a headless runner exports: both halves, against the stub.</summary>
+    MachineAuth Runner => StubEndpoint with { ClientId = "client_01ABC", ClientSecret = "sekrit" };
 
     void StubToken(string token, int expiresIn = 3600) =>
         _server.Given(Request.Create().WithPath("/oauth2/token").UsingPost())
@@ -56,14 +47,14 @@ public class MachineAuthTests : IDisposable {
     /// <summary>A container wired the same way production resolves a client, for the sites that go
     /// through <see cref="ICapacitorHttpClient"/> rather than calling the minter directly. Profiles
     /// resolve to none, matching a runner with no profile present.</summary>
-    ServiceProvider Container() {
+    ServiceProvider Container(MachineAuth machine) {
         var services = new ServiceCollection();
         var profiles = Resolutions.None(Config.Root);
 
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(_server.Urls[0], Config.Root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        services.AddCapacitorHttp(ProfileOverrides.None, machine);
 
         return services.BuildServiceProvider();
     }
@@ -77,8 +68,6 @@ public class MachineAuthTests : IDisposable {
     /// </summary>
     [Test]
     public async Task A_redirect_before_the_token_is_followed_and_still_mints() {
-        Clear();
-        UseStubTokenEndpoint();
 
         _server.Given(Request.Create().WithPath("/oauth2/token").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(307)
@@ -89,8 +78,8 @@ public class MachineAuthTests : IDisposable {
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"access_token":"tok_after_hop","expires_in":3600}"""));
 
-        using var sp     = Container();
-        using var minter = new MachineTokenProvider();
+        using var sp     = Container(Runner);
+        using var minter = new MachineTokenProvider(StubEndpoint);
 
         var result = await minter.GetTokenAsync(
             sp.GetRequiredService<WorkOSClient>(), new MachineCredential("client_01ABC", "sekrit"),
@@ -103,13 +92,11 @@ public class MachineAuthTests : IDisposable {
 
     [Test]
     public async Task Both_variables_present_reads_the_credential() {
-        Clear();
-        Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC");
-        Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, "sekrit");
+        var machine = new MachineAuth("client_01ABC", "sekrit", null);
 
-        await Assert.That(MachineAuth.Intended).IsTrue();
+        await Assert.That(machine.Intended).IsTrue();
 
-        var credential = MachineAuth.TryRead(out var problem);
+        var credential = machine.TryRead(out var problem);
 
         await Assert.That(problem).IsNull();
         await Assert.That(credential!.ClientId).IsEqualTo("client_01ABC");
@@ -125,14 +112,12 @@ public class MachineAuthTests : IDisposable {
     [Arguments(null, "sekrit", "KCAP_CLIENT_ID")]
     public async Task One_variable_present_is_reported_as_a_problem_naming_the_missing_one(
             string? id, string? secret, string expectedInProblem) {
-        Clear();
-        Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, id);
-        Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, secret);
+        var machine = new MachineAuth(id, secret, null);
 
-        await Assert.That(MachineAuth.Intended).IsTrue()
+        await Assert.That(machine.Intended).IsTrue()
             .Because("machine auth was clearly intended, so it must be diagnosed rather than skipped");
 
-        var credential = MachineAuth.TryRead(out var problem);
+        var credential = machine.TryRead(out var problem);
 
         await Assert.That(credential).IsNull();
         await Assert.That(problem).IsNotNull();
@@ -141,28 +126,37 @@ public class MachineAuthTests : IDisposable {
 
     [Test]
     public async Task Neither_variable_present_is_not_machine_auth_at_all() {
-        Clear();
-
-        await Assert.That(MachineAuth.Intended).IsFalse();
-        await Assert.That(MachineAuth.TryRead(out var problem)).IsNull();
+        await Assert.That(MachineAuth.None.Intended).IsFalse();
+        await Assert.That(MachineAuth.None.TryRead(out var problem)).IsNull();
         await Assert.That(problem).IsNull()
             .Because("an ordinary interactive user is not a misconfigured machine");
+    }
+
+    /// <summary>The credential must not be printable. The guard belongs on the type, not on the
+    /// discipline of every caller that could interpolate it or hand it to a structured log.</summary>
+    [Test]
+    public async Task Formatting_the_credential_reports_presence_and_never_the_secret() {
+        var printed = $"{new MachineAuth("client_01ABC", "sekrit", "https://idp.test/oauth2/token")}";
+
+        await Assert.That(printed).DoesNotContain("sekrit");
+        await Assert.That(printed).DoesNotContain("client_01ABC");
+        await Assert.That(printed).DoesNotContain("idp.test");
+        await Assert.That(printed).Contains("set");
+        await Assert.That($"{MachineAuth.None}").Contains("unset");
     }
 
     // ── The exchange itself ────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The load-bearing test: a real POST, and the WIRE FORMAT asserted. Verified against the live
+    /// The load-bearing test: a real POST, and the WIRE FORMAT asserted. Measured against the live
     /// WorkOS endpoint too, which answers this exact form with a credential rejection rather than
     /// `unsupported_grant_type`.
     /// </summary>
     [Test]
     public async Task Minting_posts_client_credentials_form_and_returns_the_token() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_minted");
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), rejectedToken: null, CancellationToken.None);
 
@@ -178,7 +172,7 @@ public class MachineAuthTests : IDisposable {
         await Assert.That(body).Contains("client_id=client_01ABC");
         await Assert.That(body).Contains("client_secret=sekrit");
 
-        // Review: some token endpoints reject other content types with misleading errors, so pin it.
+        // Some token endpoints reject other content types with misleading errors, so pin it.
         var contentType = requests[0].RequestMessage.Headers!["Content-Type"].First();
 
         await Assert.That(contentType).Contains("application/x-www-form-urlencoded");
@@ -187,13 +181,11 @@ public class MachineAuthTests : IDisposable {
     /// <summary>Second call reuses the cached token — no second mint.</summary>
     [Test]
     public async Task A_cached_token_is_reused_without_a_second_request() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_cached");
 
         var credential = new MachineCredential("client_01ABC", "sekrit");
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
 
         await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
         var second = await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
@@ -210,15 +202,13 @@ public class MachineAuthTests : IDisposable {
     /// </summary>
     [Test]
     public async Task A_cache_hit_does_not_wait_for_an_in_flight_mint() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_A");
 
         var warm = new MachineCredential("client_A", "s");
 
         // Shared across every call below: the cache and the gate this test exercises are both
         // per-instance, so a fresh minter per call would prove nothing about either.
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
 
         await minter.GetTokenAsync(Workos, warm, null, CancellationToken.None);
 
@@ -253,13 +243,11 @@ public class MachineAuthTests : IDisposable {
     /// </summary>
     [Test]
     public async Task A_rejected_token_forces_a_fresh_mint() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_first");
 
         var credential = new MachineCredential("client_01ABC", "sekrit");
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
         var       first  = await minter.GetTokenAsync(Workos, credential, null, CancellationToken.None);
 
         await Assert.That(first.Token).IsEqualTo("tok_first");
@@ -277,15 +265,13 @@ public class MachineAuthTests : IDisposable {
     /// </summary>
     [Test]
     public async Task A_rejected_credential_reports_a_problem_without_leaking_the_secret() {
-        Clear();
-        UseStubTokenEndpoint();
         _server.Given(Request.Create().WithPath("/oauth2/token").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(401)
                 .WithHeader("Content-Type", "application/json")
                 // A hostile/naive endpoint reflecting the request back at us.
                 .WithBody("{\"error\":\"unauthorized\",\"echo\":\"client_secret=hunter2-the-secret\"}"));
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "hunter2-the-secret"), null, CancellationToken.None);
 
@@ -299,13 +285,11 @@ public class MachineAuthTests : IDisposable {
     /// <summary>Success with no access_token must fail, not hand back an empty bearer.</summary>
     [Test]
     public async Task A_success_response_with_no_token_is_a_failure() {
-        Clear();
-        UseStubTokenEndpoint();
         _server.Given(Request.Create().WithPath("/oauth2/token").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json").WithBody("{\"expires_in\":3600}"));
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -316,14 +300,12 @@ public class MachineAuthTests : IDisposable {
     // ── The wiring: does an authenticated client actually carry the bearer? ─────────────────────
 
     /// <summary>
-    /// End-to-end through the client-construction choke point every authenticated CLI call uses. This is
-    /// the test whose absence let the last iteration of this feature ship completely non-functional: it
-    /// is the only one that proves the branch is REACHED and the header attached.
+    /// End-to-end through the client-construction choke point every authenticated CLI call uses: the
+    /// only test that proves the machine branch is REACHED and the header actually attached, rather
+    /// than that the pieces around it have the right shape.
     /// </summary>
     [Test]
     public async Task An_authenticated_client_carries_the_minted_bearer_with_no_profile_present() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_wired");
 
         // A runner's server is discovered over unauthenticated /auth/config — no profile, no token store.
@@ -334,10 +316,7 @@ public class MachineAuthTests : IDisposable {
         _server.Given(Request.Create().WithPath("/ping").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC");
-        Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, "sekrit");
-
-        using var sp      = Container();
+        using var sp      = Container(Runner);
         var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
         using var client  = attempt.Client;
 
@@ -351,8 +330,8 @@ public class MachineAuthTests : IDisposable {
 
         await Assert.That(sent.Headers!["Authorization"].Single()).IsEqualTo("Bearer tok_wired");
 
-        // Review: without this the test would still pass if the branch moved ahead of provider
-        // discovery — it would only be checking the final header, not that a mint actually happened.
+        // Without this the test would still pass if the branch moved ahead of provider discovery: it
+        // would be checking the final header, not that a mint actually happened.
         var mints = _server.LogEntries.Count(e => e.RequestMessage.Path.Contains("/oauth2/token"));
 
         await Assert.That(mints).IsEqualTo(1);
@@ -364,17 +343,13 @@ public class MachineAuthTests : IDisposable {
     /// </summary>
     [Test]
     public async Task A_half_configured_runner_reports_not_authenticated() {
-        Clear();
-        UseStubTokenEndpoint();
 
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("{\"provider\":\"workos\",\"client_id\":\"client_01TENANT\",\"authkit_domain\":\"\",\"organization_id\":\"org_01T\"}"));
 
-        Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC"); // secret missing
-
-        using var sp      = Container();
+        using var sp      = Container(StubEndpoint with { ClientId = "client_01ABC" }); // secret missing
         var       attempt = await sp.GetRequiredService<ICapacitorHttpClient>().ForHookAsync();
         using var client  = attempt.Client;
 
@@ -384,17 +359,15 @@ public class MachineAuthTests : IDisposable {
     // ── The token-URL override is a redirect primitive ─────────────────────────────────────────
 
     /// <summary>
-    /// Review found that KCAP_WORKOS_TOKEN_URL can point the mint at an attacker-chosen host, and the
-    /// REQUEST carries the secret. Plaintext non-loopback must be refused — and refused rather than
-    /// silently falling back to the default, which would send the real credential to the real endpoint
-    /// while the developer believed they were pointed at a stub.
+    /// The token URL points the mint at a host of the operator's choosing, and the REQUEST carries the
+    /// secret. Plaintext non-loopback must be refused — and refused rather than silently falling back
+    /// to the default, which would send the real credential to the real endpoint while the developer
+    /// believed they were pointed at a stub.
     /// </summary>
     [Test]
     public async Task A_plaintext_non_loopback_token_url_is_refused_without_sending_the_credential() {
-        Clear();
-        Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, "http://evil.example.com/oauth2/token");
-
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(
+            new MachineAuth(null, null, "http://evil.example.com/oauth2/token"));
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -406,18 +379,15 @@ public class MachineAuthTests : IDisposable {
     }
 
     /// <summary>
-    /// Review round 2: the loopback carve-out is for http ONLY. `Uri.IsLoopback` is host-only, so an
-    /// odd-scheme loopback URL (ftp/ws/file) must NOT be admitted just for being loopback — it is not a
+    /// The loopback carve-out is for http ONLY. `Uri.IsLoopback` is host-only, so an odd-scheme
+    /// loopback URL (ftp/ws/file) must NOT be admitted just for being loopback — it is not a
     /// credential-safe POST target.
     /// </summary>
     [Test]
     [Arguments("ftp://127.0.0.1/oauth2/token")]
     [Arguments("ws://localhost/oauth2/token")]
     public async Task An_odd_scheme_loopback_token_url_is_refused(string url) {
-        Clear();
-        Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, url);
-
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(new MachineAuth(null, null, url));
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -429,11 +399,9 @@ public class MachineAuthTests : IDisposable {
     /// <summary>Loopback over http is the deliberate carve-out — a credential cannot leave the machine.</summary>
     [Test]
     public async Task A_loopback_http_token_url_is_allowed_so_stubs_stay_testable() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_loopback");
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -442,10 +410,7 @@ public class MachineAuthTests : IDisposable {
 
     [Test]
     public async Task A_malformed_token_url_is_refused() {
-        Clear();
-        Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, "not-a-url");
-
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(new MachineAuth(null, null, "not-a-url"));
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 
@@ -454,16 +419,14 @@ public class MachineAuthTests : IDisposable {
     }
 
     /// <summary>
-    /// Review #3: the cache is keyed on client id AND token URL, so a second credential does not receive
-    /// the first one's token.
+    /// The cache is keyed on client id AND token URL, so a second credential does not receive the
+    /// first one's token.
     /// </summary>
     [Test]
     public async Task A_different_credential_does_not_receive_the_cached_token() {
-        Clear();
-        UseStubTokenEndpoint();
         StubToken("tok_for_A");
 
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(StubEndpoint);
         var       a      = await minter.GetTokenAsync(Workos, new MachineCredential("client_A", "s"), null, CancellationToken.None);
 
         await Assert.That(a.Token).IsEqualTo("tok_for_A");
@@ -475,18 +438,15 @@ public class MachineAuthTests : IDisposable {
         await Assert.That(b.Token).IsNotNull();
     }
 
-    // ── Automatic 401 recovery on the constructed client (Qodo finding 1) ───────────────────────
+    // ── Automatic 401 recovery on the constructed client ───────────────────────────────────────
 
     /// <summary>
-    /// The gap the previous revision had: an authenticated machine client got NO 401-retry handler, so
-    /// a token revoked mid-life produced repeated 401s. This drives a real request through the
-    /// constructed client: the token endpoint issues tok_A, the API 401s it once, and the client must
-    /// re-mint (tok_B) and resend WITHOUT the caller threading anything back.
+    /// A token revoked mid-life must not produce repeated 401s. This drives a real request through the
+    /// constructed client: the token endpoint issues one token, the API 401s it once, and the client
+    /// must re-mint and resend WITHOUT the caller threading anything back.
     /// </summary>
     [Test]
     public async Task An_authenticated_client_automatically_re_mints_on_a_401() {
-        Clear();
-        UseStubTokenEndpoint();
 
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200)
@@ -511,10 +471,7 @@ public class MachineAuthTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/ping").UsingGet().WithHeader("Authorization", "Bearer tok_2"))
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("ok"));
 
-        Environment.SetEnvironmentVariable(MachineAuth.ClientIdVar, "client_01ABC");
-        Environment.SetEnvironmentVariable(MachineAuth.ClientSecretVar, "sekrit");
-
-        using var sp = Container();
+        using var sp = Container(Runner);
 
         // The interactive lane is the one that installs the retry handler.
         using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
@@ -529,7 +486,7 @@ public class MachineAuthTests : IDisposable {
             .Because("exactly one re-mint: the initial token plus one recovery");
     }
 
-    // ── Error hygiene: no userinfo, no control chars in the Problem (Qodo finding 2) ────────────
+    // ── Error hygiene: no userinfo, no control chars in the Problem ─────────────────────────────
 
     /// <summary>
     /// A KCAP_WORKOS_TOKEN_URL carrying userinfo must not print the secret half in the Problem string.
@@ -537,12 +494,10 @@ public class MachineAuthTests : IDisposable {
     /// </summary>
     [Test]
     public async Task A_token_url_with_userinfo_does_not_leak_it_into_the_problem() {
-        Clear();
         // Loopback so the scheme check admits it and we reach the mint, which then fails (nothing
         // listening on that path) and builds the Problem string containing the URL.
-        Environment.SetEnvironmentVariable(MachineAuth.TokenUrlVar, "http://id:supersecret@127.0.0.1:1/oauth2/token");
-
-        using var minter = new MachineTokenProvider();
+        using var minter = new MachineTokenProvider(
+            new MachineAuth(null, null, "http://id:supersecret@127.0.0.1:1/oauth2/token"));
         var       result = await minter.GetTokenAsync(
             Workos, new MachineCredential("client_01ABC", "sekrit"), null, CancellationToken.None);
 

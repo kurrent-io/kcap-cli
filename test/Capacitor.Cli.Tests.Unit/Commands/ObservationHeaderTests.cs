@@ -36,7 +36,7 @@ public class ObservationHeaderTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(_server.Urls[0], Config.Root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
         _sp = services.BuildServiceProvider();
 
         return new WhoamiCommand(
@@ -53,7 +53,7 @@ public class ObservationHeaderTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(_server.Urls[0], Config.Root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
         _sp = services.BuildServiceProvider();
 
         return await _sp.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();

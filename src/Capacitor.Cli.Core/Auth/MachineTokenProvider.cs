@@ -34,7 +34,7 @@ public readonly record struct MachineTokenResult(string? Token, string? Problem)
 /// explicitly: a <c>SemaphoreSlim</c> release is not a barrier, so a field written inside the gate is
 /// not guaranteed visible to a reader outside it.</para>
 /// </summary>
-public sealed class MachineTokenProvider : IDisposable {
+public sealed class MachineTokenProvider(MachineAuth machine) : IDisposable {
     /// <summary>
     /// Re-mint this long before nominal expiry. A token that expires mid-flight surfaces as a 401 the
     /// caller must interpret; spending a few seconds of a 3600s lifetime avoids that entirely.
@@ -76,7 +76,7 @@ public sealed class MachineTokenProvider : IDisposable {
             string?           rejectedToken,
             CancellationToken ct
         ) {
-        var tokenUrl = MachineAuth.TryResolveTokenUrl(out var urlProblem);
+        var tokenUrl = machine.TryResolveTokenUrl(out var urlProblem);
 
         if (tokenUrl is null) return new(null, urlProblem);
 

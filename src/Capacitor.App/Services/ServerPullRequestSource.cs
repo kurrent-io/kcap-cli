@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.PullRequests;
@@ -10,8 +11,9 @@ public sealed class ServerPullRequestSource : IPullRequestSource, IAsyncDisposab
     readonly Dictionary<string, int> _missing = new(StringComparer.Ordinal);
     long _generation;
     public ServerPullRequestSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
-        AuthenticatedServerReads<PullRequestClient>.ClientFactory? factory = null, TimeProvider? time = null) {
-        _reads = new(config, profiles, env, (http, url) => new PullRequestClient(http, url, time), factory, allowAutoRedirect: false);
+        MachineAuth machine, AuthenticatedServerReads<PullRequestClient>.ClientFactory? factory = null,
+        TimeProvider? time = null) {
+        _reads = new(config, profiles, env, machine, (http, url) => new PullRequestClient(http, url, time), factory, allowAutoRedirect: false);
     }
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => _reads.ReadAsync((channel, token) => channel.DiscoverAsync(refresh, token),
         read => read.Kind == PullRequestCapabilityKind.SignedOut, new PullRequestCapability(PullRequestCapabilityKind.SignedOut),

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using System.Net;
 using System.Text;
 using Capacitor.App.Services;
@@ -16,7 +17,7 @@ public class ServerReaderProviderTests {
     [Test]
     public async Task Probe_maps_the_server_capability_and_serves_github_com_only_while_supported() {
         using var handler = new Handler { Versions = "[1]" };
-        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), ProfileOverrides.None,
+        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), ProfileOverrides.None, MachineAuth.None,
             (_, _, _, _) => Task.FromResult((new HttpClient(handler), AuthStatus.Ok)));
         var provider = new ServerReaderProvider(source);
         await Assert.That(provider.Name).IsEqualTo("server");
@@ -36,7 +37,7 @@ public class ServerReaderProviderTests {
     [Test]
     public async Task An_older_server_probes_as_failed_with_its_capability_named() {
         using var handler = new Handler { Versions = null };
-        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), ProfileOverrides.None,
+        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), ProfileOverrides.None, MachineAuth.None,
             (_, _, _, _) => Task.FromResult((new HttpClient(handler), AuthStatus.Ok)));
         var provider = new ServerReaderProvider(source);
         var status = await provider.ProbeAsync(false, default);
