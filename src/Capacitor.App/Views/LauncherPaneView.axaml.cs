@@ -18,16 +18,18 @@ namespace Capacitor.App.Views;
 public partial class LauncherPaneView : UserControl {
     public LauncherPaneView() {
         InitializeComponent();
-        // Tunnel, not bubble: TextBox can still mark Enter handled on the bubble route even when
-        // AcceptsReturn is false, so Start must see the key on the way down.
+        // Tunnel, not bubble: the TextBox marks Enter handled on the bubble route, so bare-Enter
+        // submit must see the key on the way down. Shift+Enter falls through untouched, so the
+        // TextBox inserts a newline (AcceptsReturn is true).
         GoalInput.AddHandler(KeyDownEvent, OnGoalKeyDown, RoutingStrategies.Tunnel);
     }
 
     /// Bare Enter starts a session when Start can run; otherwise the key is consumed so it does
-    /// not leave a stray newline. Mirrors the Start button: connection readiness from CanExecute,
-    /// repository from SelectedRepoPath (the button's IsEnabled binding).
+    /// not leave a stray newline. Shift+Enter is left for the TextBox to insert a newline. Mirrors
+    /// the Start button: connection readiness from CanExecute, repository from SelectedRepoPath.
     void OnGoalKeyDown(object? sender, KeyEventArgs e) {
         if (e.Key != Key.Enter) return;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
         e.Handled = true;
         if (DataContext is not HomeViewModel vm) return;
         if (string.IsNullOrEmpty(vm.SelectedRepoPath)) return;

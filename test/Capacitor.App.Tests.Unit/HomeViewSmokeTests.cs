@@ -307,6 +307,46 @@ public class HomeViewSmokeTests {
         await Assert.That(goalAfter).IsEqualTo("ship it");
     }
 
+    /// Shift+Enter inserts a newline instead of launching — even when Start could run — matching
+    /// the chat composer. Bare Enter still launches (covered above).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Shift_Enter_in_the_goal_box_inserts_a_newline_and_does_not_start() {
+        var (goalText, acceptsReturn, startCount) = await AvaloniaSession.DispatchAsync(async () => {
+            var (_, vm, _, launch, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            await vm.SelectRepositoryAsync("/repos/kcap-cli");
+            Dispatcher.UIThread.RunJobs();
+
+            var goal = Find<TextBox>(window, "GoalInput")!;
+            var accepts = goal.AcceptsReturn;
+            goal.Focus();
+            Dispatcher.UIThread.RunJobs();
+            window.KeyTextInput("line one");
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.Shift);
+            window.KeyTextInput("line two");
+            Dispatcher.UIThread.RunJobs();
+
+            var text = goal.Text;
+            var count = launch.StartCount;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (text, accepts, count);
+        });
+
+        await Assert.That(acceptsReturn).IsTrue();
+        await Assert.That(startCount).IsEqualTo(0);
+        await Assert.That(goalText).Contains("line one");
+        await Assert.That(goalText).Contains("line two");
+        await Assert.That(goalText!.Contains('\n')).IsTrue();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task StartErrorText_visibility_follows_StartError() {
