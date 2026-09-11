@@ -116,11 +116,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     if (change.Reason == ChangeReason.Remove) {
                         // The local daemon took the agent over: the row ended, the session did not.
                         // A shared agent id is not evidence of that on its own — the dedup fails
-                        // open, so two unrelated agents can carry one id — and the session id is the
-                        // proof already on both rows. The directory publishes the local add and this
-                        // removal in one edit, so that row is already in the cache here; a later one
-                        // would read as an ended session.
-                        if (directory.Rows.Lookup($"local:{row.Id}") is { HasValue: true, Value: var twin }
+                        // open, so two unrelated agents can carry one id. The proof is the
+                        // directory's: this agent runs on the daemon it proved is the local one's
+                        // twin, and both rows carry the same session id. The directory publishes
+                        // the local add and this removal in one edit, so that row is already in the
+                        // cache here; a later one would read as an ended session.
+                        if (directory.IsProvenLocalTwin(row.Id)
+                            && directory.Rows.Lookup($"local:{row.Id}") is { HasValue: true, Value: var twin }
                             && twin.SessionId is { Length: > 0 } && twin.SessionId == _row.SessionId) {
                             OriginChangedToLocal = true;
                             // Nothing is answerable through a released lease, and the agent is not

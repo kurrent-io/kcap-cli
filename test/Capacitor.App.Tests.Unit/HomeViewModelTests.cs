@@ -1406,10 +1406,12 @@ public class HomeViewModelTests {
         }
 
         public IObservable<bool> RemoteStale => Observable.Return(false);
+        public IObservable<bool> LocalDaemonOnAppServer => Observable.Return(true);
 
         public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
             Observable.Return((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
         public string? VendorOfSession(string sessionId) => null;
+        public bool IsProvenLocalTwin(string agentId) => false;
 
         public void Add(string agentId) => _source.AddOrUpdate(
             AgentRow.FromLocal(Agent(agentId, "/repo/a"), new RepoIdentity("path:/repo/a", "repo")));

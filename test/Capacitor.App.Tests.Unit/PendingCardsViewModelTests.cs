@@ -79,6 +79,33 @@ public class PendingCardsViewModelTests {
         });
     }
 
+    /// A session id is unique only within one server. While the local daemon is on a different
+    /// one, a server-lane item carrying this id is another server's session: it belongs to the
+    /// remote workspace that does hold it, and never to the local one, whose process it would
+    /// answer over HTTP.
+    [Test]
+    public async Task A_local_workspace_admits_no_server_item_while_its_daemon_is_on_another_server() {
+        await RunOnUiAsync(async () => {
+            using var permissions = new FakePermissionService();
+            using var onAppServer = new BehaviorSubject<bool>(false);
+            using var local = new PendingCardsViewModel(
+                "a1", AgentOrigin.Local, Observable.Return<string?>("s1"), permissions, Observable.Return<string?>(null), onAppServer);
+            using var remote = new PendingCardsViewModel(
+                "a1", AgentOrigin.Remote, Observable.Return<string?>("s1"), permissions, Observable.Return<string?>(null), onAppServer);
+
+            var item = PermissionEntries.ServerEntry("srv-1", sessionId: "s1");
+            item.AgentId = "a1";
+            permissions.Add(item);
+
+            await WaitUntilAsync(() => remote.PendingCards.Count == 1, what: "the card in the remote workspace");
+            await Assert.That(local.PendingCards.Count).IsEqualTo(0);
+
+            onAppServer.OnNext(true);
+
+            await WaitUntilAsync(() => local.PendingCards.Count == 1, what: "the card once the daemon is on the app's server");
+        });
+    }
+
     [Test]
     public async Task A_refresh_keeps_the_card_instance() {
         await RunOnUiAsync(async () => {

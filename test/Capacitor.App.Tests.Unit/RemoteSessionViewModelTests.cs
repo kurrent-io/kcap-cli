@@ -157,6 +157,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
 
+            h.Directory.ProvenTwins.Add("a1");
             h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
                 Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
@@ -185,6 +186,29 @@ public class RemoteSessionViewModelTests {
 
             h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
                 Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "a-different-session"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            h.Directory.Rows.Remove("remote:a1");
+
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.OriginChangedToLocal).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A matching session id on a same-id local row is still not proof. The local daemon also has
+    /// to be the twin of the daemon this agent is registered on, and the directory is the only
+    /// thing that knows it — on another server the same session id names another session, and
+    /// calling that an origin change points the user at a process that is not this agent.
+    [Test]
+    public async Task A_local_row_the_directory_does_not_call_a_twin_is_not_an_origin_change() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             h.Directory.Rows.Remove("remote:a1");
 

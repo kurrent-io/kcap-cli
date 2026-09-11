@@ -279,6 +279,36 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A local daemon on another server holds another server's sessions, and this id names a
+    /// different session there. The workspace joins nothing until the daemon is on the app's own
+    /// server — joining would put that other session's prompts in this pane.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task No_session_group_is_joined_while_the_local_daemon_is_on_another_server() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = ConnectedLane();
+            using var access = new SessionAccessService(lane, new FakeTimeProvider());
+            using var onAppServer = new BehaviorSubject<bool>(false);
+            var vm = new WorkspaceViewModel(
+                "a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
+                new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
+                new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
+                access: access, localDaemonOnAppServer: onAppServer);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false, sessionId: "s1"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Task.Delay(100); // the join, were it not scoped, lands here
+
+            await Assert.That(lane.AccessWatches).IsEmpty();
+
+            onAppServer.OnNext(true);
+
+            await WaitUntilAsync(() => lane.ChatSubscribes.Contains("s1"), what: "the join once the daemon is on the app's server");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A local agent the server never registered is refused the watch. Nothing in the workspace
     /// reads that verdict, so the pane looks exactly as it does with no server lane at all.
     [Test]

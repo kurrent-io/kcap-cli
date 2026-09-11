@@ -752,8 +752,9 @@ public class MainWindowViewModelTests {
             vm.OpenSession("r1");
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
 
-            // One session id across both rows is what proves the twin; without it the removal
-            // reads as an ended session, not a change of origin.
+            // The directory's own twin verdict plus one session id across both rows are what prove
+            // it; without either the removal reads as an ended session, not a change of origin.
+            host.Directory.ProvenTwins.Add("r1");
             host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
                 WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));

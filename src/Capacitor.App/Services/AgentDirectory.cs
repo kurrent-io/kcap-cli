@@ -2,7 +2,9 @@ using System.Collections.Frozen;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -13,10 +15,17 @@ public interface IAgentDirectory {
     IObservableCache<AgentRow, string> Rows { get; }
     /// True while the server lane is not Connected — rail rows grey out on it.
     IObservable<bool> RemoteStale { get; }
+    /// True while the local daemon reports the app's own server; replays on subscribe. A session
+    /// id is unique only within one server, so nothing local may be matched to a server-lane
+    /// session while this is false: the same id there names a different session.
+    IObservable<bool> LocalDaemonOnAppServer { get; }
     /// Session id -> logical agent id, over the current rows. Replay-1, distinct by content.
     IObservable<IReadOnlyDictionary<string, string>> SessionAgents { get; }
     /// The vendor of the row whose SessionId matches, or null.
     string? VendorOfSession(string sessionId);
+    /// Whether the local daemon has proven it hosts this agent — the daemon proved to be its
+    /// server twin registers it. A shared agent id proves nothing: the dedup fails open.
+    bool IsProvenLocalTwin(string agentId);
 }
 
 /// Merges the local daemon's agents with the server registry's into source-scoped rows.
@@ -34,12 +43,14 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     readonly string? _localMachineId;
     readonly string? _appServerUrl;
     readonly object _lock = new();
+    readonly BehaviorSubject<bool> _onAppServer = new(false);
 
     IReadOnlyList<DaemonInfo> _daemons = [];
     bool _localConnected;
     string? _localServerUrl;
     List<AgentInstanceDto> _remoteAgents = [];
     List<AgentStatusDto> _localAgents = [];
+    FrozenSet<string> _twinAgents = FrozenSet<string>.Empty;
 
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
@@ -78,6 +89,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
 
     public IObservableCache<AgentRow, string> Rows => _rows.AsObservableCache();
     public IObservable<bool> RemoteStale { get; }
+    public IObservable<bool> LocalDaemonOnAppServer => _onAppServer;
 
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents => _rows.Connect()
         .QueryWhenChanged(q => SessionMap(q.Items))
@@ -86,6 +98,8 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
 
     public string? VendorOfSession(string sessionId) =>
         _rows.Items.Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
+
+    public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
 
     // Local sorts before Remote in AgentOrigin, so the ordered pass's TryAdd lets a local row win
     // a session claimed by both an unproven twin pair — proven suppression already keeps a twin's
@@ -126,6 +140,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             bool OnTwin(AgentInstanceDto a) =>
                 twinProven && a.OwnerUserId == twin!.Value.OwnerUserId && a.DaemonName == twin.Value.DaemonName;
 
+            // The twin daemon's own registry rows, whether or not the local socket is up: this is
+            // what says a retiring remote row means the local daemon took that agent over, rather
+            // than the agent's session having ended.
+            _twinAgents = twinProven
+                ? _remoteAgents.Where(OnTwin).Select(a => a.AgentId).ToFrozenSet(StringComparer.Ordinal)
+                : FrozenSet<string>.Empty;
+
             var remote = _remoteAgents
                 .Where(a => a.Status is "Starting" or "Running")
                 .Where(a => !(_localConnected && OnTwin(a)))
@@ -146,6 +167,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                     if (cache.Lookup(row.Key) is not { HasValue: true, Value: var existing } || existing != row)
                         cache.AddOrUpdate(row);
             });
+
+            // Published inside the lock, like the row edit above, so no subscriber sees this
+            // verdict and the rows disagreeing about which recompute produced them. A side that
+            // does not canonicalize is not a match: no assertion can be made, and matching a local
+            // session to a server one on that basis is what this exists to prevent.
+            var onAppServer = ServerIdentity.SameServer(_localServerUrl, _appServerUrl);
+            if (_onAppServer.Value != onAppServer) _onAppServer.OnNext(onAppServer);
         }
     }
 

@@ -90,7 +90,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
-            SessionAccessService? access = null) {
+            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
         _disposables.Add(_lease);
@@ -123,9 +123,13 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         // An ACP-hosted agent's question reaches the app only over the server lane, in this
         // session's chat group, local agent or not — so a local workspace joins it too. A local
         // agent the server never registered answers Denied; nothing here reads the verdict, which
-        // is what keeps that invisible.
+        // is what keeps that invisible. The join is scoped to the app's own server: on any other
+        // server this id names a different session, and joining its group would deliver that
+        // session's prompts into this pane.
         if (access is not null)
             sessionIds
+                .CombineLatest(localDaemonOnAppServer ?? Observable.Return(true), (sessionId, onAppServer) => onAppServer ? sessionId : null)
+                .DistinctUntilChanged()
                 .Subscribe(sessionId => _lease.Disposable = sessionId is null ? Disposable.Empty : access.Acquire(sessionId))
                 .DisposeWith(_disposables);
 
@@ -151,7 +155,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
                     ? new TerminalChatInput(Terminal)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
-                Chat = new ChatTabViewModel(agentId, daemon, input, projection, opener, time, permissions, note, sessionIds);
+                Chat = new ChatTabViewModel(
+                    agentId, daemon, input, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
             })
             .DisposeWith(_disposables);
 

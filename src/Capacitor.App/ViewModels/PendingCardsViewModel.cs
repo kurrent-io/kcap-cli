@@ -28,18 +28,33 @@ public sealed class PendingCardsViewModel : ReactiveObject, IDisposable {
     /// The owning workspace's session id as it resolves; must replay its current value on
     /// subscribe, since the filter produces nothing until the first one arrives.
     /// </param>
+    /// <param name="localDaemonOnAppServer">
+    /// IAgentDirectory's verdict, which must replay on subscribe. Null is a caller with no
+    /// directory, and admits server items unscoped.
+    /// </param>
     public PendingCardsViewModel(
             string agentId, AgentOrigin origin, IObservable<string?> sessionId,
-            IPermissionService permissions, IObservable<string?> root) {
+            IPermissionService permissions, IObservable<string?> root,
+            IObservable<bool>? localDaemonOnAppServer = null) {
+        // A remote workspace's session belongs to the app's own server by construction. A local
+        // one's belongs to whatever server the local daemon reports, and a session id is unique
+        // only within a server — Claude's derive from transcript filenames and imports preserve
+        // them — so a matching id alone would render another server's prompt under this header and
+        // answer its process over HTTP.
+        var scoped = origin == AgentOrigin.Remote
+            ? Observable.Return(true)
+            : localDaemonOnAppServer ?? Observable.Return(true);
+
         // Lane and identity, never the agent id alone: an unproven local/remote pair shares one id
         // while carrying two different agents, so the id alone would render the other lane's card
         // under this header, and answering it would act on a process the user never opened. A
         // server item belongs to whichever workspace holds its session — an ACP question for a
         // local agent included.
-        var admits = sessionId.Select(sid => (Func<PendingPermissionRequest, bool>)(p => p.Lane switch {
-            PermissionLane.Local => origin == AgentOrigin.Local && p.AgentId == agentId,
-            _ => sid is { Length: > 0 } && p.SessionId == sid,
-        }));
+        var admits = sessionId.CombineLatest(scoped, (sid, onAppServer) =>
+            (Func<PendingPermissionRequest, bool>)(p => p.Lane switch {
+                PermissionLane.Local => origin == AgentOrigin.Local && p.AgentId == agentId,
+                _ => onAppServer && sid is { Length: > 0 } && p.SessionId == sid,
+            }));
 
         // ObserveOn BEFORE the binding operator: the cache is mutated on the service's
         // background continuations (IPermissionService.Pending's own doc comment).

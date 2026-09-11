@@ -13,8 +13,16 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
     public SourceCache<AgentRow, string> Rows { get; } = new(r => r.Key);
     public BehaviorSubject<bool> RemoteStale { get; } = new(false);
 
+    /// True unless a test is about server scoping: the local daemon shares the app's server.
+    public BehaviorSubject<bool> LocalOnAppServer { get; } = new(true);
+    /// The agent ids the directory reports the local daemon has proven it hosts.
+    public HashSet<string> ProvenTwins { get; } = new(StringComparer.Ordinal);
+
     IObservableCache<AgentRow, string> IAgentDirectory.Rows => Rows;
     IObservable<bool> IAgentDirectory.RemoteStale => RemoteStale;
+    IObservable<bool> IAgentDirectory.LocalDaemonOnAppServer => LocalOnAppServer;
+
+    public bool IsProvenLocalTwin(string agentId) => ProvenTwins.Contains(agentId);
 
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
         Rows.Connect().QueryWhenChanged(q => SessionMap(q.Items))
@@ -35,5 +43,6 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
     public void Dispose() {
         Rows.Dispose();
         RemoteStale.Dispose();
+        LocalOnAppServer.Dispose();
     }
 }
