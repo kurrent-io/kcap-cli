@@ -49,10 +49,22 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         Func<string, string?>? resolveVendorVersion = null,
         // Test seam ONLY for the per-stage launch-handshake cap. Production passes null → the
         // TimeProvider.System every other daemon-local timing decision uses.
-        TimeProvider? timeProvider = null
+        TimeProvider? timeProvider = null,
+        // The desktop app's local permission surface. Non-null (production) presents a permission on
+        // it alongside the server's web card, first answer wins; null leaves every launch server-only.
+        PermissionPromptBroker? permissionBroker = null
     ) : IHostedAgentRuntimeFactory {
     readonly Func<string, string?>? _resolveVendorVersion = resolveVendorVersion;
     readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    readonly PermissionPromptBroker? _permissionBroker = permissionBroker;
+
+    /// <summary>The delegate the interaction bridge calls to answer a request. With a desktop
+    /// surface wired, a permission is raced across the web card and the desktop card (first wins);
+    /// without one it is the raw server request, unchanged.</summary>
+    Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> RequestInteraction =>
+        _permissionBroker is { } broker
+            ? new AcpPermissionSurface(broker, descriptor.Vendor, connection.RequestAcpInteractionAsync, _timeProvider).RequestAsync
+            : connection.RequestAcpInteractionAsync;
 
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =
         connectionSource ?? (ctx => StartRealProcess(descriptor, config, ctx, loggerFactory));
@@ -208,7 +220,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 acpProcess,
                 runtimeLogger,
                 agentId: ctx.AgentId,
-                requestInteraction: connection.RequestAcpInteractionAsync,
+                requestInteraction: RequestInteraction,
                 // Drives the handshake's per-stage caps (RunHandshakeStageAsync), so a test's
                 // FakeTimeProvider controls them without a real 90-second wait.
                 timeProvider: _timeProvider,
