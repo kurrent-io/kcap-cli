@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -18,14 +17,18 @@ namespace Capacitor.Cli.Daemon.Services;
 ///
 /// <para>The server request id, once minted, is paired with the local card via
 /// <see cref="PermissionPromptBroker.TryCorrelate"/> so a client that sees both lanes coalesces them
-/// into one card. Every settled request is written to the <see cref="PermissionDecisionLog"/>. A tool
-/// payload too large to ride a control frame is not presented locally at all — it would poison every
-/// subscription — and falls back to a server-only request.</para>
+/// into one card. When the desktop answers first the same decision is submitted back to the server so
+/// its history records that allow/deny rather than the cancel a bare abandonment would leave; the
+/// server keeps the first writer, so a web answer that already landed still wins. Every settled
+/// request is written to the <see cref="PermissionDecisionLog"/>. A tool payload too large to ride a
+/// control frame is not presented locally at all — it would poison every subscription — and falls
+/// back to a server-only request.</para>
 /// </summary>
 internal sealed class AcpPermissionSurface(
         PermissionPromptBroker                                                                       broker,
         string                                                                                       vendor,
         Func<AcpInteractionRequest, Action<string>?, CancellationToken, Task<AcpInteractionDecision>> requestServer,
+        Func<string, string, AcpInteractionDecision, Task>?                                           resolveServer = null,
         PermissionDecisionLog?                                                                        decisionLog = null,
         TimeProvider?                                                                                 timeProvider = null) {
 
@@ -43,9 +46,10 @@ internal sealed class AcpPermissionSurface(
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
+        var serverId = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         // Register before the server leg so the server id can correlate onto a live entry.
         var localTask  = broker.Register(pending);
-        var serverTask = requestServer(request, id => broker.TryCorrelate(localId, id), linked.Token);
+        var serverTask = requestServer(request, id => { serverId.TrySetResult(id); broker.TryCorrelate(localId, id); }, linked.Token);
 
         var winner = await Task.WhenAny(serverTask, localTask).ConfigureAwait(false);
 
@@ -66,10 +70,24 @@ internal sealed class AcpPermissionSurface(
         }
 
         var settlement = await localTask.ConfigureAwait(false);
+        var mapped = MapSettlement(settlement, request.Options ?? []);
+        await ResolveServer(request, serverId, settlement, mapped).ConfigureAwait(false);
         linked.Cancel();
         Observe(serverTask);
         Record(request, settlement.Outcome, settlement.Source);
-        return MapSettlement(settlement, request.Options ?? []);
+        return mapped;
+    }
+
+    // The desktop answered first: mirror that decision onto the still-open server interaction so its
+    // history is the allow/deny the agent received, not the cancel the cancelled server await would
+    // otherwise leave. A withdrawal (agent gone) has nothing to record, and a server id that never
+    // arrived (nothing to answer) is skipped. Best-effort — a failure leaves the abandonment path,
+    // fired by the cancel below, to resolve the server as it did before.
+    async Task ResolveServer(AcpInteractionRequest request, TaskCompletionSource<string> serverId, PermissionSettlement settlement, AcpInteractionDecision mapped) {
+        if (resolveServer is null || settlement.Outcome == PermissionSettlements.Withdrawn || !serverId.Task.IsCompletedSuccessfully)
+            return;
+        try { await resolveServer(request.AcpSessionId, serverId.Task.Result, mapped).ConfigureAwait(false); }
+        catch { /* the cancel's abandonment path still resolves the server */ }
     }
 
     PermissionPendingDto? BuildPending(string requestId, AcpInteractionRequest request) =>
@@ -85,7 +103,8 @@ internal sealed class AcpPermissionSurface(
             request.ToolName ?? "", outcome, source));
 
     static AcpInteractionDecision MapSettlement(PermissionSettlement settlement, IReadOnlyList<AcpInteractionOption> options) {
-        if (settlement.Outcome == PermissionSettlements.Allow && PickAllow(options, IsTrue(settlement.Decision.ApplyPermissions)) is { } allow)
+        var preferAlways = settlement.Decision.ApplyPermissions is { } apply && apply.IsTrue;
+        if (settlement.Outcome == PermissionSettlements.Allow && PickAllow(options, preferAlways) is { } allow)
             return new AcpInteractionDecision(allow.Kind ?? "allow", allow.OptionId, allow.Label, null, null, null);
 
         // A deny (or a withdrawal, or an allow with no once-scoped option to point at): the daemon's
@@ -112,8 +131,6 @@ internal sealed class AcpPermissionSurface(
 
     static bool IsAffirmative(string outcome) =>
         outcome is "allow" or "allow_once" or "allow_always" or "answered";
-
-    static bool IsTrue(JsonElement? value) => value is { ValueKind: JsonValueKind.True };
 
     static void Observe(Task task) => _ = task.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
 }

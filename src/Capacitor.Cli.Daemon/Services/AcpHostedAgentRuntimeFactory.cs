@@ -65,7 +65,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         _permissionBroker is { } broker
             ? new AcpPermissionSurface(
                     broker, descriptor.Vendor, connection.RequestAcpInteractionAsync,
-                    _permissionDecisionLog, _timeProvider).RequestAsync
+                    connection.ResolveAcpInteractionAsync, _permissionDecisionLog, _timeProvider).RequestAsync
             : connection.RequestAcpInteractionAsync;
 
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =

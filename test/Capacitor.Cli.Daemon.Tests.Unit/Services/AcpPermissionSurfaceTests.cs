@@ -37,6 +37,8 @@ public class AcpPermissionSurfaceTests {
     static Func<AcpInteractionRequest, Action<string>?, CancellationToken, Task<AcpInteractionDecision>> AnsweringServer(AcpInteractionDecision decision) =>
         (_, _, _) => Task.FromResult(decision);
 
+    sealed record ServerResolution(string SessionId, string RequestId, AcpInteractionDecision Decision);
+
     static async Task<PermissionPendingDto> NextPending(ChannelReader<PermissionStreamItem> reader, Func<PermissionPendingDto, bool>? until = null) {
         until ??= _ => true;
         while (await reader.WaitToReadAsync())
@@ -96,6 +98,66 @@ public class AcpPermissionSurfaceTests {
     }
 
     [Test]
+    public async Task DesktopAllow_ResolvesTheServerWithTheSameDecision() {
+        // The desktop wins; the server interaction is still open. Its history must record the
+        // mapped allow (option and all), not the cancel a bare abandonment would leave.
+        var resolutions = new List<ServerResolution>();
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(
+            broker, "copilot", BlockingServer(serverRequestId: "srv-7"),
+            resolveServer: (s, r, d) => { resolutions.Add(new ServerResolution(s, r, d)); return Task.CompletedTask; });
+
+        var task = surface.RequestAsync(Request(), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, new PermissionDecision("allow", null, null), "allow", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(resolutions).HasSingleItem();
+        await Assert.That(resolutions[0].SessionId).IsEqualTo("sess-1");
+        await Assert.That(resolutions[0].RequestId).IsEqualTo("srv-7");
+        await Assert.That(resolutions[0].Decision.Outcome).IsEqualTo("allow_once");
+        await Assert.That(resolutions[0].Decision.SelectedOptionId).IsEqualTo("opt-allow");
+    }
+
+    [Test]
+    public async Task DesktopDeny_ResolvesTheServerWithADeny() {
+        var resolutions = new List<ServerResolution>();
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(
+            broker, "copilot", BlockingServer(serverRequestId: "srv-8"),
+            resolveServer: (s, r, d) => { resolutions.Add(new ServerResolution(s, r, d)); return Task.CompletedTask; });
+
+        var task = surface.RequestAsync(Request(), CancellationToken.None);
+        var pending = await NextPending(reader);
+        broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, "deny", PermissionSettlements.SourceApp);
+        await task;
+
+        await Assert.That(resolutions).HasSingleItem();
+        await Assert.That(resolutions[0].Decision.Outcome).IsEqualTo("deny");
+        await Assert.That(resolutions[0].Decision.SelectedOptionId).IsNull();
+    }
+
+    [Test]
+    public async Task AgentWithdrawal_DoesNotResolveTheServer() {
+        // The agent is gone; there is no answer to record, and the server's own session-end cleanup owns it.
+        var resolutions = new List<ServerResolution>();
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var surface = new AcpPermissionSurface(
+            broker, "copilot", BlockingServer(serverRequestId: "srv-9"),
+            resolveServer: (s, r, d) => { resolutions.Add(new ServerResolution(s, r, d)); return Task.CompletedTask; });
+
+        var task = surface.RequestAsync(Request(), CancellationToken.None);
+        await NextPending(reader);
+        broker.WithdrawForAgent("agent-1");
+        await task;
+
+        await Assert.That(resolutions).IsEmpty();
+    }
+
+    [Test]
     public async Task ServerRequestId_IsCorrelatedOntoTheLocalCard() {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
@@ -117,7 +179,7 @@ public class AcpPermissionSurfaceTests {
         var log = new PermissionDecisionLog(tmp.Path, NullLogger.Instance);
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
-        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), log);
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), decisionLog: log);
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
         var pending = await NextPending(reader);
