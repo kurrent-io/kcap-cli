@@ -21,6 +21,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _lease = new();
+    // Same reason as _sessionEndedChanges below: never disposed, so a row revision landing after
+    // teardown cannot throw. Cards unsubscribes from it when the pane is torn down.
+    readonly BehaviorSubject<string?> _sessionIds;
     string? _leasedSession;
     AgentRow _row;
 
@@ -101,7 +104,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _row = row;
         _access = access;
         AgentId = row.Id;
-        Cards = new PendingCardsViewModel(row.Id, permissions, Observable.Return<string?>(null));
+        _sessionIds = new BehaviorSubject<string?>(row.SessionId);
+        Cards = new PendingCardsViewModel(row.Id, AgentOrigin.Remote, _sessionIds, permissions, Observable.Return<string?>(null));
         Apply(row);
 
         directory.Rows.Connect()
@@ -145,6 +149,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     void Apply(AgentRow row) {
         _row = row;
+        if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
         StatusText = row.Status;

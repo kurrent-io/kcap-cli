@@ -116,13 +116,16 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
         presence.Select(p => p.Dto).Subscribe(dto => _latestDto = dto).DisposeWith(_disposables);
 
+        // Replays through presence, which the cards pipeline relies on: its filter admits nothing
+        // until a first session id arrives.
+        var sessionIds = presence.Select(p => p.Dto?.SessionId).DistinctUntilChanged();
+
         // An ACP-hosted agent's question reaches the app only over the server lane, in this
         // session's chat group, local agent or not — so a local workspace joins it too. A local
         // agent the server never registered answers Denied; nothing here reads the verdict, which
         // is what keeps that invisible.
         if (access is not null)
-            presence.Select(p => p.Dto?.SessionId)
-                .DistinctUntilChanged()
+            sessionIds
                 .Subscribe(sessionId => _lease.Disposable = sessionId is null ? Disposable.Empty : access.Acquire(sessionId))
                 .DisposeWith(_disposables);
 
@@ -148,7 +151,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
                     ? new TerminalChatInput(Terminal)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
-                Chat = new ChatTabViewModel(agentId, daemon, input, projection, opener, time, permissions, note);
+                Chat = new ChatTabViewModel(agentId, daemon, input, projection, opener, time, permissions, note, sessionIds);
             })
             .DisposeWith(_disposables);
 

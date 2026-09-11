@@ -9,10 +9,10 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// The NEEDS YOU cards pipeline for one agent, off the shared permission cache: filtered by
-/// agent, marshalled to the UI thread, and rendered as one of the three card kinds. Shared by
-/// ChatTabViewModel (which folds Requests into its own tool-row marks) and hosted on its own for
-/// a session with no chat pane.
+/// The NEEDS YOU cards pipeline for one workspace, off the shared permission cache: filtered by
+/// lane and identity, marshalled to the UI thread, and rendered as one of the three card kinds.
+/// Shared by ChatTabViewModel (which folds Requests into its own tool-row marks) and hosted on its
+/// own for a session with no chat pane.
 public sealed class PendingCardsViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _disposables = new();
 
@@ -24,12 +24,28 @@ public sealed class PendingCardsViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
     public bool HasPendingCards => _hasPendingCards.Value;
 
-    public PendingCardsViewModel(string agentId, IPermissionService permissions, IObservable<string?> root) {
+    /// <param name="sessionId">
+    /// The owning workspace's session id as it resolves; must replay its current value on
+    /// subscribe, since the filter produces nothing until the first one arrives.
+    /// </param>
+    public PendingCardsViewModel(
+            string agentId, AgentOrigin origin, IObservable<string?> sessionId,
+            IPermissionService permissions, IObservable<string?> root) {
+        // Lane and identity, never the agent id alone: an unproven local/remote pair shares one id
+        // while carrying two different agents, so the id alone would render the other lane's card
+        // under this header, and answering it would act on a process the user never opened. A
+        // server item belongs to whichever workspace holds its session — an ACP question for a
+        // local agent included.
+        var admits = sessionId.Select(sid => (Func<PendingPermissionRequest, bool>)(p => p.Lane switch {
+            PermissionLane.Local => origin == AgentOrigin.Local && p.AgentId == agentId,
+            _ => sid is { Length: > 0 } && p.SessionId == sid,
+        }));
+
         // ObserveOn BEFORE the binding operator: the cache is mutated on the service's
         // background continuations (IPermissionService.Pending's own doc comment).
         Requests = permissions.Pending
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Filter(p => p.AgentId == agentId);
+            .Filter(admits);
 
         var cards = Requests
             .Transform(p => p switch {

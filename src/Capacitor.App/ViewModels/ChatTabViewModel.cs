@@ -212,7 +212,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
     public ChatTabViewModel(
             string agentId, IDaemonClientService daemon, ChatInput input,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
-            string? unavailableNote = null) {
+            string? unavailableNote = null, IObservable<string?>? sessionId = null) {
         _agentId = agentId;
         _input = input;
         _disposables.Add(input);
@@ -224,7 +224,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _lifetimeToken = _lifetime.Token;
         _phase = projection is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
-        Cards = new PendingCardsViewModel(agentId, permissions, _rootSubject);
+        Cards = new PendingCardsViewModel(
+            agentId, AgentOrigin.Local, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject);
         _hasPendingCards = Cards.WhenAnyValue(c => c.HasPendingCards)
             .ToProperty(this, x => x.HasPendingCards, initialValue: Cards.HasPendingCards)
             .DisposeWith(_disposables);
