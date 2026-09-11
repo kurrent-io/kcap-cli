@@ -551,16 +551,19 @@ public class AgentAttachClientTests {
         var sinkCalls = 0;
         var contexts = new List<string>();
         var attachedObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pumpParked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new AgentAttachClient(server.Path, AgentId,
             (_, _, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
-            async (_, ct) => await Task.Delay(Timeout.Infinite, ct),   // parks the pump; only Dispose unblocks it
+            // Parks the pump; only Dispose unblocks it. Signals on ENTRY, so the wait below is on
+            // the pump actually being inside the callback rather than on it having had time to be.
+            async (_, ct) => { pumpParked.TrySetResult(); await Task.Delay(Timeout.Infinite, ct); },
             (c, _) => { Interlocked.Increment(ref sinkCalls); lock (contexts) contexts.Add(c); throw new InvalidOperationException("sink bug"); });
         var run = client.RunAsync(80, 24, CancellationToken.None);
         await server.AcceptAndPumpInboundAsync();
         await server.SendAttachedAsync(AgentId, []);
         await attachedObserved.Task;                  // Windows RST guard — see comment above
         await server.SendStdoutAsync([1]);
-        await Task.Delay(50);                                       // pump is now parked inside the callback
+        await pumpParked.Task;
 
         server.CloseConnection();
         await client.SendInputAsync([1, 2, 3]);                     // the only producer that can possibly fail right now
@@ -588,16 +591,19 @@ public class AgentAttachClientTests {
         var sink = new RecordingSink();
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var attachedObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pumpBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new AgentAttachClient(server.Path, AgentId,
             (_, _, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
-            async (_, _) => { await gate.Task; },        // blocks the pump, then returns normally (no fault)
+            // Blocks the pump, then returns normally (no fault). Signals on ENTRY, so the wait below
+            // is on the pump actually being inside the callback rather than on elapsed time.
+            async (_, _) => { pumpBlocked.TrySetResult(); await gate.Task; },
             sink.Callback);
         var run = client.RunAsync(80, 24, CancellationToken.None);
         await server.AcceptAndPumpInboundAsync();
         await server.SendAttachedAsync(AgentId, []);
         await attachedObserved.Task;                      // Windows RST guard — see comment above
         await server.SendStdoutAsync([1]);
-        await Task.Delay(50);                             // pump is now blocked inside the callback, gate not yet open
+        await pumpBlocked.Task;                           // inside the callback, gate not yet open
 
         server.CloseConnection();
         await client.SendInputAsync([9]);                 // the writer claims ConnectionLost, closes the local transport

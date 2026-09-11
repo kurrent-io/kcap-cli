@@ -124,11 +124,13 @@ public class ProcessRunnerTests {
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             runner.RunAsync(
-                "/bin/sh", ["-c", $"sleep 0.3; touch {marker}"],
+                "/bin/sh", ["-c", $"sleep 2; touch {marker}"],
                 new RunOptions(CancelMode: CancelMode.KillTree), cts.Token));
 
-        // Killed before it could reach `touch` — unlike AbandonWait, it never gets there.
-        await Task.Delay(TimeSpan.FromSeconds(1));
+        // Killed before it could reach `touch` — unlike AbandonWait, it never gets there. The child
+        // sleeps longer than the kill needs and the wait outlasts the child, so a kill that failed
+        // shows up as a marker rather than as a margin this races.
+        await Task.Delay(TimeSpan.FromSeconds(4));
         await Assert.That(File.Exists(marker)).IsFalse();
     }
 
