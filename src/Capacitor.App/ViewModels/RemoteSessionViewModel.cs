@@ -16,6 +16,8 @@ public enum RemoteSessionAccess { Connecting, Ready, Denied, Offline, NoSession 
 /// Open in web. Access is the server's explicit signal — Ready only after the watch and the chat
 /// join both succeeded — so an empty pane is "no cards", never "not allowed".
 public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
+    internal const string OriginChangedNote = "This agent is now hosted locally — open it from the rail";
+
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _lease = new();
@@ -55,12 +57,20 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
 
+    // Same reason as _sessionEndedChanges above: Stop's canExecute reads the flag through a subject.
+    readonly BehaviorSubject<bool> _originChangedChanges = new(false);
+
     bool _originChangedToLocal;
     /// The local daemon has proven this row is its twin: the remote row is gone but the agent is
     /// not, so the window replaces this host with the local workspace for the same id.
     public bool OriginChangedToLocal {
         get => _originChangedToLocal;
-        private set => this.RaiseAndSetIfChanged(ref _originChangedToLocal, value);
+        private set {
+            if (_originChangedToLocal == value) return;
+            this.RaiseAndSetIfChanged(ref _originChangedToLocal, value);
+            this.RaisePropertyChanged(nameof(AccessNote));
+            _originChangedChanges.OnNext(value);
+        }
     }
 
     RemoteSessionAccess _accessState = RemoteSessionAccess.NoSession;
@@ -77,7 +87,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// unanswerable — nobody is waiting on them any more.
     public bool ShowsCards => Access == RemoteSessionAccess.Ready && !SessionEnded;
 
-    public string AccessNote => Access switch {
+    public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
@@ -101,9 +111,17 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     if (change.Key != row.Key) continue;
                     if (change.Reason == ChangeReason.Remove) {
                         // A local row under the same id means the local daemon proved the twin and
-                        // took the agent over: the row ended, the session did not.
-                        if (directory.Rows.Lookup($"local:{row.Id}").HasValue) OriginChangedToLocal = true;
-                        else SessionEnded = true;
+                        // took the agent over: the row ended, the session did not. The directory
+                        // publishes that add and this removal in one edit, so the local row is
+                        // already in the cache here — a later one would read as an ended session.
+                        if (directory.Rows.Lookup($"local:{row.Id}").HasValue) {
+                            OriginChangedToLocal = true;
+                            // Nothing is answerable through a released lease, and the agent is not
+                            // this host's to stop any more.
+                            Access = RemoteSessionAccess.NoSession;
+                        } else {
+                            SessionEnded = true;
+                        }
                         Release();
                         continue;
                     }
@@ -115,7 +133,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         OpenInWebCommand = ReactiveCommand.Create(() => actions.OpenInWebRemote(row.Id));
         var stopKey = AgentActionService.StopKey(AgentOrigin.Remote, row.Id);
         var canStop = _sessionEndedChanges
-            .CombineLatest(actions.StopsInFlight, (ended, inFlight) => !ended && !inFlight.Contains(stopKey));
+            .CombineLatest(_originChangedChanges, actions.StopsInFlight,
+                (ended, movedLocal, inFlight) => !ended && !movedLocal && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);

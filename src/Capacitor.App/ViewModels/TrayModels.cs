@@ -26,7 +26,7 @@ public static class CheckoutLabel {
         IsMain(checkout, repoRoot) ? "main checkout" : PlatformPaths.Leaf(checkout);
 }
 
-// StopEnabled: false while AgentActionService.StopsInFlight contains Id. Kind is the wire
+// StopEnabled: false while AgentActionService.StopsInFlight contains Key. Kind is the wire
 // KindText spelling (agent|review|review-flow) — carried through so the Stop click handler can
 // pass it to AgentActionService.RequestStop, which decides protected-ness. Origin (default
 // Local) is threaded through to the same RequestStop call so a remote entry's stop reaches the

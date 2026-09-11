@@ -101,7 +101,10 @@ public sealed class SessionAttentionTracker : IDisposable {
             foreach (var (sid, s) in _sessions.ToArray()) {
                 s.Failures = 0;
                 if (!connected) { s.Attempt++; s.Timer?.Dispose(); s.Timer = null; continue; }
-                if (s.Dirty || s.Ids.Count > 0) Schedule(sid, s, TimeSpan.Zero);
+                // A set that outlived the disconnect is owed a reconciliation as much as a dirty
+                // session is, and the dirty mark is the only record of that: without it, a response
+                // superseding the one scheduled here would leave a stale set with nothing to refill it.
+                if (s.Dirty || s.Ids.Count > 0) { s.Dirty = true; Schedule(sid, s, TimeSpan.Zero); }
             }
         }
     }

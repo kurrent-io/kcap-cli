@@ -97,17 +97,16 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
 
         TogglePauseCommand = ReactiveCommand.Create<bool>(pause.RequestToggle);
         StopAgentCommand = ReactiveCommand.Create<string>(key => {
+            if (ParseKey(key) is not { } clicked) return;
             var entry = EntryFor(key);
-            var id = entry?.Id ?? IdFromKey(key);
-            actions.RequestStop(id, entry?.Label ?? id, entry?.Kind ?? "", entry?.Origin ?? AgentOrigin.Local);
+            actions.RequestStop(clicked.Id, entry?.Label ?? clicked.Id, entry?.Kind ?? "", clicked.Origin);
         });
         // Same origin dispatch as StopAgentCommand above: a remote entry's URL is the app's own
         // server, never the local daemon's snapshot — see AgentActionService.OpenInWebRemote.
         OpenInWebCommand = ReactiveCommand.Create<string>(key => {
-            var entry = EntryFor(key);
-            var id = entry?.Id ?? IdFromKey(key);
-            if (entry?.Origin == AgentOrigin.Remote) actions.OpenInWebRemote(id);
-            else actions.OpenInWeb(id);
+            if (ParseKey(key) is not { } clicked) return;
+            if (clicked.Origin == AgentOrigin.Remote) actions.OpenInWebRemote(clicked.Id);
+            else actions.OpenInWeb(clicked.Id);
         });
         OpenMainWindowCommand = ReactiveCommand.Create(openMainWindow ?? (() => { }));
         QuitCommand = ReactiveCommand.Create(quit ?? (() => { }));
@@ -189,9 +188,20 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
 
     TrayAgentEntry? EntryFor(string key) => MenuModel.Agents.FirstOrDefault(a => a.Key == key);
 
-    /// The agent a key names, for the entry that left the model between the rebuild that rendered
-    /// it and the click. A parameter with no lane prefix reads as the whole id.
-    static string IdFromKey(string key) => key[(key.IndexOf(':') + 1)..];
+    /// The lane and agent a TrayAgentEntry.Key names. The entry can leave the model between the
+    /// rebuild that rendered it and the click, so the lane is read from the key rather than from
+    /// the entry: defaulting it would send a remote row's stop to the local socket, which on a
+    /// same-id pair is a different agent. Null for anything that is not a key, which acts on nothing.
+    static (AgentOrigin Origin, string Id)? ParseKey(string key) {
+        var split = key.IndexOf(':');
+        if (split <= 0 || split == key.Length - 1) return null;
+        AgentOrigin? origin = key[..split] switch {
+            nameof(AgentOrigin.Local) => AgentOrigin.Local,
+            nameof(AgentOrigin.Remote) => AgentOrigin.Remote,
+            _ => null,
+        };
+        return origin is { } lane ? (lane, key[(split + 1)..]) : null;
+    }
 
     /// IPauseController owns the drop-while-busy rule.
     public void RequestPauseRefresh() => _pause.RequestRefresh();

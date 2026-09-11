@@ -983,9 +983,11 @@ public class TrayViewModelTests {
             var actions = new AgentActionService(ops, new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject,
                 CancellationToken.None, NeverConfirm.Confirm, lane: lane);
             var consent = new FakeConsentService();
-            var remote = Observable.Return(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+            using var remote = new BehaviorSubject<RemoteTraySummary>(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
                 AttentionEntries: [new TrayAgentEntry("a", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)]));
             using var vm = new TrayViewModel(service, pause, actions, consent, remote: remote);
+            var states = new StopStateRecorder();
+            using var sub = actions.StopsInFlight.Subscribe(states.Add);
 
             var agents = new List<AgentStatusDto> {
                 new("a", "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null, null),
@@ -997,6 +999,17 @@ public class TrayViewModelTests {
             await vm.StopAgentCommand.Execute("Remote:a").ToTask();
 
             await WaitUntilAsync(() => lane.Stops.Contains("a"), what: "the hub stop");
+            await Assert.That(ops.StopCalls).IsEqualTo(0);
+            await WaitUntilAsync(() => states[^1].Count == 0, what: "the first stop to settle");
+
+            // The entry can leave the model between the rebuild that rendered it and the click; the
+            // key is still the only thing that says which agent was named.
+            remote.OnNext(new RemoteTraySummary(0, true));
+            await Assert.That(vm.MenuModel.Agents.Select(e => e.Key)).IsEquivalentTo(["Local:a"], CollectionOrdering.Matching);
+
+            await vm.StopAgentCommand.Execute("Remote:a").ToTask();
+
+            await WaitUntilAsync(() => lane.Stops.Count == 2, what: "the hub stop for the entry that left the model");
             await Assert.That(ops.StopCalls).IsEqualTo(0);
         });
     }

@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Remote.Models;
@@ -163,6 +164,10 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.SessionEnded).IsFalse();
+            // Nothing is answerable or stoppable through the released lease.
+            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo(RemoteSessionViewModel.OriginChangedNote);
+            await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "the lease released");
             await vm.TeardownAsync();
         });

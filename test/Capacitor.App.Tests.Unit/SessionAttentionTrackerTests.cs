@@ -106,6 +106,33 @@ public class SessionAttentionTrackerTests {
         await Assert.That(h.Sessions).DoesNotContain("s1");
     }
 
+    /// The reconciliation a reconnect schedules is owed to the set that outlived the disconnect, so
+    /// a response superseding it has to leave another one armed rather than a stale set.
+    [Test]
+    public async Task A_response_racing_the_reconnects_reconciliation_leaves_one_still_owed() {
+        using var h = new Harness();
+        h.Connect();
+        h.Detail = _ => Pending("r1", "r2");
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "attention on");
+
+        h.Drop();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.DetailTask = async _ => { await gate.Task; return Pending("r1", "r2"); };
+        h.Connect(epoch: 2);
+        await WaitUntilAsync(() => h.Fetches == 2, what: "the reconnect's reconciliation");
+
+        h.Lane.PermissionRespondedSubject.OnNext(new PermissionRespondedPing("s1", "r1"));
+        gate.SetResult();
+        h.DetailTask = null;
+        h.Detail = _ => Pending();
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+
+        await WaitUntilAsync(() => h.Fetches == 3, what: "the re-armed reconciliation");
+        await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "the fetched snapshot applied");
+    }
+
     [Test]
     public async Task A_response_naming_an_unknown_id_re_reconciles() {
         using var h = new Harness();
