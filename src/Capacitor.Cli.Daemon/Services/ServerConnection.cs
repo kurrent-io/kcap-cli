@@ -1115,16 +1115,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         return await AwaitInteractionDecisionAsync(request, requestId, ct);
     }
 
-    /// <summary>Awaits the user's decision for <paramref name="requestId"/>. The server holds an
-    /// interaction open until it is answered — it has no deadline of its own — so when this side stops
-    /// waiting (the caller's deadline, or teardown) the entry is resolved as cancelled here, best-effort,
-    /// before the cancellation propagates; otherwise the pending card outlives the request.</summary>
+    /// <summary>Awaits the user's decision for <paramref name="requestId"/>. The server keeps an
+    /// interaction open far longer than any caller here waits, so when this side stops waiting on a live
+    /// connection the entry is resolved as cancelled, best-effort, before the cancellation propagates —
+    /// otherwise the pending card outlives the request. A wait cancelled by daemon shutdown is left to
+    /// the server's session-end cleanup: the hub is already stopping and the send could not land.</summary>
     internal async Task<AcpInteractionDecision> AwaitInteractionDecisionAsync(
             AcpInteractionRequest request, string requestId, CancellationToken ct) {
         try {
             return await _pendingAcpInteractions.AwaitDecisionAsync(requestId, ct);
         } catch (OperationCanceledException) {
-            _ = ResolveAbandonedInteractionAsync(request, requestId);
+            if (!_ct.IsCancellationRequested)
+                _ = ResolveAbandonedInteractionAsync(request, requestId);
             throw;
         }
     }

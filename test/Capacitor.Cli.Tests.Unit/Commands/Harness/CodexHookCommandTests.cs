@@ -585,7 +585,8 @@ public class CodexHookCommandTests : IDisposable {
 
     /// <summary>In an envelope-sourced hosted session the app-server runtime answers approvals over
     /// Codex's own requestApproval, with a deadline. The hook must step aside — a bridge round-trip
-    /// here would answer first through a channel with no deadline. Same marker guard-1 uses.</summary>
+    /// here would answer first through a channel with no deadline. Keyed on the same marker that
+    /// suppresses the hook's transcript watcher for such sessions.</summary>
     [Test, NotInParallel]
     public async Task PermissionRequest_in_an_envelope_sourced_hosted_session_yields_to_codex_without_posting_to_the_bridge() {
         using var bridge = WireMockServer.Start();
@@ -594,20 +595,15 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
         var hosted = new HostedAgent(null, IsRendered: true, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
-        var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
+        using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", "1");
         using var capture = ConsoleOutput.StartCapture();
-        try {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
-                .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
+            .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
 
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(capture.GetCapturedOutput().Trim()).IsEqualTo("{}");
-            await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput().Trim()).IsEqualTo("{}");
+        await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
     }
 
     [Test, NotInParallel]
