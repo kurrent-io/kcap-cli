@@ -190,6 +190,34 @@ public class ServerPermissionFeedTests {
         await Assert.That(h.View.Count).IsEqualTo(0);
     }
 
+    /// A same-user reconnect moves neither the session's generation nor the lane epoch, and the
+    /// live sequence only protects newer additions — so only the attempt can stop the superseded
+    /// fetch from handing back the card the reconnect's own reconciliation removed.
+    [Test]
+    public async Task A_superseded_fetch_cannot_restore_what_the_reconnects_reconciliation_removed() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stillListsIt = DetailWith("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}}]""");
+        h.Detail = async _ => { await gate.Task; return stillListsIt; };
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "p1", "Bash", null, null));
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the first fetch");
+        await Assert.That(h.View.Lookup("server:p1").HasValue).IsTrue();
+
+        // The drop and reconnect re-establish access as the SAME user, and the fetch that follows
+        // is authoritative that the request settled while the hub was down.
+        h.Detail = _ => Task.FromResult(DetailWith("[]"));
+        h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        h.Connect();
+        await WaitUntilAsync(() => !h.View.Lookup("server:p1").HasValue, what: "the reconnect's fetch removed the card");
+
+        gate.SetResult();
+        await Task.Delay(100);
+
+        await Assert.That(h.View.Lookup("server:p1").HasValue).IsFalse();
+    }
+
     [Test]
     public async Task An_identity_change_clears_the_server_lane() {
         using var h = new Harness();

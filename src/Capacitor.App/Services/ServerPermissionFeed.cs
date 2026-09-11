@@ -7,12 +7,17 @@ namespace Capacitor.App.Services;
 /// Feeds the permission cache's server lane: live pushes for sessions the app has joined, a
 /// reconciliation of each session's event stream every time its access is established, and the
 /// org-wide settlement pings. Every reconciliation carries the marker it started under, so a clear
-/// or a revocation landing mid-fetch wins and a push landing mid-fetch outlives the snapshot.
+/// or a revocation landing mid-fetch wins and a push landing mid-fetch outlives the snapshot — and
+/// the session's attempt number, because a same-user reconnect moves neither the cache generation
+/// nor the lane epoch: without it an older fetch still in flight re-adds what the reconnect's own
+/// reconciliation just proved gone.
 public sealed class ServerPermissionFeed : IDisposable {
     readonly PermissionService _permissions;
     readonly SessionDetailReader _readDetail;
     readonly CompositeDisposable _subscriptions = new();
     readonly CancellationTokenSource _lifetime = new();
+    readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
+    readonly Lock _attemptLock = new();
     string? _subject;
     bool _disposed;
 
@@ -40,21 +45,39 @@ public sealed class ServerPermissionFeed : IDisposable {
         // below take the permission cache's — so neither runs on the publishing thread.
         access.Transitions
             .Subscribe(t => {
+                // The bump happens where the transition is observed, ahead of the dispatch below,
+                // so a transition can never be overtaken by the dispatch it precedes.
                 switch (t.State) {
-                    case SessionAccessState.Established: _ = Task.Run(() => ReconcileAsync(t.SessionId)); break;
-                    case SessionAccessState.Denied: _ = Task.Run(() => permissions.DropServerForSession(t.SessionId)); break;
+                    case SessionAccessState.Established: {
+                        var attempt = Bump(t.SessionId);
+                        _ = Task.Run(() => ReconcileAsync(t.SessionId, attempt));
+                        break;
+                    }
+                    case SessionAccessState.Denied: {
+                        Bump(t.SessionId);
+                        _ = Task.Run(() => permissions.DropServerForSession(t.SessionId));
+                        break;
+                    }
                 }
             }).DisposeWith(_subscriptions);
     }
 
-    async Task ReconcileAsync(string sessionId) {
+    int Bump(string sessionId) {
+        lock (_attemptLock) return _attempts[sessionId] = _attempts.GetValueOrDefault(sessionId) + 1;
+    }
+
+    bool IsCurrent(string sessionId, int attempt) {
+        lock (_attemptLock) return _attempts.GetValueOrDefault(sessionId) == attempt;
+    }
+
+    async Task ReconcileAsync(string sessionId, int attempt) {
         var marker = _permissions.SessionMarker(sessionId);
         try {
             var fetch = await _readDetail(sessionId, _lifetime.Token).ConfigureAwait(false);
             // A fetch that merely failed says nothing about the session, so its cards stand; only
             // a 404 is evidence there is nothing to hold.
             if (fetch.Detail is null) {
-                if (fetch.NotFound) _permissions.ReplaceServerForSession(sessionId, [], marker);
+                if (fetch.NotFound && IsCurrent(sessionId, attempt)) _permissions.ReplaceServerForSession(sessionId, [], marker);
                 return;
             }
             var reconciled = InterruptReconciliation.FromDetail(fetch.Detail);
@@ -63,6 +86,9 @@ public sealed class ServerPermissionFeed : IDisposable {
                 : [.. reconciled.Pending.Where(p => p.IsAnswerableOverHttp)
                     .Select(p => PendingPermissionRequest.FromReconciled(sessionId, p))
                     .OfType<PendingPermissionRequest>()];
+            // Checked where the marker is used, not before the fetch: a newer attempt starting
+            // between the two would otherwise still lose to this one.
+            if (!IsCurrent(sessionId, attempt)) return;
             _permissions.ReplaceServerForSession(sessionId, items, marker);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
@@ -76,5 +102,7 @@ public sealed class ServerPermissionFeed : IDisposable {
         _subscriptions.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();
+        // Every in-flight fetch now reads as superseded rather than applying to a disposed cache.
+        lock (_attemptLock) _attempts.Clear();
     }
 }
