@@ -183,25 +183,40 @@
                                                                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                                                                 <Ellipse Grid.Column="0" Width="7" Height="7" Fill="{Binding StatusDot}"
                                                                                          VerticalAlignment="Top" Margin="0,4,0,0" />
-                                                                                <StackPanel Grid.Column="1" Spacing="2">
-                                                                                    <!-- Star column bounds the title so CharacterEllipsis can actually
-                                                                                         trim it; a horizontal StackPanel gives Primary unbounded width
-                                                                                         and CharacterEllipsis never engages, badge or no badge. -->
-                                                                                    <Grid ColumnDefinitions="*,Auto">
-                                                                                        <TextBlock Grid.Column="0" Text="{Binding Primary}" FontSize="13" LineHeight="18"
-                                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                                        <Border Grid.Column="1"
-                                                                                                IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                <StackPanel Grid.Column="1" Spacing="3">
+                                                                                    <!-- Title stands alone on its line; a plain TextBlock in this vertical
+                                                                                         StackPanel is width-bounded, so CharacterEllipsis engages. When the
+                                                                                         row has no title the chips line below is the row's identity. -->
+                                                                                    <TextBlock Text="{Binding Primary}" FontSize="13" LineHeight="18"
+                                                                                               IsVisible="{Binding HasTitle}"
+                                                                                               Foreground="{StaticResource KcapTextBrush}"
+                                                                                               TextTrimming="CharacterEllipsis" />
+                                                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                                        <!-- Vendor chip: web-UI palette via VendorChipPalette. -->
+                                                                                        <Border IsVisible="{Binding HasVendor}" CornerRadius="999"
+                                                                                                Padding="6,1" VerticalAlignment="Center"
+                                                                                                Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
+                                                                                            <TextBlock Text="{Binding Vendor}" FontSize="10" FontWeight="SemiBold"
+                                                                                                       Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
+                                                                                        </Border>
+                                                                                        <!-- Model chip: one info tint for every model, matching the web UI. -->
+                                                                                        <Border IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
+                                                                                                Padding="6,1" VerticalAlignment="Center"
+                                                                                                Background="{StaticResource KcapInfoDimBrush}">
+                                                                                            <TextBlock Text="{Binding Model}" FontSize="10"
+                                                                                                       Foreground="{StaticResource KcapInfoBrush}"
+                                                                                                       TextTrimming="CharacterEllipsis" />
+                                                                                        </Border>
+                                                                                        <Border IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
                                                                                                 Background="{StaticResource KcapSurfaceRaisedBrush}"
-                                                                                                CornerRadius="3" Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
+                                                                                                CornerRadius="3" Padding="4,0" VerticalAlignment="Center">
                                                                                             <TextBlock Text="{Binding MachineBadge}" FontSize="10"
                                                                                                        Foreground="{StaticResource KcapFaintBrush}" />
                                                                                         </Border>
-                                                                                    </Grid>
-                                                                                    <TextBlock Text="{Binding Sub}" FontSize="11"
-                                                                                               Foreground="{StaticResource KcapFaintBrush}"
-                                                                                               TextTrimming="CharacterEllipsis" />
+                                                                                        <TextBlock Text="{Binding Meta}" FontSize="11" VerticalAlignment="Center"
+                                                                                                   Foreground="{StaticResource KcapFaintBrush}"
+                                                                                                   TextTrimming="CharacterEllipsis" />
+                                                                                    </StackPanel>
                                                                                 </StackPanel>
                                                                             </Grid>
                                                                         </DockPanel>

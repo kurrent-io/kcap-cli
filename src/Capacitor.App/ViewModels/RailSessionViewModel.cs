@@ -15,8 +15,17 @@ namespace Capacitor.App.ViewModels;
 /// point-in-time snapshot (SessionCardViewModel precedent).
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Id { get; }
-    public string Primary { get; }
-    public string Sub { get; }
+    /// The session title; null when the row has none, in which case the chips line stands alone.
+    public string? Primary { get; }
+    public bool HasTitle { get; }
+    /// The vendor key — both the chip's label and its palette lookup (VendorChipPalette).
+    public string Vendor { get; }
+    public bool HasVendor { get; }
+    /// The model in use; null when the daemon has not resolved one (then no model chip is shown).
+    public string? Model { get; }
+    public bool HasModel { get; }
+    /// The faint trailing line: any non-agent kind, a borrowed marker, and the age.
+    public string Meta { get; }
     public IBrush StatusDot { get; }
     public string Tooltip { get; }
     /// The daemon name badge for a remote row; null for a local one.
@@ -47,14 +56,17 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             Action<string> openLocal, Action<string> openRemote) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
-        var kindLine = row.Kind == "agent" ? row.Vendor : $"{row.Vendor} · {row.Kind}";
-        var vendorLine = row.WorkLocation == WorkLocationText.Borrowed ? $"{kindLine} · borrowed" : kindLine;
+        var kindExtra = row.Kind == "agent" ? null : row.Kind;
+        var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
         var age = UptimeFormat.Format(DateTime.UtcNow - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
 
-        Primary = row.Title ?? vendorLine;
-        Sub = row.Title is null
-            ? Join(row.Model, age)
-            : Join(vendorLine, row.Model, age);
+        Primary = string.IsNullOrEmpty(row.Title) ? null : row.Title;
+        HasTitle = Primary is not null;
+        Vendor = row.Vendor;
+        HasVendor = !string.IsNullOrEmpty(row.Vendor);
+        Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
+        HasModel = Model is not null;
+        Meta = Join(kindExtra, borrowed, age);
         StatusDot = SessionStatusDots.For(row.Status);
         Tooltip = Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
             row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
