@@ -1,5 +1,7 @@
+using System.Collections.Specialized;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using DynamicData;
@@ -104,6 +106,39 @@ public class PendingCardsViewModelTests {
 
             await WaitUntilAsync(() => local.PendingCards.Count == 1, what: "the card once the daemon is on the app's server");
         });
+    }
+
+    /// Thread identity, so deliberately not under WithImmediateRxScheduler: an immediate scheduler
+    /// delivers the flip on the thread that raised it and would prove nothing. The flag is a filter
+    /// input, so flipping it adds and removes rows of a collection the UI is bound to.
+    [Test]
+    public async Task A_scope_flip_off_the_ui_thread_changes_the_cards_on_the_ui_thread() {
+        var offUiThread = await DispatchAsync(async () => {
+            using var permissions = new FakePermissionService();
+            using var onAppServer = new BehaviorSubject<bool>(true);
+            using var local = new PendingCardsViewModel(
+                "a1", AgentOrigin.Local, Observable.Return<string?>("s1"), permissions,
+                Observable.Return<string?>(null), onAppServer);
+
+            var off = 0;
+            ((INotifyCollectionChanged)local.PendingCards).CollectionChanged +=
+                (_, _) => { if (!Dispatcher.UIThread.CheckAccess()) Interlocked.Increment(ref off); };
+
+            var item = PermissionEntries.ServerEntry("srv-1", sessionId: "s1");
+            item.AgentId = "a1";
+            permissions.Add(item);
+            await WaitUntilAsync(() => local.PendingCards.Count == 1, what: "the card on the app's own server");
+
+            await Task.Run(() => onAppServer.OnNext(false));
+            await WaitUntilAsync(() => local.PendingCards.Count == 0, what: "the card gone once the daemon is elsewhere");
+
+            await Task.Run(() => onAppServer.OnNext(true));
+            await WaitUntilAsync(() => local.PendingCards.Count == 1, what: "the card back");
+
+            return Volatile.Read(ref off);
+        });
+
+        await Assert.That(offUiThread).IsEqualTo(0);
     }
 
     [Test]

@@ -50,11 +50,16 @@ public sealed class PendingCardsViewModel : ReactiveObject, IDisposable {
         // under this header, and answering it would act on a process the user never opened. A
         // server item belongs to whichever workspace holds its session — an ACP question for a
         // local agent included.
+        // Marshalled like the cache below, because a predicate change moves cards too: the scope
+        // flag is published from the directory's own recompute and the session id from the daemon
+        // client's pump, and Filter emits the resulting add or remove on whichever thread delivered
+        // the predicate — straight into the bound collection and into Requests' subscribers.
         var admits = sessionId.CombineLatest(scoped, (sid, onAppServer) =>
             (Func<PendingPermissionRequest, bool>)(p => p.Lane switch {
                 PermissionLane.Local => origin == AgentOrigin.Local && p.AgentId == agentId,
                 _ => onAppServer && sid is { Length: > 0 } && p.SessionId == sid,
-            }));
+            }))
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         // ObserveOn BEFORE the binding operator: the cache is mutated on the service's
         // background continuations (IPermissionService.Pending's own doc comment).
