@@ -43,6 +43,10 @@ public class ServiceVerifyRetireTests {
         public bool Bootstrapped;
         public int? RunningPid = 4242;
 
+        /// <summary>When set (and the new id isn't bootstrapped yet), the new id's own Query answers
+        /// Loaded at this pid — a daemon that claimed the new name ahead of this install's own write.</summary>
+        public int? NewLabelLoadedPid;
+
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [new GeneratedFile("/fake/new.plist", OwnPlistContent)];
 
         public ServiceQuery Query(string serviceId, TimeSpan timeout) {
@@ -51,6 +55,8 @@ public class ServiceVerifyRetireTests {
                 return OldUnitInstalled
                     ? new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", 1111)
                     : new ServiceQuery(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
+            if (!Bootstrapped && NewLabelLoadedPid is not null)
+                return new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", NewLabelLoadedPid);
             return Bootstrapped
                 ? new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", RunningPid)
                 : new ServiceQuery(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
@@ -205,6 +211,43 @@ public class ServiceVerifyRetireTests {
         await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
         await Assert.That(manager.OldUnitInstalled).IsTrue();
         await Assert.That(manager.Calls.Any(c => c.StartsWith("uninstall:", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_daemon_that_claims_the_new_name_during_the_retire_is_contended_after_it() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var sut = Sut(manager, OldPlist("mine"), validatedPid: id => id == NewId && !manager.OldUnitInstalled ? 9999 : null);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
+        await Assert.That(manager.Calls).Contains($"uninstall:{OldId}");
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_live_owner_seen_by_the_pre_query_is_contended_not_cleared() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, NewLabelLoadedPid = 9999 };
+        var sut = Sut(manager, OldPlist("mine"), validatedPid: id => id == NewId && manager.Calls.Contains($"query:{NewId}") ? 9999 : null);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
+        await Assert.That(manager.Calls).DoesNotContain($"uninstall:{NewId}");
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
+    }
+
+    /// <summary>DaemonKill.KillValidatedOwner is never reached here — refuseLiveOwner returns
+    /// Contended right after the null check, before the kill call it would otherwise guard.</summary>
+    [Test]
+    public async Task A_live_owner_without_a_label_is_contended_not_killed() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var sut = Sut(manager, OldPlist("mine"), validatedPid: id => id == NewId && manager.Calls.Contains($"query:{NewId}") ? 9999 : null);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
     }
 
     [Test, NotInParallel]

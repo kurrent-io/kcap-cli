@@ -107,7 +107,14 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var retire   = DaemonCommands.ExtractFlagValue(args, "--retire");
+        string? retire;
+        try {
+            retire = DaemonCommands.ExtractFlagValue(args, "--retire");
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+
+            return 1;
+        }
         var retireId = retire is null ? null : DaemonStore.Sanitize(retire);
 
         // Sanitize maps a blank or all-invalid value to "daemon" — the fallback name, which usually

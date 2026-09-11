@@ -36,6 +36,24 @@ public class DaemonCommandsServiceInstallTests {
     }
 
     [Test, NotInParallel]
+    public async Task Retire_missing_a_value_at_the_end_of_args_is_rejected() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire"], true);
+        await Assert.That(exit).IsEqualTo(1);
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines.Any(l => l.Contains("--retire"))).IsTrue();
+    }
+
+    [Test, NotInParallel]
+    public async Task Retire_followed_by_another_flag_is_rejected() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "--verify"], true);
+        await Assert.That(exit).IsEqualTo(1);
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines.Any(l => l.Contains("--retire"))).IsTrue();
+    }
+
+    [Test, NotInParallel]
     public async Task Retire_without_replace_and_verify_is_rejected() {
         using var err = ConsoleOutput.StartErrorCapture();
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--verify", "--retire", "old"], true);

@@ -71,7 +71,8 @@ public static class VerifyExit {
     public const string StartGateDriftToken = "verify_start_gate_drift";
 
     /// <summary><c>--retire</c> refused to remove the named unit: its plist is unreadable, or it is
-    /// not pinned to the profile being installed. Nothing is touched. The stderr line
+    /// not pinned to the profile being installed. Nothing is written for the new id — its own
+    /// entry-time leftover-marker recovery already ran, as on every install. The stderr line
     /// <c>retire_reason=&lt;reason&gt;</c> names which.</summary>
     public const int RetireRefused = 30;
     public const string RetireRefusedToken = "verify_retire_refused";
@@ -117,10 +118,9 @@ sealed class ServiceVerify(
     /// residue, a recovery pre-phase (≤ the rollback reserve) — so for full headroom a caller should
     /// allow the sum. The one accepted exception is <see cref="KillWait"/> (≤ 5s) on the manual-owner
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
-    /// caller's 60s kill-timeout. <c>--retire</c> spends its OWN forward budget ahead of this bound
-    /// (never the install's) and takes its own <see cref="LockWait"/> on the retired label before
-    /// that, so a caller driving a rename must allow for one more forward budget PLUS one more lock
-    /// wait on top of the sum above.</summary>
+    /// caller's 60s kill-timeout. <c>--retire</c>'s own budget starts only once its own
+    /// <see cref="LockWait"/> is held, so a caller driving a rename must allow one more lock wait
+    /// PLUS one more forward budget on top of the sum above.</summary>
     public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
@@ -795,8 +795,14 @@ sealed class ServiceVerify(
             // Retire spends its OWN forward budget — never the install's — so a late-but-successful
             // retire can never starve the install's own readiness poll and strand the operator with
             // no daemon at all (a retired unit is never restored on the install's own timeout).
-            var retireBy = time.GetUtcNow() + _forwardBudget;
-            if (await RetireAsync(retireServiceId, spec, retireBy) is { } retireExit) return retireExit;
+            if (await RetireAsync(retireServiceId, spec) is { } retireExit) return retireExit;
+
+            // A daemon can claim the new name WHILE the old unit was being retired — the pre-retire
+            // snapshot above is stale by the time retirement settles.
+            if (validatedDaemonPid(serviceId) is not null) {
+                Say(VerifyExit.ContendedToken);
+                return VerifyExit.Contended;
+            }
         }
 
         // ── forward phase: one cutoff shared by pre-query, the matrix, write, bootstrap, readiness ──
@@ -820,7 +826,7 @@ sealed class ServiceVerify(
             ServiceTxnMarker.Write(store, serviceId, new TxnMarker(1, op, "captured", preState, "no-unit", null));
         } else {
             ServiceTxnMarker.Write(store, serviceId, new TxnMarker(1, op, "captured", preState, "no-unit", null));
-            if (await ApplyReplaceMatrixAsync(serviceId, pre, preState, op, forward) is { } stopExit) {
+            if (await ApplyReplaceMatrixAsync(serviceId, pre, preState, op, forward, retireServiceId is not null) is { } stopExit) {
                 return stopExit;
             }
         }
@@ -998,7 +1004,7 @@ sealed class ServiceVerify(
     /// not provably pinned to the profile being installed is refused untouched; a bootout that
     /// cannot be confirmed stops the transaction before anything is written for the new id.
     /// </summary>
-    async Task<int?> RetireAsync(string retireId, ServiceSpec spec, DateTimeOffset deadline) {
+    async Task<int?> RetireAsync(string retireId, ServiceSpec spec) {
         // The lock must be held BEFORE reading the plist and deciding "same profile, mine to
         // destroy" — reading first would let a concurrent install/verify on this same id replace
         // the unit in the window between that read and acquiring the lock.
@@ -1007,6 +1013,9 @@ sealed class ServiceVerify(
             Say(VerifyExit.ContendedToken);
             return VerifyExit.Contended;
         }
+
+        // Started only once the lock is held — a contended lock must never eat into this budget.
+        var deadline = time.GetUtcNow() + _forwardBudget;
 
         var (status, content) = _discriminatedPlistRead(manager.UnitPath(retireId));
         if (status == LaunchdUnit.PlistRead.Absent) return null;
@@ -1044,11 +1053,17 @@ sealed class ServiceVerify(
     /// when a clear/kill couldn't be confirmed (marker retained at its last phase); otherwise falls
     /// through to the shared write+bootstrap+verify tail.
     /// </summary>
-    async Task<int?> ApplyReplaceMatrixAsync(string serviceId, ServiceQuery pre, string preState, string op, DateTimeOffset deadline) {
+    /// <param name="refuseLiveOwner">A rename never takes over a daemon that owns the new name.</param>
+    async Task<int?> ApplyReplaceMatrixAsync(string serviceId, ServiceQuery pre, string preState, string op, DateTimeOffset deadline, bool refuseLiveOwner) {
         var validatedPid = validatedDaemonPid(serviceId);
         var owning       = pre.Probe == LabelProbe.Loaded && pre.JobPid is not null && pre.JobPid == validatedPid;
 
         if (owning) {
+            if (refuseLiveOwner) {
+                Say(VerifyExit.ContendedToken);
+                return VerifyExit.Contended;
+            }
+
             // The label's own bootout terminates the process it owns — no separate kill needed. But the
             // old job may still be terminating and holding the name lock, so confirm its validated pid
             // is gone before writing/bootstrapping the replacement, else the new job hits a
@@ -1074,6 +1089,11 @@ sealed class ServiceVerify(
         // still remains.
         var liveOwner = validatedDaemonPid(serviceId);
         if (liveOwner is null) return null;
+
+        if (refuseLiveOwner) {
+            Say(VerifyExit.ContendedToken);
+            return VerifyExit.Contended;
+        }
 
         if (!DaemonKill.KillValidatedOwner(store, serviceId, liveOwner.Value, KillWait))
             Say($"replace: kill of validated owner (PID {liveOwner}) did not confirm gone immediately");
