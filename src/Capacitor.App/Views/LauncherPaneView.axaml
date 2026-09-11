@@ -111,6 +111,7 @@
                                                     <Binding Path="Harnesses" />
                                                     <Binding Path="SelectedVendor" />
                                                     <Binding Path="SelectedModel" />
+                                                    <Binding Path="ModelCatalog" />
                                                 </MultiBinding>
                                             </TextBlock.Text>
                                         </TextBlock>

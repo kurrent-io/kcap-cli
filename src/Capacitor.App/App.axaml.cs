@@ -152,6 +152,7 @@ public partial class App : Application {
     // subscribes to both _remoteAgents and serverLane, so it goes first.
     RemoteAgentsService? _remoteAgents;
     AgentDirectory? _directory;
+    ServerVendorModelCatalog? _modelCatalog;
     TrayViewModel? _trayVm;
     TrayIconManager? _tray;
     // No disposal needed — RefCount tears its Interval down with its last subscriber, and every
@@ -531,6 +532,12 @@ public partial class App : Application {
         _remoteAgents = remoteAgents;
         _directory = directory;
 
+        // The launcher's model dropdown, fetched once from the server (same catalog the web UI
+        // uses). Best-effort: a miss leaves the curated per-vendor fallback in place.
+        var modelCatalog = new ServerVendorModelCatalog(ServerVendorModelCatalog.HttpFetch(sessionHttp, profiles));
+        _modelCatalog = modelCatalog;
+        _ = modelCatalog.LoadAsync(_shutdown.Token);
+
         // After the directory, which feeds it the session→agent map: a server-lane item names a
         // session, and only that map turns it into the agent whose card it belongs on.
         var readDetail = ServerSessionHttp.DetailReader(sessionHttp, profiles);
@@ -611,7 +618,8 @@ public partial class App : Application {
                 originOf: id => directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
                     : null,
-                remoteWorkspaceFactory: BuildRemote),
+                remoteWorkspaceFactory: BuildRemote,
+                modelCatalog: modelCatalog.Catalog),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -1078,7 +1086,8 @@ public partial class App : Application {
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null,
-            Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null) {
+            Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
+            IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1108,7 +1117,8 @@ public partial class App : Application {
             openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
-            localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory);
+            localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
+            modelCatalog: modelCatalog);
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
@@ -1671,6 +1681,7 @@ public partial class App : Application {
     async ValueTask DisposeServerClientsAsync() {
         _directory?.Dispose();
         _remoteAgents?.Dispose();
+        _modelCatalog?.Dispose();
         if (_serverClients is null) return;
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }
