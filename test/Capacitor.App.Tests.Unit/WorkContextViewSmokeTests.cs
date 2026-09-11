@@ -93,7 +93,7 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("WorkContextTitle").IsEffectivelyVisible).IsFalse();
 
             var issueCard = host.Find<ContentControl>("IssueCard");
-            await Assert.That(host.Find<Button>("InlineIssueButton").IsEffectivelyVisible).IsEqualTo(inline);
+            await Assert.That(host.Find<Button>("OpenWorkItemButton").IsEffectivelyVisible).IsTrue();
             await Assert.That(issueCard.IsEffectivelyVisible).IsEqualTo(!inline);
             if (!inline) {
                 var linkKey = issueCard.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "LinkKey");

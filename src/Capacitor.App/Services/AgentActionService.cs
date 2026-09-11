@@ -133,24 +133,30 @@ public sealed class AgentActionService {
     public void OpenInWeb(string agentId) {
         string? serverUrl;
         lock (_lock) serverUrl = _serverUrl;
-        OpenAgentUrl(serverUrl, agentId, "Not connected to a daemon yet"); // cannot happen from live UI; defensive only
+        OpenUrl(serverUrl, AgentPath(agentId), "Not connected to a daemon yet"); // cannot happen from live UI; defensive only
     }
 
     /// Same URL shape as OpenInWeb, but always against the app profile's own server rather than
     /// the local daemon's latest snapshot — a remote row's daemon can live behind a different
     /// server than this machine's local one. Never throws.
     public void OpenInWebRemote(string agentId) =>
-        OpenAgentUrl(_remoteServerUrl, agentId, "Not signed in to a server");
+        OpenUrl(_remoteServerUrl, AgentPath(agentId), "Not signed in to a server");
 
-    void OpenAgentUrl(string? serverUrl, string agentId, string missingServerMessage) {
+    /// The work item's page, always on the app profile's own server: that is the server whose read
+    /// named the id, and a daemon snapshot's server may be a different one. Never throws.
+    public void OpenWorkItemInWeb(string workItemId) =>
+        OpenUrl(_remoteServerUrl, $"/work-items/{Uri.EscapeDataString(workItemId)}", "Not signed in to a server");
+
+    static string AgentPath(string agentId) => $"/agents/{Uri.EscapeDataString(agentId)}";
+
+    void OpenUrl(string? serverUrl, string path, string missingServerMessage) {
         if (serverUrl is null) {
             _notifier.Notify(missingServerMessage);
             return;
         }
 
-        var url = $"{serverUrl.TrimEnd('/')}/agents/{Uri.EscapeDataString(agentId)}";
         try {
-            _opener.Open(url);
+            _opener.Open(serverUrl.TrimEnd('/') + path);
         } catch (Exception ex) {
             _notifier.Notify($"Couldn't open the browser: {ex.Message}");
         }

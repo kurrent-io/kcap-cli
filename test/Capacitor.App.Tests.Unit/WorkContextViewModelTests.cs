@@ -26,10 +26,11 @@ public class WorkContextViewModelTests {
         public RecordingOpener Opener { get; } = new();
         public Subject<ReactiveUnit> SignIn { get; } = new();
         public int SignInRequests;
+        public List<string> OpenedWorkItems { get; } = [];
         public WorkContextViewModel Vm { get; }
 
         public Harness() =>
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, () => SignInRequests++, SignIn);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, () => SignInRequests++, SignIn, OpenedWorkItems.Add);
 
         /// For a read that will answer from the queue: pushes and awaits the read it starts.
         public async Task PushAsync(AgentStatusDto dto) {
@@ -390,6 +391,58 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// The pane's refresh is the pull requests' refresh too: the card has no control of its own.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Refresh_reloads_the_linked_pull_requests_with_the_work_item() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time);
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { });
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            h.Source.Enqueue(Ready(), Ready());
+            try {
+                await h.PushAsync(Dto());
+                await WaitUntilAsync(() => source.Lists == 1 && !pullRequests.IsReading, what: "first PR list");
+                await Assert.That(h.Source.Requested.Count).IsEqualTo(1);
+
+                h.Time.Advance(TimeSpan.FromSeconds(16));
+                await h.Vm.RefreshCommand.Execute();
+                await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => source.Lists == 2, what: "PR list reloaded by the pane refresh");
+                await Assert.That(h.Source.Requested.Count).IsEqualTo(2);
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// The open action names the item the server served, which for an absorbed item is not the
+    /// assignment's id, and a terminal read that clears the card disables it again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_open_action_waits_for_a_read_to_name_the_item_and_opens_the_served_id() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), Item(id: "w9")), WorkContextRead.Of(WorkContextReadKind.SignedOut));
+            try {
+                await Assert.That(await h.Vm.OpenWorkItemCommand.CanExecute.FirstAsync()).IsFalse();
+
+                await h.PushAsync(Dto());
+                await Assert.That(await h.Vm.OpenWorkItemCommand.CanExecute.FirstAsync()).IsTrue();
+                await h.Vm.OpenWorkItemCommand.Execute();
+                await Assert.That(h.OpenedWorkItems).IsEquivalentTo(new[] { "w9" });
+
+                await h.TickAsync();
+                await Assert.That(await h.Vm.OpenWorkItemCommand.CanExecute.FirstAsync()).IsFalse();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     static SessionWorkItemAssignmentDto Row(string id, string label, bool primary = true) =>
         new() { WorkItemId = id, Label = label, Source = "mcp", Confidence = 1, IsPrimary = primary };
 
@@ -685,7 +738,7 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public Task The_sidebar_hides_empty_parts_and_repeated_identity_but_keeps_the_issue_action() => RunOnUiAsync(async () => {
+    public Task The_sidebar_hides_empty_parts_and_repeated_identity_but_keeps_the_open_action() => RunOnUiAsync(async () => {
         var h = new Harness();
         var view = new WorkContextView { DataContext = h.Vm };
         var window = new Window { Content = view, Width = 320, Height = 800 };
@@ -704,10 +757,11 @@ public class WorkContextViewModelTests {
             await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsFalse();
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsFalse();
             await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsFalse();
-            var issue = view.FindControl<Button>("InlineIssueButton")!;
-            await Assert.That(issue.IsEffectivelyVisible).IsTrue();
-            issue.Command!.Execute(issue.CommandParameter);
-            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://linear.app/example/issue/WK-2198" });
+            var open = view.FindControl<Button>("OpenWorkItemButton")!;
+            await Assert.That(open.IsEffectivelyVisible).IsTrue();
+            open.Command!.Execute(open.CommandParameter);
+            await Assert.That(h.OpenedWorkItems).IsEquivalentTo(new[] { "w1" });
+            await Assert.That(h.Opener.Opened).IsEmpty();
 
             await h.TickAsync();
             window.UpdateLayout();
@@ -715,7 +769,7 @@ public class WorkContextViewModelTests {
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.Text).IsEqualTo("A useful title");
             await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsTrue();
-            await Assert.That(issue.IsEffectivelyVisible).IsFalse();
+            await Assert.That(open.IsEffectivelyVisible).IsTrue();
         } finally {
             window.Close();
             await h.Vm.TeardownAsync();
@@ -744,7 +798,7 @@ public class WorkContextViewModelTests {
             var title = view.FindControl<TextBlock>("WorkContextTitle")!;
             await Assert.That(title.IsEffectivelyVisible).IsEqualTo(displayTitle.Length > 0);
             await Assert.That(title.Text).IsEqualTo(displayTitle);
-            await Assert.That(view.FindControl<Button>("InlineIssueButton")!.IsEffectivelyVisible).IsEqualTo(inline);
+            await Assert.That(view.FindControl<Button>("OpenWorkItemButton")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsEqualTo(!inline);
             await Assert.That(h.Vm.Issue!.Title).IsEqualTo(issueTitle);
         } finally {

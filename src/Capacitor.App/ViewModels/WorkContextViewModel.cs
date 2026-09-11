@@ -48,6 +48,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     readonly IWorkContextSource _source;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
+    readonly Action<string>? _openWorkItem;
+    readonly BehaviorSubject<bool> _canOpenWorkItem = new(false);
     readonly CompositeDisposable _disposables = new();
     readonly List<ReadLease> _outstanding = [];
     ReadLease? _current;
@@ -131,6 +133,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         : "Waiting for the session ID";
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
+    /// The item's own page in the web UI; enabled once a read has named the item.
+    public ReactiveCommand<Unit, Unit> OpenWorkItemCommand { get; }
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     /// Test-only seam: the current lease's read, or the last one started.
@@ -138,24 +142,30 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
-            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null) {
+            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, Action<string>? openWorkItem = null) {
         _source = source;
         _opener = opener;
         _time = time;
+        _openWorkItem = openWorkItem;
         InitializeProjections();
         _disposables.Add(_hasSessionChanges);
+        _disposables.Add(_canOpenWorkItem);
 
-        // Enabled for any known session id. A click while a read is in flight queues one follow-up
+        // The pane's one refresh: the linked pull requests reload with the work item. Enabled for
+        // any known session id. A click while a read is in flight queues one follow-up
         // (RefreshPending) instead of disabling the control — a greyed icon looked broken and ate
         // the click with no feedback.
         RefreshCommand = ReactiveCommand.Create(
             () => {
+                PullRequests?.Refresh();
                 if (_current is null) return;
                 if (_current.IsReading) _current.RefreshPending = true;
                 else StartRead(_current);
             },
             _hasSessionChanges);
         _disposables.Add(RefreshCommand);
+        OpenWorkItemCommand = ReactiveCommand.Create(() => { if (PrimaryId is { } id) _openWorkItem?.Invoke(id); }, _canOpenWorkItem);
+        _disposables.Add(OpenWorkItemCommand);
         SignInCommand = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         _disposables.Add(SignInCommand);
 

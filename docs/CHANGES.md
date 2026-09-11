@@ -158,7 +158,9 @@ also available on ended sessions and sessions without a terminal.
 
 The tenant server owns GitHub reads and current user/repository admission. The
 desktop negotiates a versioned contract, subtracts network time from short access
-leases and masks protected content when the workspace loses foreground. A transient
+leases and masks protected content while the workspace is off screen: the window
+hidden to the tray or minimized. Losing keyboard focus alone keeps the reader
+readable and its lease renewed, so it can sit beside another app's window. A transient
 failure can retain the already visible view temporarily; a denial clears it.
 Frozen pages keep stable ordering, expose incomplete coverage and bound retained
 content. Markdown uses native controls with explicit safe links and no remote images.

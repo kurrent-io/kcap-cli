@@ -298,6 +298,34 @@ public class AgentActionServiceTests {
         await Assert.That(notifier.Notified).IsEquivalentTo(["Not signed in to a server"], CollectionOrdering.Matching);
     }
 
+    [Test]
+    public async Task OpenWorkItemInWeb_uses_the_profile_server_not_the_snapshot_and_escapes_the_id() {
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var opener = new RecordingOpener();
+        var snapshots = new ReplaySubject<DaemonStatusDto>(1);
+        var service = NewService(ops, notifier, opener, snapshots, fallbackServerUrl: "https://a.kcap.ai/");
+        snapshots.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://b.kcap.ai"));
+
+        service.OpenWorkItemInWeb("w/1");
+
+        await Assert.That(opener.Opened).IsEquivalentTo(["https://a.kcap.ai/work-items/w%2F1"], CollectionOrdering.Matching);
+        await Assert.That(notifier.Notified).IsEmpty();
+    }
+
+    [Test]
+    public async Task OpenWorkItemInWeb_without_a_profile_notifies_and_returns() {
+        var ops = new ScriptedLocalControlOps();
+        var notifier = new RecordingNotifier();
+        var opener = new RecordingOpener();
+        var service = NewService(ops, notifier, opener);
+
+        service.OpenWorkItemInWeb("w1");
+
+        await Assert.That(opener.Opened).IsEmpty();
+        await Assert.That(notifier.Notified).IsEquivalentTo(["Not signed in to a server"], CollectionOrdering.Matching);
+    }
+
     // ---- confirm-then-force for protected kinds (decision 5) ----
 
     [Test]
