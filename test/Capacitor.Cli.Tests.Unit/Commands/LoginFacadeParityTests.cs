@@ -2,7 +2,6 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
 using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -11,22 +10,11 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// `OAuthLoginFlow.LoginWithDiscoveryAsync`: same exit codes, same final banner line, same
 /// per-tenant token/profile publication, and no funnel events of the login path's own.
 /// </summary>
-/// <remarks>
-/// Bare, not keyed: <c>CliTelemetry.TestSink</c> is a process-global static, and the tests that
-/// contaminate it do not touch it deliberately — they run a real <c>kcap setup</c>, whose funnel
-/// lands in whatever sink is installed. A key can only exclude tests that carry it, so the writers
-/// would each have to opt in; exclusivity is the only guard that covers a reader asserting the sink
-/// is empty.
-/// </remarks>
-[NotInParallel]
 public class LoginFacadeParityTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     string TokensDir  => Config.PathTo("tokens");
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
-
-    [Before(Test)]
-    public void Cleanup() => CliTelemetry.Reset();
 
     ProfileConfig ReadConfig() => ConfigMutator.LoadPure(ConfigPath);
 
@@ -59,17 +47,15 @@ public class LoginFacadeParityTests {
 
     [Test]
     public async Task Discover_github_zero_funnel_events_of_its_own() {
-        var sink = new List<TelemetryEvent>();
-        CliTelemetry.TestSink = sink;
-        CliTelemetry.Initialize("login", null, loggedIn: false, Config.Root);
-        sink.Clear(); // drop cli_first_run
+        var probe = TelemetryProbe.Live("login", Config.Root);
 
         using var handler = AuthHttp.Script(
             proxyConfig: """{"github_client_id":"cid"}""",
             tenants: TwoGitHubTenants);
 
         var progress = new RecordingAuthProgress();
-        var facade   = NewFacade(Config.Root, progress, handler, PickerReturningFirst());
+        var facade   = NewFacade(
+            Config.Root, progress, handler, PickerReturningFirst(), telemetry: probe.Telemetry);
 
         var exit = await LoginCommand.HandleAsync(["login", "--discover", "--github", "--device"], null, ProfileConfig.DefaultName, facade, progress);
 
@@ -77,7 +63,7 @@ public class LoginFacadeParityTests {
         // The GitHub discover path has no SetupFunnel calls anywhere in its Core dependency chain
         // (unlike WorkOS discovery, which fires its embedded signin_completed/tenant_none events
         // regardless of caller) — login must not have grown any of its own.
-        await Assert.That(sink).IsEmpty();
+        await Assert.That(probe.Events).IsEmpty();
     }
 
     // ── login: known server ──────────────────────────────────────────────────

@@ -10,6 +10,10 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 /// <see cref="MeterListener"/> — the same mechanism <c>dotnet-counters</c> uses. No reconnect
 /// counters are covered here — none exist yet (a later phase).
 /// </summary>
+// Bare: the meter is process-global, and its writers are not just this class — production's
+// AcpInteractionBridge records the same instrument, so any test driving it contaminates a listener
+// here. A key can only exclude tests that carry it, which those writers have no reason to.
+[NotInParallel]
 public class AcpMetricsTests {
     [Test]
     public async Task AllCounters_CanBeIncremented_WithoutThrowing() =>

@@ -30,7 +30,7 @@ public class ParticipantUnreachableRetryTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient());
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup);
 
     static VirtualFlowRetryClock Clock() => new();
 

@@ -178,7 +178,7 @@ public class OAuthFlowTests {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"access_token":"gho_abc"}"""));
 
         var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
-            Github, "Iv1.abc", $"{server.Urls[0]}/code-exchange", new RecordingBrowser(), FakeBrowser.WithCode("the_code"));
+            Github, "Iv1.abc", $"{server.Urls[0]}/code-exchange", new RecordingBrowser(), NoTelemetry.Join, FakeBrowser.WithCode("the_code"));
 
         await Assert.That(token).IsEqualTo("gho_abc");
     }
@@ -190,7 +190,7 @@ public class OAuthFlowTests {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"access_token":"nope"}"""));
 
         var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
-            Github, "Iv1.abc", $"{server.Urls[0]}/code-exchange", new RecordingBrowser(),
+            Github, "Iv1.abc", $"{server.Urls[0]}/code-exchange", new RecordingBrowser(), NoTelemetry.Join,
             FakeBrowser.WithRawQuery("?code=the_code&state=attacker"));
 
         await Assert.That(token).IsNull();
@@ -203,7 +203,7 @@ public class OAuthFlowTests {
         var progress = new RecordingAuthProgress();
 
         var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
-            Github, "Iv1.abc", "http://unused.test/code-exchange", new RecordingBrowser(),
+            Github, "Iv1.abc", "http://unused.test/code-exchange", new RecordingBrowser(), NoTelemetry.Join,
             FakeBrowser.NonSuccess(BrowserResultType.Timeout), progress: progress);
 
         await Assert.That(token).IsNull();
@@ -219,7 +219,7 @@ public class OAuthFlowTests {
         var       progress = new RecordingAuthProgress();
 
         await Assert.That(async () => await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
-                Github, "Iv1.abc", "http://unused.test/code-exchange", new RecordingBrowser(),
+                Github, "Iv1.abc", "http://unused.test/code-exchange", new RecordingBrowser(), NoTelemetry.Join,
                 FakeBrowser.CancellingCaller(cts), ct: cts.Token, progress: progress))
             .Throws<OperationCanceledException>();
 

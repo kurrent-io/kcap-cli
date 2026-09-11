@@ -10,10 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// prompt and Spectre throws rather than returning. Either the two answers arrive as flags, or there
 /// is nothing to ask and the run has to say so.
 /// </summary>
-/// <remarks>
-/// Bare rather than keyed: these write SetupFunnel events into the process-global telemetry sink,
-/// which the facade-parity suites read back as an exact ordered set, and they capture Console.
-/// </remarks>
+/// <remarks>These capture Console, which is process-global.</remarks>
 [NotInParallel]
 public class TenantProvisionerHeadlessTests {
     const string BaseUrl = "https://signup.example";
@@ -26,7 +23,7 @@ public class TenantProvisionerHeadlessTests {
     [Test]
     public async Task Declines_instead_of_throwing_when_there_is_no_terminal_to_prompt_on() {
         var provisioner = new SpectreTenantProvisioner(
-            new TenantProvisioningClient(new HttpClient()), BaseUrl,
+            new TenantProvisioningClient(new HttpClient()), BaseUrl, NoTelemetry.Facade,
             isInteractive: () => false);
 
         var offer = await provisioner.OfferCreateAsync(Tokens());
@@ -231,7 +228,8 @@ public class TenantProvisionerHeadlessTests {
     }
 
     static SpectreTenantProvisioner Provisioner(StubHandler handler, Func<bool> isInteractive, RequestedWorkspace requested) =>
-        new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false)), BaseUrl, isInteractive, requested);
+        new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false)), BaseUrl,
+            NoTelemetry.Facade, isInteractive, requested);
 
     sealed class StubHandler : HttpMessageHandler {
         public List<string>    Paths                 { get; } = [];

@@ -83,7 +83,7 @@ public class AuthCancellationTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin:   () => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = nearExpiry, RefreshToken = "rt" }),
             orgSwitch:      (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
             orglessRefresh: (_, refreshedCt) => { refreshCt = refreshedCt; return Task.FromResult<WorkOSAuthResponse?>(null); },

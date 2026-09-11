@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Commands;
@@ -19,7 +20,7 @@ public static class CommandServices {
     public static IServiceCollection AddCapacitorCli(
             this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
             ProfileContext profiles, ProfileOverrides env, MachineAuth machine, HookClock clock,
-            string? baseUrl) {
+            string? baseUrl, TelemetryStartup telemetryStartup) {
         services
             .AddCapacitorContext(config, home, daemons, profiles)
             .AddCapacitorCommands();
@@ -40,6 +41,24 @@ public static class CommandServices {
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
         services.AddCapacitorHttp(env, machine);
+        services.AddCapacitorTelemetry(config, telemetryStartup);
+
+        return services;
+    }
+
+    /// <summary>
+    /// The telemetry facade and the funnel it owns, so a command asks for the narrower one when the
+    /// funnel is all it uses. Both resolve the same facade.
+    ///
+    /// <para>Resolving one has no side effects — no console, no once-per-device marker consumed:
+    /// the privacy notice belongs to <c>CliTelemetry.Announce</c>, which Program.cs calls at the
+    /// point a run should show it.</para>
+    /// </summary>
+    public static IServiceCollection AddCapacitorTelemetry(
+            this IServiceCollection services, ConfigRoot config, TelemetryStartup startup) {
+        services.AddSingleton(startup);
+        services.AddSingleton(_ => CliTelemetry.Start(startup, config));
+        services.AddSingleton(sp => sp.GetRequiredService<CliTelemetry>().Funnel);
 
         return services;
     }

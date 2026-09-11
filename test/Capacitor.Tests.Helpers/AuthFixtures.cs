@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -34,7 +35,11 @@ public static class AuthFixtures {
             Func<CancellationToken, Task<WorkOSAuthResponse?>>?         workosLogin   = null,
             IBrowser?                                                   workosBrowser = null,
             string?                                                     workosApiBase = null,
-            IBrowserLauncher?                                           browser       = null) {
+            IBrowserLauncher?                                           browser       = null,
+            // A facade that is off unless a test hands one in, like every other collaborator
+            // defaulted here: a test that does not observe telemetry must not have to name it, and
+            // one that does gets an empty sink rather than a silent pass if it forgets.
+            CliTelemetry?                                               telemetry     = null) {
         var factory = new PlainHttpClientFactory(handler);
 
         return new OnboardingFacade(
@@ -42,7 +47,8 @@ public static class AuthFixtures {
                 new AuthProxyClient(factory.CreateClient(CapacitorClients.Anonymous)),
                 new GitHubOAuthClient(factory), new WorkOSClient(factory),
                 progress, browser ?? new RecordingBrowser(),
-                picker ?? Substitute.For<ITenantPicker>(), provisioner, beforeCommit) {
+                picker ?? Substitute.For<ITenantPicker>(), provisioner,
+                telemetry ?? CliTelemetry.Disabled(), beforeCommit) {
             WorkOSOrglessLogin    = workosLogin,
             WorkOSBrowser         = workosBrowser,
             WorkOSApiBaseOverride = workosApiBase

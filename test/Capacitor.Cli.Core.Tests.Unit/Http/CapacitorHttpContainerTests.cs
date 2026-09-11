@@ -383,7 +383,7 @@ public class CapacitorHttpContainerTests : IDisposable {
             sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<IAuthProxyClient>(),
             sp.GetRequiredService<GitHubOAuthClient>(), sp.GetRequiredService<WorkOSClient>(),
             new RecordingAuthProgress(), new RecordingBrowser(), AuthFixtures.PickerReturningFirst(),
-            provisioner: null, beforeCommit: null);
+            provisioner: null, NoTelemetry.Facade, beforeCommit: null);
 
         await facade.LoginAsync(Url, forceDevice: false, _profile, CancellationToken.None, adoptServer: true);
 

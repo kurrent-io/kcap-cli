@@ -15,7 +15,7 @@ using Capacitor.Cli.Core.Telemetry;
 namespace Capacitor.Cli.Commands;
 
 class McpFlowsServer(
-        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http) {
+        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http, TelemetryStartup startup) {
     public async Task<int> RunAsync(string? driverArg = null) {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
@@ -34,13 +34,19 @@ class McpFlowsServer(
 
         var repository = new CwdRepository(config, cwd);
 
-        // MCP servers are long-lived and denylisted under the top-level "mcp" command
-        // (CommandEvents.Denylisted) — re-initialise under the reportable pseudo-command
-        // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
-        // disk must never block the server from starting.
+        // Best-effort, and recorded even when the read throws: a stale token on disk must never
+        // block the server from starting, and an absent property is a different value in a funnel
+        // from a false one — "could not tell" belongs with "not logged in", not with a gap.
         var loggedIn = false;
         try { loggedIn = await store.LoadForProfileAsync(profiles.Name) is not null; } catch { }
-        CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
+
+        // MCP servers are long-lived and denylisted under the top-level "mcp" command
+        // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
+        // "mcp-server" is what lets per-tool-call events leave at all.
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        telemetry.AddSharedProperty("logged_in", loggedIn);
+
+        await using var mcp = new McpTelemetry(telemetry);
 
         // Validate the server_url shape once, locally (pure string check — no network, token,
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
@@ -97,7 +103,7 @@ class McpFlowsServer(
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                McpTelemetry.ToolCalled("kcap-flows", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-flows", tool, ok, CommandTiming.ElapsedMs(start));
             }
         }
 

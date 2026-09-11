@@ -1,14 +1,10 @@
 using System.Text;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
-// PublishAsync emits SetupFunnel events into CliTelemetry's process-global sink, so this class
-// must not run beside a test asserting on that sink's contents.
-[NotInParallel(nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink))]
 public class WorkOSDiscoveryTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -38,7 +34,7 @@ public class WorkOSDiscoveryTests {
         var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" };
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            "https://auth.kcap.ai", proxyConfig, proxy, picker,
+            "https://auth.kcap.ai", proxyConfig, proxy, picker, NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched));
 
@@ -64,7 +60,7 @@ public class WorkOSDiscoveryTests {
     public async Task DiscoverAsync_errors_when_workos_not_configured() {
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "" },
-            Substitute.For<IAuthProxyClient>(), Substitute.For<ITenantPicker>(),
+            Substitute.For<IAuthProxyClient>(), Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(null),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
 
@@ -83,7 +79,7 @@ public class WorkOSDiscoveryTests {
         var switchCalled = false;
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => { switchCalled = true; return Task.FromResult<WorkOSAuthResponse?>(null); });
 
@@ -99,7 +95,7 @@ public class WorkOSDiscoveryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
 
@@ -123,7 +119,7 @@ public class WorkOSDiscoveryTests {
         var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_new", AccessToken = "acc2", RefreshToken = "rt2" };
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            "https://auth.kcap.ai", proxyConfig, proxy, Substitute.For<ITenantPicker>(),
+            "https://auth.kcap.ai", proxyConfig, proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched),
             provisioner:  provisioner);
@@ -171,7 +167,7 @@ public class WorkOSDiscoveryTests {
 
         string? switchRefreshToken = null;
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            "https://auth.kcap.ai", proxyConfig, proxy, Substitute.For<ITenantPicker>(),
+            "https://auth.kcap.ai", proxyConfig, proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin:   ()      => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:      (rt, _) => { switchRefreshToken = rt; return Task.FromResult<WorkOSAuthResponse?>(switched); },
             orglessRefresh: (_, _)  => Task.FromResult<WorkOSAuthResponse?>(
@@ -195,7 +191,7 @@ public class WorkOSDiscoveryTests {
         var switchCalled = false;
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => { switchCalled = true; return Task.FromResult<WorkOSAuthResponse?>(null); },
             provisioner: provisioner);
@@ -222,7 +218,7 @@ public class WorkOSDiscoveryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
             provisioner: provisioner);
@@ -245,7 +241,7 @@ public class WorkOSDiscoveryTests {
         var switchCalled = false;
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => { switchCalled = true; return Task.FromResult<WorkOSAuthResponse?>(null); },
             provisioner: provisioner);
@@ -295,7 +291,7 @@ public class WorkOSDiscoveryTests {
 
         return await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_p" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
             provisioner: provisioner);
@@ -320,7 +316,7 @@ public class WorkOSDiscoveryTests {
         var orgless  = new WorkOSAuthResponse { User = new() { Id = "user_x" }, AccessToken = "acc", RefreshToken = "rt" };
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            "https://auth.kcap.ai", proxyConfig, proxy, picker,
+            "https://auth.kcap.ai", proxyConfig, proxy, picker, NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
             progress:     progress);
@@ -363,7 +359,7 @@ public class WorkOSDiscoveryTests {
         };
 
         await WorkOSDiscovery.DiscoverAsync(
-            "https://auth.kcap.ai", proxyConfig, proxy, picker,
+            "https://auth.kcap.ai", proxyConfig, proxy, picker, NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_a", AccessToken = "a2", RefreshToken = "r2" }),

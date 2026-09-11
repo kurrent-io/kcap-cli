@@ -1,54 +1,31 @@
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 
-// CliTelemetry's statics (TestSink, the Initialize-set state) stay process-global; the
-// telemetry files live under this test's own root.
-[NotInParallel([
-    nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink)
-])]
 public class SetupFunnelTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    // CliTelemetry holds process-global static state (Enabled, TestSink, ...). A prior test
-    // elsewhere in the suite (e.g. one that persists `telemetry off`) can leave Enabled=false
-    // behind via CliTelemetry.DiscardAndDisable — reset before touching TestSink so every test
-    // here starts from pristine state rather than inheriting whatever ran before it.
-    [Before(Test)]
-    public void ResetTelemetry() => CliTelemetry.Reset();
-
-    List<TelemetryEvent> StartCapturing() {
-        var sink = new List<TelemetryEvent>();
-        CliTelemetry.TestSink = sink;
-        CliTelemetry.Initialize("setup", null, loggedIn: false, Config.Root);
-
-        TelemetryTestGuards.AssertEnabled("setup", Config.Root);
-
-        sink.Clear();   // drop cli_first_run
-
-        return sink;
-    }
+    TelemetryProbe StartCapturing() => TelemetryProbe.Live("setup", Config.Root);
 
     [Test]
     public async Task Happy_path_emits_the_full_sequence() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        SetupFunnel.Started(hasExistingProfile: false, serverUrlProvided: false, noPrompt: false);
-        SetupFunnel.SigninOpened("browser", "workos");
-        SetupFunnel.SigninCompleted("workos");
-        SetupFunnel.TenantNone("workos");
-        SetupFunnel.WorkspaceOffered();
-        SetupFunnel.WorkspaceRequested();
-        SetupFunnel.WorkspaceProvisioned();
-        SetupFunnel.Succeeded(agentsConfigured: 3);
+        probe.Telemetry.Funnel.Started(hasExistingProfile: false, serverUrlProvided: false, noPrompt: false);
+        probe.Telemetry.Funnel.SigninOpened("browser", "workos");
+        probe.Telemetry.Funnel.SigninCompleted("workos");
+        probe.Telemetry.Funnel.TenantNone("workos");
+        probe.Telemetry.Funnel.WorkspaceOffered();
+        probe.Telemetry.Funnel.WorkspaceRequested();
+        probe.Telemetry.Funnel.WorkspaceProvisioned();
+        probe.Telemetry.Funnel.Succeeded(agentsConfigured: 3);
 
         // CollectionOrdering.Matching: IsEquivalentTo defaults to set comparison (any order) and
         // would pass even on a transposed sequence — this is exactly the funnel's ordering that
         // matters (a PostHog ordered funnel converts on step order, not just step presence).
-        await Assert.That(sink.Select(e => e.Name).ToArray()).IsEquivalentTo(new[] {
+        await Assert.That(probe.Names).IsEquivalentTo(new[] {
             "cli_setup_started", "cli_setup_signin_opened", "cli_setup_signin_completed",
             "cli_setup_tenant_none", "cli_setup_workspace_offered", "cli_setup_workspace_requested",
             "cli_setup_workspace_provisioned", "cli_setup_succeeded",
@@ -57,37 +34,37 @@ public class SetupFunnelTests {
 
     [Test]
     public async Task Abandoned_at_signup_stops_after_the_offer() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        SetupFunnel.Started(false, false, false);
-        SetupFunnel.SigninCompleted("workos");
-        SetupFunnel.TenantNone("workos");
-        SetupFunnel.WorkspaceOffered();
-        SetupFunnel.WorkspaceDeclined();
+        probe.Telemetry.Funnel.Started(false, false, false);
+        probe.Telemetry.Funnel.SigninCompleted("workos");
+        probe.Telemetry.Funnel.TenantNone("workos");
+        probe.Telemetry.Funnel.WorkspaceOffered();
+        probe.Telemetry.Funnel.WorkspaceDeclined();
 
-        await Assert.That(sink[^1].Name).IsEqualTo("cli_setup_workspace_declined");
-        await Assert.That(sink.Any(e => e.Name == "cli_setup_succeeded")).IsFalse();
+        await Assert.That(probe.Events[^1].Name).IsEqualTo("cli_setup_workspace_declined");
+        await Assert.That(probe.Names.Any(n => n == "cli_setup_succeeded")).IsFalse();
     }
 
     [Test]
     public async Task Provisioning_failure_carries_a_reason() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        SetupFunnel.WorkspaceFailed("slug_taken");
+        probe.Telemetry.Funnel.WorkspaceFailed("slug_taken");
 
-        await Assert.That(sink[^1].Name).IsEqualTo("cli_setup_workspace_failed");
-        await Assert.That(sink[^1].Properties["reason"]!.GetValue<string>()).IsEqualTo("slug_taken");
+        await Assert.That(probe.Events[^1].Name).IsEqualTo("cli_setup_workspace_failed");
+        await Assert.That(probe.Events[^1].Properties["reason"]!.GetValue<string>()).IsEqualTo("slug_taken");
     }
 
     [Test]
     public async Task Started_carries_its_entry_conditions() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
         // Mixed, not all-true: all-true would pass under a transposed mapping (e.g.
         // ["no_prompt"] = serverUrlProvided) just as easily as the correct one.
-        SetupFunnel.Started(hasExistingProfile: true, serverUrlProvided: false, noPrompt: true);
+        probe.Telemetry.Funnel.Started(hasExistingProfile: true, serverUrlProvided: false, noPrompt: true);
 
-        var props = sink[0].Properties;
+        var props = probe.Events[0].Properties;
         await Assert.That(props["has_existing_profile"]!.GetValue<bool>()).IsTrue();
         await Assert.That(props["server_url_provided"]!.GetValue<bool>()).IsFalse();
         await Assert.That(props["no_prompt"]!.GetValue<bool>()).IsTrue();
@@ -95,11 +72,11 @@ public class SetupFunnelTests {
 
     [Test]
     public async Task Succeeded_reports_a_count_not_vendor_names() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        SetupFunnel.Succeeded(agentsConfigured: 4);
+        probe.Telemetry.Funnel.Succeeded(agentsConfigured: 4);
 
-        await Assert.That(sink[^1].Properties["agents_configured"]!.GetValue<int>()).IsEqualTo(4);
+        await Assert.That(probe.Events[^1].Properties["agents_configured"]!.GetValue<int>()).IsEqualTo(4);
     }
 
     // Guards collisions with events OTHER producers own: the server's own cli_setup_completed,
@@ -114,25 +91,25 @@ public class SetupFunnelTests {
             "cli_auth_return",
         ];
 
-        var sink = StartCapturing();
-        SetupFunnel.Started(false, false, false);
-        SetupFunnel.SigninOpened("browser", "workos");
-        SetupFunnel.SigninCompleted("workos");
-        SetupFunnel.SigninFailed("timeout");
-        SetupFunnel.TenantNone("workos");
-        SetupFunnel.WorkspaceOffered();
-        SetupFunnel.WorkspaceDeclined();
-        SetupFunnel.WorkspaceRedirected();
-        SetupFunnel.WorkspaceRequested();
-        SetupFunnel.WorkspaceProvisioned();
-        SetupFunnel.WorkspaceFailed("poll_timeout");
-        SetupFunnel.Succeeded(1);
+        var probe = StartCapturing();
+        probe.Telemetry.Funnel.Started(false, false, false);
+        probe.Telemetry.Funnel.SigninOpened("browser", "workos");
+        probe.Telemetry.Funnel.SigninCompleted("workos");
+        probe.Telemetry.Funnel.SigninFailed("timeout");
+        probe.Telemetry.Funnel.TenantNone("workos");
+        probe.Telemetry.Funnel.WorkspaceOffered();
+        probe.Telemetry.Funnel.WorkspaceDeclined();
+        probe.Telemetry.Funnel.WorkspaceRedirected();
+        probe.Telemetry.Funnel.WorkspaceRequested();
+        probe.Telemetry.Funnel.WorkspaceProvisioned();
+        probe.Telemetry.Funnel.WorkspaceFailed("poll_timeout");
+        probe.Telemetry.Funnel.Succeeded(1);
 
-        // Without this, an Emit that silently no-ops would leave sink empty and the loop below
+        // Without this, an Emit that silently no-ops would leave the sink empty and the loop below
         // would assert nothing — a test that cannot fail. 12 = the 12 calls above.
-        await Assert.That(sink.Count).IsEqualTo(12);
+        await Assert.That(probe.Events.Count).IsEqualTo(12);
 
-        foreach (var e in sink)
+        foreach (var e in probe.Events)
             await Assert.That(serverEvents.Contains(e.Name)).IsFalse();
     }
 
@@ -144,7 +121,7 @@ public class SetupFunnelTests {
     // which is exactly the case that anchoring on the overall outcome gets wrong.
     [Test]
     public async Task WorkOSDiscovery_emits_signin_completed_before_tenant_none_for_a_zero_tenant_run() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
@@ -152,7 +129,7 @@ public class SetupFunnelTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), probe.Telemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
 
@@ -160,7 +137,7 @@ public class SetupFunnelTests {
         // sign-in itself worked fine.
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.NoTenants>();
 
-        await Assert.That(sink.Select(e => e.Name).ToArray()).IsEquivalentTo(
+        await Assert.That(probe.Names).IsEquivalentTo(
             new[] { "cli_setup_signin_completed", "cli_setup_tenant_none" }, CollectionOrdering.Matching);
     }
 }

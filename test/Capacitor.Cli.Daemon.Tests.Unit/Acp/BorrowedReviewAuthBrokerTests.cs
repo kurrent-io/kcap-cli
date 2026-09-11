@@ -287,7 +287,7 @@ public class BorrowedReviewAuthBrokerTests {
         Skip.When(OperatingSystem.IsWindows(), "POSIX shell command");
 
         var (result, elapsed) = Timed(() => BorrowedReviewTokenCommand.Run(
-            "head -c 33554432 /dev/zero | tr '\\0' 'x' 1>&2; exit 1"));
+            $"head -c {FloodBytes} /dev/zero | tr '\\0' 'x' 1>&2; exit 1"));
 
         await Assert.That(result).IsNull();
         await Assert.That(elapsed).IsLessThan(BorrowedReviewTokenCommand.Timeout);
@@ -299,7 +299,7 @@ public class BorrowedReviewAuthBrokerTests {
         Skip.When(OperatingSystem.IsWindows(), "POSIX shell command");
 
         var (result, elapsed) = Timed(() => BorrowedReviewTokenCommand.Run(
-            "head -c 33554432 /dev/zero | tr '\\0' 'y'"));
+            $"head -c {FloodBytes} /dev/zero | tr '\\0' 'y'"));
 
         await Assert.That(result).IsNull();
         await Assert.That(elapsed).IsLessThan(BorrowedReviewTokenCommand.Timeout);
@@ -313,11 +313,18 @@ public class BorrowedReviewAuthBrokerTests {
         Skip.When(OperatingSystem.IsWindows(), "POSIX shell command");
 
         var (token, elapsed) = Timed(() => BorrowedReviewTokenCommand.Run(
-            "printf 'tok-first\\n'; head -c 33554432 /dev/zero | tr '\\0' 'z'"));
+            $"printf 'tok-first\\n'; head -c {FloodBytes} /dev/zero | tr '\\0' 'z'"));
 
         await Assert.That(token).IsEqualTo("tok-first");
         await Assert.That(elapsed).IsLessThan(BorrowedReviewTokenCommand.Timeout);
     }
+
+    /// <summary>
+    /// Enough to prove the pipe keeps being drained — a pipe buffer is 64 KiB, so a writer that
+    /// nobody reads blocks long before this — without spending so much of the machine that the
+    /// elapsed-time assertions below race whatever else the suite is running.
+    /// </summary>
+    const int FloodBytes = 4 * 1024 * 1024;
 
     static (string? Result, TimeSpan Elapsed) Timed(Func<string?> run) {
         var started = DateTime.UtcNow;

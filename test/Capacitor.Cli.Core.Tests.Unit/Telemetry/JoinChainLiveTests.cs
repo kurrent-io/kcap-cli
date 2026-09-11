@@ -29,12 +29,11 @@ namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 /// below has <c>$device_id</c> ONLY. That still exercises the full merge — the device id is what
 /// crosses back — while writing nothing into the real PostHog project.</para>
 /// </summary>
-// Bare [NotInParallel], not the CliTelemetry.TestSink key: this captures Console, which is
+// Bare [NotInParallel]: this captures Console, which is
 // process-global, and ConsoleOutput rejects an overlapping capture. Ungrouped is strictly stronger.
 [NotInParallel]
-public class JoinChainLiveTests : IDisposable {
-    readonly TempDir _tmp = new();
-    public void Dispose() => _tmp.Dispose();
+public class JoinChainLiveTests {
+    [TempDir] public required TempDir Tmp { get; init; }
 
     const string GateEnvVar = "KCAP_JOIN_E2E";
 
@@ -56,29 +55,19 @@ public class JoinChainLiveTests : IDisposable {
         using var console = ConsoleOutput.StartErrorCapture();
 
         var priorSignup = Environment.GetEnvironmentVariable("KCAP_SIGNUP_URL");
-        var priorDebug  = Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG");
 
         try {
             // FirstHopUrl reads this, which is the whole reason the override exists.
             Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", baseUrl);
-            Environment.SetEnvironmentVariable("KCAP_TELEMETRY_DEBUG", "1");
 
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
-
-            var config = new ConfigRoot(_tmp.Path);
-            var sink = new List<TelemetryEvent>();
-            CliTelemetry.TestSink = sink;
-            CliTelemetry.Initialize("setup", null, loggedIn: false, config);
-            TelemetryTestGuards.AssertEnabled("setup", config);
-
-            var key = SetupJoin.Mint();
+            var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), debug: true);
+            var key   = probe.Join.Mint();
             await Assert.That(key).IsNotNull();
 
             var port     = OAuthLoginFlow.GetAvailablePort();
             var redirect = $"http://127.0.0.1:{port}/callback";
 
-            using var browser = new LoopbackBrowser(new RecordingBrowser(), join: SetupJoin.Loopback) {
+            using var browser = new LoopbackBrowser(new RecordingBrowser(), join: probe.Join) {
                 DrainCap = TimeSpan.FromSeconds(30), DisposeWait = TimeSpan.FromSeconds(10),
             };
 
@@ -123,9 +112,9 @@ public class JoinChainLiveTests : IDisposable {
             await Assert.That(result.ResultType).IsEqualTo(BrowserResultType.Success);
 
             // 3. The merge actually happened, on the real return trip.
-            sink.Clear();
-            CliTelemetry.Capture("cli_e2e_probe", new JsonObject());
-            var props = sink[^1].Properties;
+            probe.Sink.Discard();
+            probe.Telemetry.Capture("cli_e2e_probe", new JsonObject());
+            var props = probe.Events[^1].Properties;
 
             await Assert.That(props["join_id"]!.GetValue<string>()).IsEqualTo(key);
             await Assert.That(props["web_device_id_capacitor"]!.GetValue<string>()).IsEqualTo(CapDeviceId);
@@ -137,9 +126,6 @@ public class JoinChainLiveTests : IDisposable {
             await Assert.That(printed).DoesNotContain(key!);
         } finally {
             Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", priorSignup);
-            Environment.SetEnvironmentVariable("KCAP_TELEMETRY_DEBUG", priorDebug);
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
         }
     }
 }

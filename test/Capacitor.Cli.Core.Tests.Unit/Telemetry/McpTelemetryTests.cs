@@ -3,40 +3,19 @@ using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 
-// CliTelemetry's statics (TestSink, the Initialize-set state) stay process-global; the
-// telemetry files live under this test's own root.
-[NotInParallel([
-    nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink)
-])]
 public class McpTelemetryTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    // CliTelemetry holds process-global static state (Enabled, TestSink, ...). A prior test
-    // elsewhere in the suite (e.g. one that persists `telemetry off`) can leave Enabled=false
-    // behind via CliTelemetry.DiscardAndDisable — reset before touching TestSink so every test
-    // here starts from pristine state rather than inheriting whatever ran before it.
-    [Before(Test)]
-    public void ResetTelemetry() => CliTelemetry.Reset();
-
-    List<TelemetryEvent> StartCapturing() {
-        var sink = new List<TelemetryEvent>();
-        CliTelemetry.TestSink = sink;
-        CliTelemetry.Initialize("mcp-server", null, loggedIn: false, Config.Root);
-
-        TelemetryTestGuards.AssertEnabled("mcp-server", Config.Root);
-
-        sink.Clear();
-
-        return sink;
-    }
+    TelemetryProbe StartCapturing() => TelemetryProbe.Live("mcp-server", Config.Root);
 
     [Test]
     public async Task Tool_call_records_server_tool_and_outcome() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        McpTelemetry.ToolCalled("kcap-memory", "search_memories", ok: true, durationMs: 120);
+        await using var mcp = new McpTelemetry(probe.Telemetry);
+        mcp.ToolCalled("kcap-memory", "search_memories", ok: true, durationMs: 120);
 
-        var e = sink.Single();
+        var e = probe.Events.Single();
         await Assert.That(e.Name).IsEqualTo("mcp_tool_called");
         await Assert.That(e.Properties["server"]!.GetValue<string>()).IsEqualTo("kcap-memory");
         await Assert.That(e.Properties["tool"]!.GetValue<string>()).IsEqualTo("search_memories");
@@ -46,11 +25,12 @@ public class McpTelemetryTests {
 
     [Test]
     public async Task Failed_tool_call_is_recorded_as_not_ok() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        McpTelemetry.ToolCalled("kcap-sessions", "get_turn", ok: false, durationMs: 5);
+        await using var mcp = new McpTelemetry(probe.Telemetry);
+        mcp.ToolCalled("kcap-sessions", "get_turn", ok: false, durationMs: 5);
 
-        await Assert.That(sink.Single().Properties["ok"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(probe.Events.Single().Properties["ok"]!.GetValue<bool>()).IsFalse();
     }
 
     // Tool arguments can contain repo paths, prompts, and session ids. An earlier draft of this
@@ -59,20 +39,39 @@ public class McpTelemetryTests {
     // Inverted to an allowlist so ANY unexpected key fails the test, regardless of its name.
     [Test]
     public async Task No_argument_data_is_carried() {
-        var sink = StartCapturing();
+        var probe = StartCapturing();
 
-        McpTelemetry.ToolCalled("kcap-memory", "save_memory", ok: true, durationMs: 1);
+        await using var mcp = new McpTelemetry(probe.Telemetry);
+        mcp.ToolCalled("kcap-memory", "save_memory", ok: true, durationMs: 1);
 
         // The four event-specific properties, plus every shared property CliTelemetry.Capture
-        // merges in (see CliTelemetry.Initialize's `_shared` object) — nothing else may appear.
+        // merges in — nothing else may appear.
         var allowed = new HashSet<string> {
             "server", "tool", "ok", "duration_ms",
             "source", "cli_version", "build_channel", "os", "arch", "is_ci", "is_headless",
             "has_server", "logged_in"
         };
 
-        var keys = sink.Single().Properties.Select(p => p.Key).ToArray();
+        var keys = probe.Events.Single().Properties.Select(p => p.Key).ToArray();
         await Assert.That(keys.All(allowed.Contains)).IsTrue();
+    }
+
+    // A server exits when its harness closes stdin, which for most sessions is long before the
+    // periodic flush interval. Everything queued by then would otherwise be neither sent nor
+    // spooled: the process-exit flush belongs to the facade the top-level command built, and the
+    // top-level "mcp" command is denylisted, so that facade is off and has nothing to ship.
+    [Test]
+    public async Task Ending_a_session_ships_what_it_queued() {
+        var probe = StartCapturing();
+
+        await using (var mcp = new McpTelemetry(probe.Telemetry)) {
+            mcp.ToolCalled("kcap-memory", "search_memories", ok: true, durationMs: 1);
+
+            await Assert.That(probe.Sink.Flushes).IsEqualTo(0)
+                .Because("one call is far short of the periodic flush interval");
+        }
+
+        await Assert.That(probe.Sink.Flushes).IsEqualTo(1);
     }
 
     [Test]
