@@ -27,11 +27,12 @@ namespace Capacitor.Cli.Commands.Harness;
 ///                       emit the idle-wait marker that clears the chat
 ///                       "working" indicator. HandleStop also refreshes watcher
 ///                       liveness and emits {"continue":true} for Codex's parser.
-///   PermissionRequest → in a daemon-launched hosted agent (a loopback bridge named), bounce
-///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
-///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
-///                       POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
-///                       Codex's normal in-CLI approval prompt takes over).
+///   PermissionRequest → in an envelope-sourced hosted session (KCAP_HOSTED_APPSERVER), yield: the
+///                       app-server runtime owns approvals there. Otherwise in a daemon-launched
+///                       hosted agent (a loopback bridge named), bounce through the daemon's
+///                       LocalPermissionBridge and wait for the dashboard's decision (fail-closed on
+///                       bridge errors: deny + exit nonzero). Otherwise: POST /hooks/permission-record
+///                       (fire-and-forget; CLI emits no decision so Codex's own prompt takes over).
 ///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
 ///   PreToolUse        → swallowed
 ///   PostToolUse       → swallowed
@@ -486,12 +487,27 @@ sealed class CodexHookCommand(
         return 0;
     }
 
-    async Task<int> HandlePermissionRequest(JsonNode node) =>
-        hosted.Bridge switch {
+    async Task<int> HandlePermissionRequest(JsonNode node) {
+        // An envelope-sourced hosted session answers approvals over the app-server protocol itself:
+        // Codex's requestApproval reaches the daemon's CodexApprovalBridge, which surfaces it to the
+        // user and fails closed on its own deadline. Bouncing this hook to the daemon bridge would
+        // answer first, through a channel with no deadline, and that decline would never come.
+        if (IsEnvelopeSourcedHostedSession())
+            return YieldToCodex();
+
+        return hosted.Bridge switch {
             DaemonBridge.Loopback bridge => await HandlePermissionRequestViaBridge(bridge.BaseUrl, node),
             DaemonBridge.NotLoopback bad => RefuseBridge(bad.Value),
             _                            => await HandlePermissionRequestStub(node),
         };
+    }
+
+    /// <summary>Empty hookSpecificOutput — Codex reads it as "no decision" and runs its own approval
+    /// flow (codex-rs/hooks/src/events/permission_request.rs).</summary>
+    static int YieldToCodex() {
+        Console.Write("{}");
+        return 0;
+    }
 
     /// A named bridge this hook may not post to is a misconfiguration, not a terminal session: the
     /// stub's silent fallback to Codex's own prompt would hide it, and this hook fails closed.
@@ -523,11 +539,7 @@ sealed class CodexHookCommand(
         // PostBestEffortAsync for the shared swallow-all/cap behavior.
         await PostBestEffortAsync("permission-record", node, TimeSpan.FromSeconds(2));
 
-        // Empty hookSpecificOutput → Codex treats it as "no decision" and runs
-        // its normal approval flow. See
-        // codex-rs/hooks/src/events/permission_request.rs in openai/codex.
-        Console.Write("{}");
-        return 0;
+        return YieldToCodex();
     }
 
     async Task<int> HandlePermissionRequestViaBridge(string bridgeBase, JsonNode node) {

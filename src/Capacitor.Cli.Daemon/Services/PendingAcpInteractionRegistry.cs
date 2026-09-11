@@ -19,11 +19,18 @@ internal sealed class PendingAcpInteractionRegistry {
     readonly Dictionary<string, TaskCompletionSource<AcpInteractionDecision>>  _pending    = new();
     readonly Dictionary<string, AcpInteractionDecision>                        _early      = new();
     readonly Queue<string>                                                     _earlyOrder = new();
+    // Request ids this side stopped waiting on. The server still answers them — at least with the
+    // cancel this side asked for — and that answer must be dropped, not buffered: request ids are a
+    // per-server sequence, so a buffered stale decision could be handed to a later request that reuses
+    // the id after a server restart. A new wait on the id supersedes the mark.
+    readonly Dictionary<string, LinkedListNode<string>>                        _abandoned      = new();
+    readonly LinkedList<string>                                                _abandonedOrder = new();
 
     public Task<AcpInteractionDecision> AwaitDecisionAsync(string requestId, CancellationToken ct) {
         TaskCompletionSource<AcpInteractionDecision> tcs;
 
         lock (_gate) {
+            ClearAbandoned(requestId);
             if (_early.Remove(requestId, out var early))
                 return Task.FromResult(early);
 
@@ -40,7 +47,9 @@ internal sealed class PendingAcpInteractionRegistry {
             CancellationToken                              ct
         ) {
         await using var _ = ct.Register(() => {
-            lock (_gate) _pending.Remove(requestId);
+            lock (_gate) {
+                if (_pending.Remove(requestId)) MarkAbandoned(requestId);
+            }
 
             tcs.TrySetCanceled(ct);
         }).ConfigureAwait(false);
@@ -48,10 +57,32 @@ internal sealed class PendingAcpInteractionRegistry {
         return await tcs.Task.ConfigureAwait(false);
     }
 
+    // Age-ordered by the CURRENT mark: re-marking an id moves it to the back, and clearing it removes
+    // its order entry, so the bound evicts the genuinely oldest mark and the list cannot grow past it.
+    void MarkAbandoned(string requestId) {
+        if (_abandoned.TryGetValue(requestId, out var existing))
+            _abandonedOrder.Remove(existing);
+        _abandoned[requestId] = _abandonedOrder.AddLast(requestId);
+        while (_abandoned.Count > MaxBufferedDecisions) {
+            var oldest = _abandonedOrder.First!;
+            _abandonedOrder.RemoveFirst();
+            _abandoned.Remove(oldest.Value);
+        }
+    }
+
+    bool ClearAbandoned(string requestId) {
+        if (!_abandoned.Remove(requestId, out var node)) return false;
+        _abandonedOrder.Remove(node);
+        return true;
+    }
+
     public void Resolve(string requestId, AcpInteractionDecision decision) {
         TaskCompletionSource<AcpInteractionDecision>? tcs;
 
         lock (_gate) {
+            if (ClearAbandoned(requestId))
+                return;
+
             if (!_pending.Remove(requestId, out tcs)) {
                 if (_early.TryAdd(requestId, decision))
                     _earlyOrder.Enqueue(requestId);
