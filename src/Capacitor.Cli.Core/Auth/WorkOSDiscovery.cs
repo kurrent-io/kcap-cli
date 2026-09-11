@@ -41,6 +41,7 @@ public static class WorkOSDiscovery {
             ProxyConfigResponse                             proxyConfig,
             IAuthProxyClient                                proxy,
             ITenantPicker                                   picker,
+            SetupFunnel                                     funnel,
             Func<Task<WorkOSAuthResponse?>>                 orglessLogin,
             Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch,     // args: refreshToken, organizationId
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh = null, // args: refreshToken, ct
@@ -62,12 +63,12 @@ public static class WorkOSDiscovery {
             // tenant_none/workspace_provisioned and make signin_failed fire for declined offers,
             // provisioning failures, and the deliberately-non-zero retarget path — none of which
             // are a sign-in failure.
-            SetupFunnel.SigninFailed("workos_signin_failed");
+            funnel.SigninFailed("workos_signin_failed");
 
             return Failed(progress, "WorkOS sign-in failed.", ct);
         }
 
-        SetupFunnel.SigninCompleted(AuthProvider.WorkOS);
+        funnel.SigninCompleted(AuthProvider.WorkOS);
 
         var result = await proxy.DiscoverWorkOSTenantsAsync(proxyUrl, auth.AccessToken, ct);
         if (result.Error != DiscoveryError.None) {
@@ -80,7 +81,7 @@ public static class WorkOSDiscovery {
         }
 
         if (result.Tenants.Length == 0) {
-            return await OfferCreateAsync(proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, ct, progress);
+            return await OfferCreateAsync(proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, ct, progress);
         }
 
         var picked = result.Tenants.Length == 1
@@ -105,12 +106,13 @@ public static class WorkOSDiscovery {
             Func<string, string, Task<WorkOSAuthResponse?>>             orgSwitch,
             Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh,
             ITenantProvisioner?                                         provisioner,
+            SetupFunnel                                                 funnel,
             CancellationToken                                           ct,
             IAuthProgress                                               progress) {
         // Fires before the provisioner-null check below: a headless run (null provisioner,
         // "ask your admin" dead-end) still reached the fork and must count as such — this is
         // the denominator for "reached signup".
-        SetupFunnel.TenantNone(AuthProvider.WorkOS);
+        funnel.TenantNone(AuthProvider.WorkOS);
 
         if (provisioner is null) {
             progress.Error("No Capacitor tenants are linked to your account. Ask your admin to invite you.");

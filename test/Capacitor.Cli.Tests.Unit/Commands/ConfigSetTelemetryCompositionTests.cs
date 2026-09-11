@@ -1,6 +1,5 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -14,13 +13,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <c>ApplySet(profile, "telemetry", …)</c> — which throws "Unknown config key" — AFTER the
 /// telemetry flag had already been persisted. A user would see a confusing crash right after
 /// their opt-out silently took effect, and every existing test would stay green.
-///
-/// <para>Holds the <see cref="CliTelemetry.TestSink"/> key: the path it drives reaches
-/// <see cref="CliTelemetry.DiscardAndDisable"/>, which clears whatever sink is live — including a
-/// concurrently-running funnel test's. The on-disk state needs no key: config.json, telemetry.json
-/// and the device id all live under this test's own root.</para>
 /// </summary>
-[NotInParallel(nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink))]
 public class ConfigSetTelemetryCompositionTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -38,7 +31,7 @@ public class ConfigSetTelemetryCompositionTests {
         await ConfigMutator.MutateAsync(Config.Root, _ => seeded);
         var before = await File.ReadAllTextAsync(ConfigPath);
 
-        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient()).HandleAsync(["config", "set", "telemetry", "off"]);
+        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "set", "telemetry", "off"]);
 
         await Assert.That(exit).IsEqualTo(0);
         var after = await File.ReadAllTextAsync(ConfigPath);
@@ -51,7 +44,7 @@ public class ConfigSetTelemetryCompositionTests {
         // LoadProfileConfig/SaveProfileConfig, not merely that it round-trips one unchanged.
         await Assert.That(File.Exists(ConfigPath)).IsFalse();
 
-        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient()).HandleAsync(["config", "set", "telemetry", "off"]);
+        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "set", "telemetry", "off"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(File.Exists(ConfigPath)).IsFalse();

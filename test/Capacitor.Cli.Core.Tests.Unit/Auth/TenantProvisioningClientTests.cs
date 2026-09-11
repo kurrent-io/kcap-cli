@@ -7,11 +7,6 @@ using WireMock.Server;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
-// Reads SetupJoin.Current (a telemetry static), so it shares the same resource lock as the other
-// telemetry-static tests (SetupFunnelTests/CliTelemetryTests) and cannot run beside one that mints.
-[NotInParallel([
-    nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink),
-])]
 public class TenantProvisioningClientTests {
     [Test]
     public async Task ProvisionAsync_sends_bearer_and_camelCase_body_and_parses_202() {
@@ -24,7 +19,7 @@ public class TenantProvisioningClientTests {
         using var http = new HttpClient();
         var client = new TenantProvisioningClient(http);
 
-        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", CancellationToken.None);
+        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", joinId: null, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(202);
         await Assert.That(outcome.Body!.State).IsEqualTo("provisioning");
@@ -49,7 +44,7 @@ public class TenantProvisioningClientTests {
         using var http = new HttpClient();
         var client = new TenantProvisioningClient(http);
 
-        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme", "acme", CancellationToken.None);
+        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme", "acme", joinId: null, CancellationToken.None);
         await Assert.That(outcome.StatusCode).IsEqualTo(409);
         await Assert.That(outcome.Body!.Reason).IsEqualTo("taken");
     }
@@ -155,49 +150,17 @@ public class TenantProvisioningClientTests {
         using var http = new HttpClient();
         var client = new TenantProvisioningClient(http);
 
-        var outcome = await client.ProvisionAsync(url, "tok", "Acme", "acme", CancellationToken.None);
+        var outcome = await client.ProvisionAsync(url, "tok", "Acme", "acme", joinId: null, CancellationToken.None);
         await Assert.That(outcome.StatusCode).IsEqualTo(0);
         await Assert.That(outcome.Body).IsNull();
     }
 
-    // The key is read off the process-wide static rather than threaded through
-    // OfferCreateAsync -> provisioner -> client: it is per-run state, the same shape CliTelemetry
-    // already has everywhere, and null by construction whenever telemetry is off.
+    /// <summary>`setup` is one of the two commands that mint, so a live facade has a key to carry.</summary>
     [Test]
     public async Task ProvisionAsync_carries_the_minted_join_key_on_the_wire() {
         using var tmp = new TempDir();
-        CliTelemetry.Reset();
-        SetupJoin.Reset();
-        CliTelemetry.TestSink = [];
-        CliTelemetry.Initialize("setup", null, loggedIn: false, new ConfigRoot(tmp.Path));
-        var key = SetupJoin.Mint();
-
-        try {
-            using var server = WireMockServer.Start();
-            server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())
-                .RespondWith(Response.Create().WithStatusCode(202)
-                    .WithBody("""{"slug":"acme","state":"provisioning"}""")
-                    .WithHeader("Content-Type", "application/json"));
-
-            using var http = new HttpClient();
-            await new TenantProvisioningClient(http)
-                .ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", CancellationToken.None);
-
-            var log  = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
-            var body = JsonNode.Parse(log[0].RequestMessage.Body!)!;
-
-            await Assert.That(key).IsNotNull();
-            await Assert.That(body["joinId"]!.GetValue<string>()).IsEqualTo(key);
-        } finally {
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
-        }
-    }
-
-    [Test]
-    public async Task ProvisionAsync_sends_no_joinId_when_telemetry_is_off() {
-        CliTelemetry.Reset();
-        SetupJoin.Reset();
+        var probe = TelemetryProbe.Live("setup", new ConfigRoot(tmp.Path));
+        var key   = probe.Telemetry.Join.Current;
 
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())
@@ -207,7 +170,29 @@ public class TenantProvisioningClientTests {
 
         using var http = new HttpClient();
         await new TenantProvisioningClient(http)
-            .ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", CancellationToken.None);
+            .ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", key, CancellationToken.None);
+
+        var log  = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
+        var body = JsonNode.Parse(log[0].RequestMessage.Body!)!;
+
+        await Assert.That(key).IsNotNull();
+        await Assert.That(body["joinId"]!.GetValue<string>()).IsEqualTo(key);
+    }
+
+    /// <summary>A facade that is off mints nothing, so there is no key to put on the wire.</summary>
+    [Test]
+    public async Task ProvisionAsync_sends_no_joinId_when_telemetry_is_off() {
+        var telemetry = CliTelemetry.Disabled();
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(202)
+                .WithBody("""{"slug":"acme","state":"provisioning"}""")
+                .WithHeader("Content-Type", "application/json"));
+
+        using var http = new HttpClient();
+        await new TenantProvisioningClient(http).ProvisionAsync(
+            server.Urls[0], "tok", "Acme Inc", "acme", telemetry.Join.Current, CancellationToken.None);
 
         var log = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
         await Assert.That(log[0].RequestMessage.Body!).DoesNotContain("joinId");

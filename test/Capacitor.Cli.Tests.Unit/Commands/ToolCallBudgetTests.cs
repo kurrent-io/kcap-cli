@@ -22,7 +22,7 @@ public class ToolCallBudgetTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient());
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup);
 
     static JsonObject StartArguments() => new() {
         ["kind"]         = "code-review",

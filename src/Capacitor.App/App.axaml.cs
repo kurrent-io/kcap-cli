@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Reactive.Subjects;
@@ -51,6 +52,11 @@ public partial class App : Application {
     readonly ProfileOverrides _serverEnv  = ProfileOverrides.FromEnvironment();
     readonly MachineAuth      _machineEnv = MachineAuth.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
+
+    /// The wizard signs in through the CLI's own stack, which reports the signup funnel. The app
+    /// shows no privacy notice and offers no opt-out of its own, so it hands that stack a facade
+    /// that is off — nothing a wizard run does can emit.
+    readonly CliTelemetry _telemetry = CliTelemetry.Disabled();
 
     /// Process-lifetime rather than per wizard run — a provisioning poll can outlive the window that
     /// started it, and this client degrades a transport failure but not a disposed handler. What it
@@ -657,7 +663,7 @@ public partial class App : Application {
             profiles.Name, serverUrl,
             WizardComposition.BuildBridges(
                 action => Dispatcher.UIThread.Post(action),
-                _foreignHttp.GetRequiredService<TenantProvisioningClient>()),
+                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry),
             new ConsentFlipClaims(_config),
             new AppStateStore(_config.Path("app-state.json")),
             new ShellUrlOpener(),
@@ -733,7 +739,7 @@ public partial class App : Application {
             OperatingSystem.IsMacOS(), shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(
             action => Dispatcher.UIThread.Post(action),
-            _foreignHttp.GetRequiredService<TenantProvisioningClient>());
+            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var graph = WizardComposition.BuildGraph(new WizardGraphOptions(

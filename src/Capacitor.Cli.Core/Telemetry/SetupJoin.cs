@@ -8,8 +8,8 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// <summary>
 /// The loopback browser's view of the join: build the URL the closing page should navigate to,
 /// and accept whatever comes back afterwards. Kept as an interface so
-/// <see cref="Auth.LoopbackBrowser"/> stays dumb and testable, and so a test can drive it
-/// without touching the process-wide statics in <see cref="SetupJoin"/>.
+/// <see cref="Auth.LoopbackBrowser"/> stays dumb and testable, and so a test can drive it with a
+/// stand-in rather than a real <see cref="SetupJoin"/>.
 /// </summary>
 public interface ILoopbackJoin {
     string? FirstHopUrl(int port);
@@ -45,7 +45,7 @@ public interface ILoopbackJoin {
 /// one check: no key means no redirect and no <c>joinId</c> on any request, off by construction
 /// rather than by four separate guards.</para>
 /// </summary>
-public static class SetupJoin {
+public sealed class SetupJoin(CliTelemetry telemetry) : ILoopbackJoin {
     /// <summary>
     /// The property name the key travels under, shared by everything that has to recognise it.
     /// There are exactly two places the key could otherwise escape the process — the debug
@@ -55,11 +55,11 @@ public static class SetupJoin {
     /// </summary>
     public const string PropertyName = "join_id";
 
-    static string? _current;
-    static int     _consumed;
+    string? _current;
+    int     _consumed;
 
     /// <summary>The key for this run, or null when telemetry is off or nothing minted one.</summary>
-    public static string? Current => _current;
+    public string? Current => _current;
 
     /// <summary>
     /// Mints the key and registers it as a telemetry shared property, so every event captured
@@ -67,14 +67,14 @@ public static class SetupJoin {
     /// the existing key rather than rotating it mid-run. Returns null — and does nothing — when
     /// telemetry is disabled.
     /// </summary>
-    public static string? Mint() {
+    public string? Mint() {
         try {
-            if (!CliTelemetry.Enabled) return null;
+            if (!telemetry.Enabled) return null;
             if (_current is not null) return _current;
 
             // Same shape and minting discipline as MachineId/TelemetryDeviceId.
             _current = Guid.NewGuid().ToString("N");
-            CliTelemetry.AddSharedProperty(PropertyName, _current);
+            telemetry.AddSharedProperty(PropertyName, _current);
 
             return _current;
         } catch {
@@ -89,7 +89,7 @@ public static class SetupJoin {
     /// itself, so accepting one here would make a production web page redirect anywhere a caller
     /// named.</para>
     /// </summary>
-    public static string? FirstHopUrl(int port) {
+    public string? FirstHopUrl(int port) {
         try {
             return _current is null ? null : $"{ProvisioningEndpoint.Url}/api/cli/return?j={_current}&p={port}";
         } catch {
@@ -119,7 +119,7 @@ public static class SetupJoin {
     /// burning it would let any local process kill the bridge by racing a junk request, and
     /// guessing a 128-bit key inside the drain's few seconds is not a real threat.</para>
     /// </summary>
-    public static bool Accept(string query) {
+    public bool Accept(string query) {
         try {
             if (_current is null) return false;
             if (Volatile.Read(ref _consumed) != 0) return false;
@@ -144,7 +144,7 @@ public static class SetupJoin {
             if (Param(query, "w2") is { } wwwId && IsWebId(wwwId))
                 accepted["web_device_id_www"] = wwwId;
 
-            CliTelemetry.AddSharedProperties(accepted);
+            telemetry.AddSharedProperties(accepted);
 
             return true;
         } catch {
@@ -154,7 +154,7 @@ public static class SetupJoin {
 
     // Constant-time, so a local process probing the port cannot recover the key one byte at a
     // time from response timing.
-    static bool KeyMatches(string candidate) {
+    bool KeyMatches(string candidate) {
         var expected = _current;
         if (expected is null || candidate.Length != expected.Length) return false;
 
@@ -186,19 +186,5 @@ public static class SetupJoin {
         }
 
         return null;
-    }
-
-    /// <summary>Test seam: restores the pristine, nothing-minted state.</summary>
-    public static void Reset() {
-        _current  = null;
-        _consumed = 0;
-    }
-
-    /// <summary>The adapter handed to <see cref="Auth.LoopbackBrowser"/>; forwards to the statics.</summary>
-    public static ILoopbackJoin Loopback { get; } = new StaticLoopbackJoin();
-
-    sealed class StaticLoopbackJoin : ILoopbackJoin {
-        public string? FirstHopUrl(int port) => SetupJoin.FirstHopUrl(port);
-        public bool Accept(string query)     => SetupJoin.Accept(query);
     }
 }
