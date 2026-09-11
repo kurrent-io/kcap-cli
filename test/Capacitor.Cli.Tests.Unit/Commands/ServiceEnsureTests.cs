@@ -423,6 +423,7 @@ public class EnsureFlowMapTests {
             [VerifyExit.RestoreVerification] = null,
             [VerifyExit.StartGate]           = FirstRunMachineActionReasons.NeedsAttention,
             [VerifyExit.StartGateDrift]      = null,
+            [VerifyExit.RetireRefused]       = FirstRunMachineActionReasons.NotConfigured,
         };
 
         var codes = typeof(VerifyExit)

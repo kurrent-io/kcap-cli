@@ -29,6 +29,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) =>
         bind().SendTextAsync(agentId, text, ct);
+
+    public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) =>
+        bind().PutDaemonSettingsAsync(put, ct);
 }
 
 /// <summary>

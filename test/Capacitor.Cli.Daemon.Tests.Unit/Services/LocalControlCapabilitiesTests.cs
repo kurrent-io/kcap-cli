@@ -13,6 +13,6 @@ public class LocalControlCapabilitiesTests {
     [Test]
     public async Task The_advertised_list_is_exactly_the_routed_capabilities() =>
         await Assert.That(LocalControlCapabilities.Current)
-            .IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1" },
+            .IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "settings/1" },
                 CollectionOrdering.Matching);
 }

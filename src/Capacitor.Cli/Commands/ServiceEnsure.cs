@@ -151,6 +151,7 @@ internal static class EnsureFailureMap {
         VerifyExit.RestoreVerification => "verify_restore_verification",
         VerifyExit.StartGate           => "verify_start_gate",
         VerifyExit.StartGateDrift      => "verify_start_gate_drift",
+        VerifyExit.RetireRefused       => "verify_retire_refused",
         _                              => $"verify_unknown_{exit}",
     };
 }
@@ -191,7 +192,11 @@ internal static class EnsureFlowMap {
 
         // Viability is proven before anything destructive, so an unusable pinned URL is a
         // misconfiguration rather than a transaction that failed — and retrying it cannot help.
-        "no_profile_configured" or "no_server_configured" or "daemon_not_found" or "verify_viability" =>
+        // install --retire's own refusal is the same shape (nothing written) though the ladder's
+        // own install arm never passes a retire id — it still needs a row in the pinned-exhaustive
+        // flow map that covers every coded verify exit.
+        "no_profile_configured" or "no_server_configured" or "daemon_not_found" or "verify_viability"
+            or "verify_retire_refused" =>
             Refused(FirstRunMachineActionReasons.NotConfigured),
 
         // Rows the ladder will not touch, plus the whole start-gate family: that gate refuses in its

@@ -43,4 +43,8 @@ public sealed record LocalFrame(FrameType Type) {
     /// Constructs a SendText or SendTextAck frame, whose payload is UTF-8 JSON (snake_case via
     /// InputIpcJsonContext) carried in Text — see InputIpc.cs.
     public static LocalFrame InputJson(FrameType type, string json) => new(type) { Text = json };
+
+    /// Constructs a DaemonSettingsPut or DaemonSettingsAck frame, whose payload is UTF-8 JSON
+    /// (snake_case via SettingsIpcJsonContext) carried in Text — see SettingsIpc.cs.
+    public static LocalFrame SettingsJson(FrameType type, string json) => new(type) { Text = json };
 }
