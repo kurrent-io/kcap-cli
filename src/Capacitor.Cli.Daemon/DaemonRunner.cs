@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
@@ -275,6 +276,7 @@ public static partial class DaemonRunner {
         }
 
         config.InstanceId = daemonLock.InstanceId;
+        StartupPhase("lock acquired");
 
         // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by
         // the pre-host boot-check block immediately below AND (further down) by the coverage journal /
@@ -330,6 +332,8 @@ public static partial class DaemonRunner {
         config.RecordlessSurvivorsImpossible = new CoverageJournal(coverageStateDir, NullLogger.Instance)
             .RecordBoot(daemonLock.InstanceId, daemonLock.PriorInstanceId,
                 priorLockReadFailed: daemonLock.PriorLockIndeterminate, thisEpochContained: OperatingSystem.IsWindows());
+
+        StartupPhase("boot checks done");
 
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton(configRoot);
@@ -561,6 +565,7 @@ public static partial class DaemonRunner {
 
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
+        LogStartupPhase(logger, "host built");
 
         // Set by the supervised restart strategy so we exit non-zero for a supervisor relaunch.
         var restartState = host.Services.GetRequiredService<RestartState>();
@@ -606,6 +611,7 @@ public static partial class DaemonRunner {
             FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.UnattendedVendors);
         config.UnattendedVendorCapabilities =
             ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
+        LogStartupPhase(logger, "vendors probed");
 
         // Which build of each unattended vendor was installed when this daemon started. Recorded at
         // startup (like the Cursor-unavailable warning below) rather than per launch, and reported
@@ -703,6 +709,7 @@ public static partial class DaemonRunner {
                 // BaseUrl is still null and the spawned Claude falls back to the HTTPS path —
                 // exactly what this bridge is meant to avoid.
                 await host.StartAsync(lifetime.ApplicationStopping);
+                LogStartupPhase(logger, "socket bound");
 
                 // Phase B (D4 §6.4(3)): resolve the orchestrator (which wires OnLaunchAgent +
                 // GetLiveAgents in its ctor) and reap any hosted-agent children that outlived a
@@ -718,6 +725,7 @@ public static partial class DaemonRunner {
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
+                    LogStartupPhase(logger, "server connected");
                 } catch (Exception ex) when (nameInUse) {
                     // ConnectAsync's initial-connect path threw because of NameInUse. OnNameInUse
                     // already fired and set our flag; the host hasn't started its main loop yet, so
@@ -1355,16 +1363,22 @@ public static partial class DaemonRunner {
     /// testable without spinning up the whole DI host <see cref="RunAsync"/> builds.
     /// </summary>
     internal static IReadOnlyList<UnattendedVendorStatus> ClassifyUnattendedVendors(
-            IEnumerable<IHostedAgentRuntimeFactory> factories) =>
-        factories
-            .Where(f => f.IsAvailable())
-            .Select(f => {
-                var support = f.DescribeUnattendedSupport();
+            IEnumerable<IHostedAgentRuntimeFactory> factories) {
+        var installed = factories.Where(f => f.IsAvailable()).ToArray();
+        var byVendor  = installed.ToDictionary(f => f.Vendor, StringComparer.Ordinal);
 
-                return new UnattendedVendorStatus(f.Vendor, support.Supported, support.WithheldReason);
-            })
+        // The gated reviewers spawn their vendor binary to answer, so classifying N of them
+        // sequentially serializes N bounded `--version` probes before the socket ever binds. Overlap
+        // them: each factory is still asked exactly once, on its own task, under one shared ceiling.
+        var support = ProbeVendorsConcurrently(
+            byVendor.Keys, vendor => byVendor[vendor].DescribeUnattendedSupport(),
+            timedOut: new UnattendedSupport(false, null));
+
+        return installed
+            .Select(f => new UnattendedVendorStatus(f.Vendor, support[f.Vendor].Supported, support[f.Vendor].WithheldReason))
             .OrderBy(s => s.Vendor, StringComparer.Ordinal)
             .ToArray();
+    }
 
     /// <summary>The advertised subset of a <see cref="ClassifyUnattendedVendors"/> result.</summary>
     internal static string[] AdvertisedUnattendedVendors(IEnumerable<UnattendedVendorStatus> statuses) =>
@@ -1404,15 +1418,21 @@ public static partial class DaemonRunner {
             IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config,
             IEnumerable<string>? advertised = null) {
         var unattended = advertised?.ToArray() ?? ComputeUnattendedVendors(factories, config);
+        var byVendor   = factories.ToDictionary(f => f.Vendor, StringComparer.Ordinal);
+
+        // The `--version` probe is the slowest thing here (attempts × 10s). Run all of them at once,
+        // under one ceiling, rather than blocking startup for the sum across every advertised vendor.
+        // A vendor whose binary is unresolved is not probed at all — its version stays null, exactly as
+        // an inline probe of an empty path would leave it.
+        var probePaths = unattended
+            .Where(v => byVendor.TryGetValue(v, out var f) && !string.IsNullOrEmpty(f.CliPath))
+            .ToDictionary(v => v, v => byVendor[v].CliPath, StringComparer.Ordinal);
+        var probedVersions = ProbeVendorsConcurrently(
+            probePaths.Keys, vendor => ProbeCliVersion(probePaths[vendor]), timedOut: (string?)null);
+
         var capabilities = new List<UnattendedVendorCapability>();
         foreach (var vendor in unattended) {
-            var factory = factories.First(f => string.Equals(f.Vendor, vendor, StringComparison.Ordinal));
-            // The binary comes from the factory that would launch it, never from a vendor-keyed map
-            // here: a map is a second answer about one build, and the vendor it forgets is advertised
-            // as "CLI version unknown" while the admission gate resolves it fine — the wrong answer
-            // reaching the operator's log and the server. Only the policy version is genuinely per
-            // vendor, and a missing arm there is a wrong string rather than a silent nothing.
-            var cliPath = factory.CliPath;
+            var factory = byVendor[vendor];
             var policyVersion = vendor switch {
                 "claude"  => ClaudeLauncherPolicyVersion,
                 "cursor"  => CursorLauncherPolicyVersion,
@@ -1439,7 +1459,7 @@ public static partial class DaemonRunner {
             var modelResolver = factory.ReviewerModelResolver;
             capabilities.Add(new(
                 vendor,
-                string.IsNullOrEmpty(cliPath) ? null : ProbeCliVersion(cliPath),
+                probedVersions.GetValueOrDefault(vendor),
                 policyVersion,
                 borrowedSupported,
                 borrowedSupported ? factory.BorrowedReviewContainment : null,
@@ -1517,6 +1537,40 @@ public static partial class DaemonRunner {
     /// improve.</summary>
     const int LaunchVersionProbeTimeoutMs = 3_000;
 
+    /// <summary>One wall-clock ceiling for a whole concurrent probe pass. Strictly above a single
+    /// vendor's own budget (attempts × timeout, plus its backoff), so overlapping the probes only
+    /// removes the N-way serialization — it never cuts short a probe a sequential pass would have let
+    /// finish, which is what keeps the "one transient miss must not durably disable a vendor" contract
+    /// intact. A vendor still unfinished at the ceiling is a miss the capability-refresh path re-probes.</summary>
+    const int ConcurrentProbeCeilingMs = VersionProbeAttempts * VersionProbeTimeoutMs + 5_000;
+
+    /// <summary>
+    /// Applies <paramref name="probe"/> to every vendor CONCURRENTLY under one wall-clock ceiling, so a
+    /// daemon probing N vendor CLIs at startup waits roughly one probe's budget instead of the sum
+    /// across N. Each probe keeps its own per-vendor budget; the ceiling is only a backstop above it.
+    /// A vendor whose probe faults or has not returned by the ceiling maps to <paramref name="timedOut"/>
+    /// — the same value a sequential miss yields, so nothing but the wall-clock changes.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, T> ProbeVendorsConcurrently<T>(
+            IEnumerable<string> vendors, Func<string, T> probe, T timedOut,
+            int ceilingMs = ConcurrentProbeCeilingMs) {
+        var tasks = new Dictionary<string, Task<T>>(StringComparer.Ordinal);
+        foreach (var vendor in vendors)
+            tasks.TryAdd(vendor, Task.Run(() => probe(vendor)));
+
+        if (tasks.Count == 0) return FrozenDictionary<string, T>.Empty;
+
+        try { Task.WaitAll([.. tasks.Values], ceilingMs); } catch { /* per-task faults handled below */ }
+
+        var result = new Dictionary<string, T>(tasks.Count, StringComparer.Ordinal);
+        foreach (var (vendor, task) in tasks) {
+            if (task.IsFaulted) _ = task.Exception;   // observe so a fault is never an unobserved-task exception
+            result[vendor] = task.Status == TaskStatus.RanToCompletion ? task.Result : timedOut;
+        }
+
+        return result;
+    }
+
     internal static string? ProbeCliVersion(string cliPath) =>
         ProbeCliVersion(cliPath, VersionProbeAttempts, VersionProbeTimeoutMs);
 
@@ -1533,7 +1587,13 @@ public static partial class DaemonRunner {
         return null;
     }
 
+    /// <summary>How long the probe waits for the drains to reach EOF on their own after the child has
+    /// been dealt with. On the happy path they are already done; this only bounds the case where a
+    /// descendant that inherited the pipe is holding it open.</summary>
+    const int DrainGraceMs = 1_500;
+
     static string? ProbeCliVersionOnce(string cliPath, int timeoutMs) {
+        using var deadline = new CancellationTokenSource(timeoutMs);
         try {
             using var process = Process.Start(new ProcessStartInfo {
                 FileName = cliPath,
@@ -1548,21 +1608,45 @@ public static partial class DaemonRunner {
             // buffer — some vendor CLIs emit a banner or an "update available" notice — blocks on
             // write until the parent reads, so reading only after WaitForExit deadlocks: the child
             // parks on a full pipe, the wait never returns, and the probe hangs until the timeout
-            // kills it. The drains never fault (they swallow to ""), so the abandoned timeout path
-            // leaves no unobserved task exception.
-            var stdout = DrainToEndAsync(process.StandardOutput);
-            var stderr = DrainToEndAsync(process.StandardError);
+            // kills it. The drains swallow to their buffer, so an abandoned probe leaves no
+            // unobserved task exception.
+            var stdout = DrainToEndAsync(process.StandardOutput, deadline.Token);
+            var stderr = DrainToEndAsync(process.StandardError, deadline.Token);
 
-            if (!process.WaitForExit(timeoutMs)) {
+            var exited = process.WaitForExit(timeoutMs);
+
+            // The drains have read everything buffered; give them a short window to see EOF. They will
+            // not if the child never exited (still writing) or if a descendant that inherited the pipe
+            // is holding it open past the child's exit — the shape that used to block this probe, and
+            // the Task.Run running it, forever.
+            if (!Task.WaitAll([stdout, stderr], DrainGraceMs)) {
+                // Force the tree down (effective while the child is still alive — the timeout path),
+                // then close our own read ends. Closing them is what unblocks a drain a reparented
+                // descendant is holding open: the pending read throws and the drain returns the bytes
+                // it had already buffered, so a version printed before the block is recovered rather
+                // than discarded. A descendant that outlived a cleanly-exited child cannot be reaped
+                // from its parent's pid once it has reparented — closing the pipe detaches it, and its
+                // next write fails rather than wedging us.
+                deadline.Cancel();
                 try { ProcessTree.Kill(process); } catch { }
-                return null;
+                try { process.StandardOutput.Dispose(); } catch { }
+                try { process.StandardError.Dispose(); }  catch { }
+                Task.WaitAll([stdout, stderr], DrainGraceMs);
             }
 
-            var output = stdout.GetAwaiter().GetResult().Trim();
-            if (output.Length == 0) output = stderr.GetAwaiter().GetResult().Trim();
-            return ParseProbedVersion(output);
+            var output = ResultOrEmpty(stdout).Trim();
+            if (output.Length == 0) output = ResultOrEmpty(stderr).Trim();
+
+            // A child we had to kill for overrunning the budget with no usable output is a miss, not a
+            // version; but if it printed one before a descendant wedged the pipe, keep it.
+            return !exited && output.Length == 0 ? null : ParseProbedVersion(output);
         } catch { return null; }
     }
+
+    /// <summary>A finished drain's text, or "" for one still running — never a blocking wait on a
+    /// drain a descendant is holding open.</summary>
+    static string ResultOrEmpty(Task<string> drain) =>
+        drain.Status == TaskStatus.RanToCompletion ? drain.Result : "";
 
     /// Enough for any real vendor <c>--version</c> (a line or two); a version that needed more would
     /// fail the parser anyway. Past the cap the stream is still read to EOF so the child never blocks
@@ -1570,17 +1654,21 @@ public static partial class DaemonRunner {
     /// for the whole probe budget.
     const int ProbeOutputCap = 8 * 1024;
 
-    static async Task<string> DrainToEndAsync(System.IO.StreamReader reader) {
+    static async Task<string> DrainToEndAsync(System.IO.StreamReader reader, CancellationToken ct) {
+        var kept = new System.Text.StringBuilder();
         try {
             var buffer = new char[4096];
-            var kept   = new System.Text.StringBuilder();
             int read;
-            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0) {
+            while ((read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0) {
                 var room = ProbeOutputCap - kept.Length;
                 if (room > 0) kept.Append(buffer, 0, Math.Min(read, room));
             }
-            return kept.ToString();
-        } catch { return ""; }
+        } catch {
+            // Cancelled at the deadline, or the stream was torn down — return whatever was read before
+            // the block. A version printed ahead of a descendant that then held the pipe open is
+            // recovered rather than lost, and the drain always completes rather than parking a task.
+        }
+        return kept.ToString();
     }
 
     /// <summary>
@@ -1803,4 +1891,23 @@ public static partial class DaemonRunner {
             // might be gone, etc. Already exiting — nothing useful to do.
         }
     }
+
+    /// <summary>
+    /// Pre-host startup breadcrumb. Between lock acquisition and host construction there is no
+    /// <see cref="ILogger"/> yet, so a stall in that window would leave no record of how far the boot
+    /// got. Each phase writes one timestamped line to <see cref="Console.Error"/> (captured to the
+    /// stderr file on the detached path), so the last line printed names the last phase reached. Once
+    /// the host is built, normal logging takes over via <see cref="LogStartupPhase"/>.
+    /// </summary>
+    internal static void StartupPhase(string phase) {
+        try {
+            Console.Error.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [startup] {phase}");
+            Console.Error.Flush();
+        } catch {
+            // Same posture as DeathRattle: a redirected/closed stderr must not fault the boot.
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "startup phase: {Phase}")]
+    static partial void LogStartupPhase(ILogger logger, string phase);
 }

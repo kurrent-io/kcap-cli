@@ -43,6 +43,11 @@ public class HelloProbeTests {
             await FrameCodec.WriteAsync(s, reply, ct);
     };
 
+    // Accept the connection, read the Hello, then close without replying — a daemon built before the
+    // Hello frame drops the unknown frame this way. Reachable (serving) yet not well-formed. The read's
+    // result is unused; the connection closes when the server disposes the stream after this returns.
+    static readonly ConnScript ReadThenClose = FrameCodec.ReadAsync;
+
     async Task WithServerAsync(ConnScript script, Func<string, Task> body) {
         var name = "hp-" + Guid.NewGuid().ToString("N")[..6];
         await using var server = new OneShotServer(Daemons.Store.SocketPath(name), script);
@@ -60,6 +65,7 @@ public class HelloProbeTests {
             var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeSpan.FromSeconds(5));
 
             await Assert.That(result.WellFormed).IsTrue();
+            await Assert.That(result.Reachable).IsTrue();
             await Assert.That(result.ProtocolVersion).IsEqualTo(1);
             await Assert.That(result.DaemonVersion).IsEqualTo("9.9.9");
             await Assert.That(result.DaemonName).IsEqualTo("probed-daemon");
@@ -67,12 +73,13 @@ public class HelloProbeTests {
     }
 
     [Test]
-    public async Task No_listener_is_not_well_formed() {
+    public async Task No_listener_is_unreachable_and_not_well_formed() {
         Skip.When(OperatingSystem.IsWindows(), "Unix-domain socket path");
 
         // Short name: macOS allows 104 bytes of socket path and $TMPDIR takes 49.
         var result = await HelloProbe.RunAsync(Daemons.Store, "no-such-daemon", TimeSpan.FromSeconds(2));
 
+        await Assert.That(result.Reachable).IsFalse();   // nothing to connect to → still starting
         await Assert.That(result.WellFormed).IsFalse();
         await Assert.That(result.ProtocolVersion).IsNull();
         await Assert.That(result.DaemonVersion).IsNull();
@@ -80,12 +87,28 @@ public class HelloProbeTests {
     }
 
     [Test]
-    public async Task Error_frame_reply_is_not_well_formed() {
+    public async Task Error_frame_reply_is_reachable_but_not_well_formed() {
         Skip.When(OperatingSystem.IsWindows(), "Unix-domain socket path");
 
         await WithServerAsync(ReplyWith(LocalFrame.Error("nope")), async name => {
             var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeSpan.FromSeconds(5));
 
+            await Assert.That(result.Reachable).IsTrue();    // the connection opened → serving
+            await Assert.That(result.WellFormed).IsFalse();
+        });
+    }
+
+    [Test]
+    public async Task A_socket_that_accepts_then_closes_without_replying_is_reachable() {
+        Skip.When(OperatingSystem.IsWindows(), "Unix-domain socket path");
+
+        // The pre-Hello daemon: accepts the connection (so it is serving) and drops the unknown Hello
+        // frame without a reply. Reachability, not a well-formed Hello, is the serving signal — a
+        // CLI-only update that read WellFormed here reported an already-serving old daemon as starting.
+        await WithServerAsync(ReadThenClose, async name => {
+            var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeSpan.FromSeconds(5));
+
+            await Assert.That(result.Reachable).IsTrue();
             await Assert.That(result.WellFormed).IsFalse();
         });
     }
