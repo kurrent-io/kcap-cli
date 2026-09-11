@@ -1113,22 +1113,27 @@ reasons, and can never deliver its result. The grant admits those named tools an
 **Give the daemon durable credentials.** An unattended reviewer's stdin is closed, so it cannot complete an
 interactive login — an unauthenticated `agy` fails the launch with a coded
 `antigravity_reviewer_auth_unavailable` rather than hanging. Application Default Credentials are the
-supported setup, and the service install completes them for you:
+supported setup, and every CLI-driven daemon start completes them for you — `daemon start`, `-d`, and
+`service install` alike:
 
 ```bash
 gcloud auth application-default login
-kcap daemon service install --name "$(whoami)"   # captures/derives the trio into the unit
+kcap daemon start -d --name "$(whoami)"          # or: kcap daemon service install --name "$(whoami)"
 ```
 
 The daemon needs all three of `GOOGLE_CLOUD_PROJECT`, `AGY_ADC_AUTH=1` and
-`GOOGLE_APPLICATION_CREDENTIALS`. The install captures any you exported and silently derives the rest:
+`GOOGLE_APPLICATION_CREDENTIALS`. The CLI captures any you exported and silently derives the rest:
 the credential path from ADC's well-known location (only when the file is actually there), `AGY_ADC_AUTH=1`
 alongside it, and the project from your environment or gcloud's own active configuration. Exported values
 always win. Only the canonical `GOOGLE_CLOUD_PROJECT` counts here — `GOOGLE_CLOUD_PROJECT_ID` is carried
 for Gemini, which honours both, and does not satisfy agy's project leg. The explicit path looks redundant — ADC has a well-known default location — but a reviewer
 launch redirects `HOME` to a per-launch state directory, so the default location is not visible to the
-child. Derivation happens in the installer, at your command; the daemon itself still never reads a
-credential location of its own accord — it only forwards what the unit carries.
+child. Derivation happens in the CLI, at your command; the daemon itself still never reads a credential
+location of its own accord — it only forwards what it was started with.
+
+A daemon already running from before you logged in needs a fresh start to pick the trio up — `kcap daemon
+stop` then `kcap daemon start`/`-d` (or re-run `service install`). `kcap daemon restart` reuses the running
+process's own environment rather than re-deriving, so it will not.
 
 Deliberately unit-only: do **not** export `AGY_ADC_AUTH=1` in your interactive shell — under ADC auth agy
 fires no hooks, so that export would stop kcap capturing your own interactive Antigravity sessions. The

@@ -1,14 +1,15 @@
 namespace Capacitor.Cli.Harness.Antigravity;
 
 /// <summary>
-/// The three environment variables a daemon-hosted agy needs, and how a service install completes
-/// them. A hosted launch redirects HOME, so ADC's well-known location is invisible to the child and
-/// the credential path has to be explicit; the flag selects the auth mode, without which agy demands
-/// an interactive login it has no stdin for.
+/// The three environment variables a daemon-hosted agy needs, and how the CLI completes them when it
+/// stamps a daemon spawn's environment — a <c>daemon service install</c> unit and a direct
+/// <c>daemon start</c> / <c>-d</c> alike. A hosted launch redirects HOME, so ADC's well-known location
+/// is invisible to the child and the credential path has to be explicit; the flag selects the auth
+/// mode, without which agy demands an interactive login it has no stdin for.
 ///
-/// <para>Deriving belongs to the installer the operator is running, never to the daemon, which goes
-/// looking for a credential nowhere. And it lands in the unit only: <c>AGY_ADC_AUTH=1</c> exported
-/// in an interactive shell disables agy's own hook capture.</para>
+/// <para>Deriving belongs to whichever CLI the operator runs, never to the daemon, which goes looking
+/// for a credential nowhere. It is stamped only onto a daemon the CLI spawns, never exported into the
+/// operator's interactive shell: <c>AGY_ADC_AUTH=1</c> there disables agy's own hook capture.</para>
 /// </summary>
 static class AntigravityAdcTrio {
     internal const string ProjectKey     = "GOOGLE_CLOUD_PROJECT";

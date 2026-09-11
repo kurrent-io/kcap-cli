@@ -117,10 +117,7 @@ public sealed class DaemonCommands(
             CreateNoWindow  = true
         };
 
-        // Written, not left to the child to derive: a derived root is one HOME change away from a
-        // different one, and the sandboxes that do rewrite HOME name their own root anyway.
-        psi.Environment[DaemonStore.DaemonsDirEnvVar] = store.Directory;
-        psi.Environment[ConfigRoot.ConfigDirEnvVar]   = config.Directory;
+        ApplyEnvironment(psi.Environment);
 
         foreach (var arg in args) {
             psi.ArgumentList.Add(arg);
@@ -206,10 +203,7 @@ public sealed class DaemonCommands(
         psi.ArgumentList.Add("--log-file");
         psi.ArgumentList.Add(LogPath);
 
-        // Written, not left to the child to derive: a derived root is one HOME change away from a
-        // different one, and the sandboxes that do rewrite HOME name their own root anyway.
-        psi.Environment[DaemonStore.DaemonsDirEnvVar] = store.Directory;
-        psi.Environment[ConfigRoot.ConfigDirEnvVar]   = config.Directory;
+        ApplyEnvironment(psi.Environment);
 
         // we close the daemon's std pipes just below (anti-hang), which
         // means a runtime/native fatal message written straight to fd 2 would be
@@ -270,6 +264,54 @@ public sealed class DaemonCommands(
         Console.Out.WriteLine($"  Status:    kcap daemon status --name {name}");
 
         return 0;
+    }
+
+    /// <summary>
+    /// Overlays the daemon/config roots plus the Antigravity ADC trio onto a CLI-spawned daemon's
+    /// <see cref="ProcessStartInfo.Environment"/> — the same derivation
+    /// <c>ServiceEnvironment.Capture</c> runs at <c>daemon service install</c>, reused here so
+    /// `daemon start` and `start -d` (and the desktop app, which shells out to the latter) do not
+    /// leave hosted Antigravity without it just because the daemon didn't come from a service install.
+    /// </summary>
+    void ApplyEnvironment(IDictionary<string, string?> env) {
+        var isWindows = OperatingSystem.IsWindows();
+
+        ApplySpawnEnvironment(
+            env, store.Directory, config.Directory, isWindows,
+            adcCredentialsPath: isWindows ? null : Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.ExistingCredentialsPath(home),
+            gcloudProject:      isWindows ? null : GcloudConfig.DefaultProject(home));
+    }
+
+    /// <summary>Pure half of <see cref="ApplyEnvironment"/>: the daemon/config roots are written, not
+    /// left to the child to derive (a derived root is one HOME change away from a different one, and
+    /// the sandboxes that do rewrite HOME name their own root anyway), and off Windows the trio is
+    /// completed via <see cref="Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.Complete"/>.
+    /// <c>Complete</c> is seeded from what the environment already carries, so a trio member the
+    /// operator exported wins over the derived default — it only fills what is absent, and handing it
+    /// an empty view would let the derived default overwrite the exported value on the copy back.
+    /// A present-but-EMPTY export is dropped from the seed so the derivation still runs — matching how
+    /// <c>ServiceEnvironment.Capture</c> treats an empty capture as unset — except an empty
+    /// <c>AGY_ADC_AUTH</c>, which is a deliberate refusal of ADC auth and is kept. Without that drop an
+    /// empty credentials path both blocks derivation and manufactures <c>AGY_ADC_AUTH=1</c> for a path
+    /// agy cannot read.</summary>
+    internal static void ApplySpawnEnvironment(
+            IDictionary<string, string?> env, string daemonsDir, string configDir, bool isWindows,
+            string? adcCredentialsPath, string? gcloudProject) {
+        env[DaemonStore.DaemonsDirEnvVar] = daemonsDir;
+        env[ConfigRoot.ConfigDirEnvVar]   = configDir;
+
+        if (isWindows) return;
+
+        var trio = new Dictionary<string, string>();
+        foreach (var (k, v) in env) {
+            if (v is null) continue;
+            if (v.Length > 0 || k == Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.FlagKey)
+                trio[k] = v;
+        }
+
+        Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.Complete(trio, adcCredentialsPath, gcloudProject);
+
+        foreach (var (k, v) in trio) env[k] = v;
     }
 
     /// <summary><c>DaemonRunner.BootCarriers.Seed</c>'s twin: the daemon project defines the

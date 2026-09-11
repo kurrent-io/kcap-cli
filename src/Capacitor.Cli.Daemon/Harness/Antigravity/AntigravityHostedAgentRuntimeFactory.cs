@@ -413,24 +413,19 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
     /// <summary>
     /// Turns a failed handshake into a reason an operator can act on. The auth arm is
-    /// <b>non-retryable and names the ADC remedy</b> — a generic launch failure would send an operator
-    /// looking at the daemon, the flow or the network, when the actual fix is three environment
-    /// variables.
+    /// <b>non-retryable and names the kcap command that fixes it</b>, not the three environment
+    /// variables it sets — every CLI-driven daemon start (<c>daemon start</c>, <c>-d</c>,
+    /// <c>service install</c>) derives them the same way, so the fix is a restart, not manual
+    /// export.
     ///
-    /// <para><b>GOOGLE_APPLICATION_CREDENTIALS is one of the three, and naming it is load-bearing.</b>
-    /// ADC's default location is <c>$HOME/.config/gcloud/application_default_credentials.json</c>, and
-    /// this launch redirects <c>HOME</c> to a per-launch state directory — so the credential
-    /// <c>gcloud auth application-default login</c> just wrote is invisible to the child, and neither
-    /// <c>AGY_ADC_AUTH</c> nor <c>GOOGLE_CLOUD_PROJECT</c> carries a path that would find it. An earlier
-    /// revision of this message named only those two; measured, an operator following it exactly still
-    /// gets <c>authentication required. Run 'agy' to log in.</c> The remedy text has to be sufficient on
-    /// its own — a remedy that leaves the operator where they started reads as a broken feature.</para>
+    /// <para><b>Naming GOOGLE_APPLICATION_CREDENTIALS is still load-bearing.</b> ADC's default
+    /// location is <c>$HOME/.config/gcloud/application_default_credentials.json</c>, and this launch
+    /// redirects <c>HOME</c> to a per-launch state directory, so the credential <c>gcloud auth
+    /// application-default login</c> wrote is invisible to the child unless the path is explicit.</para>
     ///
     /// <para>The daemon deliberately does NOT synthesize the path from its own <c>HOME</c>. Per the
     /// borrowed-review auth design it never goes <i>looking</i> for a credential — it forwards what the
-    /// operator exported and nothing else — and reading a well-known credential location is exactly
-    /// that. <c>ServiceEnvironment</c> already carries this key into a supervised unit off-Windows, so
-    /// the export survives a service install without the daemon ever reading the file.</para>
+    /// CLI derived at spawn time and nothing else.</para>
     /// </summary>
     static InvalidOperationException DescribeLaunchFailure(
             Exception cause, IAgyTurnProcess? firstTurn, CancellationToken callerToken, CancellationToken launchToken) {
@@ -438,13 +433,14 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
             return new InvalidOperationException(
                 "antigravity_reviewer_auth_unavailable: agy could not authenticate, and a daemon-hosted "
               + "agy has no way to complete an interactive login (its stdin is closed). Give the "
-              + "daemon durable credentials: `gcloud auth application-default login`, then set ALL THREE "
-              + "of GOOGLE_CLOUD_PROJECT=<project>, AGY_ADC_AUTH=1 and "
-              + "GOOGLE_APPLICATION_CREDENTIALS=<absolute path to "
-              + "application_default_credentials.json> in the daemon's environment. The path is required "
-              + "even though ADC has a default location: a reviewer launch redirects HOME, so the "
-              + "default location is not visible to it. A supervised daemon installed before these were "
-              + "exported must be reinstalled to capture them.",
+              + "daemon durable credentials: `gcloud auth application-default login`, then stop and "
+              + "start it (`kcap daemon stop` then `kcap daemon start` or `-d`) — or re-run `kcap "
+              + "daemon service install` for a supervised daemon. That derives AGY_ADC_AUTH=1 and "
+              + "GOOGLE_APPLICATION_CREDENTIALS from the credential you just wrote, and "
+              + "GOOGLE_CLOUD_PROJECT from your active gcloud project — so set one first if you have "
+              + "not (`gcloud config set project <id>`). The explicit credentials path matters even "
+              + "though ADC has a default location, because a reviewer launch redirects HOME and that "
+              + "default location is not visible to it.",
                 cause);
 
         if (launchToken.IsCancellationRequested && !callerToken.IsCancellationRequested)
