@@ -2479,18 +2479,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// selector resolves against it; failure falls back to the loaded session's current model,
     /// exactly like launch. A no-op for `NoOpModelSelector` vendors or when no model was
     /// requested.</summary>
-    async Task ReapplyModelAsync(Incarnation candidate, CancellationToken ct) {
-        var selected = await _modelSelector
+    async Task ReapplyModelAsync(Incarnation candidate, CancellationToken ct) =>
+        _resolvedModel = await _modelSelector
             .TrySelectAsync(candidate.Connection, _sessionId!, _lastLoadResult, _requestedModel, _logger, ct)
-            .ConfigureAwait(false);
-        // A default launch (nothing requested) selects nothing, so refresh from the loaded session's
-        // CURRENT model — the reconnect mirror of StartAsync's fallback — rather than keeping the
-        // startup value, which session/load may have superseded. A requested-but-unmatched model
-        // still keeps the prior value (null selection, non-blank request).
-        _resolvedModel = selected
-            ?? (string.IsNullOrWhiteSpace(_requestedModel) ? AcpSessionModelList.ExtractCurrentModel(_lastLoadResult) : null)
-            ?? _resolvedModel;
-    }
+            .ConfigureAwait(false) ?? _resolvedModel;
 
     /// <summary>
     /// Commit (§6.3), under the reconnect lock: stop re-check, candidate liveness via the

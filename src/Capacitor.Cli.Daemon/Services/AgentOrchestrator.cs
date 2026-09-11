@@ -2404,16 +2404,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogBridgeDefeatingPosture(agentId, applied.Sandbox, applied.Approval);
             }
 
-            // An ACP runtime confirms model application during its StartAsync handshake:
-            // Transcript.ResolvedModel is the id actually applied, or null when the request did not
-            // take (no availableModels match / the agent rejected the option — the vendor's default
-            // runs in every null case). Register the CONFIRMED value, never the request: agent.Model
-            // feeds AgentRegisteredAsync (live model chip + hosted_agent_started analytics),
-            // AgentRunStarted (agent_runs), every reconnect re-registration, and the local
-            // supervision status payload (SnapshotAgentsForStatus). Same requested-vs-running rule
-            // as ModelSelectionLaunchPolicy, applied per-request instead of per-capability. PTY
-            // runtimes have no confirmation seam (Transcript is null) and keep reporting
-            // effectiveModel.
+            // An ACP runtime confirms its running model during the StartAsync handshake:
+            // Transcript.ResolvedModel is the applied selection, or — when no model was requested —
+            // the handshake's current model; it is null only when a REQUESTED model did not take (no
+            // availableModels match / the agent rejected the option), in which case the vendor default
+            // runs and effectiveModel (also blank on a default launch) is registered instead. Register
+            // the CONFIRMED value, never a requested-but-unconfirmed one: agent.Model feeds
+            // AgentRegisteredAsync (live model chip + hosted_agent_started analytics), AgentRunStarted
+            // (agent_runs), every reconnect re-registration, and the local supervision status payload
+            // (SnapshotAgentsForStatus). PTY runtimes have no confirmation seam (Transcript is null)
+            // and keep reporting effectiveModel.
             var registeredModel = start.Transcript is { } confirmed ? confirmed.ResolvedModel : effectiveModel;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
