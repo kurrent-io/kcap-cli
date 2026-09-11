@@ -518,6 +518,42 @@ public class AcpHostedAgentRuntimeTests {
         h.Fake.HoldPromptResponses.TrySetResult();
     }
 
+    [Test]
+    public async Task Second_prompt_queued_behind_an_in_flight_turn_emits_its_user_message_immediately_in_send_order() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        // Hold every session/prompt response so the first turn stays genuinely in flight while the
+        // second is queued behind it.
+        h.Fake.HoldPromptResponses = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await h.Runtime.StartAsync("/abs/worktree", "prompt-A", h.Cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (h.Fake.ReceivedCalls.All(c => c.Method != "session/prompt") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/prompt")).IsTrue();
+
+        // The queued prompt's row must appear the moment it is accepted — while the first turn is
+        // still held open, not only once the worker dequeues it — and after the first prompt's.
+        await h.Runtime.SendUserInputAsync("prompt-B").WaitAsync(HangGuard);
+
+        var userMessages = new List<AcpEventEnvelope>();
+        while (userMessages.Count < 2) {
+            var env = await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard);
+            if (env.Kind == AcpEventKind.UserMessage) userMessages.Add(env);
+        }
+
+        await Assert.That(userMessages.Select(e => e.Text!))
+            .IsEquivalentTo(new[] { "prompt-A", "prompt-B" }, CollectionOrdering.Matching);
+
+        // The second row did not wait on the first turn: only prompt-A's session/prompt was ever
+        // sent, and its response is still held.
+        await Assert.That(h.Fake.ReceivedCalls.Count(c => c.Method == "session/prompt")).IsEqualTo(1);
+
+        h.Fake.HoldPromptResponses.TrySetResult();
+    }
+
     // ── Test plan item 9: cancellation propagates out of StartAsync ───────────────────
 
     /// <summary>

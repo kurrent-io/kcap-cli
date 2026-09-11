@@ -116,7 +116,6 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     bool         _incidentResendSentence;
     InFlightTurn? _inFlight;
     PendingTurn?  _heldTurn;
-    bool          _heldTurnSkipEnvelope;
     CancellationTokenSource? _ownerCts;
     Task          _ownerTask = Task.CompletedTask;
 
@@ -267,6 +266,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// happens-before analysis above.
     /// </summary>
     readonly object _aggregationLock = new();
+
+    /// Serializes <see cref="EnqueueTurn"/> so a turn's user-message emit, its capacity check, and its
+    /// write to <see cref="_pendingTurns"/> are one atomic step: concurrent senders cannot both pass a
+    /// stale count and have one write silently dropped, and the emit always precedes the write.
+    readonly object _enqueueLock = new();
 
     AcpUpdateKind?  _openRunKind;
     StringBuilder?  _openRunText;
@@ -1184,24 +1188,40 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         var written = acknowledgeWrite
             ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             : null;
-        if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
-            var dropped = Interlocked.Increment(ref _droppedPendingTurns);
-            _logger.LogWarning(
-                "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
-                _pendingTurnsCapacity, dropped);
+        // The capacity check, the user-message emit, and the write are one critical section. The
+        // emit precedes the write, so the worker — which cannot see the turn until it is written —
+        // never sends a prompt whose user row is not yet recorded (the row shows in send order the
+        // moment the turn is accepted, even queued behind an in-flight one). And because no
+        // concurrent sender can fill the queue between the check and the write under this lock, the
+        // write cannot be DropWrite-dropped, so a row is never left for a turn that never queued. A
+        // held turn re-admitted after a reconnect is re-processed without re-enqueueing, so this is
+        // the single emit per turn — the worker's admission path emits none.
+        lock (_enqueueLock) {
+            if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
+                var dropped = Interlocked.Increment(ref _droppedPendingTurns);
+                _logger.LogWarning(
+                    "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
+                    _pendingTurnsCapacity, dropped);
 
-            var full = new InputNotAdmittedException("ACP pending-turns queue is full.");
-            if (written is null) throw full;
-            written.TrySetException(full);
-            return written.Task;
+                var full = new InputNotAdmittedException("ACP pending-turns queue is full.");
+                if (written is null) throw full;
+                written.TrySetException(full);
+                return written.Task;
+            }
+
+            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text), advanceActivity: false);
+
+            if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
+                // The channel was completed (the runtime went terminal) — the only way a not-full
+                // write fails. Rare, and the row above is harmless on a transcript that is ending;
+                // fault the caller so it is not left awaiting a turn that will never run.
+                _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
+                var closed = new InputNotAdmittedException("ACP runtime is terminal; this input was not queued.");
+                if (written is null) throw closed;
+                written.TrySetException(closed);
+            }
         }
 
-        if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
-            _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
-            var closed = new InputNotAdmittedException("ACP runtime is terminal; this input was not queued.");
-            if (written is null) throw closed;
-            written.TrySetException(closed);
-        }
         return written?.Task ?? Task.CompletedTask;
     }
 
@@ -1218,16 +1238,13 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         try {
             while (true) {
                 PendingTurn turn;
-                var skipEnvelope = false;
 
-                // The held-turn slot outranks the queue (reconnect spec §6.4 ordering: held turn
-                // first, then queued turns). At most one turn can be held: the worker is
-                // single-flight, so only one turn is ever past dequeue.
+                // The held-turn slot outranks the queue: a turn parked during reconnect is
+                // re-admitted before any newer queued turn. At most one turn is ever held — the
+                // worker is single-flight, so only one turn is past dequeue at a time.
                 if (_heldTurn is { } held) {
-                    turn                  = held;
-                    skipEnvelope          = _heldTurnSkipEnvelope;
-                    _heldTurn             = null;
-                    _heldTurnSkipEnvelope = false;
+                    turn      = held;
+                    _heldTurn = null;
                 } else {
                     if (!await _pendingTurns.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
                         break; // channel completed — shutdown
@@ -1236,12 +1253,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                         continue;
                 }
 
-                // Pre-gate admission (reconnect spec §5.3): the park-or-register decision and —
-                // when admitted — the UserMessage envelope emission share ONE critical section
-                // under the reconnect lock (the aggregation lock nests inside, §5.1), so a crash
-                // snapshot can never observe a registered turn with indeterminate envelope state,
-                // and a turn dequeued after the gate closed parks instead of being sent at a dead
-                // incarnation. Parking holds no gate.
+                // Pre-gate admission: decide park-or-register under the reconnect lock. This turn's
+                // UserMessage row was already emitted at accept time (EnqueueTurn), so admission only
+                // registers the in-flight turn or parks it — a turn dequeued after the gate closed
+                // parks instead of being sent at a dead incarnation. Parking holds no gate.
                 Task? reopen   = null;
                 var   terminal = false;
 
@@ -1249,13 +1264,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     if (Phase == RuntimePhase.Terminal) {
                         terminal = true;
                     } else if (Phase == RuntimePhase.Reconnecting) {
-                        _heldTurn             = turn;
-                        _heldTurnSkipEnvelope = skipEnvelope;
-                        reopen                = _gateOpen.Task;
+                        _heldTurn = turn;
+                        reopen    = _gateOpen.Task;
                     } else {
                         _inFlight = new InFlightTurn(turn, _installed.Id);
-                        if (!skipEnvelope)
-                            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text));
                     }
                 }
 
@@ -1283,7 +1295,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     /// <summary>
     /// Processes exactly one ADMITTED prompt turn (its <c>UserMessage</c> envelope was already
-    /// emitted inside the pre-gate admission critical section — reconnect spec §5.3): (a) performs
+    /// emitted at accept time in <see cref="EnqueueTurn"/>): (a) performs
     /// the write-entry transition (or parks on refusal); (b) sends <c>session/prompt</c> and awaits
     /// its <c>stopReason</c> response (reusing <see cref="SendPromptAsync"/>); (c) performs this
     /// turn's end-of-turn flush of the aggregation buffer in a <c>finally</c> — this runs whether
@@ -1296,21 +1308,21 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     async Task ProcessAdmittedTurnAsync(PendingTurn turn, CancellationToken ct) {
         await _turnExecutionGate.WaitAsync(ct).ConfigureAwait(false);
         try {
-            // Write entry (reconnect spec §5.3, `TryEnterWrite`): re-check `Reconnecting` and
-            // advance `not-started → entered` atomically, INSIDE the turn-execution gate,
-            // immediately before the send. A refusal parks the turn with its envelope already in
-            // the transcript (skip-user-envelope) and NEVER faults the ack — the failed write
-            // entry is what guarantees this turn's bytes never reached any incarnation, the race
-            // an installed-id check alone cannot close because no swap has happened yet. The park
-            // path returns through this method's finally, releasing the gate BEFORE the worker
-            // awaits reopen, which is what keeps the owner's settlement wait deadlock-free.
+            // Write entry (`TryEnterWrite`): re-check `Reconnecting` and advance
+            // `not-started → entered` atomically, INSIDE the turn-execution gate, immediately before
+            // the send. A refusal parks the turn — its UserMessage row is already in the transcript
+            // (emitted at accept time) and its re-admission never re-enqueues, so the row is not
+            // duplicated — and NEVER faults the ack: the failed write entry is what guarantees this
+            // turn's bytes never reached any incarnation, the race an installed-id check alone cannot
+            // close because no swap has happened yet. The park path returns through this method's
+            // finally, releasing the gate BEFORE the worker awaits reopen, which is what keeps the
+            // owner's settlement wait deadlock-free.
             AcpConnection connection;
 
             lock (_reconnectLock) {
                 if (Phase != RuntimePhase.Running || _inFlight is not { } inFlight || !ReferenceEquals(inFlight.Turn, turn)) {
-                    _heldTurn             = turn;
-                    _heldTurnSkipEnvelope = true;
-                    _inFlight             = null;
+                    _heldTurn = turn;
+                    _inFlight = null;
                     return;
                 }
 
@@ -1836,7 +1848,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// relying on <c>TryWrite</c>'s return value, which is <see langword="true"/> for BOTH a normal
     /// write and a drop-and-evict write under this FullMode — it cannot distinguish the two.
     /// </summary>
-    void EmitEnvelope(AcpEventEnvelope envelope) {
+    void EmitEnvelope(AcpEventEnvelope envelope, bool advanceActivity = true) {
         // Liveness-supervision spec §1: advance BEFORE the channel write below, never after — a
         // reader blocked on Envelopes.ReadAsync can wake and run the instant TryWrite makes the item
         // visible, on another thread, with no ordering relationship to whatever this thread does
@@ -1849,8 +1861,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // admitted — session_info_update/usage_update reach here with no turn in flight at all (see
         // AggregateUpdate's standalone-emit case). Advance even on the dropped-because-completed path
         // below: the content was genuinely produced, and by the time the channel is completed nothing
-        // downstream is reading idle state for this agent anyway.
-        ActivityClock?.Advance();
+        // downstream is reading idle state for this agent anyway. The one exception is the accept-time
+        // user row (advanceActivity: false): a prompt queued behind an in-flight turn is the person's
+        // input, not that turn's progress, so advancing here would reset a stalled turn's idle timer
+        // every time the user queues another prompt and let a wedged reviewer dodge the turn-wedge reap.
+        if (advanceActivity) ActivityClock?.Advance();
 
         // Named positively, so a metadata kind added later cannot count as the agent speaking by
         // accident: usage and session-info envelopes reach here with no turn in flight at all, and a

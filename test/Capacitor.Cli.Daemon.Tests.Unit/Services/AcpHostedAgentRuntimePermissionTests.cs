@@ -4,6 +4,7 @@ using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Acp;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -119,6 +120,51 @@ public class AcpHostedAgentRuntimePermissionTests {
         await Assert.That(fake.LastServerRequestError!.Value.GetProperty("code").GetInt32()).IsEqualTo(-32601);
 
         cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>A prompt queued behind an in-flight turn records its user row at accept time (that is
+    /// the point of showing queued input immediately), but that row is the person's input, not the
+    /// active turn's progress — so it must not advance the activity clock, or queuing input while a
+    /// turn is wedged would keep resetting its idle timer and let it dodge the turn-wedge reap.</summary>
+    [Test]
+    public async Task Queued_prompt_records_its_row_without_advancing_the_activity_clock() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+        var gate    = new TaskCompletionSource<AcpInteractionDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn, process, NullLogger.Instance, requestInteraction: (req, ct) => gate.Task) {
+            ActivityClock = new AgentActivityClock(new FakeTimeProvider())
+        };
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        // Turn 1 stalls on a permission that never resolves: it stays in flight and produces no output.
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run ls"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]""");
+        await runtime.SendUserInputAsync("first").WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!fake.SentServerRequests.Any(r => r.Method == "session/request_permission") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var seqBefore = runtime.ActivityClock!.ActivitySeq;
+
+        // SendUserInputAsync emits the accept-time row synchronously before its task completes, so the
+        // clock is settled by the time this await returns — no envelope poll needed.
+        await runtime.SendUserInputAsync("second").WaitAsync(HangGuard);
+
+        await Assert.That(runtime.ActivityClock!.ActivitySeq).IsEqualTo(seqBefore);
+
+        cts.Cancel();
+        gate.TrySetCanceled();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await runtime.DisposeAsync();
         await fake.DisposeAsync();

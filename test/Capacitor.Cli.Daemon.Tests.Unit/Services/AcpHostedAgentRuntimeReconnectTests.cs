@@ -3,6 +3,7 @@ using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Acp;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -271,14 +272,21 @@ public class AcpHostedAgentRuntimeReconnectTests {
             c.Params!.Value.GetProperty("prompt")[0].GetProperty("text").GetString() == "in-flight-turn")).IsFalse();
 
         // …the note carries the resend sentence (a turn was in flight)…
+        await Harness.PollUntilAsync(() => {
+            var e = h.EnvelopeSnapshot();
+            return e.Any(x => x.Kind == AcpEventKind.SystemNote)
+                && e.Count(x => x.Kind == AcpEventKind.UserMessage) == 2;
+        });
+
         var envelopes = h.EnvelopeSnapshot();
         var note = envelopes.Single(e => e.Kind == AcpEventKind.SystemNote);
         await Assert.That(note.Text!).Contains("resend");
 
-        // …and ordering held: the note precedes the queued turn's UserMessage envelope.
-        var noteIndex   = envelopes.ToList().FindIndex(e => e.Kind == AcpEventKind.SystemNote);
-        var queuedIndex = envelopes.ToList().FindIndex(e => e.Kind == AcpEventKind.UserMessage && e.Text == "queued-turn");
-        await Assert.That(queuedIndex).IsGreaterThan(noteIndex);
+        // …and each turn's UserMessage row was emitted exactly once, at accept time, in send order:
+        // parking the queued turn during reconnect neither loses its row nor lets its later
+        // re-admission duplicate it.
+        var userMessages = envelopes.Where(e => e.Kind == AcpEventKind.UserMessage).Select(e => e.Text!).ToList();
+        await Assert.That(userMessages).IsEquivalentTo(new[] { "in-flight-turn", "queued-turn" }, CollectionOrdering.Matching);
     }
 
     [Test]
