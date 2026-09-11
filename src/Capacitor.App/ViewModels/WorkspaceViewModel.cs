@@ -78,6 +78,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
 
     readonly CompositeDisposable _disposables = new();
+    readonly SerialDisposable _lease = new();
 
     // Read by StopCommand at click time -- the DTO's own Kind decides protected-ness
     // (AgentActionService.IsProtectedKind), so Stop must see whatever the LATEST resolved dto
@@ -88,9 +89,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             string agentId, IDaemonClientService daemon, AgentActionService actions,
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
-            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null) {
+            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
+            SessionAccessService? access = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
+        _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -112,6 +115,16 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         presence.Select(p => p.Dto).Subscribe(dto => _latestDto = dto).DisposeWith(_disposables);
+
+        // An ACP-hosted agent's question reaches the app only over the server lane, in this
+        // session's chat group, local agent or not — so a local workspace joins it too. A local
+        // agent the server never registered answers Denied; nothing here reads the verdict, which
+        // is what keeps that invisible.
+        if (access is not null)
+            presence.Select(p => p.Dto?.SessionId)
+                .DistinctUntilChanged()
+                .Subscribe(sessionId => _lease.Disposable = sessionId is null ? Disposable.Empty : access.Acquire(sessionId))
+                .DisposeWith(_disposables);
 
         _title = presence.Select(p => TitleFor(p.Dto))
             .ToProperty(this, x => x.Title, TitleFor(null))

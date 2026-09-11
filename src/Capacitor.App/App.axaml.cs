@@ -584,7 +584,8 @@ public partial class App : Application {
             workContext, ops, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
-            });
+            },
+            access: sessionAccess);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
