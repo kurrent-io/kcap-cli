@@ -91,22 +91,32 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     public IObservable<bool> RemoteStale { get; }
     public IObservable<bool> LocalDaemonOnAppServer => _onAppServer;
 
+    // The scope flag is an input, not just a consumer's filter: a flip changes the answer for rows
+    // that never moved, so the map has to be republished on it.
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents => _rows.Connect()
-        .QueryWhenChanged(q => SessionMap(q.Items))
-        .StartWith(SessionMap(_rows.Items))
+        .QueryWhenChanged(q => (IReadOnlyList<AgentRow>)[.. q.Items])
+        .StartWith((IReadOnlyList<AgentRow>)[.. _rows.Items])
+        .CombineLatest(_onAppServer, SessionMap)
         .DistinctUntilChanged(new DictionaryEquality());
 
     public string? VendorOfSession(string sessionId) =>
-        _rows.Items.Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
+        ServerSessionRows(_rows.Items, _onAppServer.Value)
+            .Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
 
     public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
+
+    /// Both session lookups answer for a server-lane session id. While the local daemon reports
+    /// another server, its rows carry that server's ids and a match here is coincidence: the id
+    /// names a different session, whose agent is not the local one.
+    static IEnumerable<AgentRow> ServerSessionRows(IEnumerable<AgentRow> rows, bool localOnAppServer) =>
+        localOnAppServer ? rows : rows.Where(r => r.Origin != AgentOrigin.Local);
 
     // Local sorts before Remote in AgentOrigin, so the ordered pass's TryAdd lets a local row win
     // a session claimed by both an unproven twin pair — proven suppression already keeps a twin's
     // remote row out of _rows entirely, so this tie only ever arises while the pairing is unproven.
-    static IReadOnlyDictionary<string, string> SessionMap(IEnumerable<AgentRow> rows) {
+    static IReadOnlyDictionary<string, string> SessionMap(IReadOnlyList<AgentRow> rows, bool localOnAppServer) {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var row in rows.OrderBy(r => r.Origin))
+        foreach (var row in ServerSessionRows(rows, localOnAppServer).OrderBy(r => r.Origin))
             if (row.SessionId is { Length: > 0 } sid) map.TryAdd(sid, row.Id);
         return map.Count == 0 ? FrozenDictionary<string, string>.Empty : map;
     }

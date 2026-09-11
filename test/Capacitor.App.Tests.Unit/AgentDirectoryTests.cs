@@ -27,8 +27,8 @@ public class AgentDirectoryTests {
         return (local, remote, lane, dir);
     }
 
-    static AgentStatusDto LocalAgent(string id, string? sessionId = null) => new(
-        Id: id, Kind: "agent", Vendor: "claude", RepoPath: "/r", Status: "Running",
+    static AgentStatusDto LocalAgent(string id, string? sessionId = null, string vendor = "claude") => new(
+        Id: id, Kind: "agent", Vendor: vendor, RepoPath: "/r", Status: "Running",
         FlowRunId: null, FlowRole: null, Requester: null, CreatedAt: DateTime.UtcNow, Model: null,
         RequesterDisplay: null, SessionId: sessionId);
 
@@ -212,6 +212,7 @@ public class AgentDirectoryTests {
     public async Task Session_agents_maps_every_row_with_a_session_and_prefers_the_local_row_on_a_tie() {
         var (local, remote, _, dir) = Build();
         using var _d = dir;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap()); // the daemon is on the app's server
         local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "s1"));
         remote.Cache.AddOrUpdate(Remote("z9", daemon: "elsewhere", owner: "u2", sessionId: "s1"));
         remote.Cache.AddOrUpdate(Remote("r2", daemon: "elsewhere", owner: "u2", sessionId: "s2"));
@@ -223,4 +224,29 @@ public class AgentDirectoryTests {
         await Assert.That(map["s2"]).IsEqualTo("r2");
         await Assert.That(dir.VendorOfSession("s2")).IsNotNull();
     }
+
+    /// A session id is unique only within one server. While the local daemon reports another one,
+    /// its rows carry that server's ids, so a server-lane session sharing an id is the remote row's
+    /// — resolving it to the local agent stamps that session's cards and its rail pip onto an
+    /// unrelated process.
+    [Test]
+    public async Task Server_session_lookups_skip_local_rows_while_the_daemon_is_on_another_server() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "http://elsewhere:8080"));
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "s1", vendor: "codex"));
+        remote.Cache.AddOrUpdate(Remote("r1", daemon: "elsewhere", owner: "u2", sessionId: "s1"));
+
+        IReadOnlyDictionary<string, string>? map = null;
+        using var sub = dir.SessionAgents.Subscribe(m => map = m);
+
+        await Assert.That(map!["s1"]).IsEqualTo("r1");
+        await Assert.That(dir.VendorOfSession("s1")).IsEqualTo("claude");
+
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+
+        await Assert.That(map["s1"]).IsEqualTo("a1");
+        await Assert.That(dir.VendorOfSession("s1")).IsEqualTo("codex");
+    }
+
 }
