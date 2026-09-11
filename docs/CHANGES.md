@@ -10,8 +10,9 @@ code moves on; where an entry disagrees with the code, the code wins.
 
 `npm publish` returns while the registry is still processing a tarball, and a platform package carrying
 two native binaries took about ten minutes to become installable. A wrapper visible in that window
-installs without its binary, silently: npm skips an optional dependency it cannot resolve. The release
-now polls every platform package until it resolves before publishing the wrapper, and the desktop
+installs without its binary, silently: npm skips an optional dependency it cannot resolve or download.
+The release now polls every platform package until it resolves and its tarball answers before
+publishing the wrapper, and the desktop
 publish reuses that poll before comparing its binaries with npm's. Every poll and every install the
 launcher runs passes `--prefer-online`, because npm serves a cached packument for five minutes and a
 plain retry re-reads the same miss.

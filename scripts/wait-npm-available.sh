@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Blocks until every <package>@<version> resolves from the npm registry, or fails at the deadline.
+# Blocks until every <package>@<version> resolves from the npm registry and its tarball downloads, or
+# fails at the deadline.
 # npm publish returns while the registry is still processing the tarball, for minutes on a large one.
 # Usage: wait-npm-available.sh <version> <package>...
 # NPM_WAIT_TIMEOUT (seconds, default 1800) and NPM_WAIT_INTERVAL (seconds, default 15) tune the poll.
@@ -15,7 +16,9 @@ err="$(mktemp)"; trap 'rm -f "$err"' EXIT
 for pkg in "$@"; do
   while :; do
     # --prefer-online: npm caches a packument for five minutes, so a plain re-poll re-reads the miss.
-    if [ "$(npm view "$pkg@$version" version --prefer-online --registry https://registry.npmjs.org 2>"$err")" = "$version" ]; then
+    tarball="$(npm view "$pkg@$version" dist.tarball --prefer-online --registry https://registry.npmjs.org 2>"$err")" || tarball=""
+    # npm also skips an optional dependency whose tarball fails to download.
+    if [ -n "$tarball" ] && curl -fsSI "$tarball" >/dev/null 2>>"$err"; then
       echo "$pkg@$version is available"
       break
     fi

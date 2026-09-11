@@ -18,7 +18,7 @@ assert.strictEqual(resolveInstallSpec({ install_tag: "latest" }), "@kurrent/kcap
 assert.strictEqual(resolveInstallSpec({}), "@kurrent/kcap@latest");          // missing → latest
 assert.strictEqual(resolveInstallSpec(null), "@kurrent/kcap@latest");        // no probe → latest
 assert.strictEqual(resolveInstallSpec({ install_tag: "" }), "@kurrent/kcap@latest");
-assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@1.0.1"); // server-capped pin
+assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@1.0.1");
 
 // Revalidates npm's cached packument, so a platform package published minutes ago is not skipped.
 assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online"]);
