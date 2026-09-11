@@ -585,6 +585,24 @@ public sealed class DaemonCommands(
 
     // ── status ──────────────────────────────────────────────────────────────
 
+    /// <summary>How long <c>status</c> waits for a daemon's Hello before reporting it as still
+    /// starting. Short: a bound daemon answers immediately, and an unbound one refuses the connection
+    /// at once — the timeout only bounds the rare mid-bind race.</summary>
+    static readonly TimeSpan ServingProbeTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The running daemon's status line, distinguishing a daemon that is actually serving from one
+    /// whose PID is live but whose local control socket does not yet answer. A validated PID proves
+    /// only that the process exists; a well-formed Hello proves it has bound its socket and can answer.
+    /// A live process that is not yet answering has acquired its lock but has not finished binding its
+    /// listener and connecting — it is starting, not serving — which a PID alone reports as flatly
+    /// "running".
+    /// </summary>
+    internal static string DescribeRunningDaemon(int pid, bool serving) =>
+        serving
+            ? $"running (PID {pid})"
+            : $"running (PID {pid}, starting — not yet serving)";
+
     async Task<int> Status(string[] args) {
         string? explicitName;
 
@@ -613,7 +631,12 @@ public sealed class DaemonCommands(
             if (DaemonPidProbe.ReadPidFile(store, name) is not { } entry) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
             } else if (DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
-                await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
+                // Socket-bound is the serving signal: a Hello over the local control socket answers
+                // only once the daemon has bound its listener, which happens after the lock and boot
+                // checks it may still be working through. A validated PID alone cannot tell a
+                // still-starting daemon from a serving one.
+                var hello = await HelloProbe.RunAsync(store, name, ServingProbeTimeout);
+                await Console.Out.WriteLineAsync($"Daemon '{name}': {DescribeRunningDaemon(entry.Pid, hello.WellFormed)}");
 
                 // Version of the *running* daemon (from the marker it wrote at
                 // startup), so the user can confirm a self-update took effect.
