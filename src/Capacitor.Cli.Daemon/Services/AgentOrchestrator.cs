@@ -2542,8 +2542,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
-            // Phase B (D1): a post-insert failure (this launch's own agent already in _agents — e.g. a
-            // throwing RegisterAgentAsync) routes teardown through the single-flight CleanupAgentAsync
+            // A post-insert failure (this launch's own agent already in _agents — e.g. a throwing
+            // RegisterAgentAsync) routes teardown through the single-flight CleanupAgentAsync
             // so it can't strand a live child. `published`, not ContainsKey: a pre-publish failure can
             // find agentId already occupied by a DIFFERENT, live incarnation, and CleanupAgentAsync
             // would then tear down that unrelated agent while leaking this launch's own journal.
