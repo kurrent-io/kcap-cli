@@ -19,11 +19,18 @@ internal sealed class PendingAcpInteractionRegistry {
     readonly Dictionary<string, TaskCompletionSource<AcpInteractionDecision>>  _pending    = new();
     readonly Dictionary<string, AcpInteractionDecision>                        _early      = new();
     readonly Queue<string>                                                     _earlyOrder = new();
+    // Request ids this side stopped waiting on. The server still answers them — at least with the
+    // cancel this side asked for — and that answer must be dropped, not buffered: request ids are a
+    // per-server sequence, so a buffered stale decision could be handed to a later request that reuses
+    // the id after a server restart. A new wait on the id supersedes the mark.
+    readonly HashSet<string>                                                   _abandoned      = new();
+    readonly Queue<string>                                                     _abandonedOrder = new();
 
     public Task<AcpInteractionDecision> AwaitDecisionAsync(string requestId, CancellationToken ct) {
         TaskCompletionSource<AcpInteractionDecision> tcs;
 
         lock (_gate) {
+            _abandoned.Remove(requestId);
             if (_early.Remove(requestId, out var early))
                 return Task.FromResult(early);
 
@@ -40,7 +47,9 @@ internal sealed class PendingAcpInteractionRegistry {
             CancellationToken                              ct
         ) {
         await using var _ = ct.Register(() => {
-            lock (_gate) _pending.Remove(requestId);
+            lock (_gate) {
+                if (_pending.Remove(requestId)) MarkAbandoned(requestId);
+            }
 
             tcs.TrySetCanceled(ct);
         }).ConfigureAwait(false);
@@ -48,10 +57,19 @@ internal sealed class PendingAcpInteractionRegistry {
         return await tcs.Task.ConfigureAwait(false);
     }
 
+    void MarkAbandoned(string requestId) {
+        if (_abandoned.Add(requestId)) _abandonedOrder.Enqueue(requestId);
+        while (_abandoned.Count > MaxBufferedDecisions && _abandonedOrder.Count > 0)
+            _abandoned.Remove(_abandonedOrder.Dequeue());
+    }
+
     public void Resolve(string requestId, AcpInteractionDecision decision) {
         TaskCompletionSource<AcpInteractionDecision>? tcs;
 
         lock (_gate) {
+            if (_abandoned.Remove(requestId))
+                return;
+
             if (!_pending.Remove(requestId, out tcs)) {
                 if (_early.TryAdd(requestId, decision))
                     _earlyOrder.Enqueue(requestId);
