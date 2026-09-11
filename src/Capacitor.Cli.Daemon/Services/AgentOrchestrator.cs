@@ -2043,7 +2043,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var activityClock = CreateActivityClock();
 
         try {
-            if (EffectiveCount >= _config.MaxConcurrentAgents) {
+            // MaxConcurrentAgents == 0 is unlimited: the gate is skipped entirely, never compared.
+            if (_config.MaxConcurrentAgents > 0 && EffectiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);

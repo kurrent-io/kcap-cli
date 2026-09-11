@@ -131,7 +131,7 @@ public class SettingsViewModelTests {
         using var vm = Make(store, Connected());
         await Assert.That(vm.CanSave).IsFalse();
         await Assert.That(vm.CanRename).IsFalse();
-        vm.Capacity = 0;
+        vm.Capacity = -1;
         vm.Name = "Bad Name";
         await Assert.That(vm.CanSave).IsFalse();
         await Assert.That(vm.NameError).IsNotNull();
@@ -143,6 +143,15 @@ public class SettingsViewModelTests {
         await Assert.That(vm.CanRename).IsTrue();
         await Assert.That(store.Load().Name).IsEqualTo("daemon-a");
         await Assert.That(store.Load().MaxAgents).IsEqualTo(5);
+    });
+
+    [Test]
+    public Task Zero_capacity_is_valid_and_means_unlimited() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = Make(store, Connected());
+        vm.Capacity = 0;
+        await Assert.That(vm.CapacityError).IsNull();
+        await Assert.That(vm.CanSave).IsTrue();
     });
 
     [Test]

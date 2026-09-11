@@ -104,8 +104,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public string? NameError => string.IsNullOrWhiteSpace(Name) || DaemonStore.Sanitize(Name) != Name
         ? "Use lowercase letters, numbers, dots, hyphens or underscores, with no surrounding spaces or repeated hyphens." : null;
-    public string? CapacityError => Capacity is not { } value || value < 1 || value > int.MaxValue || decimal.Truncate(value) != value
-        ? "Enter a whole number of at least 1." : null;
+    public string? CapacityError => Capacity is not { } value || value < 0 || value > int.MaxValue || decimal.Truncate(value) != value
+        ? "Enter a whole number (0 = unlimited)." : null;
     public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS."
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
@@ -116,7 +116,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             : !Idle ? "Waiting for the daemon’s current agent count…" : "Renaming restarts the daemon and relaunches this app.";
     public string StatusLine => _status.State switch {
         AttachState.Connected when _snapshot is { } snap =>
-            $"Running as {snap.Daemon.Name}, {snap.Daemon.ActiveAgents} of {snap.Daemon.MaxAgents} agents",
+            snap.Daemon.MaxAgents == 0
+                ? $"Running as {snap.Daemon.Name}, {snap.Daemon.ActiveAgents} agents (unlimited)"
+                : $"Running as {snap.Daemon.Name}, {snap.Daemon.ActiveAgents} of {snap.Daemon.MaxAgents} agents",
         AttachState.Unreachable => "Daemon not running. Changes apply when it starts.",
         _ => "Connecting to daemon…",
     };

@@ -23,7 +23,8 @@ internal sealed partial class DaemonSettingsIpc(
     // Validate everything before applying anything, so a put is all-or-nothing as settings grow.
     DaemonSettingsAckDto Apply(DaemonSettingsPutDto? dto) {
         if (!SettingsWire.HasAnySetting(dto)) return Refuse(DaemonSettingsReasons.Malformed);
-        if (dto!.MaxAgents is < 1) return Refuse(DaemonSettingsReasons.InvalidMaxAgents);
+        // 0 is unlimited; only a negative value is invalid.
+        if (dto!.MaxAgents is < 0) return Refuse(DaemonSettingsReasons.InvalidMaxAgents);
 
         if (dto.MaxAgents is { } max) {
             config.MaxConcurrentAgents = max;
