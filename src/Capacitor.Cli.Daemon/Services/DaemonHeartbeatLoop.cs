@@ -18,6 +18,10 @@ namespace Capacitor.Cli.Daemon.Services;
 /// instead of waiting for the WebSocket to teach the daemon.
 /// </summary>
 internal interface IDaemonHeartbeatPort {
+    /// <summary>The hub is <c>Connected</c>. False while SignalR is Connecting/Reconnecting or the
+    /// connection is Disconnected — states where <c>WithAutomaticReconnect</c> and <c>OnClosed</c>
+    /// already own recovery, and the heartbeat must not force a reconnect of its own.</summary>
+    bool       IsConnected { get; }
     Task<bool> PingAsync(CancellationToken ct);
     Task       ReRegisterAsync();
     Task       ForceReconnectAsync();
@@ -56,6 +60,16 @@ internal sealed class DaemonHeartbeatLoop(
     /// whether reconnects are deadline-exceeded vs ping-threw vs slot-displaced).
     /// </summary>
     public async Task TickAsync(CancellationToken ct) {
+        // Stand down unless the hub is Connected. While it is Connecting/Reconnecting/Disconnected,
+        // WithAutomaticReconnect and OnClosed own recovery; a ping here would throw "connection is not
+        // active" and the catch below would force a reconnect that races the one already in flight —
+        // the self-sustaining storm. Skipping keeps the loop quiet until the connection is back.
+        if (!port.IsConnected) {
+            logger.LogDebug("Heartbeat: hub is not connected — automatic reconnect owns recovery; skipping tick");
+
+            return;
+        }
+
         var sw = Stopwatch.StartNew();
 
         try {
@@ -117,6 +131,15 @@ internal sealed class DaemonHeartbeatLoop(
     }
 
     async Task SafeForceReconnectAsync() {
+        // The connection can drop between the ping and here (the invoke threw "connection is not
+        // active"). Recovery is then already in flight, so forcing another reconnect only races it —
+        // force only while the hub still believes it is Connected (a hung-but-live transport).
+        if (!port.IsConnected) {
+            logger.LogDebug("Heartbeat: reconnect already in progress — not forcing");
+
+            return;
+        }
+
         try {
             await port.ForceReconnectAsync();
         } catch (Exception ex) {

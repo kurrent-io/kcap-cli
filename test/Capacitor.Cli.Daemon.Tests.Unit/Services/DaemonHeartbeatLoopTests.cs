@@ -28,9 +28,15 @@ public class DaemonHeartbeatLoopTests {
         public Func<Task>?                          ForceReconnectHandler    { get; set; }
         public int                                  ReRegisterCalls;
         public int                                  ForceReconnectCalls;
+        public int                                  PingCalls;
+        // Defaults to the Connected steady state every pre-existing test exercises.
+        public bool                                 IsConnected { get; set; } = true;
 
-        public Task<bool> PingAsync(CancellationToken ct)
-            => PingHandler is null ? Task.FromResult(true) : PingHandler(ct);
+        public Task<bool> PingAsync(CancellationToken ct) {
+            PingCalls++;
+
+            return PingHandler is null ? Task.FromResult(true) : PingHandler(ct);
+        }
 
         public Task ReRegisterAsync() {
             ReRegisterCalls++;
@@ -209,6 +215,43 @@ public class DaemonHeartbeatLoopTests {
 
         await Assert.That(port.ReRegisterCalls).IsEqualTo(1);
         await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Tick_HubReconnecting_SkipsWithoutPingingOrForcing() {
+        // THE storm fix: while the hub is not Connected, SignalR's automatic reconnect (and OnClosed)
+        // own recovery. A ping would throw "connection is not active" every tick and the loop would
+        // force a reconnect that races the one already in flight — the self-sustaining storm. The
+        // heartbeat must stand down: no ping, no force-reconnect.
+        var port = new FakePort {
+            IsConnected = false,
+            PingHandler = _ => Task.FromException<bool>(new InvalidOperationException("connection is not active"))
+        };
+        var loop = CreateLoop(port);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.PingCalls).IsEqualTo(0);
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+        await Assert.That(port.ReRegisterCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Tick_ConnectionDropsDuringPing_DoesNotForceReconnect() {
+        // The hub was Connected at the top of the tick but dropped mid-ping (the invoke throws
+        // "connection is not active"). Recovery is now in flight, so the loop must not force its own.
+        var port = new FakePort { IsConnected = true };
+        port.PingHandler = _ => {
+            port.IsConnected = false;
+
+            return Task.FromException<bool>(new InvalidOperationException("connection is not active"));
+        };
+        var loop = CreateLoop(port);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.PingCalls).IsEqualTo(1);
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
     }
 
     [Test]
