@@ -166,6 +166,7 @@ public partial class App : Application {
     // counterpart of the wizard sign-in quiesce.
     SignInWindow? _signInWindow;
     SettingsWindow? _settingsWindow;
+    readonly AppMenu _appMenu = new(AppKitMenus.ShowAboutPanel);
     Task? _reauthSettle;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
@@ -190,7 +191,7 @@ public partial class App : Application {
         AvaloniaXamlLoader.Load(this);
         // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
         // "About Avalonia" when there is none.
-        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel));
+        NativeMenu.SetMenu(this, _appMenu.Menu);
     }
 
     public override void OnFrameworkInitializationCompleted() {
@@ -577,7 +578,7 @@ public partial class App : Application {
         Action? openSettings = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
             ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier, lifecycle.PhaseClosed)
             : null;
-        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel, openSettings));
+        ConfigureSettingsMenu(openSettings);
 
         // LAST, deliberately (spec §9): anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
@@ -591,6 +592,8 @@ public partial class App : Application {
             restartPending: restartPending.Pending, openSettings: openSettings);
         _tray = new TrayIconManager(this, _trayVm);
     }
+
+    internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled) {
