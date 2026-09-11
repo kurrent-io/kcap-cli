@@ -509,7 +509,6 @@ public partial class App : Application {
         // One launch client and one work-context source for the app, not one per window the
         // coordinator builds — each owns a live transport, and only a held instance can be
         // disposed at teardown.
-        serverLane.Start();
         var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv);
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv);
         var ghRunner = new ProcessRunner();
@@ -546,6 +545,10 @@ public partial class App : Application {
         _sessionAccess = sessionAccess;
         _permissionFeed = permissionFeed;
         _attention = attention;
+
+        // Only now: the lane's permission, elicitation and settlement streams are hot and replay
+        // nothing, so anything pushed before the feed and the tracker are subscribed is lost.
+        serverLane.Start();
 
         // The rail pips on both halves: agents with a card in the cache, plus sessions the tracker
         // knows are waiting but the app has never opened, mapped back to their agent.
