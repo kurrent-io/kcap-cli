@@ -1080,7 +1080,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
         // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
         // one consolidated Info log carrying the negotiated protocol version, loadSession, and the
-        // resolved model (null if none was requested/matched).
+        // resolved model (the applied selection, the handshake's current model for a no-request
+        // launch, or null when a requested model did not match or no current marker was published).
         LogHandshakeOk(_agentId, _negotiatedProtocolVersion, _negotiatedCapabilities.LoadSession, _resolvedModel);
 
         // A dropped model is only knowable after session/new publishes the vendor's list, so nothing

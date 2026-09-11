@@ -2406,14 +2406,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // An ACP runtime confirms its running model during the StartAsync handshake:
             // Transcript.ResolvedModel is the applied selection, or — when no model was requested —
-            // the handshake's current model; it is null only when a REQUESTED model did not take (no
-            // availableModels match / the agent rejected the option), in which case the vendor default
-            // runs and effectiveModel (also blank on a default launch) is registered instead. Register
-            // the CONFIRMED value, never a requested-but-unconfirmed one: agent.Model feeds
-            // AgentRegisteredAsync (live model chip + hosted_agent_started analytics), AgentRunStarted
-            // (agent_runs), every reconnect re-registration, and the local supervision status payload
-            // (SnapshotAgentsForStatus). PTY runtimes have no confirmation seam (Transcript is null)
-            // and keep reporting effectiveModel.
+            // the handshake's current model. It is null when a REQUESTED model did not take (no
+            // availableModels match / the agent rejected it) OR when a no-request launch published no
+            // current marker; the vendor default runs with no known id in both. Register that
+            // CONFIRMED value (null included) rather than a requested-but-unconfirmed one: agent.Model
+            // feeds AgentRegisteredAsync (live model chip + hosted_agent_started analytics),
+            // AgentRunStarted (agent_runs), every reconnect re-registration, and the local supervision
+            // status payload (SnapshotAgentsForStatus). Only PTY runtimes (Transcript is null) fall
+            // back to effectiveModel.
             var registeredModel = start.Transcript is { } confirmed ? confirmed.ResolvedModel : effectiveModel;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {

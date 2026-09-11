@@ -24,10 +24,11 @@ internal interface IAcpTranscriptSource {
     /// selection (the vendor's model-selection RPC — <c>session/set_config_option</c> or
     /// <c>session/set_model</c> — was sent and answered without error), OR, when NO model was
     /// requested, the current model the <c>session/new</c> handshake reported. It is
-    /// <see langword="null"/> only when a model WAS requested but resolution found no match in
-    /// <c>session/new</c>'s <c>availableModels</c> or the agent rejected the option — the vendor's own
-    /// default then runs and is not reported as a specific id. So a non-null value is always a model
-    /// the session is actually running, never a requested-but-unconfirmed one.
+    /// <see langword="null"/> in two cases: a REQUESTED model that did not take (no match in
+    /// <c>availableModels</c> / the agent rejected the option), and a no-request launch whose
+    /// <c>session/new</c> published no current-model marker. In both the vendor's own default runs and
+    /// its specific id is unknown — so a non-null value is always a model the session is actually
+    /// running, never a requested-but-unconfirmed or guessed one.
     /// </summary>
     string? ResolvedModel { get; }
 
