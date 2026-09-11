@@ -1112,7 +1112,36 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             maxServerErrorRetries: OwnershipNotReadyMaxRetries
         );
 
-        return await _pendingAcpInteractions.AwaitDecisionAsync(requestId, ct);
+        return await AwaitInteractionDecisionAsync(request, requestId, ct);
+    }
+
+    /// <summary>Awaits the user's decision for <paramref name="requestId"/>. The server holds an
+    /// interaction open until it is answered — it has no deadline of its own — so when this side stops
+    /// waiting (the caller's deadline, or teardown) the entry is resolved as cancelled here, best-effort,
+    /// before the cancellation propagates; otherwise the pending card outlives the request.</summary>
+    internal async Task<AcpInteractionDecision> AwaitInteractionDecisionAsync(
+            AcpInteractionRequest request, string requestId, CancellationToken ct) {
+        try {
+            return await _pendingAcpInteractions.AwaitDecisionAsync(requestId, ct);
+        } catch (OperationCanceledException) {
+            _ = ResolveAbandonedInteractionAsync(request, requestId);
+            throw;
+        }
+    }
+
+    /// <summary>The outcome the server records for an interaction this side stopped waiting on — its own
+    /// token for an interaction nobody answered (InterruptOutcomes.Cancel), distinct from a user deny.</summary>
+    internal const string AbandonedInteractionOutcome = "cancel";
+
+    async Task ResolveAbandonedInteractionAsync(AcpInteractionRequest request, string requestId) {
+        try {
+            var sessionId = SessionIds.Canonical(request.AcpSessionId) ?? request.AcpSessionId;
+            var outcome   = await RespondToPermissionAsync(sessionId, requestId, new PermissionDecision(AbandonedInteractionOutcome, null, null));
+            if (outcome.Kind == RespondOutcomeKind.Failed)
+                _logger.LogDebug("ACP interaction {RequestId} abandoned locally but not resolved on the server: {Reason}", requestId, outcome.Reason);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP interaction {RequestId} abandoned locally but not resolved on the server", requestId);
+        }
     }
 
     /// <summary>
