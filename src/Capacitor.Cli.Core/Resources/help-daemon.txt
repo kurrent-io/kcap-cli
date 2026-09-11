@@ -18,7 +18,7 @@ Subcommands:
 Options for start:
   --name <name>           Daemon name (defaults to OS username)
   --server-url <url>      Server URL
-  --max-agents <n>        Max concurrent hosted coding agents (default: 5)
+  --max-agents <n>        Max concurrent hosted coding agents (default: 5; 0 = unlimited)
   --log-file <path>       Log to file instead of console
   --log-level <level>     Log verbosity: trace|debug|information|warning|error|
                           critical|none (default: information). Also settable via

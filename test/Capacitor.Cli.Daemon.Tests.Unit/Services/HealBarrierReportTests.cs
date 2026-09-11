@@ -64,8 +64,9 @@ public class HealBarrierReportTests {
     // A Seq'd LaunchAgentCommand the shipped launch would reject at capacity flows through the
     // processor as a terminal LaunchRejected(daemon_capacity) CommandOutcome, so the sequenced lane
     // emits a CommandRejected (in addition to the legacy LaunchFailed) and the watermark still
-    // advances. A daemon already at capacity (one seeded agent, cap 1) rejects the next admission at
-    // the capacity gate, before any launcher/worktree side effect. (Capacity 0 now means unlimited.)
+    // advances. Capacity 0 is the unlimited sentinel, so forcing a rejection needs a finite cap: a
+    // daemon at cap 1 with one seeded agent rejects the next admission at the gate, before any
+    // launcher/worktree side effect.
     [Test]
     public async Task Sequenced_launch_over_capacity_emits_daemon_capacity_rejection() {
         var server = new SeqCaptureServerConnection();
