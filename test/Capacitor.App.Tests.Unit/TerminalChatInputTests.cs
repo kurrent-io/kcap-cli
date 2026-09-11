@@ -35,7 +35,7 @@ public class TerminalChatInputTests {
 
             var raised = new List<string>();
             input.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
-            await Assert.That(await input.SendAsync("hello", CancellationToken.None)).IsTrue();
+            await Assert.That(await input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
             await Assert.That(input.Availability).IsEqualTo(SendAvailability.Sending);
             await Assert.That(input.Hint).IsEqualTo("Sending…");
             await Assert.That(raised).Contains(nameof(ChatInput.Availability));
@@ -60,7 +60,7 @@ public class TerminalChatInputTests {
             client.Result.SetResult(new AttachOutcome.Exited(0));
             await terminal.CurrentRunForTesting!;
             await Assert.That(raised).IsEqualTo(0);
-            await Assert.That(await input.SendAsync("x", CancellationToken.None)).IsFalse();
+            await Assert.That(await input.SendAsync("x", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await terminal.TeardownAsync();
         });
     }

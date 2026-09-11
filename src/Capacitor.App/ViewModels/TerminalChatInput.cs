@@ -29,8 +29,9 @@ public sealed class TerminalChatInput : ChatInput {
     public override string Hint => HintFor(_terminal.SendAvailability, _terminal.State);
 
     /// The terminal path has nothing to cancel: acceptance is synchronous.
-    public override Task<bool> SendAsync(string text, CancellationToken ct) =>
-        Task.FromResult(!_disposed && _terminal.TrySendText(text));
+    public override Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) =>
+        Task.FromResult(!_disposed && !ct.IsCancellationRequested && _terminal.TrySendText(text)
+            ? ChatSendOutcome.Accepted : ChatSendOutcome.Rejected);
 
     public override void Dispose() {
         if (_disposed) return;

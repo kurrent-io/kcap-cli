@@ -13,9 +13,12 @@ public class JsonlTailTests {
         var first = tail.ReadAppended();
         await Assert.That(first.Status).IsEqualTo(TailStatus.Ok);
         await Assert.That(first.Lines).IsEquivalentTo(new[] { "{\"a\":1}", "{\"b\":2}" });
+        await Assert.That(first.SnapshotLength).IsEqualTo(new FileInfo(path).Length);
+        await Assert.That(first.SnapshotLength!.Value).IsGreaterThan(tail.Cursor);
 
         var second = tail.ReadAppended();
         await Assert.That(second.Lines).IsEmpty();
+        await Assert.That(second.SnapshotLength).IsEqualTo(first.SnapshotLength);
 
         File.AppendAllText(path, "3}\n");
         var third = tail.ReadAppended();
@@ -28,16 +31,16 @@ public class JsonlTailTests {
         var read = new JsonlTail(path).ReadAppended();
 
         await Assert.That(read.Lines).IsEquivalentTo(new[] { "{\"a\":1}", "{\"b\":2}" });
-        await Assert.That(read.LineEndOffsets).IsEquivalentTo(new long[] { 9, 23 });
+        await Assert.That(read.LineStartOffsets).IsEquivalentTo(new long[] { 0, 14 });
     }
 
     [Test]
     public async Task Line_offsets_count_utf8_bytes_and_remain_absolute_across_reads() {
         var path = Tmp.CreateFile("offsets.jsonl", "é\r\n\n");
         var tail = new JsonlTail(path);
-        await Assert.That(tail.ReadAppended().LineEndOffsets).IsEquivalentTo(new long[] { 4 });
+        await Assert.That(tail.ReadAppended().LineStartOffsets).IsEquivalentTo(new long[] { 0 });
         File.AppendAllText(path, "ok\n");
-        await Assert.That(tail.ReadAppended().LineEndOffsets).IsEquivalentTo(new long[] { 8 });
+        await Assert.That(tail.ReadAppended().LineStartOffsets).IsEquivalentTo(new long[] { 5 });
     }
 
     [Test]

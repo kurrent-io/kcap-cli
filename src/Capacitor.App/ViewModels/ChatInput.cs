@@ -9,8 +9,11 @@ public abstract class ChatInput : ReactiveObject, IDisposable {
     public abstract SendAvailability Availability { get; }
     public abstract bool CanAcceptText { get; }
     public abstract string Hint { get; }
-    /// Completes when the channel considers the text committed: true to clear the composer.
-    public abstract Task<bool> SendAsync(string text, CancellationToken ct);
+    /// Acceptance may clear the composer; an unconfirmed delivery must await transcript evidence.
+    public abstract Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct);
+    /// The caller has transcript evidence for its latest send. Older receipts must not clear a
+    /// newer send's delivery notice.
+    public virtual void ConfirmLastSend() { }
     public virtual bool CanInterrupt => false;
     public virtual Task InterruptAsync(CancellationToken ct) => Task.CompletedTask;
     public abstract void Dispose();

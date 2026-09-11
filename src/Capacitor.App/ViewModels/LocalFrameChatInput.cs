@@ -62,19 +62,20 @@ internal sealed class LocalFrameChatInput : ChatInput {
         _                            => "Connecting to the agent…",
     };
 
-    public override async Task<bool> SendAsync(string text, CancellationToken ct) {
-        if (_disposed || !CanAcceptText) return false;
+    public override async Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) {
+        if (_disposed || !CanAcceptText || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
         _sending = true; _notice = null; Raise();
         SendTextResult result;
         try {
             result = await _ops.SendTextAsync(_agentId, text, ct);
         } catch (OperationCanceledException) {
-            return Settle(false, Unconfirmed);
-        } catch (Exception ex) {
-            return Settle(false, ex.Message);
+            return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
+        } catch (Exception) {
+            return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
         }
-        if (result.Ok) return Settle(true, null);
-        return Settle(false, result.Reason switch {
+        if (result.Ok) return Settle(ChatSendOutcome.Accepted, null);
+        var outcome = result.Reason == SendTextReasons.Transport ? ChatSendOutcome.Unconfirmed : ChatSendOutcome.Rejected;
+        return Settle(outcome, result.Reason switch {
             SendTextReasons.Transport      => Unconfirmed,
             SendTextReasons.NotRunning     => "agent is no longer running",
             SendTextReasons.NoSuchAgent    => "agent is no longer running",
@@ -90,10 +91,16 @@ internal sealed class LocalFrameChatInput : ChatInput {
         });
     }
 
-    bool Settle(bool committed, string? notice) {
-        if (_disposed) return committed;
+    ChatSendOutcome Settle(ChatSendOutcome outcome, string? notice) {
+        if (_disposed) return outcome;
         _sending = false; _notice = notice; Raise();
-        return committed;
+        return outcome;
+    }
+
+    public override void ConfirmLastSend() {
+        if (_disposed || _sending || _notice != Unconfirmed) return;
+        _notice = null;
+        Raise();
     }
 
     void Raise() {

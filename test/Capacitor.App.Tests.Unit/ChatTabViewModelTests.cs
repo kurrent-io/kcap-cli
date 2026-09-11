@@ -673,15 +673,15 @@ public class ChatTabViewModelTests {
 
     /// A scripted ChatInput for composer tests: SendAsync completes when the test says so.
     sealed class ScriptedInput : ChatInput {
-        public TaskCompletionSource<bool>? Pending;
+        public TaskCompletionSource<ChatSendOutcome>? Pending;
         public int Disposals;
         public List<(string Text, CancellationToken Ct)> Sends { get; } = [];
         public override SendAvailability Availability => Pending is null ? SendAvailability.Ready : SendAvailability.Sending;
         public override bool CanAcceptText => Pending is null;
         public override string Hint => "scripted";
-        public override Task<bool> SendAsync(string text, CancellationToken ct) {
+        public override Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) {
             Sends.Add((text, ct));
-            Pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Pending = new TaskCompletionSource<ChatSendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             this.RaisePropertyChanged(nameof(CanAcceptText));
             return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
@@ -738,19 +738,19 @@ public class ChatTabViewModelTests {
             var send = h.Chat.SendCommand.Execute().ToTask();
             await Assert.That(input.Sends.Single().Text).IsEqualTo("hello");
             h.Chat.ComposerText = "hello edited";
-            input.Pending!.SetResult(true);
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
             await Assert.That(h.Chat.ComposerText).IsEqualTo("hello edited");
 
             h.Chat.ComposerText = "two";
             send = h.Chat.SendCommand.Execute().ToTask();
-            input.Pending!.SetResult(false);
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
             await send;
             await Assert.That(h.Chat.ComposerText).IsEqualTo("two");
 
             h.Chat.ComposerText = "three";
             send = h.Chat.SendCommand.Execute().ToTask();
-            input.Pending!.SetResult(true);
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
             await Assert.That(h.Chat.ComposerText).IsEqualTo("");
             await h.TeardownAsync();
@@ -771,7 +771,7 @@ public class ChatTabViewModelTests {
             var send = h.Chat.SendCommand.Execute().ToTask();
             h.Chat.ComposerText = "hello!";
             h.Chat.ComposerText = "hello";
-            input.Pending!.SetResult(true);
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
 
             await Assert.That(h.Chat.ComposerText).IsEqualTo("hello");
@@ -922,11 +922,11 @@ public class ChatTabViewModelTests {
             h.Chat.ComposerText = "hello";
             var send = h.Chat.SendCommand.Execute().ToTask();
             await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued");
-            input.Pending!.SetResult(true);
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
             h.Chat.ComposerText = "hello";
             send = h.Chat.SendCommand.Execute().ToTask();
-            input.Pending!.SetResult(true);
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
             await h.TickAsync();
             await Assert.That(h.Chat.QueueSummary).IsEqualTo("2 messages queued");
@@ -953,16 +953,250 @@ public class ChatTabViewModelTests {
             File.AppendAllText(path, UserLine + "\n");
             await h.TickAsync();
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
-            input.Pending!.SetResult(true);
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await send;
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
             h.Chat.ComposerText = "refused";
             send = h.Chat.SendCommand.Execute().ToTask();
-            input.Pending!.SetResult(false);
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
             await send;
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
             await Assert.That(h.Chat.ComposerText).IsEqualTo("refused");
             await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_path_switch_keeps_unconfirmed_input_until_a_fresh_echo() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("before.jsonl", [UserLine]);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                var other = Tmp.CreateFile("after.jsonl", [UserLine]);
+                await h.PushAsync(Dto(other));
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message unconfirmed");
+                File.AppendAllText(other, UserLine + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_reset_rebases_input_without_acknowledging_replayed_history() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("reset.jsonl", [UserLine, AssistantLine, AssistantLine]);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                File.WriteAllLines(path, [UserLine]);
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message unconfirmed");
+                File.AppendAllText(path, UserLine + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_working_clock_excludes_time_blocked_on_a_card() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            try {
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false });
+                h.Time.Advance(TimeSpan.FromSeconds(65));
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                h.Time.Advance(TimeSpan.FromMinutes(10));
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+                h.Time.Advance(TimeSpan.FromSeconds(2));
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 7s");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_lost_ack_keeps_input_unconfirmed_until_a_transcript_echo(bool newerSend) {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var presence = new System.Reactive.Subjects.BehaviorSubject<AgentPresence>(
+                new AgentPresence(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" }, false));
+            var ops = new ScriptedLocalControlOps();
+            var input = new LocalFrameChatInput("a1", daemon, ops, presence);
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            try {
+                daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1"]));
+                var path = Tmp.CreateFile("lost-ack.jsonl", []);
+                await h.PushAsync(Hosted(path, "Running", false));
+                ops.QueueSendText(new SendTextResult(false, SendTextReasons.Transport, "lost ack", null));
+                h.Chat.ComposerText = "hello";
+                await h.Chat.SendCommand.Execute();
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message unconfirmed");
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("hello");
+                if (newerSend) {
+                    ops.QueueSendText(new SendTextResult(false, SendTextReasons.Transport, "another lost ack", null));
+                    h.Chat.ComposerText = "later";
+                    await h.Chat.SendCommand.Execute();
+                }
+                File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hello")) + "\n");
+                await h.TickAsync();
+                if (newerSend) {
+                    await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message unconfirmed");
+                    await Assert.That(h.Chat.ComposerHint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
+                    await Assert.That(h.Chat.ComposerText).IsEqualTo("later");
+                    File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "later")) + "\n");
+                    await h.TickAsync();
+                }
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+                await Assert.That(h.Chat.ComposerHint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_slash_command_echo_acknowledges_input_without_a_display_row() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("slash.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "/clear";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                File.AppendAllText(path, """{"type":"user","message":{"content":"<command-name>/clear</command-name><local-command-stdout>ok</local-command-stdout>"}}""" + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items).IsEmpty();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false, false)]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    [Arguments(true, true)]
+    public async Task Unconfirmed_send_and_echo_can_arrive_in_either_order_without_erasing_a_new_draft(bool echoFirst, bool editBack) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("uncertain.jsonl", []);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                h.Chat.ComposerText = "another draft";
+                if (editBack) h.Chat.ComposerText = "hello";
+                if (echoFirst) {
+                    File.AppendAllText(path, UserLine + "\n");
+                    await h.TickAsync();
+                }
+                input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+                await send;
+                if (!echoFirst) {
+                    await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsTrue();
+                    File.AppendAllText(path, UserLine + "\n");
+                    await h.TickAsync();
+                }
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo(editBack ? "hello" : "another draft");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(ChatSendOutcome.Accepted, false)]
+    [Arguments(ChatSendOutcome.Rejected, false)]
+    [Arguments(ChatSendOutcome.Unconfirmed, true)]
+    public async Task Without_a_projection_only_uncertain_delivery_stays_in_the_queue(ChatSendOutcome outcome, bool queued) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(null, input: input);
+            try {
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(outcome);
+                await send;
+                await Assert.That(h.Chat.HasQueuedMessages).IsEqualTo(queued);
+                await Assert.That(h.Chat.ComposerText).IsEqualTo(outcome == ChatSendOutcome.Accepted ? "" : "hello");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Initial_history_and_preexisting_partial_lines_cannot_acknowledge_a_send(bool missing) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = missing ? Tmp.PathTo("missing.jsonl") : Tmp.CreateFile("partial.jsonl", UserLine);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                if (missing) File.WriteAllText(path, UserLine + "\n");
+                else File.AppendAllText(path, "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                File.AppendAllText(path, UserLine + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Mixed_queue_distinguishes_unconfirmed_and_accepted_sends_and_marks_both_at_session_end() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            try {
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+                await send;
+                h.Chat.ComposerText = "next";
+                send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message queued · 1 unconfirmed");
+                await Assert.That(h.Chat.QueuedMessages[0].IsUnconfirmed).IsTrue();
+                await Assert.That(h.Chat.QueuedMessages[1].IsUnconfirmed).IsFalse();
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Completed" });
+                await Assert.That(h.Chat.QueueSummary).IsEqualTo("2 messages unconfirmed");
+            } finally { await h.TeardownAsync(); }
         });
     }
 

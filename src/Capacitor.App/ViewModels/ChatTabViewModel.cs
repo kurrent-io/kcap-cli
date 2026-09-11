@@ -45,6 +45,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
+    QueuedChatMessage? _lastSent;
     readonly Dictionary<string, ToolCallItem> _pendingTools = new(StringComparer.Ordinal);
     // Every tool id with a result, not only the running ones: a replayed request can arrive after
     // the transcript's initial load, and then only this set can tell that its tool is done.
@@ -77,6 +78,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
     }
 
     int _generation;
+    int _inputGeneration;
     int _readInFlight;
     string? _path;
     string? _root;
@@ -88,8 +90,17 @@ public sealed class ChatTabViewModel : ReactiveObject {
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
     public IAvaloniaReadOnlyList<QueuedChatMessage> QueuedMessages => _queuedMessages;
     public bool HasQueuedMessages => _queuedMessages.Count > 0;
-    public string QueueSummary => $"{_queuedMessages.Count} message{(_queuedMessages.Count == 1 ? "" : "s")} "
-        + (SessionStatusDots.IsTerminal(_status) ? "unconfirmed" : "queued");
+    public string QueueSummary {
+        get {
+            var unconfirmed = _queuedMessages.Count(q => q.IsUnconfirmed);
+            var queued = _queuedMessages.Count - unconfirmed;
+            return unconfirmed == 0 ? $"{MessageCount(queued)} queued"
+                : queued == 0 ? $"{MessageCount(unconfirmed)} unconfirmed"
+                : $"{MessageCount(queued)} queued · {unconfirmed} unconfirmed";
+        }
+    }
+
+    static string MessageCount(int count) => $"{count} message{(count == 1 ? "" : "s")}";
 
     void RefreshQueue() {
         this.RaisePropertyChanged(nameof(HasQueuedMessages));
@@ -162,15 +173,24 @@ public sealed class ChatTabViewModel : ReactiveObject {
     string _status = "";
     bool? _awaitingInput;
     long? _workingSince;
+    TimeSpan _worked;
 
     void RefreshActivityNote() {
-        var working = _status == "Running" && _awaitingInput == false;
-        if (working) _workingSince ??= _time.GetTimestamp();
-        else _workingSince = null;
+        var inTurn = _status == "Running" && _awaitingInput == false;
+        var working = inTurn && !HasPendingCards;
+        if (!inTurn) {
+            _workingSince = null;
+            _worked = TimeSpan.Zero;
+        } else if (working) {
+            _workingSince ??= _time.GetTimestamp();
+        } else if (_workingSince is { } pausedAt) {
+            _worked += _time.GetElapsedTime(pausedAt);
+            _workingSince = null;
+        }
         ActivityNote = _status == "Starting"
             ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
-            : working && !HasPendingCards && _workingSince is { } since
-                ? WorkingNote(_time.GetElapsedTime(since)) : "";
+            : working && _workingSince is { } since
+                ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
     }
 
     static string WorkingNote(TimeSpan elapsed) {
@@ -324,19 +344,25 @@ public sealed class ChatTabViewModel : ReactiveObject {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
-            var queued = new QueuedChatMessage(snapshot, _path);
+            var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, TranscriptLength(_path));
+            _lastSent = queued;
             _queuedMessages.Add(queued);
             RefreshQueue();
-            var committed = false;
-            try { committed = await _input.SendAsync(snapshot, _lifetimeToken); }
-            catch (OperationCanceledException) { return; }
-            finally {
-                // Without a transcript there is no later echo to observe; the channel's ack is
-                // the only delivery evidence available. Refusals keep the original draft below.
-                if (!committed || _projection is null) _queuedMessages.Remove(queued);
-                RefreshQueue();
+            ChatSendOutcome outcome;
+            try { outcome = await _input.SendAsync(snapshot, _lifetimeToken); }
+            catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
+            catch (Exception ex) {
+                LogOnce($"send: {ex.Message}");
+                outcome = ChatSendOutcome.Unconfirmed;
             }
-            if (committed && _composerEdits == edits && ComposerText == snapshot) ComposerText = "";
+            if (_lifetimeToken.IsCancellationRequested) return;
+            if (outcome == ChatSendOutcome.Rejected || (outcome == ChatSendOutcome.Accepted && _projection is null))
+                _queuedMessages.Remove(queued);
+            else if (outcome == ChatSendOutcome.Unconfirmed)
+                queued.MarkUnconfirmed();
+            RefreshQueue();
+            if (outcome == ChatSendOutcome.Accepted) ClearSentDraft(queued);
+            if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);
         _disposables.Add(SendCommand);
 
@@ -355,6 +381,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         foreach (var change in changes) {
             if (change.Key == _agentId && change.Reason == ChangeReason.Remove) {
                 _status = "Completed";
+                foreach (var queued in _queuedMessages) queued.MarkUnconfirmed();
                 RefreshActivityNote();
                 RefreshQueue();
             }
@@ -379,6 +406,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
         StatusText = SessionStatusDots.Label(dto);
         StatusDot = SessionStatusDots.For(dto.Status);
         _status = dto.Status;
+        if (SessionStatusDots.IsTerminal(_status))
+            foreach (var queued in _queuedMessages) queued.MarkUnconfirmed();
         _awaitingInput = dto.AwaitingInput;
         if (_projection is not null && dto.TranscriptPath is { } path && path != _path) SwitchPath(path);
         RefreshActivityNote();
@@ -392,6 +421,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _openGroup = null;
         _marked.Clear();
         _path = path;
+        RebaseQueuedMessages(TranscriptLength(path));
         _lease = new TailLease(new JsonlTail(path), Interlocked.Increment(ref _generation));
         var wasWaiting = _phase == ChatTabPhase.Waiting;
         Phase = ChatTabPhase.Waiting;
@@ -399,6 +429,28 @@ public sealed class ChatTabViewModel : ReactiveObject {
         // is unchanged — and only then, since the setter itself raises the note on a real change.
         if (wasWaiting) this.RaisePropertyChanged(nameof(PhaseNote));
         OnTick();
+    }
+
+    static long? TranscriptLength(string? path) {
+        if (path is null) return null;
+        try { return new FileInfo(path).Length; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    void RebaseQueuedMessages(long? offset) {
+        _inputGeneration++;
+        foreach (var queued in _queuedMessages) queued.Rebase(_inputGeneration, offset);
+        RefreshQueue();
+    }
+
+    void ClearSentDraft(QueuedChatMessage queued) {
+        if (_composerEdits == queued.ComposerEdits && ComposerText == queued.Text) ComposerText = "";
+    }
+
+    void ConfirmDelivery(QueuedChatMessage queued) {
+        if (ReferenceEquals(queued, _lastSent)) _input.ConfirmLastSend();
+        ClearSentDraft(queued);
     }
 
     void OnTick() {
@@ -418,7 +470,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
             var (read, envelopes) = await Task.Run(() => {
                 var result = lease.Tail.ReadAppended();
                 if (result.Status == TailStatus.Reset) lease.Reset();
-                var list = new List<(AcpEventEnvelope Envelope, long Offset)>();
+                var list = new List<(ChatProjectionResult Projection, long Offset)>();
                 if (result.Lines.Count > 0) {
                     var context = lease.ContextFor(projection, _agentId);
                     context.BeginBatch();
@@ -427,8 +479,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
                         var line = result.Lines[index];
                         var lineNumber = lease.NextLine();
                         try {
-                            foreach (var envelope in projection.Project(line, lineNumber, receivedAt, context))
-                                list.Add((envelope, result.LineEndOffsets[index]));
+                            list.Add((projection.ProjectWithInputs(line, lineNumber, receivedAt, context), result.LineStartOffsets[index]));
                         }
                         catch (Exception ex) { LogOnce($"projection: {ex.Message}"); }
                     }
@@ -444,7 +495,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
-    void Apply(int generation, TailRead read, List<(AcpEventEnvelope Envelope, long Offset)> envelopes) {
+    void Apply(int generation, TailRead read, List<(ChatProjectionResult Projection, long Offset)> lines) {
         if (generation != Volatile.Read(ref _generation)) return;
 
         switch (read.Status) {
@@ -455,6 +506,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 LogOnce(read.Failure ?? "read failed");
                 return;
             case TailStatus.Reset:
+                // Skip everything already present in the new file, including appends that landed
+                // while this read was being projected. They may be replayed history, not receipts.
+                RebaseQueuedMessages(Math.Max(read.SnapshotLength ?? 0, TranscriptLength(_path) ?? 0));
                 _items.Clear();
                 _pendingTools.Clear();
                 _settledTools.Clear();
@@ -464,45 +518,57 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
 
         Phase = ChatTabPhase.Reading;
-        if (envelopes.Count == 0) {
+        // A send made before the transcript existed has no safe baseline. Its first successful
+        // read establishes one; that initial history cannot acknowledge the send.
+        foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline))
+            queued.Rebase(_inputGeneration, Math.Max(read.SnapshotLength ?? 0, TranscriptLength(_path) ?? 0));
+        RefreshQueue();
+        if (lines.Count == 0) {
             RefreshActivityNote();
             return;
         }
 
         var fresh = new List<ChatItemViewModel>();
-        foreach (var (e, offset) in envelopes) {
-            switch (e.Kind) {
-                case AcpEventKind.UserMessage:
-                    var acknowledged = _queuedMessages.FirstOrDefault(q => q.Matches(e.Text ?? "", _path, offset));
-                    if (acknowledged is not null) _queuedMessages.Remove(acknowledged);
-                    _openGroup = null;
-                    fresh.Add(new UserTurnItem(e.Text ?? ""));
-                    break;
-                case AcpEventKind.AssistantText:
-                    _openGroup = null;
-                    fresh.Add(new AssistantTextItem(e.Text ?? ""));
-                    break;
-                case AcpEventKind.SystemNote:
-                    _openGroup = null;
-                    fresh.Add(new SystemNoteItem(e.Text ?? ""));
-                    break;
-                case AcpEventKind.ToolCall: {
-                    var name = e.ToolName ?? "tool";
-                    var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root), ToolSummary.Categorize(name, e.ToolInputJson));
-                    if (e.ToolCallId is { } id) _pendingTools[id] = item;
-                    if (_openGroup is null) {
-                        _openGroup = new ToolGroupItem();
-                        fresh.Add(_openGroup);
+        foreach (var (projected, offset) in lines) {
+            foreach (var text in projected.SubmittedInputs) {
+                var acknowledged = _queuedMessages.FirstOrDefault(q => q.Matches(text, _inputGeneration, offset));
+                if (acknowledged is null) continue;
+                acknowledged.Acknowledged = true;
+                _queuedMessages.Remove(acknowledged);
+                ConfirmDelivery(acknowledged);
+            }
+            foreach (var e in projected.Envelopes) {
+                switch (e.Kind) {
+                    case AcpEventKind.UserMessage:
+                        _openGroup = null;
+                        fresh.Add(new UserTurnItem(e.Text ?? ""));
+                        break;
+                    case AcpEventKind.AssistantText:
+                        _openGroup = null;
+                        fresh.Add(new AssistantTextItem(e.Text ?? ""));
+                        break;
+                    case AcpEventKind.SystemNote:
+                        _openGroup = null;
+                        fresh.Add(new SystemNoteItem(e.Text ?? ""));
+                        break;
+                    case AcpEventKind.ToolCall: {
+                        var name = e.ToolName ?? "tool";
+                        var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root), ToolSummary.Categorize(name, e.ToolInputJson));
+                        if (e.ToolCallId is { } id) _pendingTools[id] = item;
+                        if (_openGroup is null) {
+                            _openGroup = new ToolGroupItem();
+                            fresh.Add(_openGroup);
+                        }
+                        _openGroup.Add(item);
+                        break;
                     }
-                    _openGroup.Add(item);
-                    break;
+                    case AcpEventKind.ToolResult:
+                        if (e.ToolCallId is not { } resultId) break;
+                        _settledTools.Add(resultId);
+                        if (_pendingTools.Remove(resultId, out var call))
+                            call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
+                        break;
                 }
-                case AcpEventKind.ToolResult:
-                    if (e.ToolCallId is not { } resultId) break;
-                    _settledTools.Add(resultId);
-                    if (_pendingTools.Remove(resultId, out var call))
-                        call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
-                    break;
             }
         }
         if (fresh.Count > 0) _items.AddRange(fresh);

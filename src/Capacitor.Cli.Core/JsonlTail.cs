@@ -5,8 +5,10 @@ namespace Capacitor.Cli.Core;
 public enum TailStatus { Ok, Reset, Missing, Failed }
 
 public sealed record TailRead(IReadOnlyList<string> Lines, TailStatus Status, string? Failure = null) {
-    /// Byte positions immediately after each returned line, for correlating newly appended input.
-    public IReadOnlyList<long> LineEndOffsets { get; init; } = [];
+    /// Byte positions at the start of each returned line, for correlating newly appended input.
+    public IReadOnlyList<long> LineStartOffsets { get; init; } = [];
+    /// Length observed when this read began, including a partial final line.
+    public long? SnapshotLength { get; init; }
 }
 
 /// Appended-lines reader over a JSONL file another process is writing. Every open shares
@@ -31,7 +33,7 @@ public sealed class JsonlTail(string path) {
             var status = regressed ? TailStatus.Reset : TailStatus.Ok;
             if (length == origin) {
                 _cursor = origin;
-                return new TailRead([], status);
+                return new TailRead([], status) { SnapshotLength = length };
             }
 
             stream.Position = origin;
@@ -46,7 +48,7 @@ public sealed class JsonlTail(string path) {
             var offsets = new List<long>();
             var lines = SplitCompleteLines(buffer.AsSpan(0, read), out var consumed, offsets, origin);
             _cursor = origin + consumed;
-            return new TailRead(lines, status) { LineEndOffsets = offsets };
+            return new TailRead(lines, status) { LineStartOffsets = offsets, SnapshotLength = length };
         } catch (FileNotFoundException) {
             return new TailRead([], TailStatus.Missing);
         } catch (DirectoryNotFoundException) {
@@ -71,7 +73,7 @@ public sealed class JsonlTail(string path) {
             if (line.Length > 0 && line[^1] == (byte)'\r') line = line[..^1];
             if (!IsBlank(line)) {
                 lines.Add(Encoding.UTF8.GetString(line));
-                offsets?.Add(origin + i + 1);
+                offsets?.Add(origin + start);
             }
             start = i + 1;
             consumed = start;

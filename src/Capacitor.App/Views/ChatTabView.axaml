@@ -370,9 +370,13 @@
                     <ItemsControl ItemsSource="{Binding QueuedMessages}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:QueuedChatMessage">
-                                <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="12"
-                                           Margin="0,2" TextTrimming="CharacterEllipsis" MaxLines="1"
-                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                <StackPanel Margin="0,2" Spacing="2">
+                                    <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="12"
+                                               TextTrimming="CharacterEllipsis" MaxLines="1"
+                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                    <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
+                                               FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
+                                </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
