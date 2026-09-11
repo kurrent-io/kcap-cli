@@ -195,9 +195,9 @@ sealed class GeminiHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
 
-            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
                     GuidelinesDisabled: guidelinesDisabled));

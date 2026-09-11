@@ -110,7 +110,7 @@ public class SetupFacadeParityTests {
         SetupCommand.FacadeOverride = _ =>
             NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst());
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNotNull();
         await Assert.That(discovered!.Value.LoginComplete).IsTrue();
@@ -136,7 +136,7 @@ public class SetupFacadeParityTests {
         SetupCommand.FacadeOverride = _ =>
             NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst());
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNotNull();
         await Assert.That(sink.Select(e => e.Name).ToArray()).IsEquivalentTo(
@@ -151,7 +151,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         // Today's setup fires SigninCompleted unconditionally once the token is acquired, and
@@ -171,7 +171,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         await Assert.That(sink.Select(e => e.Name).ToArray()).IsEquivalentTo(
@@ -188,7 +188,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         await Assert.That(sink.Select(e => e.Name).ToArray()).IsEquivalentTo(
@@ -203,7 +203,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         // Other/Unreachable failures map to nothing beyond SigninOpened — only SigninDenied and
@@ -221,7 +221,7 @@ public class SetupFacadeParityTests {
 
         using var console = ConsoleOutput.StartErrorCapture("\n");
 
-        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         await Assert.That(console.GetCapturedError()).Contains(SetupAuthProgress.UnreachableGuidance);
@@ -240,7 +240,7 @@ public class SetupFacadeParityTests {
             return NewFacade(Config.Root, new RecordingAuthProgress(), handler);
         };
 
-        await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery)
+        await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery)
             .RunDiscoveryAsync([], forceDevice: true, new RequestedWorkspace("Acme", "acme"));
 
         await Assert.That(captured).IsTypeOf<SpectreTenantProvisioner>();
@@ -351,7 +351,7 @@ public class SetupFacadeParityTests {
         int exitCode;
 
         try {
-            exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+            exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
                 loginComplete: true, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
                 forceDevice: false, activeProfile: "acme");
         } finally {
@@ -369,7 +369,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.None, serverUrl: "https://none.example",
             forceDevice: false, activeProfile: "default");
 
@@ -391,7 +391,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.None, serverUrl: "https://none.example",
             forceDevice: false, activeProfile: "default");
 
@@ -404,7 +404,7 @@ public class SetupFacadeParityTests {
 
         SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
 
-        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
             forceDevice: true, activeProfile: "acme");
 
@@ -428,7 +428,7 @@ public class SetupFacadeParityTests {
 
         using var console = ConsoleOutput.StartCapture();
 
-        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
             forceDevice: true, activeProfile: "acme");
 
@@ -453,7 +453,7 @@ public class SetupFacadeParityTests {
         int exitCode;
 
         try {
-            exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+            exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
                 loginComplete: true, provider: provider, serverUrl: "https://acme.kcap.ai",
                 forceDevice: false, activeProfile: "acme");
         } finally {
@@ -472,7 +472,7 @@ public class SetupFacadeParityTests {
 
         // The provider param is Step 1's resolved value; Step 2 re-fetches /auth/config for the
         // actual login, so a server reporting an unrelated/unknown provider by then still fails.
-        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
+        var exitCode = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
             forceDevice: false, activeProfile: "acme");
 

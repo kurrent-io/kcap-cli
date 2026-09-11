@@ -663,10 +663,70 @@ public class AcpInteractionBridgeTests {
         await Assert.That(infoEntries).Contains(e => e.Message.Contains("issued") && e.Message.Contains("permission"));
         await Assert.That(infoEntries).Contains(e => e.Message.Contains("resolved") && e.Message.Contains("permission") && e.Message.Contains("selected"));
 
-        // Payload-free: the tool title ("Run ls") and the chosen optionId ("allow-once") must never
-        // leak into these Info logs, even though "allow-once" happens to also be a log-safe kind
-        // token elsewhere — check the actual tool content, not option ids.
+        // The tool title ("Run ls") must never leak into these Info logs — option ids/kinds ARE
+        // deliberately logged elsewhere (see the "offered options"/"decision received" tests below),
+        // but tool identity/content never is.
         await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("Run ls"));
+    }
+
+    [Test]
+    public async Task RequestPermission_Issued_LogsOfferedOptionIdsAndKinds() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var request = new AcpRequest(1, "session/request_permission", KindedPermissionParams(("allow-once", "allow_once"), ("deny", "reject_once")));
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("options offered") && e.Message.Contains("allow-once:allow_once") && e.Message.Contains("deny:reject_once"));
+    }
+
+    /// <summary>
+    /// The undiagnosable case: the server resolves an AFFIRMATIVE decision (the human really did
+    /// approve it) but with a <see cref="AcpInteractionDecision.SelectedOptionId"/> that matches none
+    /// of the options THIS request offered — <c>MapPermissionDecision</c> fails closed to
+    /// `cancelled`. The resolve log must carry the raw outcome/selectedOptionId and say plainly that
+    /// it did not match, so this exact mismatch is diagnosable from the daemon log alone.
+    /// </summary>
+    [Test]
+    public async Task RequestPermission_ResolvedOptionIdDoesNotMatchOffered_LogsOutcomeAndMismatch() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "some-other-id", "Allow", null, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
+        var result  = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(result!.Value.GetProperty("outcome").GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("decision received")
+         && e.Message.Contains("outcome=allow")
+         && e.Message.Contains("selectedOptionId=some-other-id")
+         && e.Message.Contains("matchedOfferedOption=False"));
+    }
+
+    [Test]
+    public async Task RequestPermission_ResolvedOptionIdMatchesOffered_LogsMatchedTrue() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("decision received") && e.Message.Contains("matchedOfferedOption=True"));
     }
 
     [Test]

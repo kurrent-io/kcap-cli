@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core.Config;
@@ -84,7 +85,7 @@ public class SessionStartMemoryRedirectTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(_server.Url!, Config.Root, profiles));
-        services.AddCapacitorHttp(ProfileOverrides.None);
+        services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
 
         await using var sp = services.BuildServiceProvider();
 

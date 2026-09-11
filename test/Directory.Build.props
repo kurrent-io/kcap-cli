@@ -18,5 +18,12 @@
                       and '$(MSBuildProjectName)' != 'Capacitor.Cli.Tests.Unit.NativeTestHost'">
         <Compile Include="$(MSBuildThisFileDirectory)Capacitor.Tests.Helpers/Guards/GuardsBootstrap.cs"
                  Link="Guards/GuardsBootstrap.cs" />
+        <!-- An MTP extension contributes its command-line options only where it is referenced, so this
+             belongs on every test host rather than on Helpers. -->
+        <PackageReference Include="Microsoft.Testing.Extensions.GitHubActionsReport" />
+        <!-- MTP reads a testconfig.json only from the project directory; a user-owned item whose target
+             path is <AssemblyName>.testconfig.json is the supported way to share one file. -->
+        <None Include="$(MSBuildThisFileDirectory)testconfig.json"
+              Link="$(MSBuildProjectName).testconfig.json" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 </Project>

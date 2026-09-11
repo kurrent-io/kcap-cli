@@ -584,9 +584,9 @@ public sealed class CursorHookCommand(
 
             var store = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             // Both lanes send on the hook's own client, which stays this method's caller's to dispose.
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, _ => Task.FromResult(client));
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, _ => Task.FromResult(client), clock.Time);
 
-            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 // ClassificationAuthoritative is hardcoded true, and this is VALID UNDER THE
                 // MEASURED EVENT CONTRACT rather than proven from this file alone:
                 //

@@ -5,11 +5,16 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// deadline, so a regression fails by name instead of hanging the run.
 /// </summary>
 internal static class WaitHarness {
-    internal static readonly TimeSpan PollBound = TimeSpan.FromSeconds(5);
+    /// <summary>Deadlines, not budgets: each turns a hang into a named failure, so it only has to
+    /// outlast the slowest honest run. A loaded two-core runner overruns anything tighter while the
+    /// code under test is working perfectly.</summary>
+    internal static readonly TimeSpan PollBound = TimeSpan.FromSeconds(30);
 
+    /// <inheritdoc cref="PollBound"/>
     internal static readonly TimeSpan Bounded = TimeSpan.FromSeconds(30);
 
-    internal static readonly TimeSpan AcpHangGuard = TimeSpan.FromSeconds(5);
+    /// <inheritdoc cref="PollBound"/>
+    internal static readonly TimeSpan AcpHangGuard = TimeSpan.FromSeconds(30);
 
     internal static async Task PollUntilAsync(Func<bool> condition) {
         var deadline = DateTime.UtcNow + PollBound;

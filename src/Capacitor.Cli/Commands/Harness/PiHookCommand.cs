@@ -326,9 +326,9 @@ sealed class PiHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
 
-            return await new SessionStartMemoryOrchestrator(store, provider).GetFragmentAsync(
+            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(file, reason),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
                     GuidelinesDisabled: guidelinesDisabled));

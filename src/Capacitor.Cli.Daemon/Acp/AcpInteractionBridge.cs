@@ -322,9 +322,11 @@ internal sealed partial class AcpInteractionBridge(
 
         AcpInteractionDecision decision;
 
-        // Payload-free lifecycle logging — kind + eventual decision ONLY, never the tool
-        // name/args/options content already captured above in interactionRequest.
+        // The lifecycle log stays payload-free (kind only); the options log is deliberately
+        // narrower than the full offer — ids/kinds only, never labels or tool name/args — so a
+        // server-side optionId echo mismatch is diagnosable from the daemon log alone.
         LogInteractionIssued(agentId, "permission");
+        LogPermissionOptionsOffered(agentId, FormatOptions(options));
         AcpMetrics.RecordBlockingRequest("permission");
 
         try {
@@ -353,7 +355,9 @@ internal sealed partial class AcpInteractionBridge(
             return CancelledResult();
         }
 
-        var mapped = MapPermissionDecision(decision, options);
+        var mapped  = MapPermissionDecision(decision, options);
+        var matched = decision.SelectedOptionId is { } sid && options.Any(o => o.OptionId == sid);
+        LogPermissionDecisionReceived(agentId, decision.Outcome, decision.SelectedOptionId ?? "(none)", matched);
         LogInteractionResolved(agentId, "permission", OutcomeLabel(mapped));
 
         return mapped;
@@ -820,15 +824,38 @@ internal sealed partial class AcpInteractionBridge(
     /// only <c>{toolCallId, title}</c> — therefore never matches a preset and keeps prompting.</summary>
     static string? TryGetToolKind(JsonElement toolCall)   => toolCall.Str("kind");
 
+    /// <summary>The offered options as <c>optionId:kind</c> pairs, e.g. <c>[allow-once:allow_once,
+    /// deny:reject_once]</c> — never <see cref="PermissionOptionDto.Name"/>, which is an
+    /// agent-supplied label, not a stable identifier.</summary>
+    static string FormatOptions(IReadOnlyList<PermissionOptionDto> options) =>
+        "[" + string.Join(", ", options.Select(o => $"{Clip(o.OptionId)}:{Clip(o.Kind ?? "?")}")) + "]";
+
+    /// The id and kind are agent-controlled, and the file logger writes a value verbatim: strip
+    /// control characters so a newline cannot inject a forged log line, and cap the length so a
+    /// hostile or buggy agent cannot flood the log.
+    static string Clip(string value) {
+        var stripped = new string(value.Where(c => !char.IsControl(c)).ToArray());
+        return stripped.Length <= 64 ? stripped : stripped[..64] + "…";
+    }
+
     // ── LoggerMessage source-generated methods ──────────────────────────────────────────────────
-    // Payload-free by construction: kind ("permission"/"elicitation") and decision
-    // ("selected"/"cancelled") ONLY — never tool name/args, prompt text, or option content.
+    // The lifecycle pair stays payload-free: kind ("permission"/"elicitation") and decision
+    // ("selected"/"cancelled") ONLY — never tool name/args, prompt text, or option content. The
+    // permission-only pair below is the deliberate exception: offered/received option identifiers
+    // ARE the diagnostic this exists for — a mismatched optionId fails safe to cancelled with
+    // nothing in the log to show why — so they're logged narrowly (ids/kinds, never labels).
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP blocking request issued: agentId={AgentId} kind={Kind}")]
     partial void LogInteractionIssued(string agentId, string kind);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP blocking request resolved: agentId={AgentId} kind={Kind} decision={Decision}")]
     partial void LogInteractionResolved(string agentId, string kind, string decision);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP permission options offered: agentId={AgentId} options={Options}")]
+    partial void LogPermissionOptionsOffered(string agentId, string options);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP permission decision received: agentId={AgentId} outcome={Outcome} selectedOptionId={SelectedOptionId} matchedOfferedOption={Matched}")]
+    partial void LogPermissionDecisionReceived(string agentId, string outcome, string selectedOptionId, bool matched);
 
     // ── Unattended review-flow auto-approve audit ───────────────────────────────────────────────
     // Pinned fields only: agentId + the selected allow Kind, plus the tool title as EXPLICITLY

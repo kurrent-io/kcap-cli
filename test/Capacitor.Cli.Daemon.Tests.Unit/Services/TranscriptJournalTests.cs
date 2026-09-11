@@ -193,7 +193,9 @@ public class TranscriptJournalTests {
 
         await Assert.That(drained).IsFalse();
         await Assert.That(journal.Drained).IsFalse();
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+        // 5s against a 200ms grace: headroom for a starved pool delivering the Task.Delay
+        // continuation late, which a two-core runner does by ~1s.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
         await Assert.That(log.Warnings.Single()).Contains("assistant_text").And.Contains("1 queued").And.Contains("1 unrecorded");
         journal.Record(Text("after")); // latched: silently ignored
         sink.Release.Release(10);

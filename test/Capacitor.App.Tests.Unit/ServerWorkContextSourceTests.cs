@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using System.Net;
 using System.Text;
 using Capacitor.App.Services;
@@ -43,7 +44,7 @@ public class ServerWorkContextSourceTests {
     static (ServerWorkContextSource Source, List<ScriptedHandler> Handlers) Build(
             ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null) {
         var handlers = new List<ScriptedHandler>();
-        var source = new ServerWorkContextSource(config, profiles, ProfileOverrides.None, (_, _, _, _) => {
+        var source = new ServerWorkContextSource(config, profiles, ProfileOverrides.None, MachineAuth.None, (_, _, _, _) => {
             var handler = new ScriptedHandler();
             handlers.Add(handler);
             return Task.FromResult((new HttpClient(handler), status?.Invoke() ?? AuthStatus.Ok));

@@ -1,17 +1,13 @@
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 
 /// <summary>
-/// Test plan item 7 (Round 2 Finding 2 drops the throwing-construction cases from an
-/// earlier revision of this design): pins <see cref="AcpVendorDescriptors.Cursor"/>'s literal
-/// field values against today's hard-coded constants — a lightweight guard against an accidental
-/// edit to the shared descriptor silently changing Cursor's behavior. There is no
-/// <c>SupportsModelSelection</c> flag/invariant left to test — <see cref="AcpVendorDescriptor"/>
-/// accepts any <see cref="IAcpModelSelector"/> for <see cref="AcpVendorDescriptor.ModelSelector"/>
-/// unconditionally, so the one thing worth asserting is that Cursor's real descriptor constructs
-/// successfully and round-trips through equality as expected.
+/// Pins each shipped descriptor's literal field values, so an edit to the shared descriptor cannot
+/// silently change one vendor's launch, and the construction-time invariants that reject an
+/// incoherent row.
 /// </summary>
 public class AcpVendorDescriptorTests {
     [Test]
@@ -55,13 +51,6 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.BorrowedReviewContainment)
             .IsEqualTo(AcpBorrowedReviewContainment.None);
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
-    }
-
-    [Test]
-    public async Task Copilot_ResolveBinaryPath_ReadsConfigCopilotPath() {
-        var config = new DaemonConfig { CopilotPath = "/opt/copilot/copilot" };
-
-        await Assert.That(AcpVendorDescriptors.Copilot.ResolveBinaryPath(config)).IsEqualTo("/opt/copilot/copilot");
     }
 
     [Test]
@@ -114,13 +103,6 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.ModelSelector).IsEqualTo(SetModelSelector.Instance);
     }
 
-    [Test]
-    public async Task Kiro_ResolveBinaryPath_ReadsConfigKiroPath() {
-        var config = new DaemonConfig { KiroPath = "/opt/kiro/kiro-cli" };
-
-        await Assert.That(AcpVendorDescriptors.Kiro.ResolveBinaryPath(config)).IsEqualTo("/opt/kiro/kiro-cli");
-    }
-
     /// <summary>
     /// The zero-configuration case, and the one an env-precedence test cannot cover: with nothing set,
     /// the descriptor must resolve the name a standard install actually puts on PATH.
@@ -135,47 +117,27 @@ public class AcpVendorDescriptorTests {
     /// </summary>
     [Test]
     public async Task Kiro_ZeroConfiguration_ResolvesTheShippedBinaryName() {
-        await Assert.That(AcpVendorDescriptors.Kiro.ResolveBinaryPath(new DaemonConfig()))
+        await Assert.That(new DaemonConfig().PathSlot(AcpVendorDescriptors.Kiro.Harness).Read())
             .IsEqualTo("kiro-cli");
     }
 
-    /// <summary>Zero-configuration behaviour is unchanged from the no-override era: with no
-    /// <c>KiroModel</c> configured the descriptor offers no daemon-wide default — Kiro runs its own
-    /// default model and none is reported — and ANOTHER vendor's model field must never leak in.
-    /// When <c>KiroModel</c> IS configured it is the daemon-wide default, resolved against
+    /// <summary>With no <c>KiroModel</c> configured the daemon offers no default — Kiro runs its own
+    /// and none is reported. When one IS configured it is the daemon-wide default, resolved against
     /// <c>session/new</c>'s <c>availableModels</c> at launch like Cursor's.</summary>
     [Test]
-    public async Task Kiro_ResolveDefaultModel_ReadsConfigKiroModel_NullByDefault() {
-        await Assert.That(AcpVendorDescriptors.Kiro.ResolveDefaultModel(new DaemonConfig())).IsNull();
-        await Assert.That(AcpVendorDescriptors.Kiro.ResolveDefaultModel(
-            new DaemonConfig { CursorModel = "claude-opus-4-8" })).IsNull();
-        await Assert.That(AcpVendorDescriptors.Kiro.ResolveDefaultModel(
-            new DaemonConfig { KiroModel = "claude-haiku-4.5" })).IsEqualTo("claude-haiku-4.5");
-    }
-
-    [Test]
-    public async Task Cursor_ResolveBinaryPath_ReadsConfigCursorPath() {
-        var config = new DaemonConfig { CursorPath = "/opt/cursor/cursor-agent" };
-
-        await Assert.That(AcpVendorDescriptors.Cursor.ResolveBinaryPath(config)).IsEqualTo("/opt/cursor/cursor-agent");
-    }
-
-    [Test]
-    public async Task Cursor_ResolveDefaultModel_ReadsConfigCursorModel() {
-        var config = new DaemonConfig { CursorModel = "claude-opus-4-8" };
-
-        await Assert.That(AcpVendorDescriptors.Cursor.ResolveDefaultModel(config)).IsEqualTo("claude-opus-4-8");
+    public async Task Kiro_offers_no_daemon_wide_model_until_one_is_configured() {
+        await Assert.That(new DaemonConfig().ModelSlot(HarnessId.Kiro)!.Read()).IsNull();
+        await Assert.That(new DaemonConfig { KiroModel = "claude-haiku-4.5" }
+            .ModelSlot(HarnessId.Kiro)!.Read()).IsEqualTo("claude-haiku-4.5");
     }
 
     /// <summary>Any <see cref="IAcpModelSelector"/> — including a NoOp one, even though the real
-    /// Cursor descriptor never uses it — constructs a valid descriptor. There is no invariant left
-    /// to reject this combination (Round 2 Finding 2).</summary>
+    /// Cursor descriptor never uses it — constructs a valid descriptor: no invariant rejects the
+    /// combination.</summary>
     [Test]
     public async Task Descriptor_ConstructsSuccessfully_WithAnyModelSelector() {
         var descriptor = new AcpVendorDescriptor(
-            Vendor:              "test-vendor",
-            ResolveBinaryPath:   _ => "test-vendor-cli",
-            ResolveDefaultModel: _ => null,
+            Harness:             HarnessId.Pi,
             Argv:                ["acp"],
             UnattendedTrustArgv: [],
             SupportsUnattended:  false,
@@ -188,15 +150,13 @@ public class AcpVendorDescriptorTests {
         await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
     }
 
-    /// <summary>Qodo finding 3: a vendor that doesn't support unattended launches must not carry
-    /// any <see cref="AcpVendorDescriptor.UnattendedTrustArgv"/> — the constructor enforces this
-    /// invariant rather than relying solely on the orchestrator's external gate.</summary>
+    /// <summary>A vendor that does not support unattended launches must not carry any
+    /// <see cref="AcpVendorDescriptor.UnattendedTrustArgv"/>: the constructor enforces it rather
+    /// than relying solely on the orchestrator's external gate.</summary>
     [Test]
     public async Task Constructor_Throws_WhenUnattendedTrustArgvNonEmpty_AndSupportsUnattendedFalse() {
         await Assert.That(() => new AcpVendorDescriptor(
-            Vendor:              "test-vendor",
-            ResolveBinaryPath:   _ => "test-vendor-cli",
-            ResolveDefaultModel: _ => null,
+            Harness:             HarnessId.Pi,
             Argv:                ["acp"],
             UnattendedTrustArgv: ["--trust"],
             SupportsUnattended:  false,
@@ -205,12 +165,29 @@ public class AcpVendorDescriptorTests {
         )).Throws<ArgumentException>();
     }
 
+    /// <summary>A rejection names the vendor it rejected. The name is derived from the harness, so a
+    /// descriptor that fails validation before the harness is recorded would accuse whichever vendor
+    /// the enum's default happens to be — and the message exists to point at the malformed row.</summary>
+    [Test]
+    public async Task A_rejected_descriptor_names_the_vendor_it_rejected() {
+        var thrown = await Assert.That(() => new AcpVendorDescriptor(
+            Harness:             HarnessId.Pi,
+            Argv:                ["acp"],
+            UnattendedTrustArgv: ["--trust"],
+            SupportsUnattended:  false,
+            ModelSelector:       NoOpModelSelector.Instance,
+            SupportsMcpServers:  false
+        )).Throws<ArgumentException>();
+
+        await Assert.That(thrown!.Message).Contains(HarnessId.Pi.VendorId);
+        await Assert.That(thrown!.Message).DoesNotContain(HarnessId.Claude.VendorId)
+            .Because("naming the default harness would send a reader to the wrong descriptor");
+    }
+
     [Test]
     public async Task Constructor_Throws_WhenSessionNewTransportLacksMcpServerSupport() {
         await Assert.That(() => new AcpVendorDescriptor(
-            Vendor:                 "test-vendor",
-            ResolveBinaryPath:      _ => "test-vendor-cli",
-            ResolveDefaultModel:    _ => null,
+            Harness:                HarnessId.Pi,
             Argv:                   ["acp"],
             UnattendedTrustArgv:    ["--trust"],
             SupportsUnattended:     true,
@@ -227,15 +204,8 @@ public class AcpVendorDescriptorTests {
     /// notice if it stopped being.</summary>
     [Test]
     public async Task Gemini_ZeroConfiguration_ResolvesTheShippedBinaryName() {
-        await Assert.That(AcpVendorDescriptors.Gemini.ResolveBinaryPath(new DaemonConfig()))
+        await Assert.That(new DaemonConfig().PathSlot(AcpVendorDescriptors.Gemini.Harness).Read())
             .IsEqualTo("gemini");
-    }
-
-    [Test]
-    public async Task Gemini_ResolveBinaryPath_ReadsConfigGeminiPath() {
-        var config = new DaemonConfig { GeminiPath = "/opt/gemini/gemini" };
-
-        await Assert.That(AcpVendorDescriptors.Gemini.ResolveBinaryPath(config)).IsEqualTo("/opt/gemini/gemini");
     }
 
     [Test]
@@ -375,9 +345,7 @@ public class AcpVendorDescriptorTests {
     [Test]
     public async Task Constructor_Throws_WhenBorrowedReviewSupportLacksUnattendedSupport() {
         await Assert.That(() => new AcpVendorDescriptor(
-            Vendor:                      "test-vendor",
-            ResolveBinaryPath:           _ => "test-vendor-cli",
-            ResolveDefaultModel:         _ => null,
+            Harness:                     HarnessId.Pi,
             Argv:                        [],
             UnattendedTrustArgv:         [],
             SupportsUnattended:          false,

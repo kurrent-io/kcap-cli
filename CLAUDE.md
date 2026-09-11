@@ -126,9 +126,9 @@ A single suite still runs directly as an executable, which is the faster loop wh
 dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests.Unit.csproj
 ```
 
-Every suite, the daemon one included, runs green at full parallelism — no flag needed. CI's
-`--maximum-parallel-tests 1` caps only the unconstrained bucket, so it narrows race windows rather
-than closing them; a test that needs exclusion carries the constraint itself.
+Every suite, the daemon one included, runs green at full parallelism — no flag needed, and CI runs
+each assembly at that same width. A test that needs exclusion carries the constraint itself; a
+narrower width would only narrow the race window, not close it.
 
 ## Publishing
 

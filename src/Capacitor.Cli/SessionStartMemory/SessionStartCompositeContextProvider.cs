@@ -20,6 +20,7 @@ internal sealed class SessionStartCompositeContextProvider(
     ISessionStartMemoryScopeResolver scopeResolver,
     SessionStartMemoryContextProvider memory,
     SessionStartGuidelinesLane guidelines,
+    TimeProvider time,
     Action<string>? diagnostic = null) : ISessionStartContextProvider {
 
     public async Task<SessionStartMemoryContextResult> GetAsync(SessionStartMemoryContextRequest request) {
@@ -28,8 +29,8 @@ internal sealed class SessionStartCompositeContextProvider(
         if (!memoryEnabled && !guidelinesEnabled) return SessionStartMemoryContextResult.Empty;
         if (request.Budget <= TimeSpan.Zero) return SessionStartMemoryContextResult.Retry;
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken);
-        cts.CancelAfter(request.Budget);
+        using var expiry = new CancellationTokenSource(request.Budget, time);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken, expiry.Token);
 
         SessionStartMemoryScope scope;
         try {

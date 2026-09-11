@@ -85,4 +85,33 @@ public class DaemonRunnerVersionProbeTests {
 
         await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
     }
+
+    /// <summary>A CLI that exits while a descendant keeps the redirected stdout open must not wedge the
+    /// probe. The pipe never reaches EOF while the descendant lives, so reading the drain to the end
+    /// would block forever — hanging daemon startup and stacking one leaked task per later capability
+    /// refresh. The probe is bounded on its own budget instead, and it still recovers the version the
+    /// CLI printed before the descendant wedged the pipe: closing the read end hands the drain back the
+    /// bytes it had buffered. POSIX stub, so Windows is skipped like the other real-binary checks.</summary>
+    [Test]
+    public async Task A_descendant_holding_the_pipe_open_is_bounded_and_still_reads_the_version() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary is a POSIX shell script.");
+        using var tmp = new TempDir();
+        // Prints the version, then leaves a child holding the inherited stdout open after the CLI
+        // itself exits — the shape that made ProbeCliVersionOnce block on a drain that never saw EOF.
+        var cli = tmp.CreateFile(
+            "faketool", "#!/bin/sh\necho 'faketool 9.9.9'\nsleep 20 &\nexit 0\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var version = await Task.Run(() => DaemonRunner.ProbeCliVersionForLaunch(cli));
+        sw.Stop();
+
+        // Bounded: a return well under the descendant's 20s lifetime proves the drain was not blocked
+        // to an EOF that never comes.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(12));
+        // Recovered: the version printed ahead of the block survives, so registration advertises it
+        // rather than an unknown version that would reject a launch.
+        await Assert.That(version).IsEqualTo("9.9.9");
+    }
 }

@@ -285,14 +285,17 @@ public class AcpTranscriptAggregationTests {
         var e3 = await ReadEnvelopeAsync(h.Runtime);
         var e4 = await ReadEnvelopeAsync(h.Runtime);
 
+        // Both user rows are emitted at accept time, so the queued turn's row lands the moment it is
+        // sent — while turn 1 is still held — ahead of turn 1's flushed reply. Each turn's assistant
+        // run still flushes as its own uncontaminated envelope, in turn order.
         await Assert.That(e1.Kind).IsEqualTo(AcpEventKind.UserMessage);
         await Assert.That(e1.Text).IsEqualTo("first");
 
-        await Assert.That(e2.Kind).IsEqualTo(AcpEventKind.AssistantText);
-        await Assert.That(e2.Text).IsEqualTo("turn one reply"); // NOT contaminated with turn 2's text
+        await Assert.That(e2.Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(e2.Text).IsEqualTo("second");
 
-        await Assert.That(e3.Kind).IsEqualTo(AcpEventKind.UserMessage);
-        await Assert.That(e3.Text).IsEqualTo("second");
+        await Assert.That(e3.Kind).IsEqualTo(AcpEventKind.AssistantText);
+        await Assert.That(e3.Text).IsEqualTo("turn one reply"); // NOT contaminated with turn 2's text
 
         await Assert.That(e4.Kind).IsEqualTo(AcpEventKind.AssistantText);
         await Assert.That(e4.Text).IsEqualTo("turn two reply"); // NOT contaminated with turn 1's text

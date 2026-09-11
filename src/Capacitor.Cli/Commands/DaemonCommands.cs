@@ -16,6 +16,14 @@ public sealed class DaemonCommands(
         HarnessRegistry harnesses, BinaryProbe binaries) {
     string LogPath { get; } = config.Path("daemon.log");
 
+    /// <summary>The sibling capture for the daemon's raw stderr/stdout — where a detached start points
+    /// the child's fds (<c>--stderr-file</c>) and the launchd unit its <c>StandardErrorPath</c>. It
+    /// holds what the primary log cannot: native fatal messages written straight to fd 2, and the
+    /// pre-host startup breadcrumbs <c>DaemonRunner.StartupPhase</c> writes before the logger exists.
+    /// So <c>daemon logs</c> surfaces it too — a startup that never reached the logger still leaves a
+    /// trace here.</summary>
+    string StderrCapturePath => Path.ChangeExtension(LogPath, null) + ".out.log";
+
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             PrintUsage();
@@ -117,10 +125,7 @@ public sealed class DaemonCommands(
             CreateNoWindow  = true
         };
 
-        // Written, not left to the child to derive: a derived root is one HOME change away from a
-        // different one, and the sandboxes that do rewrite HOME name their own root anyway.
-        psi.Environment[DaemonStore.DaemonsDirEnvVar] = store.Directory;
-        psi.Environment[ConfigRoot.ConfigDirEnvVar]   = config.Directory;
+        ApplyEnvironment(psi.Environment);
 
         foreach (var arg in args) {
             psi.ArgumentList.Add(arg);
@@ -206,10 +211,7 @@ public sealed class DaemonCommands(
         psi.ArgumentList.Add("--log-file");
         psi.ArgumentList.Add(LogPath);
 
-        // Written, not left to the child to derive: a derived root is one HOME change away from a
-        // different one, and the sandboxes that do rewrite HOME name their own root anyway.
-        psi.Environment[DaemonStore.DaemonsDirEnvVar] = store.Directory;
-        psi.Environment[ConfigRoot.ConfigDirEnvVar]   = config.Directory;
+        ApplyEnvironment(psi.Environment);
 
         // we close the daemon's std pipes just below (anti-hang), which
         // means a runtime/native fatal message written straight to fd 2 would be
@@ -217,7 +219,7 @@ public sealed class DaemonCommands(
         // daemon's fds at a sibling capture file so those messages survive. Same
         // ".out.log" convention as the launchd unit's StandardErrorPath.
         psi.ArgumentList.Add("--stderr-file");
-        psi.ArgumentList.Add(Path.ChangeExtension(LogPath, null) + ".out.log");
+        psi.ArgumentList.Add(StderrCapturePath);
 
         foreach (var arg in args.Where(a => a is not "-d" and not "--detach")) {
             psi.ArgumentList.Add(arg);
@@ -270,6 +272,54 @@ public sealed class DaemonCommands(
         Console.Out.WriteLine($"  Status:    kcap daemon status --name {name}");
 
         return 0;
+    }
+
+    /// <summary>
+    /// Overlays the daemon/config roots plus the Antigravity ADC trio onto a CLI-spawned daemon's
+    /// <see cref="ProcessStartInfo.Environment"/> — the same derivation
+    /// <c>ServiceEnvironment.Capture</c> runs at <c>daemon service install</c>, reused here so
+    /// `daemon start` and `start -d` (and the desktop app, which shells out to the latter) do not
+    /// leave hosted Antigravity without it just because the daemon didn't come from a service install.
+    /// </summary>
+    void ApplyEnvironment(IDictionary<string, string?> env) {
+        var isWindows = OperatingSystem.IsWindows();
+
+        ApplySpawnEnvironment(
+            env, store.Directory, config.Directory, isWindows,
+            adcCredentialsPath: isWindows ? null : Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.ExistingCredentialsPath(home),
+            gcloudProject:      isWindows ? null : GcloudConfig.DefaultProject(home));
+    }
+
+    /// <summary>Pure half of <see cref="ApplyEnvironment"/>: the daemon/config roots are written, not
+    /// left to the child to derive (a derived root is one HOME change away from a different one, and
+    /// the sandboxes that do rewrite HOME name their own root anyway), and off Windows the trio is
+    /// completed via <see cref="Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.Complete"/>.
+    /// <c>Complete</c> is seeded from what the environment already carries, so a trio member the
+    /// operator exported wins over the derived default — it only fills what is absent, and handing it
+    /// an empty view would let the derived default overwrite the exported value on the copy back.
+    /// A present-but-EMPTY export is dropped from the seed so the derivation still runs — matching how
+    /// <c>ServiceEnvironment.Capture</c> treats an empty capture as unset — except an empty
+    /// <c>AGY_ADC_AUTH</c>, which is a deliberate refusal of ADC auth and is kept. Without that drop an
+    /// empty credentials path both blocks derivation and manufactures <c>AGY_ADC_AUTH=1</c> for a path
+    /// agy cannot read.</summary>
+    internal static void ApplySpawnEnvironment(
+            IDictionary<string, string?> env, string daemonsDir, string configDir, bool isWindows,
+            string? adcCredentialsPath, string? gcloudProject) {
+        env[DaemonStore.DaemonsDirEnvVar] = daemonsDir;
+        env[ConfigRoot.ConfigDirEnvVar]   = configDir;
+
+        if (isWindows) return;
+
+        var trio = new Dictionary<string, string>();
+        foreach (var (k, v) in env) {
+            if (v is null) continue;
+            if (v.Length > 0 || k == Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.FlagKey)
+                trio[k] = v;
+        }
+
+        Capacitor.Cli.Harness.Antigravity.AntigravityAdcTrio.Complete(trio, adcCredentialsPath, gcloudProject);
+
+        foreach (var (k, v) in trio) env[k] = v;
     }
 
     /// <summary><c>DaemonRunner.BootCarriers.Seed</c>'s twin: the daemon project defines the
@@ -585,6 +635,25 @@ public sealed class DaemonCommands(
 
     // ── status ──────────────────────────────────────────────────────────────
 
+    /// <summary>How long <c>status</c> waits for a daemon's control socket before reporting it as still
+    /// starting. Short: a bound daemon accepts the connection immediately, and an unbound one refuses
+    /// it at once — the timeout only bounds the rare mid-bind race.</summary>
+    static readonly TimeSpan ServingProbeTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The running daemon's status line, distinguishing a daemon that is actually serving from one
+    /// whose PID is live but whose local control socket does not yet accept a connection. A validated
+    /// PID proves only that the process exists; a reachable control socket proves the daemon has bound
+    /// its listener. A live process whose socket is not yet reachable has acquired its lock but has not
+    /// finished binding — it is starting, not serving — which a PID alone reports as flatly "running".
+    /// Reachability, not a well-formed Hello, is the signal: an older daemon accepts the connection and
+    /// drops the unknown Hello frame, and it is serving all the same.
+    /// </summary>
+    internal static string DescribeRunningDaemon(int pid, bool serving) =>
+        serving
+            ? $"running (PID {pid})"
+            : $"running (PID {pid}, starting — not yet serving)";
+
     async Task<int> Status(string[] args) {
         string? explicitName;
 
@@ -609,11 +678,28 @@ public sealed class DaemonCommands(
             return 0;
         }
 
-        foreach (var name in names) {
-            if (DaemonPidProbe.ReadPidFile(store, name) is not { } entry) {
+        // Read each name's PID entry once, then probe every validated-live daemon AT ONCE. Each probe
+        // carries its own ServingProbeTimeout, so a status over several daemons whose sockets accept
+        // but stay silent costs one timeout rather than one per daemon; results are rendered below in
+        // the original name order.
+        var entries = names.Select(n => (Name: n, Entry: DaemonPidProbe.ReadPidFile(store, n))).ToList();
+
+        var servingProbes = entries
+            .Where(e => e.Entry is { } pe && DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken))
+            .ToDictionary(e => e.Name, e => HelloProbe.RunAsync(store, e.Name, ServingProbeTimeout));
+
+        await Task.WhenAll(servingProbes.Values);
+
+        foreach (var (name, entry) in entries) {
+            if (entry is not { } pe) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
-            } else if (DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
-                await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
+            } else if (DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken)) {
+                // Socket-reachable is the serving signal: a daemon that accepts the control-socket
+                // connection has bound its listener, so it is serving even if it is an older build
+                // that cannot answer the Hello frame. Only a refused or timed-out connection —
+                // unreachable — is the still-starting daemon a validated PID alone cannot tell apart.
+                var serving = servingProbes.TryGetValue(name, out var probe) && probe.Result.Reachable;
+                await Console.Out.WriteLineAsync($"Daemon '{name}': {DescribeRunningDaemon(pe.Pid, serving)}");
 
                 // Version of the *running* daemon (from the marker it wrote at
                 // startup), so the user can confirm a self-update took effect.
@@ -854,22 +940,42 @@ public sealed class DaemonCommands(
     }
 
     async Task<int> Logs() {
-        if (!File.Exists(LogPath)) {
+        var shown = await TailAsync(LogPath);
+
+        // The stderr capture holds what the primary log cannot — native fatal messages and the
+        // pre-host startup breadcrumbs — so a startup that never reached the logger still leaves a
+        // trace an operator can find here rather than in an undocumented sibling file. Surfaced only
+        // when it has content: a clean run leaves it empty.
+        shown |= await TailAsync(StderrCapturePath, skipIfEmpty: true);
+
+        if (!shown) {
             await Console.Error.WriteLineAsync("No log file found.");
 
             return 1;
         }
 
-        var lines = await File.ReadAllLinesAsync(LogPath);
-        var start = Math.Max(0, lines.Length - 50);
-
-        for (var i = start; i < lines.Length; i++) {
-            await Console.Out.WriteLineAsync(lines[i]);
-        }
-
-        await Console.Error.WriteLineAsync($"\n--- {LogPath} ({lines.Length} lines total) ---");
-
         return 0;
+    }
+
+    /// <summary>Prints the last 50 lines of <paramref name="path"/> with a trailing banner, or returns
+    /// false if it is absent (or empty, when <paramref name="skipIfEmpty"/>). Read write-sharing: the
+    /// daemon holds both this log and the stderr capture open for its whole life, and a plain read
+    /// denies it Write on Windows.</summary>
+    static async Task<bool> TailAsync(string path, bool skipIfEmpty = false) {
+        if (!File.Exists(path)) return false;
+        if (skipIfEmpty && new FileInfo(path).Length == 0) return false;
+
+        var lines = (await File.ReadAllTextSharedAsync(path)).Split('\n');
+        // A trailing newline yields a final empty element that is not a line.
+        var count = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
+        var start = Math.Max(0, count - 50);
+
+        for (var i = start; i < count; i++)
+            await Console.Out.WriteLineAsync(lines[i].TrimEnd('\r'));
+
+        await Console.Error.WriteLineAsync($"\n--- {path} ({count} lines total) ---");
+
+        return true;
     }
 
     // ── service evidence for status/doctor (the verbs live in DaemonServiceCommands) ──

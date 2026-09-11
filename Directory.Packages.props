@@ -31,6 +31,9 @@
     <PackageVersion Include="Spectre.Console" Version="0.57.2" />
     <PackageVersion Include="SvcSystems.UI.Terminal" Version="1.1.4" />
     <PackageVersion Include="Tomlyn" Version="2.10.1" />
+    <!-- Must stay on the Microsoft.Testing.Platform version TUnit.Engine resolves (2.4.0):
+         an MTP extension only loads against its own platform version. -->
+    <PackageVersion Include="Microsoft.Testing.Extensions.GitHubActionsReport" Version="2.4.0" />
     <PackageVersion Include="TUnit" Version="1.66.27" />
     <PackageVersion Include="TUnit.Core" Version="1.66.27" />
     <PackageVersion Include="Velopack" Version="1.2.0" />

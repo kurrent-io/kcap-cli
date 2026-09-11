@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Cursor;
@@ -16,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// <see cref="IHostedAgentRuntimeFactory"/> for ACP-speaking vendors, parameterized over an
-/// <see cref="AcpVendorDescriptor"/> — spawns <c>{descriptor.ResolveBinaryPath(config)}
+/// <see cref="AcpVendorDescriptor"/> — spawns <c>{config.PathSlot(descriptor.Harness).Read()}
 /// {descriptor.Argv}</c> as a child process, wraps its stdio in an <see cref="AcpConnection"/> +
 /// <see cref="AcpChildProcess"/>, and drives the ACP handshake via
 /// <see cref="AcpHostedAgentRuntime.StartAsync"/>. Cursor and Copilot descriptors share this path;
@@ -62,7 +63,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// this, never the static descriptor — see <see cref="ResolvedBorrowedReviewPolicy"/> for why
     /// splitting them is how advertisement and spawn drift apart.</summary>
     internal static ResolvedBorrowedReviewPolicy PolicyFor(AcpVendorDescriptor descriptor) =>
-        descriptor.Vendor == AcpVendorDescriptors.Copilot.Vendor
+        descriptor.Harness is HarnessId.Copilot
             ? CopilotBorrowedReviewPolicy.Current
             : ResolvedBorrowedReviewPolicy.FromDescriptor(descriptor);
 
@@ -116,7 +117,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// implementation, or a test double, is equally valid and would defeat one.</summary>
     public bool SupportsModelSelection => descriptor.ModelSelector.CanSelectModel;
 
-    public string CliPath => descriptor.ResolveBinaryPath(config);
+    public string CliPath => config.PathSlot(descriptor.Harness).Read();
 
     public bool IsAvailable() => config.Binaries.Finds(CliPath);
 
@@ -543,10 +544,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx) {
         if (!ctx.IsReviewFlow) return null;
 
-        if (descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor)
+        if (descriptor.Harness is HarnessId.Kiro)
             return config.KiroReviewerLaunchTimeoutSeconds;
 
-        if (descriptor.Vendor == AcpVendorDescriptors.OpenCode.Vendor)
+        if (descriptor.Harness is HarnessId.OpenCode)
             return config.OpenCodeReviewerLaunchTimeoutSeconds;
 
         return null;
@@ -569,7 +570,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// an interactive login instead of failing — so the shape is the same and only the binary
     /// differs.</summary>
     static string ReviewerLaunchTimeoutHint(AcpVendorDescriptor descriptor) =>
-        descriptor.Vendor == AcpVendorDescriptors.OpenCode.Vendor
+        descriptor.Harness is HarnessId.OpenCode
             ? "An opencode whose credential has expired can wait on an interactive login rather than "
             + "failing, which is the shape this bound exists for — check that the daemon user's "
             + "opencode is still authenticated (`opencode auth login`)."
@@ -590,7 +591,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         var stateDir = ReviewerStateDir(config);
         var epoch    = config.DaemonEpoch ?? "unpinned";
 
-        if (descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor) {
+        if (descriptor.Harness is HarnessId.Kiro) {
             KiroReviewerHome.Delete(
                 Path.Combine(KiroReviewerHome.RootFor(stateDir),
                              KiroReviewerHome.NameFor(epoch, ctx.AgentId)),
@@ -598,7 +599,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             return;
         }
 
-        if (descriptor.Vendor == AcpVendorDescriptors.OpenCode.Vendor) {
+        if (descriptor.Harness is HarnessId.OpenCode) {
             OpenCodeReviewerConfigDir.Delete(
                 Path.Combine(OpenCodeReviewerConfigDir.RootFor(stateDir),
                              OpenCodeReviewerConfigDir.NameFor(epoch, ctx.AgentId)),
@@ -697,8 +698,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// produce — aliasing is what makes that comparison close to an identity check rather than a
     /// string match.</para></summary>
     internal static bool AliasesResultChannel(AcpVendorDescriptor descriptor) =>
-        descriptor.Vendor == AcpVendorDescriptors.Gemini.Vendor
-     || descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor;
+        descriptor.Harness is HarnessId.Gemini
+     || descriptor.Harness is HarnessId.Kiro;
 
     /// <summary>Vendors whose ARGV carries an exact-name MCP allowlist a review launch must widen to
     /// exactly its injected set — Gemini alone.
@@ -708,7 +709,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// the placeholder substitution or the canonical-argv assertion for it would assert against
     /// machinery it does not have, and route it through Gemini's capability gate.</para></summary>
     internal static bool UsesMcpNameAllowlistArgv(AcpVendorDescriptor descriptor) =>
-        descriptor.Vendor == AcpVendorDescriptors.Gemini.Vendor;
+        descriptor.Harness is HarnessId.Gemini;
 
     /// <summary>Whether the model reaching the runtime is the launch's own pick rather than the
     /// daemon-wide default. The UI dispatches the literal string <c>"default"</c>, not an empty one,
@@ -731,7 +732,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// against the session's <c>availableModels</c> happens in <see cref="AcpHostedAgentRuntime"/>
     /// via <see cref="Capacitor.Cli.Core.Acp.AcpModelResolver"/>.</summary>
     static string? ResolveRequestedModel(AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx) =>
-        LaunchPickedTheModel(ctx) ? ctx.Model : descriptor.ResolveDefaultModel(config);
+        LaunchPickedTheModel(ctx) ? ctx.Model : config.ModelSlot(descriptor.Harness)?.Read();
 
     /// <summary>
     /// PURE builder for a real launch's spawn shape — no process side effects. StartRealProcess is
@@ -856,7 +857,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // Resolving a borrowed reviewer through an exact-build record instead made a vendor
         // auto-update hard-fail the launch. See
         // docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
-        var binaryPath = descriptor.ResolveBinaryPath(config);
+        var binaryPath = config.PathSlot(descriptor.Harness).Read();
 
         // The read boundary. Only a borrowed snapshot is wrapped: every other launch either has no
         // borrowed content to protect or is already confined by the owned worktree it runs in.
@@ -928,7 +929,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // left to the vendor: it must exist, and be owner-only, before the child writes the first
         // transcript line into it. Review launches only; an interactive hosted Kiro must behave as the
         // user's own session does, global servers included.
-        if (ctx.IsReviewFlow && descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor) {
+        if (ctx.IsReviewFlow && descriptor.Harness is HarnessId.Kiro) {
             psi.Environment["KIRO_HOME"] = KiroReviewerHome.Create(
                 ReviewerStateDir(config), config.DaemonEpoch ?? "unpinned", ctx.AgentId);
         }
@@ -937,7 +938,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // none of the global flags), so its whole posture lives here. Unlike Kiro's branch above this
         // is NOT review-only: the plugin suppression it applies is what keeps an INTERACTIVE hosted
         // session from being captured twice.
-        if (descriptor.Vendor == AcpVendorDescriptors.OpenCode.Vendor) {
+        if (descriptor.Harness is HarnessId.OpenCode) {
             OpenCodeLaunchEnvironment.Apply(psi.Environment);
 
             // A review launch additionally gets the isolated config dir, project-config suppression and
@@ -959,7 +960,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             }
         }
 
-        if (stateRoot is not null && descriptor.Vendor == AcpVendorDescriptors.Copilot.Vendor)
+        if (stateRoot is not null && descriptor.Harness is HarnessId.Copilot)
             // COPILOT_HOME relocates Copilot's whole tree, so an inherited one points the reviewer
             // outside the sandbox home below — at a path this deny-default profile never grants.
             psi.Environment.Remove("COPILOT_HOME");
@@ -1099,7 +1100,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (!enabled) return new(false, null, null);
 
         var installed = (resolveVersion ?? new VendorVersionResolver(config.Binaries).Resolve)(
-            descriptor.ResolveBinaryPath(config));
+            config.PathSlot(descriptor.Harness).Read());
 
         return new(true, installed, VersionStoreFor(config, descriptor.Vendor).Affirmed);
     }
@@ -1117,7 +1118,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// </summary>
     internal static string? ReviewerRefusal(
             AcpVendorDescriptor descriptor, DaemonConfig config, Func<string, string?>? resolveVersion) {
-        if (descriptor.Vendor == AcpVendorDescriptors.Kiro.Vendor) {
+        if (descriptor.Harness is HarnessId.Kiro) {
             var g    = GateInputsFor(descriptor, config, config.KiroUnattendedReviewerEnabled, resolveVersion);
             var kiro = KiroReviewerCapability.Decide(g.Enabled, g.Installed, g.Affirmed);
 
@@ -1126,7 +1127,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 : KiroReviewerCapability.DenialReason(kiro, g.Installed, g.Affirmed);
         }
 
-        if (descriptor.Vendor == AcpVendorDescriptors.OpenCode.Vendor) {
+        if (descriptor.Harness is HarnessId.OpenCode) {
             var g   = GateInputsFor(descriptor, config, config.OpenCodeUnattendedReviewerEnabled, resolveVersion);
             var oc  = OpenCodeReviewerCapability.Decide(g.Enabled, g.Installed, g.Affirmed);
 

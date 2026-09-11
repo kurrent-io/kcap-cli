@@ -583,6 +583,29 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(capture.GetCapturedOutput()).Contains("\"behavior\":\"allow\"");
     }
 
+    /// <summary>In an envelope-sourced hosted session the app-server runtime answers approvals over
+    /// Codex's own requestApproval, with a deadline. The hook must step aside — a bridge round-trip
+    /// here would answer first through a channel with no deadline. Keyed on the same marker that
+    /// suppresses the hook's transcript watcher for such sessions.</summary>
+    [Test, NotInParallel]
+    public async Task PermissionRequest_in_an_envelope_sourced_hosted_session_yields_to_codex_without_posting_to_the_bridge() {
+        using var bridge = WireMockServer.Start();
+        var       token  = "abc123";
+        bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
+        var hosted = new HostedAgent(null, IsRendered: true, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
+        using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", "1");
+        using var capture = ConsoleOutput.StartCapture();
+
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
+            .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput().Trim()).IsEqualTo("{}");
+        await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
+    }
+
     [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500() {
         using var bridge = WireMockServer.Start();

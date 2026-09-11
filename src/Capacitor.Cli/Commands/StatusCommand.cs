@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, NpmRegistryClient npm, bool? appBundled = null) {
+        ICapacitorHttpClient http, NpmRegistryClient npm, MachineAuth machine, bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
 
@@ -44,9 +44,7 @@ public sealed class StatusCommand(
         // the token store entirely, so its state is not what this CLI authenticates with — printing
         // both would show a headless runner as "records as the machine" AND "not authenticated (run:
         // kcap login)", contradictory and with irrelevant remediation.
-        var machineLine = MachineAuth.DescribeDiversion(
-            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(MachineAuth.ClientIdVar)),
-            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(MachineAuth.ClientSecretVar)));
+        var machineLine = machine.Diversion;
 
         if (machineLine is not null) {
             Console.WriteLine($"  Auth:    {machineLine}");

@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Acp;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -118,6 +120,51 @@ public class AcpHostedAgentRuntimePermissionTests {
         await Assert.That(fake.LastServerRequestError!.Value.GetProperty("code").GetInt32()).IsEqualTo(-32601);
 
         cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>A prompt queued behind an in-flight turn records its user row at accept time (that is
+    /// the point of showing queued input immediately), but that row is the person's input, not the
+    /// active turn's progress — so it must not advance the activity clock, or queuing input while a
+    /// turn is wedged would keep resetting its idle timer and let it dodge the turn-wedge reap.</summary>
+    [Test]
+    public async Task Queued_prompt_records_its_row_without_advancing_the_activity_clock() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+        var gate    = new TaskCompletionSource<AcpInteractionDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn, process, NullLogger.Instance, requestInteraction: (req, ct) => gate.Task) {
+            ActivityClock = new AgentActivityClock(new FakeTimeProvider())
+        };
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        // Turn 1 stalls on a permission that never resolves: it stays in flight and produces no output.
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run ls"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]""");
+        await runtime.SendUserInputAsync("first").WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!fake.SentServerRequests.Any(r => r.Method == "session/request_permission") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var seqBefore = runtime.ActivityClock!.ActivitySeq;
+
+        // SendUserInputAsync emits the accept-time row synchronously before its task completes, so the
+        // clock is settled by the time this await returns — no envelope poll needed.
+        await runtime.SendUserInputAsync("second").WaitAsync(HangGuard);
+
+        await Assert.That(runtime.ActivityClock!.ActivitySeq).IsEqualTo(seqBefore);
+
+        cts.Cancel();
+        gate.TrySetCanceled();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await runtime.DisposeAsync();
         await fake.DisposeAsync();
@@ -283,6 +330,196 @@ public class AcpHostedAgentRuntimePermissionTests {
         await Assert.That(captured).IsNotNull();
         await Assert.That(captured!.Value.AcpSessionId).IsEqualTo(FakeAcpAgent.FixedSessionId);
         await Assert.That(captured.Value.AcpSessionId).IsNotEmpty();
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    static async Task<AcpEventEnvelope?> WaitForEnvelopeAsync(
+            AcpHostedAgentRuntime runtime, Func<AcpEventEnvelope, bool> predicate,
+            List<AcpEventEnvelope>? seen = null, TimeSpan? timeout = null) {
+        var deadline = DateTime.UtcNow + (timeout ?? HangGuard);
+
+        while (DateTime.UtcNow < deadline) {
+            while (runtime.Envelopes.TryRead(out var envelope)) {
+                seen?.Add(envelope);
+                if (predicate(envelope))
+                    return envelope;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The reported failure end-to-end: a turn's permission request resolves to the ACP `cancelled`
+    /// outcome (exactly what a mismatched server-side optionId echo fails closed to — see
+    /// <c>AcpInteractionBridgeTests.RequestPermission_ResolvedOptionIdDoesNotMatchOffered_LogsOutcomeAndMismatch</c>),
+    /// and the turn's scripted response carries no agent_message_chunk at all — the "Copilot's tool
+    /// returned a rejection but the turn just ends" shape. The runtime must emit a system_note so the
+    /// transcript says why, instead of leaving the chat looking idle.
+    /// </summary>
+    [Test]
+    public async Task PermissionCancelled_NoAssistantOutput_TurnEndEmitsSystemNote() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn,
+            process,
+            NullLogger.Instance,
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run rm -rf /"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]""");
+
+        // No updates at all — the turn ends on stopReason alone, exactly like a vendor that reports
+        // the rejection to itself but never turns it into assistant text.
+        fake.EnqueuePromptScript([], JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
+
+        await runtime.SendUserInputAsync("do it").WaitAsync(HangGuard);
+
+        var note = await WaitForEnvelopeAsync(runtime, e => e.Kind == AcpEventKind.SystemNote);
+
+        await Assert.That(note).IsNotNull();
+        await Assert.That(note!.Value.Text).IsEqualTo("The tool call was not permitted; the turn ended.");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Negative control: a cancelled permission whose turn never reaches its stopReason —
+    /// the transport drops and its reconnect sweep declines the pending request. The note is only for
+    /// a turn that ended normally, so a teardown-driven cancellation must not forge a refusal.</summary>
+    [Test]
+    public async Task PermissionCancelled_ButTransportDropsBeforeStopReason_EmitsNoSystemNote() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn,
+            process,
+            NullLogger.Instance,
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run rm -rf /"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]""");
+        // No stopReason enqueued: after the permission is declined the prompt never completes, so the
+        // turn ends only when the transport below drops it — the exact case that must not emit a note.
+
+        _ = runtime.SendUserInputAsync("do it");
+
+        var seen = new List<AcpEventEnvelope>();
+        await Task.Delay(300); // let the permission be issued and declined so the cancelled flag is set
+        cts.Cancel();          // drop the fake agent → transport ends → the pending turn is cancelled
+        await WaitForEnvelopeAsync(runtime, _ => false, seen, timeout: TimeSpan.FromMilliseconds(600));
+
+        await Assert.That(seen).DoesNotContain(e => e.Kind == AcpEventKind.SystemNote);
+
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Negative control: the SAME cancelled permission, but the agent goes on to say
+    /// something before ending the turn. No system_note — the chat already shows why the turn
+    /// ended, so a second, daemon-synthesized note would be redundant noise.</summary>
+    [Test]
+    public async Task PermissionCancelled_WithAssistantOutput_TurnEndEmitsNoSystemNote() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn,
+            process,
+            NullLogger.Instance,
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run rm -rf /"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]""");
+
+        fake.EnqueuePromptScript(
+            [FakeAcpAgent.DefaultAgentMessageChunkUpdate(FakeAcpAgent.FixedSessionId, "I can't run that.")],
+            JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
+
+        await runtime.SendUserInputAsync("do it").WaitAsync(HangGuard);
+
+        var seen = new List<AcpEventEnvelope>();
+        var text = await WaitForEnvelopeAsync(runtime, e => e.Kind == AcpEventKind.AssistantText, seen);
+
+        await Assert.That(text).IsNotNull();
+        await Assert.That(seen).DoesNotContain(e => e.Kind == AcpEventKind.SystemNote);
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Negative control: an ALLOWED permission with no assistant output must not be
+    /// mistaken for a refusal — the note is keyed on the cancelled outcome, never on silence
+    /// alone.</summary>
+    [Test]
+    public async Task PermissionAllowed_NoAssistantOutput_TurnEndEmitsNoSystemNote() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn,
+            process,
+            NullLogger.Instance,
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run ls"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]""");
+
+        fake.EnqueuePromptScript([], JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
+
+        await runtime.SendUserInputAsync("run ls").WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (fake.LastServerRequestResponse is null && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        await Assert.That(fake.LastServerRequestResponse!.Value.GetProperty("outcome").GetProperty("outcome").GetString()).IsEqualTo("selected");
+
+        var seen = new List<AcpEventEnvelope>();
+        await WaitForEnvelopeAsync(runtime, _ => false, seen, timeout: TimeSpan.FromMilliseconds(500));
+
+        await Assert.That(seen).DoesNotContain(e => e.Kind == AcpEventKind.SystemNote);
 
         cts.Cancel();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }

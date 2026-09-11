@@ -2,8 +2,9 @@ namespace Capacitor.Cli.Services;
 
 /// <summary>
 /// Reads gcloud's own on-disk configuration for the active default project — no process spawn, no
-/// network. Used only by the service-install capture (<see cref="ServiceEnvironment.Capture"/>);
-/// the daemon itself never reads this.
+/// network. Read by the CLI as it stamps a daemon spawn's environment — the <c>daemon service
+/// install</c> capture and a direct <c>daemon start</c> / <c>-d</c> alike; the daemon process itself
+/// never reads it.
 /// </summary>
 static class GcloudConfig {
     /// <summary>The active configuration's <c>[core] project</c>, or null when gcloud is not set

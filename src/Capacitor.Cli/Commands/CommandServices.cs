@@ -18,7 +18,8 @@ public static class CommandServices {
     /// </summary>
     public static IServiceCollection AddCapacitorCli(
             this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
-            ProfileContext profiles, ProfileOverrides env, HookClock clock, string? baseUrl) {
+            ProfileContext profiles, ProfileOverrides env, MachineAuth machine, HookClock clock,
+            string? baseUrl) {
         services
             .AddCapacitorContext(config, home, daemons, profiles)
             .AddCapacitorCommands();
@@ -38,7 +39,7 @@ public static class CommandServices {
                 sp.GetRequiredService<HarnessRegistry>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
-        services.AddCapacitorHttp(env);
+        services.AddCapacitorHttp(env, machine);
 
         return services;
     }
