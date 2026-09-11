@@ -94,6 +94,8 @@ public class SessionAccessServiceTests {
         await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "unsubscribe on last release");
     }
 
+    /// The give-back is ordered behind the join it undoes, so the membership ends up dropped
+    /// whichever way the two hub calls would otherwise have raced each other to the server.
     [Test]
     public async Task Lease_disposed_while_chat_subscribe_in_flight_still_unsubscribes() {
         using var h = new Harness();
@@ -103,15 +105,15 @@ public class SessionAccessServiceTests {
         var lease = h.Service.Acquire("s1");
         await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s1"), what: "chat subscribe started");
         lease.Dispose();
-        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "release fires its own unsubscribe");
         gate.SetResult(HubCallOutcome.Ok);
-        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Count(s => s == "s1") == 2, what: "late subscribe triggers a follow-up unsubscribe");
+        await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "the membership given back once the subscribe resolved");
     }
 
-    /// Closing and reopening the same workspace while the first attempt is still in flight: the
-    /// new entry establishes first, and the stale attempt landing behind it must not hand back the
-    /// group the live lease is receiving payloads on — that leaves the lease Established, with no
-    /// retry armed, while nothing arrives.
+    /// Closing and reopening the same workspace while the first attempt is still in flight. The
+    /// stale attempt did join, and handing that group back while the reopened lease receives
+    /// payloads on it leaves the lease Established, with no retry armed, while nothing arrives.
+    /// Ordering the calls is what settles it: by the time the stale give-back can run, the
+    /// reopened entry holds the session and neither give-back applies.
     [Test]
     public async Task A_stale_attempt_leaves_the_chat_a_live_lease_holds_alone() {
         using var h = new Harness();
@@ -124,15 +126,37 @@ public class SessionAccessServiceTests {
         first.Dispose();
         h.Lane.SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
         using var live = h.Service.Acquire("s1");
-        await WaitUntilAsync(async () => await Harness.Current(live) == SessionAccessState.Established, "the reopened lease established");
-
-        // The release gave the group back once, legitimately; nothing may follow it.
-        var given = h.Lane.ChatUnsubscribes.Count(s => s == "s1");
         gate.SetResult(HubCallOutcome.Ok);
-        await Task.Delay(100);
 
-        await Assert.That(h.Lane.ChatUnsubscribes.Count(s => s == "s1")).IsEqualTo(given);
+        await WaitUntilAsync(async () => await Harness.Current(live) == SessionAccessState.Established, "the reopened lease established");
+        await Task.Delay(100); // the stale attempt's give-back, were it not dropped, lands here
+
+        await Assert.That(h.Lane.ChatUnsubscribes).DoesNotContain("s1");
         await Assert.That(await Harness.Current(live)).IsEqualTo(SessionAccessState.Established);
+    }
+
+    /// The same race on the release path: the last lease goes while a fresh acquisition is
+    /// establishing, and the release's own give-back must find the session claimed again and
+    /// leave the membership alone. The first attempt never joined, so nothing else can hand it
+    /// back and the session has to end up subscribed.
+    [Test]
+    public async Task A_release_racing_a_fresh_acquisition_leaves_the_session_subscribed() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource<HubCallOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Lane.SubscribeChatHandler = _ => gate.Task;
+        h.Connect();
+        var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s1"), what: "the first chat subscribe");
+
+        first.Dispose();
+        h.Lane.SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        using var live = h.Service.Acquire("s1");
+        gate.SetResult(HubCallOutcome.Failed("closed"));
+
+        await WaitUntilAsync(async () => await Harness.Current(live) == SessionAccessState.Established, "the reopened lease established");
+        await Task.Delay(100); // the release's give-back, were it not dropped, lands here
+
+        await Assert.That(h.Lane.ChatUnsubscribes).DoesNotContain("s1");
     }
 
     /// A hub failure is otherwise indistinguishable from the lane being down: the state is
