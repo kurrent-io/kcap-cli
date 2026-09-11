@@ -235,6 +235,41 @@ public class ServerPermissionFeedTests {
         await Assert.That(h.View.Lookup("server:p1").HasValue).IsFalse();
     }
 
+    /// Testing the attempt and committing the result are one unit. Held between the two, a fetch
+    /// resumes into a cache the attempt that replaced it has already reconciled, and hands back
+    /// what that attempt proved gone — a same-user reconnect moves neither the cache generation
+    /// nor the lane epoch, so ordering is all that separates the two commits.
+    [Test]
+    public async Task A_fetch_held_at_its_commit_cannot_outlive_the_attempt_that_replaced_it() {
+        using var h = new Harness();
+        h.Detail = _ => Task.FromResult(DetailWith("""
+            [
+            {"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}},
+            {"event_type":"InterruptIssued","event_number":2,"payload":{"request_id":"p2","kind":"permission","tool_name":"Bash"}}
+            ]
+            """));
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "p1", "Bash", null, null));
+
+        using var held = await h.Feed.CommitGates.EnterAsync("s1");
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the first fetch");
+        await Task.Delay(100); // the commit, were it not ordered, lands here
+        // p2 is this fetch's alone, so its absence is what says the commit has not run yet.
+        await Assert.That(h.View.Lookup("server:p2").HasValue).IsFalse();
+
+        // The reconnect's own fetch is authoritative that both settled while the hub was down.
+        h.Detail = _ => Task.FromResult(DetailWith("[]"));
+        h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        h.Connect();
+        await WaitUntilAsync(() => h.Fetches == 2, what: "the reconnect's fetch");
+
+        held.Dispose();
+
+        await WaitUntilAsync(() => !h.View.Lookup("server:p1").HasValue, what: "the reconnect's fetch removed the card");
+        await Assert.That(h.View.Lookup("server:p2").HasValue).IsFalse();
+    }
+
     [Test]
     public async Task An_identity_change_clears_the_server_lane() {
         using var h = new Harness();

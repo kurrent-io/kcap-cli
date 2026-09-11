@@ -10,7 +10,8 @@ namespace Capacitor.App.Services;
 /// or a revocation landing mid-fetch wins and a push landing mid-fetch outlives the snapshot — and
 /// the session's attempt number, because a same-user reconnect moves neither the cache generation
 /// nor the lane epoch: without it an older fetch still in flight re-adds what the reconnect's own
-/// reconciliation just proved gone.
+/// reconciliation just proved gone. Testing that attempt and committing the result run as one unit
+/// per session, so a completion cannot land between a newer one's test and its commit.
 public sealed class ServerPermissionFeed : IDisposable {
     readonly PermissionService _permissions;
     readonly SessionDetailReader _readDetail;
@@ -18,6 +19,9 @@ public sealed class ServerPermissionFeed : IDisposable {
     readonly CancellationTokenSource _lifetime = new();
     readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
     readonly Lock _attemptLock = new();
+    /// The per-session validate-and-commit lane. Internal so a test can hold a session's gate and
+    /// pin the ordering rather than race it.
+    internal SessionGates CommitGates { get; } = new();
     string? _subject;
     bool _disposed;
 
@@ -66,8 +70,15 @@ public sealed class ServerPermissionFeed : IDisposable {
         lock (_attemptLock) return _attempts[sessionId] = _attempts.GetValueOrDefault(sessionId) + 1;
     }
 
-    bool IsCurrent(string sessionId, int attempt) {
-        lock (_attemptLock) return _attempts.GetValueOrDefault(sessionId) == attempt;
+    /// Tests the attempt and commits under the session's gate, so nothing can move the attempt
+    /// between the two. Never spans the fetch itself.
+    async Task CommitAsync(string sessionId, int attempt, Action commit) {
+        using (await CommitGates.EnterAsync(sessionId).ConfigureAwait(false)) {
+            lock (_attemptLock) {
+                if (_attempts.GetValueOrDefault(sessionId) != attempt) return;
+            }
+            commit();
+        }
     }
 
     async Task ReconcileAsync(string sessionId, int attempt) {
@@ -77,7 +88,8 @@ public sealed class ServerPermissionFeed : IDisposable {
             // A fetch that merely failed says nothing about the session, so its cards stand; only
             // a 404 is evidence there is nothing to hold.
             if (fetch.Detail is null) {
-                if (fetch.NotFound && IsCurrent(sessionId, attempt)) _permissions.ReplaceServerForSession(sessionId, [], marker);
+                if (fetch.NotFound)
+                    await CommitAsync(sessionId, attempt, () => _permissions.ReplaceServerForSession(sessionId, [], marker)).ConfigureAwait(false);
                 return;
             }
             var reconciled = InterruptReconciliation.FromDetail(fetch.Detail);
@@ -86,10 +98,9 @@ public sealed class ServerPermissionFeed : IDisposable {
                 : [.. reconciled.Pending.Where(p => p.IsAnswerableOverHttp)
                     .Select(p => PendingPermissionRequest.FromReconciled(sessionId, p))
                     .OfType<PendingPermissionRequest>()];
-            // Checked where the marker is used, not before the fetch: a newer attempt starting
+            // Tested where the marker is used, not before the fetch: a newer attempt starting
             // between the two would otherwise still lose to this one.
-            if (!IsCurrent(sessionId, attempt)) return;
-            _permissions.ReplaceServerForSession(sessionId, items, marker);
+            await CommitAsync(sessionId, attempt, () => _permissions.ReplaceServerForSession(sessionId, items, marker)).ConfigureAwait(false);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: session reconciliation failed: {ex.Message}");
