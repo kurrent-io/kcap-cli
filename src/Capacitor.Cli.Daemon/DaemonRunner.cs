@@ -555,7 +555,8 @@ public static partial class DaemonRunner {
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalControlServer>());
 
         builder.Services.AddSingleton(sp => new TranscriptJournalSweep(
-            config.Store.StateDirectory(config.Name), TimeProvider.System, sp.GetRequiredService<ILogger<TranscriptJournalSweep>>()));
+            config.Store.StateDirectory(config.Name), TimeProvider.System, sp.GetRequiredService<ILogger<TranscriptJournalSweep>>(),
+            isLive: sp.GetRequiredService<AgentOrchestrator>().IsLiveJournalStem));
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptJournalSweep>());
 
         var host   = builder.Build();

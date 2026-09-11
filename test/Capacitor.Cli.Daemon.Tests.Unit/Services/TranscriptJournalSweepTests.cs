@@ -16,8 +16,8 @@ public class TranscriptJournalSweepTests {
     static void PidRecord(TempDir tmp, string agentId) =>
         tmp.CreateFile(["agents", AgentFileNames.For(agentId) + ".json"], "{}");
 
-    static TranscriptJournalSweep Sweep(TempDir tmp, TimeProvider time, JournalPathLocks? locks = null) =>
-        new(tmp.Path, time, NullLogger<TranscriptJournalSweep>.Instance, locks);
+    static TranscriptJournalSweep Sweep(TempDir tmp, TimeProvider time, JournalPathLocks? locks = null, Func<string, bool>? isLive = null) =>
+        new(tmp.Path, time, NullLogger<TranscriptJournalSweep>.Instance, locks, isLive);
 
     /// A fake clock only fires the timers that exist when it advances, and StartAsync returns before
     /// the hosted service has necessarily armed its own: advancing first drops the tick for a whole
@@ -51,6 +51,21 @@ public class TranscriptJournalSweepTests {
         await Assert.That(File.Exists(fresh)).IsTrue();
         await Assert.That(File.Exists(oldButLive)).IsTrue();
         await Assert.That(File.Exists(other)).IsTrue();
+    }
+
+    /// Antigravity spawns one child per turn, so its PID record can be absent BETWEEN turns while
+    /// the runtime + journal are still live — the id-live check must save the journal even with no
+    /// PID record on disk, not just alongside one.
+    [Test]
+    public async Task Skips_a_journal_whose_id_is_a_live_agent_even_without_a_pid_record() {
+        using var tmp = new TempDir();
+        var time = new FakeTimeProvider(Now);
+        var old  = Journal(tmp, "old-live", TimeSpan.FromDays(31));
+        var stem = AgentFileNames.For("old-live");
+
+        await Sweep(tmp, time, isLive: s => s == stem).RunOnceAsync(CancellationToken.None);
+
+        await Assert.That(File.Exists(old)).IsTrue();
     }
 
     [Test]
