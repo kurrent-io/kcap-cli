@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// by <see cref="Capacitor.Cli.Daemon.Services.AcpHostedAgentRuntime"/> (Task B4).
 ///
 /// <paramref name="requestInteraction"/> is injected as a plain delegate — matching the shape of
-/// <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync"/> — rather
+/// <see cref="Capacitor.Cli.Daemon.Services.ServerConnection.RequestAcpInteractionAsync(Capacitor.Cli.Core.AcpInteractionRequest, System.Threading.CancellationToken)"/> — rather
 /// than taking a concrete <c>ServerConnection</c> dependency, so this class is unit-testable
 /// without a real SignalR connection (see <c>AcpInteractionBridgeTests</c>).
 ///

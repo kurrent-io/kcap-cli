@@ -1086,6 +1086,20 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
+    /// <summary>Submits an ACP interaction's decision — its outcome as the behavior plus the selected
+    /// option id the server resolves by — so a request a second local surface answered first records
+    /// that same answer on the server. The server keeps the first writer, so a web answer that already
+    /// landed wins; best-effort, a fault is classified rather than thrown.</summary>
+    public virtual async Task<RespondOutcome> ResolveAcpInteractionAsync(string sessionId, string serverRequestId, AcpInteractionDecision decision) {
+        try {
+            await _hub.InvokeAsync("RespondToPermission", sessionId, serverRequestId, decision.Outcome,
+                null, null, decision.SelectedOptionId, decision.SelectedOptionLabel, _ct);
+            return new RespondOutcome(RespondOutcomeKind.Applied, null);
+        } catch (Exception ex) {
+            return ClassifyRespondFailure(ex);
+        }
+    }
+
     internal static RespondOutcome ClassifyRespondFailure(Exception ex) =>
         ex is Microsoft.AspNetCore.SignalR.HubException he && he.Message.Contains("no longer pending", StringComparison.Ordinal)
             ? new RespondOutcome(RespondOutcomeKind.NotPending, he.Message)
@@ -1098,9 +1112,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// see that method's remarks for why the invoke returns a requestId immediately rather than
     /// blocking the connection's parallel-invocation slot for the whole interaction wait.
     /// </summary>
-    public virtual async Task<AcpInteractionDecision> RequestAcpInteractionAsync(
+    public virtual Task<AcpInteractionDecision> RequestAcpInteractionAsync(
             AcpInteractionRequest request,
             CancellationToken     ct = default
+        ) => RequestAcpInteractionAsync(request, onServerRequestId: null, ct);
+
+    /// <summary><paramref name="onServerRequestId"/> fires once the server has minted its id for this
+    /// interaction, before the decision wait — the seam a second local surface uses to pair its own
+    /// card with the server's so a client seeing both lanes coalesces them.</summary>
+    public virtual async Task<AcpInteractionDecision> RequestAcpInteractionAsync(
+            AcpInteractionRequest request,
+            Action<string>?       onServerRequestId,
+            CancellationToken     ct
         ) {
         var requestId = await ConnectionRetry.InvokeWithConnectionRetryAsync(
             () => _hub.InvokeAsync<string>("AcpRequestInteraction", request, ct),
@@ -1112,6 +1135,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             maxServerErrorRetries: OwnershipNotReadyMaxRetries
         );
 
+        onServerRequestId?.Invoke(requestId);
         return await AwaitInteractionDecisionAsync(request, requestId, ct);
     }
 
