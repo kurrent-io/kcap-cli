@@ -1,4 +1,6 @@
 using System.Collections;
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Services;
 
@@ -10,9 +12,13 @@ namespace Capacitor.Cli.Services;
 /// </summary>
 static class ServiceEnvironment {
     /// <summary>Variables carried from the installing shell into the service unit. No credentials —
-    /// the unit is a file on disk.</summary>
+    /// the unit is a file on disk.
+    ///
+    /// <para>Two of the nine vendor path overrides, deliberately: a captured path is frozen at install
+    /// time, so carrying one for a vendor the operator has not pinned bakes in a stale location. The
+    /// rest stay uncaptured until someone asks.</para></summary>
     static readonly string[] Keys =
-        ["PATH", "KCAP_PROFILE", "KCAP_URL", "KCAP_CLAUDE_PATH", "KCAP_CODEX_PATH",
+        ["PATH", ProfileOverrides.ProfileVar, ProfileOverrides.UrlVar, HarnessId.Claude.PathEnvVar, HarnessId.Codex.PathEnvVar,
          "KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL",
          // Codex transport selection + interactive opt-in: the daemon reads both from its own
          // environment and nowhere else, so the install has to carry them into the unit.
@@ -158,7 +164,7 @@ static class ServiceEnvironment {
             if (!source.TryGetValue(key, out var v)) continue;
             if (!string.IsNullOrEmpty(v) || BakeEvenEmptyKeys.Contains(key)) env[key] = v;
         }
-        if (!string.IsNullOrEmpty(profileName)) env["KCAP_PROFILE"] = profileName; // explicit pin wins
+        if (!string.IsNullOrEmpty(profileName)) env[ProfileOverrides.ProfileVar] = profileName; // explicit pin wins
 
         // POSIX only: Windows carries no GOOGLE_APPLICATION_CREDENTIALS at all (no owner-only unit
         // guarantee), so the trio can never complete there and a derived half would only mislead.

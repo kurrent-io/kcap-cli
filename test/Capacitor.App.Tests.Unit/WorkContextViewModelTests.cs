@@ -1,7 +1,9 @@
 using ReactiveUnit = System.Reactive.Unit;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Avalonia.Controls;
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
@@ -507,6 +509,27 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// The server sends the key as the title when an item has no tracker or generated title, so
+    /// the card would otherwise print the key twice.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_key_titled_item_with_no_other_title_shows_the_key_once() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(
+                ReadyWith(Row("w1", "WK-2198"), Item(title: "WK-2198", enriched: null)),
+                ReadyWith(Row("w1", "WK-2198 — Desktop shell"), Item(title: "WK-2198", enriched: "Desktop shell")));
+
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.Key).IsEqualTo("WK-2198");
+            await Assert.That(h.Vm.Title).IsEqualTo("");
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.Title).IsEqualTo("Desktop shell");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Without_an_item_a_new_primary_shows_the_assignment_label_whole_with_no_key() {
@@ -662,6 +685,78 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task The_sidebar_hides_empty_parts_and_repeated_identity_but_keeps_the_issue_action() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var view = new WorkContextView { DataContext = h.Vm };
+        var window = new Window { Content = view, Width = 320, Height = 800 };
+        var item = Item(title: "WK-2198", enriched: null) with {
+            Links = [Link("issue", "WK-2198", "https://linear.app/example/issue/WK-2198")],
+        };
+        h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), item),
+            ReadyWith(Row("w1", "WK-2198"), item with {
+                EnrichedTitle = "A useful title", Parts = [Part("p1", "First part", 0)],
+                Links = [Link("issue", "#860", "https://github.com/example/repo/issues/860")],
+            }));
+        try {
+            window.Show();
+            await h.PushAsync(Dto());
+            window.UpdateLayout();
+            await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsFalse();
+            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsFalse();
+            var issue = view.FindControl<Button>("InlineIssueButton")!;
+            await Assert.That(issue.IsEffectivelyVisible).IsTrue();
+            issue.Command!.Execute(issue.CommandParameter);
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://linear.app/example/issue/WK-2198" });
+
+            await h.TickAsync();
+            window.UpdateLayout();
+            await Assert.That(view.FindControl<Button>("PartsToggle")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.Text).IsEqualTo("A useful title");
+            await Assert.That(view.FindControl<TextBlock>("WorkContextTitle")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(issue.IsEffectivelyVisible).IsFalse();
+        } finally {
+            window.Close();
+            await h.Vm.TeardownAsync();
+            h.Presence.Dispose();
+            h.SignIn.Dispose();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(null, "Tracker title", "Tracker title", true)]
+    [Arguments("Tracker title", "Tracker title", "Tracker title", true)]
+    [Arguments("Work item title", "Tracker title", "Work item title", false)]
+    [Arguments(null, "WK-2198", "", true)]
+    public Task A_primary_issue_keeps_its_unique_title(string? enriched, string issueTitle, string displayTitle, bool inline) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var view = new WorkContextView { DataContext = h.Vm };
+        var window = new Window { Content = view, Width = 320, Height = 800 };
+        h.Source.Enqueue(ReadyWith(Row("w1", "WK-2198"), Item(enriched: enriched) with {
+            Links = [Link("issue", "WK-2198", "https://linear.app/example/issue/WK-2198", issueTitle)],
+        }));
+        try {
+            window.Show();
+            await h.PushAsync(Dto());
+            window.UpdateLayout();
+            var title = view.FindControl<TextBlock>("WorkContextTitle")!;
+            await Assert.That(title.IsEffectivelyVisible).IsEqualTo(displayTitle.Length > 0);
+            await Assert.That(title.Text).IsEqualTo(displayTitle);
+            await Assert.That(view.FindControl<Button>("InlineIssueButton")!.IsEffectivelyVisible).IsEqualTo(inline);
+            await Assert.That(view.FindControl<ContentControl>("IssueCard")!.IsEffectivelyVisible).IsEqualTo(!inline);
+            await Assert.That(h.Vm.Issue!.Title).IsEqualTo(issueTitle);
+        } finally {
+            window.Close();
+            await h.Vm.TeardownAsync();
+            h.Presence.Dispose();
+            h.SignIn.Dispose();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_issue_card_is_the_first_link_class_issue_and_reference_rows_are_ignored() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
@@ -686,7 +781,8 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://github.com/kurrent-io/kcap-cli/issues/777" });
 
             await h.TickAsync();
-            await Assert.That(h.Vm.Issue!.Title).IsEqualTo("Issue WK-2521");
+            await Assert.That(h.Vm.Issue!.Key).IsEqualTo("WK-2521");
+            await Assert.That(h.Vm.Issue.Title).IsEqualTo("");
             await Assert.That(h.Vm.Issue.CanOpen).IsFalse();
 
             await h.TickAsync();
@@ -696,29 +792,42 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// The section lists people, so its count names people first; the session count stays beside
+    /// it because one person can hold several sessions. Without a listed contributor the requester
+    /// row stands in and the session count alone is shown.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Contributors_and_the_session_count_come_from_the_item_and_the_requester_row_is_the_fallback() {
+    public async Task The_who_count_names_people_before_sessions_and_the_requester_row_is_the_fallback() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var now = h.Time.GetUtcNow();
             var crowded = Item() with {
                 Contributors = [Person("u1", " Ada Lovelace ", now.AddHours(-2)), Person("github:7", null, now.AddDays(-3)), Person("u3", "👩 Grace")],
-                SessionCount = 3,
+                SessionCount = 4,
             };
-            h.Source.Enqueue(ReadyWith(Row("w1", "t"), crowded), ReadyWith(Row("w1", "t"), Item() with { SessionCount = 1 }));
+            h.Source.Enqueue(
+                ReadyWith(Row("w1", "t"), crowded),
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person("u1", "Ada")], SessionCount = 2 }),
+                ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person("u1", "Ada")], SessionCount = 1 }),
+                ReadyWith(Row("w1", "t"), Item() with { SessionCount = 1 }));
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.HasContributors).IsTrue();
             await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { "Ada Lovelace", "github:7", "👩 Grace" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.Initial)).IsEquivalentTo(new[] { "A", "G", "👩" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Contributors.Select(c => c.LastActivityText)).IsEquivalentTo(new[] { "2h ago", "3d ago", "" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.SessionCountText).IsEqualTo("3 sessions");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("3 people · 4 sessions");
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 2 sessions");
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 person · 1 session");
 
             await h.TickAsync();
             await Assert.That(h.Vm.HasContributors).IsFalse();
             await Assert.That(h.Vm.Contributors).IsEmpty();
-            await Assert.That(h.Vm.SessionCountText).IsEqualTo("1 session");
+            await Assert.That(h.Vm.WhoCountText).IsEqualTo("1 session");
             await Assert.That(h.Vm.Requester).IsEqualTo("You");
             await h.Vm.TeardownAsync();
         });
@@ -754,7 +863,8 @@ public class WorkContextViewModelTests {
             };
             var otherRepo = dup with { PullRequests = [Pr("kurrent-io", "kcap-server", 42, "https://github.com/kurrent-io/kcap-server/pull/42", "Server")] };
             var noIdentity = dup with { RepoOwner = null, RepoName = null, PullRequests = [Pr("x", "y", 42, null, "Elsewhere")] };
-            h.Source.Enqueue(ReadyWith(null, summary: dup), ReadyWith(null, summary: otherRepo), ReadyWith(null, summary: noIdentity));
+            var untitled = dup with { PrTitle = null, PullRequests = [] };
+            h.Source.Enqueue(ReadyWith(null, summary: dup), ReadyWith(null, summary: otherRepo), ReadyWith(null, summary: noIdentity), ReadyWith(null, summary: untitled));
 
             await h.PushAsync(Dto());
             await Assert.That(h.Vm.Links.Select(l => l.Title)).IsEquivalentTo(new[] { "Listed" });
@@ -766,6 +876,9 @@ public class WorkContextViewModelTests {
 
             await h.TickAsync();
             await Assert.That(h.Vm.Links.Select(l => l.Title)).IsEquivalentTo(new[] { "Elsewhere" });
+
+            await h.TickAsync();
+            await Assert.That(h.Vm.Links.Select(l => (l.Key, l.Title))).IsEquivalentTo(new[] { ("#42", "") });
             await h.Vm.TeardownAsync();
         });
     }
@@ -894,7 +1007,7 @@ public class WorkContextViewModelTests {
                 await Assert.That(h.Vm.Links).IsEmpty();
                 await Assert.That(h.Vm.Issue).IsNull();
                 await Assert.That(h.Vm.Contributors).IsEmpty();
-                await Assert.That(h.Vm.SessionCountText).IsEqualTo("");
+                await Assert.That(h.Vm.WhoCountText).IsEqualTo("");
                 await Assert.That(h.Vm.Repository).IsEqualTo("myproj");
                 await Assert.That(h.Vm.Requester).IsEqualTo("You");
                 await h.Vm.TeardownAsync();

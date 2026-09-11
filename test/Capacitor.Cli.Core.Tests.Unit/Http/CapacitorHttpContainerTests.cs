@@ -1,5 +1,6 @@
 using System.Net;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
@@ -52,7 +53,7 @@ public class CapacitorHttpContainerTests : IDisposable {
         services.AddSingleton(Config.Root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(target, Config.Root, profiles));
-        services.AddCapacitorHttp();
+        services.AddCapacitorHttp(ProfileOverrides.None);
 
         return services.BuildServiceProvider();
     }

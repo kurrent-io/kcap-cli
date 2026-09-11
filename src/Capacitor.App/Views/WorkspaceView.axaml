@@ -9,33 +9,37 @@
     <UserControl.Styles>
         <Style Selector="Button.tab">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="0" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="FontSize" Value="12.5" />
-            <Setter Property="Padding" Value="12,5" />
+            <Setter Property="Padding" Value="3,9" />
+            <Setter Property="Margin" Value="0,0,16,0" />
         </Style>
         <Style Selector="Button.tab.active">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <!-- Fluent hover paints PART_ContentPresenter; keep tab chrome on our tokens. -->
         <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.tab:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <Style Selector="Button.tab.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.tab.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
     </UserControl.Styles>
 
     <!-- Two columns: the workspace proper, and the work-context pane at its fixed width. The
          terminal keeps its own column, so the size it reports to the PTY is the real center width. -->
-    <Grid ColumnDefinitions="*,400">
+    <Grid ColumnDefinitions="*,320">
     <Grid Grid.Column="0" RowDefinitions="56,42,*">
         <!-- Header: title over checkout · spacer · actions.
              Harness/transport live in the work-context pane; leaving is the rail's job. -->

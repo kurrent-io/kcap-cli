@@ -18,6 +18,10 @@ namespace Capacitor.Cli.Daemon.Services;
 /// instead of waiting for the WebSocket to teach the daemon.
 /// </summary>
 internal interface IDaemonHeartbeatPort {
+    /// <summary>The hub is <c>Connected</c>. False while SignalR is Connecting/Reconnecting or the
+    /// connection is Disconnected — states where <c>WithAutomaticReconnect</c> and <c>OnClosed</c>
+    /// already own recovery, and the heartbeat must not force a reconnect of its own.</summary>
+    bool       IsConnected { get; }
     Task<bool> PingAsync(CancellationToken ct);
     Task       ReRegisterAsync();
     Task       ForceReconnectAsync();
@@ -56,6 +60,16 @@ internal sealed class DaemonHeartbeatLoop(
     /// whether reconnects are deadline-exceeded vs ping-threw vs slot-displaced).
     /// </summary>
     public async Task TickAsync(CancellationToken ct) {
+        // Stand down unless the hub is Connected. While it is Connecting/Reconnecting/Disconnected,
+        // WithAutomaticReconnect and OnClosed own recovery; a ping here would throw "connection is not
+        // active" and the catch below would force a reconnect that races the one already in flight —
+        // the self-sustaining storm. Skipping keeps the loop quiet until the connection is back.
+        if (!port.IsConnected) {
+            logger.LogDebug("Heartbeat: hub is not connected — automatic reconnect owns recovery; skipping tick");
+
+            return;
+        }
+
         var sw = Stopwatch.StartNew();
 
         try {
@@ -92,8 +106,14 @@ internal sealed class DaemonHeartbeatLoop(
             // Outer cancellation (process shutting down) — let the loop exit.
         } catch (Exception ex) {
             sw.Stop();
-            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — forcing reconnect", sw.Elapsed.TotalMilliseconds);
-            await SafeForceReconnectAsync();
+            // A ping that THROWS (as opposed to hanging until the deadline) means the SignalR client
+            // already knows the connection is unusable — "connection is not active" is exactly its
+            // signal that the hub has dropped — and OnClosed plus automatic reconnect are already
+            // reacting to the same condition. Forcing a reconnect here only races that recovery, and
+            // reading HubState to decide is unsafe because the invoke failure can be observed before
+            // the state transitions. Only a hung ping (the deadline above) needs the heartbeat, since
+            // SignalR still believes a half-open transport is fine. So stand down on any throw.
+            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — standing down for automatic reconnect", sw.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -117,6 +137,10 @@ internal sealed class DaemonHeartbeatLoop(
     }
 
     async Task SafeForceReconnectAsync() {
+        // Reached only from the two live-connection paths — a hung ping (deadline) and a failed
+        // re-register — so a reconnect is genuinely wanted here; the ping-threw path stands down
+        // before reaching this. No state sample gates the force, since a hung transport must be
+        // reconnected whatever HubState momentarily reads.
         try {
             await port.ForceReconnectAsync();
         } catch (Exception ex) {

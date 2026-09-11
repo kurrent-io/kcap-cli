@@ -16,42 +16,79 @@ namespace Capacitor.Cli.Core.Auth;
 /// authenticate exits quietly rather than stack-tracing into a transcript. The sign-in legs do not,
 /// because a sign-in is interactive and a transport failure there is worth saying out loud.</para>
 /// </summary>
-public sealed class WorkOSClient(IHttpClientFactory httpFactory) {
+public sealed class WorkOSClient(IHttpClientFactory httpFactory, TimeSpan? refreshTimeout = null) {
     /// <summary>AuthKit's API host. The machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.</summary>
     public const string ApiBase = "https://api.workos.com";
 
-    // Short, so a hook never blocks for the default budget when WorkOS is unreachable.
-    static readonly TimeSpan RetryBudget = TimeSpan.FromSeconds(5);
+    // A hard deadline on the single refresh attempt: the shared HttpClient carries the 100 s default,
+    // and a refresh runs under the cross-process lock, so a stalled WorkOS would otherwise hold auth
+    // and every peer's refresh for that long. Short — a hook must not block on an unreachable WorkOS.
+    readonly TimeSpan _refreshTimeout = refreshTimeout ?? TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Exchanges a rotating refresh token for a fresh access token, or null when WorkOS refused it or
-    /// answered unreadably — the repair is a fresh login either way.
+    /// Exchanges a rotating refresh token for a fresh access token, classifying the outcome so a caller
+    /// can tell a token WorkOS refused apart from a request that never landed.
     ///
-    /// <para>The retry covers transport failures only, never a non-success response. WorkOS rotates the
-    /// refresh token on every successful use, so a retry after a response was lost in transit does
-    /// re-send a token WorkOS already consumed — but that window exists without the retry too, since
-    /// the next refresh re-reads the same unrotated token from disk. What it buys is the common case:
-    /// a request that never arrived.</para>
+    /// <para>Sent once — never retried. WorkOS consumes the refresh token on every use, so re-sending
+    /// one after a lost response presents a token it has already spent, which trips reuse detection and
+    /// revokes the whole family. A <see cref="WorkOSRefreshOutcome.Rejected"/> is any non-success status
+    /// (an <c>invalid_grant</c> among them); <see cref="WorkOSRefreshOutcome.TransportFailed"/> is an
+    /// exception or an unreadable body, where the token was not spent. Reports rather than throws,
+    /// cancellation aside.</para>
     /// </summary>
-    public async Task<WorkOSAuthResponse?> RefreshAsync(
+    public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
+        // The deadline cancels only the linked token, not the caller's ct, so a timeout is caught below
+        // as a TransportFailed (the token was not spent — retry is safe) while a real caller cancel
+        // still propagates.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_refreshTimeout);
+
+        HttpResponseMessage response;
         try {
-            using var http = httpFactory.CreateClient(CapacitorClients.WorkOS);
-            using var form = new FormUrlEncodedContent(new Dictionary<string, string> {
+            response = await PostFormAsync(AuthenticateUrl, new() {
                 ["grant_type"]    = "refresh_token",
                 ["client_id"]     = clientId,
                 ["refresh_token"] = refreshToken
-            });
+            }, deadline.Token);
+        } catch when (!ct.IsCancellationRequested) {
+            // No response headers arrived — the request may never have reached WorkOS, so the token is
+            // most likely still live and a later attempt re-reads the same on-disk one. The residual
+            // ambiguity (a reply lost after WorkOS processed it) needs a durable "attempted" marker to
+            // close fully — a deliberate follow-up, since marking every transient blip terminal would
+            // force a re-login far more often than a lost reply actually occurs.
+            return new(WorkOSRefreshOutcome.TransportFailed, null);
+        }
 
-            using var response = await http.PostWithRetryAsync(AuthenticateUrl, form, RetryBudget, ct);
+        using (response) {
+            if (!response.IsSuccessStatusCode) {
+                // A 4xx means WorkOS understood and refused the refresh token (a 400 invalid_grant on
+                // a consumed/revoked token is the usual one) — terminal, only `kcap login` repairs it.
+                // A 5xx/408/429 is the server faltering, not the token being bad, so it reads as a
+                // transport failure the caller may retry with the same still-live token.
+                return IsTransientStatus((int)response.StatusCode)
+                    ? new(WorkOSRefreshOutcome.TransportFailed, null)
+                    : new(WorkOSRefreshOutcome.Rejected, null);
+            }
 
-            return response.IsSuccessStatusCode
-                ? await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse, ct)
-                : null;
-        } catch {
-            return null;
+            // A success status means WorkOS has consumed the old token and rotated. If the new one is
+            // unreadable it is lost and the old token is spent — Rejected (re-login), never a
+            // retryable failure that would re-send the consumed token.
+            WorkOSAuthResponse? body;
+            try {
+                body = await response.Content.ReadFromJsonAsync(
+                    CapacitorJsonContext.Default.WorkOSAuthResponse, deadline.Token);
+            } catch when (!ct.IsCancellationRequested) {
+                return new(WorkOSRefreshOutcome.Rejected, null);
+            }
+
+            return body is null
+                ? new(WorkOSRefreshOutcome.Rejected, null)
+                : new(WorkOSRefreshOutcome.Rotated, body);
         }
     }
+
+    static bool IsTransientStatus(int status) => status >= 500 || status is 408 or 429;
 
     /// <summary>
     /// Opens a device grant. It takes no organization: the human picks one at the AuthKit screen, so

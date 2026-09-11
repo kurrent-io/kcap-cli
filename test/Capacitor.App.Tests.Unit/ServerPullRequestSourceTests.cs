@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.PullRequests;
 
 namespace Capacitor.App.Tests.Unit;
@@ -12,7 +13,7 @@ public class ServerPullRequestSourceTests {
     [Test]
     public async Task Three_missing_reads_stop_only_that_session_and_retry_resets_it() {
         using var handler = new Handler();
-        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root),
+        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), ProfileOverrides.None,
             (_, _, _, _) => Task.FromResult((new HttpClient(handler), AuthStatus.Ok)));
         for (var i = 0; i < 4; i++) await source.ListAsync("missing", default);
         await Assert.That(handler.Lists).IsEqualTo(3);
@@ -27,7 +28,7 @@ public class ServerPullRequestSourceTests {
         using var handler = new Handler();
         var gate = new TaskCompletionSource<(HttpClient, AuthStatus)>();
         var calls = 0;
-        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), (_, _, _, _) => {
+        await using var source = new ServerPullRequestSource(Config.Root, Resolutions.At("https://server.test", Config.Root), ProfileOverrides.None, (_, _, _, _) => {
             calls++;
             return calls == 1 ? gate.Task : Task.FromResult((new HttpClient(new Handler()), AuthStatus.Ok));
         });

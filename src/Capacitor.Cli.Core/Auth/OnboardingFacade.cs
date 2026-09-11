@@ -304,7 +304,8 @@ public sealed class OnboardingFacade(
                     ct: ct, progress: progress, keys: KeyWatcher),
             orgSwitch: (refreshToken, organizationId) =>
                 workos.SwitchOrganizationAsync(clientId, refreshToken, organizationId, ct),
-            orglessRefresh: (refreshToken, refreshCt) => workos.RefreshAsync(clientId, refreshToken, refreshCt),
+            orglessRefresh: async (refreshToken, refreshCt) =>
+                (await workos.RefreshAsync(clientId, refreshToken, refreshCt)).Response,
             provisioner: provisioner,
             ct: ct,
             progress: progress,

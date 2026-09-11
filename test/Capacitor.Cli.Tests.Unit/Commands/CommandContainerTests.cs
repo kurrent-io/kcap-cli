@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -19,7 +20,7 @@ public class CommandContainerTests {
             .AddCapacitorCli(
                 Config.Root, Home, Daemons.Store,
                 baseUrl is null ? Resolutions.None(Config.Root) : Resolutions.At(baseUrl, Config.Root),
-                new HookClock(TimeProvider.System), baseUrl)
+                ProfileOverrides.None, new HookClock(TimeProvider.System), baseUrl)
             // What Program.cs builds with, so a registration this rejects is one a run would too.
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 

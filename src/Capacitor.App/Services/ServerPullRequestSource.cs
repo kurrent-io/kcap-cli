@@ -9,9 +9,9 @@ public sealed class ServerPullRequestSource : IPullRequestSource, IAsyncDisposab
     readonly Lock _lock = new();
     readonly Dictionary<string, int> _missing = new(StringComparer.Ordinal);
     long _generation;
-    public ServerPullRequestSource(ConfigRoot config, ProfileContext? profiles,
+    public ServerPullRequestSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
         AuthenticatedServerReads<PullRequestClient>.ClientFactory? factory = null, TimeProvider? time = null) {
-        _reads = new(config, profiles, (http, url) => new PullRequestClient(http, url, time), factory, allowAutoRedirect: false);
+        _reads = new(config, profiles, env, (http, url) => new PullRequestClient(http, url, time), factory, allowAutoRedirect: false);
     }
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => _reads.ReadAsync((channel, token) => channel.DiscoverAsync(refresh, token),
         read => read.Kind == PullRequestCapabilityKind.SignedOut, new PullRequestCapability(PullRequestCapabilityKind.SignedOut),

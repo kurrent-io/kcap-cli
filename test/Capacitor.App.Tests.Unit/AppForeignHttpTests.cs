@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -14,7 +15,7 @@ public class AppForeignHttpTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     ServiceProvider Build() =>
-        new ServiceCollection().AddAppForeignHttp(Config.Root).BuildValidated();
+        new ServiceCollection().AddAppForeignHttp(Config.Root, ProfileOverrides.None).BuildValidated();
 
     [Test]
     public async Task The_foreign_container_resolves_what_the_app_takes_from_it() {

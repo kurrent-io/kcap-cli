@@ -598,9 +598,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // scan) or explicitly rate-limited by TitleResolveLoop itself.
     readonly PeriodicTimer _titleResolve = new(TimeSpan.FromSeconds(60));
 
-    // Refresh once the token is within this much of its expiry. Comfortably above the 60 s tick
-    // so the window is never stepped over.
-    static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(5);
+    // Refresh once the token is within this much of its expiry. Kept above the 60 s tick plus the
+    // reactive 30 s IsExpired margin, so proactive refresh still fires before a hook would hit the
+    // margin — but no wider, so a token minted seconds ago at login isn't refreshed on the spot.
+    static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(2);
 
     // Hit the refresh endpoint at most once per this interval (see TokenRefreshLoop). Small
     // enough that a healthy token issued with a short lifetime is still renewed before it
@@ -3663,7 +3664,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KCAP_URL"] = _config.ServerUrl,
+                    [ProfileOverrides.UrlVar] = _config.ServerUrl,
                     [ConfigRoot.ConfigDirEnvVar] = _config.ConfigRoot.Directory
                 }
             };
@@ -3776,8 +3777,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // A quit command typed into chat: a runtime with no TUI has nothing that interprets it, so
         // forwarding would hand the text to the model as an ordinary prompt — at best role-played
         // ("Quitting"), never a stop. PTY runtimes keep receiving the text verbatim: their TUI owns
-        // the command's meaning.
-        if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) return InputDeliveryOutcome.QuitRequested;
+        // the command's meaning. The runtime is what journals a delivered prompt, so the one text it
+        // never sees is recorded here: the chat renders the journal alone.
+        if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) {
+            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, DateTimeOffset.UtcNow.ToString("O"), text));
+
+            return InputDeliveryOutcome.QuitRequested;
+        }
 
         // Codex turn diagnostic: whether to run the post-send rollout probe, plus this round's
         // generation and the rollout length sampled just BEFORE delivery. The probe reads a rollout

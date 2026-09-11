@@ -477,6 +477,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// without a live SignalR transport.</summary>
     internal virtual HubConnectionState HubState => _hub.State;
 
+    /// <summary>The heartbeat's gate: only a <c>Connected</c> hub is pinged and, on a hung ping,
+    /// force-reconnected. Any other state means automatic reconnect owns recovery.</summary>
+    public bool IsConnected => HubState == HubConnectionState.Connected;
+
     /// <summary>Raw <see cref="HubConnection.StartAsync"/> — a seam for the same reason.</summary>
     internal virtual Task StartHubAsync(CancellationToken ct) => _hub.StartAsync(ct);
 

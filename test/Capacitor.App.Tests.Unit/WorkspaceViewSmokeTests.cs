@@ -116,7 +116,7 @@ public class WorkspaceViewSmokeTests {
             foreach (var name in new[] {
                 "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
                 "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton", "LinkCards", "IssueCard",
-                "WhoToggle", "ContributorStack", "ContributorList", "SessionCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts",
+                "WhoToggle", "ContributorStack", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts",
             })
                 await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
 
@@ -126,22 +126,24 @@ public class WorkspaceViewSmokeTests {
         });
     }
 
-    /// The pane takes its fixed 400 and the terminal the rest, so the PTY size the terminal
+    /// The pane takes its fixed 320 and the terminal the rest, so the PTY size the terminal
     /// reports is the real center-pane width.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_is_400_wide_and_the_terminal_takes_the_remainder() {
+    public async Task The_pane_is_320_wide_and_the_terminal_takes_the_remainder() {
         await RunOnUiAsync(async () => {
             var (window, vm, _, _) = await ShowPtyAsync();
 
-            var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-            var terminal = Find<TerminalControl>(window, "TerminalHost")!;
-            await Assert.That(pane.Bounds.Width).IsEqualTo(400);
-            await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 400);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            await vm.TeardownAsync();
+            try {
+                var pane = Find<WorkContextView>(window, "WorkContextHost")!;
+                var terminal = Find<TerminalControl>(window, "TerminalHost")!;
+                await Assert.That(pane.Bounds.Width).IsEqualTo(320);
+                await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 320);
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                await vm.TeardownAsync();
+            }
         });
     }
 

@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -204,7 +206,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         if (!IsAvailable())
             return $"antigravity_reviewer_binary_missing: '{config.AntigravityPath}' does not resolve to "
                  + "an executable. Install the Antigravity CLI (the `agy` binary — the IDE alone is not "
-                 + "enough), or set KCAP_ANTIGRAVITY_PATH to its location.";
+                 + $"enough), or set {HarnessId.Antigravity.PathEnvVar} to its location.";
 
         // ONCE: the verdict and its explanation both need the version, and resolving it per consumer
         // spawns the vendor binary twice to produce one refusal.
@@ -579,7 +581,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // its config, MCP servers and result channel at the operator's profile, not this home.
         psi.Environment.Remove("GEMINI_CLI_HOME");
 
-        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;
+        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         // Without these a surviving turn child is invisible to OrphanReaper's env-marker pass — and
         // nothing fails visibly when they are omitted, which is exactly why they are stamped here

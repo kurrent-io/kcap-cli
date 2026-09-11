@@ -47,6 +47,12 @@ internal sealed class TokenStoreRefreshPort(TokenStore store, string profile, Ti
 /// the moment it enters the window.</para>
 /// </summary>
 internal sealed class TokenRefreshLoop {
+    // A rejected refresh means the refresh token itself is dead — WorkOS refused it, and only
+    // `kcap login` mints a new one. Backing off this far (rather than the ordinary
+    // minAttemptInterval) stops the loop re-sending a doomed token every few minutes, while still
+    // picking a re-login up eventually without a daemon restart.
+    static readonly TimeSpan RejectedBackoff = TimeSpan.FromHours(1);
+
     readonly IProactiveTokenRefreshPort _port;
     readonly ILogger                    _logger;
     readonly TimeSpan                   _minAttemptInterval;
@@ -92,6 +98,14 @@ internal sealed class TokenRefreshLoop {
                     _logger.LogWarning(
                         "Proactive token refresh failed — backing off for {BackoffSeconds:F0}s; run `kcap login` if this persists",
                         _minAttemptInterval.TotalSeconds
+                    );
+
+                    break;
+
+                case ProactiveRefreshOutcome.Rejected:
+                    _nextAttemptAllowedAt = _utcNow() + RejectedBackoff;
+                    _logger.LogWarning(
+                        "Proactive token refresh was rejected — the stored credential is no longer valid; run `kcap login` to re-authenticate"
                     );
 
                     break;

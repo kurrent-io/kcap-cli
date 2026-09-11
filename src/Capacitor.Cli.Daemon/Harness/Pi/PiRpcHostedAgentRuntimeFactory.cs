@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -238,7 +239,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         // The dual-capture gate — unconditional, see PiLaunchEnvironment's doc.
         PiLaunchEnvironment.Apply(psi.Environment);
 
-        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;
+        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;

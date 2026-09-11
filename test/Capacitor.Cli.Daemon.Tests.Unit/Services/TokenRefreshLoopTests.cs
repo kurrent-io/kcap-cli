@@ -81,6 +81,26 @@ public class TokenRefreshLoopTests {
     }
 
     [Test]
+    public async Task Tick_Rejected_LogsOnceNamingLoginAndBacksOffHard() {
+        // A rejected refresh means the refresh token itself is dead (WorkOS refused it). The loop
+        // must warn once, point at `kcap login`, and stop re-sending the dead token every interval
+        // — a much longer backoff than a transient Failed, so a tick 30 minutes later is skipped.
+        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var logger = new CaptureLogger();
+        var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Rejected) };
+        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(port.Calls).IsEqualTo(1);
+        await Assert.That(logger.Entries.Count(e => e.Level == LogLevel.Warning)).IsEqualTo(1);
+        await Assert.That(logger.Entries).Contains(e => e.Level == LogLevel.Warning && e.Message.Contains("kcap login"));
+
+        now = now.AddMinutes(30);                           // far past the 5-minute interval, well inside the hard backoff
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(port.Calls).IsEqualTo(1);         // suppressed — the dead token isn't re-sent
+    }
+
+    [Test]
     public async Task Tick_PortThrows_DoesNotRethrowAndLogsWarning() {
         // The unobserved background loop must survive a faulting refresh (e.g. a genuine IO
         // fault reading the token file that TokenStore lets propagate).

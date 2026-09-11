@@ -1,3 +1,9 @@
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Antigravity;
+using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.OpenCode;
+
 namespace Capacitor.Cli.Core;
 
 /// <summary>
@@ -36,11 +42,16 @@ public static class GatedReviewers {
     /// it.</para>
     /// </summary>
     public static readonly GatedReviewer[] All = [
-        new("kiro",        "kiro-cli", "KCAP_KIRO_PATH",        "KCAP_KIRO_UNATTENDED_REVIEWER"),
-        new("gemini",      "gemini",   "KCAP_GEMINI_PATH",      "KCAP_GEMINI_UNATTENDED_REVIEWER"),
-        new("antigravity", "agy",      "KCAP_ANTIGRAVITY_PATH", "KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER"),
-        new("opencode",    "opencode", "KCAP_OPENCODE_PATH",    "KCAP_OPENCODE_UNATTENDED_REVIEWER")
+        For<KiroHarness>       ("KCAP_KIRO_UNATTENDED_REVIEWER"),
+        For<GeminiHarness>     ("KCAP_GEMINI_UNATTENDED_REVIEWER"),
+        For<AntigravityHarness>("KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER"),
+        For<OpenCodeHarness>   ("KCAP_OPENCODE_UNATTENDED_REVIEWER")
     ];
+
+    /// <summary>The opt-out switch is the only thing a row states for itself. The vendor token and its
+    /// binary are the harness's; the path override is <see cref="HarnessOverrides"/>'s.</summary>
+    static GatedReviewer For<TSelf>(string enableEnvVar) where TSelf : IHarness<TSelf> =>
+        new(TSelf.Id.VendorId, TSelf.CliBinary, TSelf.Id.PathEnvVar, enableEnvVar);
 
     /// <summary>For usage text: <c>kiro | gemini | antigravity | opencode</c>.</summary>
     public static string VendorList => string.Join(" | ", All.Select(r => r.Vendor));

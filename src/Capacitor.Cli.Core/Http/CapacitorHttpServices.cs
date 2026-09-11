@@ -11,8 +11,9 @@ public static class CapacitorHttpServices {
     /// so it records the response finally returned rather than a discarded 401, and the observation
     /// headers so a resend carries one copy of each rather than two.
     /// </summary>
-    public static IServiceCollection AddCapacitorHttp(this IServiceCollection services) {
+    public static IServiceCollection AddCapacitorHttp(this IServiceCollection services, ProfileOverrides env) {
         services.AddCapacitorForeignClients();
+        services.AddSingleton(env);
         // Here rather than beside ConfigRoot: the refreshes need the anonymous and WorkOS lanes, so a
         // host that never stands up HTTP is never handed a store that can reach the network.
         services.AddSingleton<TokenStore>();
