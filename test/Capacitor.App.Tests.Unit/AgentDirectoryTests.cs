@@ -27,8 +27,8 @@ public class AgentDirectoryTests {
         return (local, remote, lane, dir);
     }
 
-    static AgentStatusDto LocalAgent(string id, string? sessionId = null, string vendor = "claude") => new(
-        Id: id, Kind: "agent", Vendor: vendor, RepoPath: "/r", Status: "Running",
+    static AgentStatusDto LocalAgent(string id, string? sessionId = null, string vendor = "claude", string status = "Running") => new(
+        Id: id, Kind: "agent", Vendor: vendor, RepoPath: "/r", Status: status,
         FlowRunId: null, FlowRole: null, Requester: null, CreatedAt: DateTime.UtcNow, Model: null,
         RequesterDisplay: null, SessionId: sessionId);
 
@@ -249,4 +249,28 @@ public class AgentDirectoryTests {
         await Assert.That(dir.VendorOfSession("s1")).IsEqualTo("codex");
     }
 
+    /// Twin proof is a takeover verdict, so the pairing alone is not enough: with the local socket
+    /// down, a remote row retiring is the server's own verdict on the agent and the local row that
+    /// stands is history. A local row that has itself finished says the same.
+    [Test]
+    public async Task Twin_proof_needs_the_local_lane_connected_and_the_agent_live_on_it() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/1"]));
+        local.Agents.AddOrUpdate(LocalAgent("a1"));
+        remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "daemon-a", MachineId = "m1", OwnerUserId = "u1", Connected = true }]);
+        remote.Cache.AddOrUpdate(Remote("a1", daemon: "daemon-a"));
+
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsTrue();
+
+        local.StatusSubject.OnNext(new(AttachState.Unreachable, "daemon_unreachable", null));
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsFalse();
+
+        local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/2"]));
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsTrue();
+
+        local.Agents.AddOrUpdate(LocalAgent("a1", status: "Completed"));
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsFalse();
+    }
 }

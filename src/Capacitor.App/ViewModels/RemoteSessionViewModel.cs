@@ -121,7 +121,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                         // twin, and both rows carry the same session id. The directory publishes
                         // the local add and this removal in one edit, so that row is already in the
                         // cache here; a later one would read as an ended session.
-                        if (directory.IsProvenLocalTwin(row.Id)
+                        // Never once a terminal status has ended this session: that verdict came
+                        // from the authority that was winning, and the local row reappearing behind
+                        // the retired remote one is retained history rather than a takeover.
+                        if (!SessionEnded
+                            && directory.IsProvenLocalTwin(row.Id)
                             && directory.Rows.Lookup($"local:{row.Id}") is { HasValue: true, Value: var twin }
                             && twin.SessionId is { Length: > 0 } && twin.SessionId == _row.SessionId) {
                             OriginChangedToLocal = true;

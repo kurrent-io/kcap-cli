@@ -150,11 +150,15 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             bool OnTwin(AgentInstanceDto a) =>
                 twinProven && a.OwnerUserId == twin!.Value.OwnerUserId && a.DaemonName == twin.Value.DaemonName;
 
-            // The twin daemon's own registry rows, whether or not the local socket is up: this is
-            // what says a retiring remote row means the local daemon took that agent over, rather
-            // than the agent's session having ended.
-            _twinAgents = twinProven
-                ? _remoteAgents.Where(OnTwin).Select(a => a.AgentId).ToFrozenSet(StringComparer.Ordinal)
+            // What says a retiring remote row means the local daemon took that agent over. It is a
+            // takeover verdict, so it takes current local authority and not the pairing alone: the
+            // socket up and the agent still live on it. A server verdict that ends the session
+            // retires the same row, and read as a takeover it would hide the end.
+            var liveLocally = _localAgents
+                .Where(a => !ViewModels.SessionStatusDots.IsTerminal(a.Status))
+                .Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
+            _twinAgents = twinProven && _localConnected
+                ? _remoteAgents.Where(OnTwin).Select(a => a.AgentId).Where(liveLocally.Contains).ToFrozenSet(StringComparer.Ordinal)
                 : FrozenSet<string>.Empty;
 
             var remote = _remoteAgents

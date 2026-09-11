@@ -219,6 +219,33 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// The server is the winning authority while the local lane is down, and Completed is its
+    /// verdict that the session ended. The retained local row reappearing as the remote one retires
+    /// is history: reporting a move would point the user at a process that is not running this
+    /// session any more.
+    [Test]
+    public async Task A_terminal_remote_status_ends_the_session_even_for_a_proven_twin() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.ProvenTwins.Add("a1");
+            h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
+            await Assert.That(vm.SessionEnded).IsTrue();
+
+            h.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                Agent("a1", "gemini", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            h.Directory.Rows.Remove("remote:a1");
+
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.OriginChangedToLocal).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A row that leaves the directory takes its hub subscriptions with it, whether or not the
     /// pane is torn down afterwards.
     [Test]
