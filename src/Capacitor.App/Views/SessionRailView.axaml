@@ -191,37 +191,35 @@
                                                                                                IsVisible="{Binding HasTitle}"
                                                                                                Foreground="{StaticResource KcapTextBrush}"
                                                                                                TextTrimming="CharacterEllipsis" />
-                                                                                    <!-- A Grid, not a StackPanel: Meta takes the remaining (star) width so its
-                                                                                         ellipsis engages, and each chip is width-capped, so the whole row stays
-                                                                                         within the 310px rail even with long vendor/model/daemon names. Per-child
-                                                                                         left margins (not ColumnSpacing) so a hidden chip leaves no gap. -->
-                                                                                    <Grid ColumnDefinitions="Auto,Auto,Auto,*">
-                                                                                        <Border Grid.Column="0" IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
-                                                                                                Padding="6,1" VerticalAlignment="Center"
+                                                                                    <!-- WrapPanel, not a fixed row: chips + meta wrap to a second line rather
+                                                                                         than overflow the 310px rail when a vendor token, model id, or daemon
+                                                                                         name is unusually long. Each label is also individually width-capped and
+                                                                                         trims, so no single chip can push a line past the rail either. -->
+                                                                                    <WrapPanel>
+                                                                                        <Border IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
+                                                                                                Padding="6,1" Margin="0,0,6,3" VerticalAlignment="Center"
                                                                                                 Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
                                                                                             <TextBlock Text="{Binding Vendor}" FontSize="10" FontWeight="SemiBold"
                                                                                                        TextTrimming="CharacterEllipsis"
                                                                                                        Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
                                                                                         </Border>
-                                                                                        <Border Grid.Column="1" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                                Padding="6,1" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                                        <Border IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
+                                                                                                Padding="6,1" Margin="0,0,6,3" VerticalAlignment="Center"
                                                                                                 Background="{StaticResource KcapInfoDimBrush}">
                                                                                             <TextBlock Text="{Binding Model}" FontSize="10"
                                                                                                        Foreground="{StaticResource KcapInfoBrush}"
                                                                                                        TextTrimming="CharacterEllipsis" />
                                                                                         </Border>
-                                                                                        <Border Grid.Column="2" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                        <Border IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
                                                                                                 Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
-                                                                                                CornerRadius="3" Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
+                                                                                                CornerRadius="3" Padding="4,0" Margin="0,0,6,3" VerticalAlignment="Center">
                                                                                             <TextBlock Text="{Binding MachineBadge}" FontSize="10"
                                                                                                        TextTrimming="CharacterEllipsis"
                                                                                                        Foreground="{StaticResource KcapFaintBrush}" />
                                                                                         </Border>
-                                                                                        <TextBlock Grid.Column="3" Text="{Binding Meta}" FontSize="11" VerticalAlignment="Center"
-                                                                                                   Margin="6,0,0,0"
-                                                                                                   Foreground="{StaticResource KcapFaintBrush}"
-                                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                                    </Grid>
+                                                                                        <TextBlock Text="{Binding Meta}" FontSize="11" VerticalAlignment="Center"
+                                                                                                   Foreground="{StaticResource KcapFaintBrush}" />
+                                                                                    </WrapPanel>
                                                                                 </StackPanel>
                                                                             </Grid>
                                                                         </DockPanel>
