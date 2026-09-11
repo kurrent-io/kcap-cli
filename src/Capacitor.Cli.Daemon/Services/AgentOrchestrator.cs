@@ -2552,7 +2552,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
                 // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
                 // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
-                ReportResolvedModel(agentId, cmd.Vendor, model);
+                // updateLocal only on the PTY path: an app-server Codex (Transcript present) already
+                // registered its confirmed handshake model, which must not be overwritten locally.
+                ReportResolvedModel(agentId, cmd.Vendor, model, updateLocal: start.Transcript is null);
             }
 
             // Phase B2-b (sequenced-settlement design §4.2.2): the launch executed — the agent is registered.
@@ -2657,7 +2659,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
     /// failure must not break launch.
     /// </summary>
-    void ReportResolvedModel(string agentId, string vendor, string model) {
+    void ReportResolvedModel(string agentId, string vendor, string model, bool updateLocal) {
         try {
             var isDefault = string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase);
 
@@ -2667,9 +2669,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             if (string.IsNullOrEmpty(resolved)) return;
 
-            // Surface it locally too, not just to the server: the desktop rail reads the model off
-            // the local status frame, so without this a local Codex row shows no model chip.
-            if (_agents.TryGetValue(agentId, out var agent)) SetResolvedModel(agent, resolved);
+            // Surface it on the LOCAL status frame only for a runtime with no authoritative handshake
+            // model — the PTY path (updateLocal). An app-server Codex already registered the confirmed
+            // model at launch, so overwriting it with a config-derived value would show the wrong one;
+            // and the unresolved "default" sentinel is never a real model to display.
+            if (updateLocal
+             && !string.Equals(resolved, "default", StringComparison.OrdinalIgnoreCase)
+             && _agents.TryGetValue(agentId, out var agent))
+                SetResolvedModel(agent, resolved);
 
             _ = _server.ReportAgentResolvedModelAsync(agentId, resolved);
         } catch (Exception ex) {
