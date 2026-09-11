@@ -579,8 +579,13 @@ public partial class App : Application {
         ILaunchClient launch = serverLane;
         _serverClients = serverClients;
         // The single restart trigger for a completed sign-in — RestartAsync serializes rather
-        // than coalesces, so RefreshAfterReauthAsync deliberately does not also await it.
-        serverClients.SignInCompleted.Subscribe(signedIn => { _ = serverLane.RestartAsync(); });
+        // than coalesces, so RefreshAfterReauthAsync deliberately does not also await it. The model
+        // catalog reloads here too: the endpoint needs auth, so a signed-out start left it empty and
+        // only a successful sign-in can fill it.
+        serverClients.SignInCompleted.Subscribe(signedIn => {
+            _ = serverLane.RestartAsync();
+            _ = modelCatalog.LoadAsync(_shutdown.Token);
+        });
 
         // One attach client per attempt, dialed at the daemon's own control socket; 80x24 is a
         // placeholder only — TerminalControl resizes its model to the real pane the moment it is

@@ -25,19 +25,28 @@ public sealed class ServerVendorModelCatalog : IDisposable {
 
     public IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>> Catalog => _catalog;
 
-    /// Fetches once and publishes on success; a null result (offline / signed out / any error)
-    /// leaves the current snapshot untouched. Never throws — the launcher's curated fallback covers
-    /// a miss.
+    /// Fetches and publishes on success; a null result (offline / signed out / non-success) leaves
+    /// the current snapshot untouched. Cancellation (shutdown) is silent; an unexpected fault is
+    /// logged rather than swallowed, but never propagates — the launcher's curated fallback covers a
+    /// miss either way. Safe to call more than once (e.g. a reload after sign-in).
     public async Task LoadAsync(CancellationToken ct = default) {
         try {
             if (await _fetch(ct).ConfigureAwait(false) is { } catalog) _catalog.OnNext(catalog);
-        } catch (Exception) { }
+        } catch (OperationCanceledException) {
+            // Shutdown or a superseded reload — not a failure.
+        } catch (Exception ex) {
+            // Unexpected (e.g. a deserialization/mapping defect): keep the curated fallback, but do
+            // not fail silently — this is the one place such a bug would otherwise be invisible.
+            Console.Error.WriteLine($"kcap app: vendor model catalog load failed: {ex}");
+        }
     }
 
     public void Dispose() => _catalog.Dispose();
 
     /// Builds the HTTP fetch over an authenticated client, mapping the server's {value,label} to
-    /// ModelChoice. Returns null (no change) when signed out, offline, or on any non-success.
+    /// ModelChoice. Returns null for an EXPECTED miss — signed out, offline, or a non-success status.
+    /// An UNEXPECTED fault (a bad payload / mapping bug) propagates to LoadAsync, which logs it rather
+    /// than letting a real defect hide behind the curated fallback.
     public static Func<CancellationToken, Task<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?>>
             HttpFetch(ICapacitorHttpClient? http, ProfileContext? profiles) => async ct => {
         var serverUrl = profiles?.Resolution.ServerUrl;
@@ -53,7 +62,9 @@ public sealed class ServerVendorModelCatalog : IDisposable {
                     RemoteModelsJsonContext.Default.DictionaryStringVendorModelOptionDtoArray, ct).ConfigureAwait(false);
                 return raw is null ? null : Map(raw);
             }
-        } catch (Exception) { return null; }
+        } catch (HttpRequestException) {
+            return null;   // offline / transport — an expected miss
+        }
     };
 
     static IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> Map(Dictionary<string, VendorModelOptionDto[]> raw) =>
