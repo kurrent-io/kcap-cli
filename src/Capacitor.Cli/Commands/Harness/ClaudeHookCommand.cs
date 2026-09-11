@@ -1132,7 +1132,7 @@ public sealed class ClaudeHookCommand(
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(config, clock.Time), http.ForMemoryAsync);
+                new SessionStartMemoryScopeResolver(config, clock.Time), http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
