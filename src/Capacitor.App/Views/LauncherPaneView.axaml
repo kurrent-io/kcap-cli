@@ -58,7 +58,7 @@
                            IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
 
-            <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+            <Border x:Name="ComposerCard" Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                     BorderThickness="1" CornerRadius="12" Padding="14">
                 <StackPanel Spacing="12">
                     <TextBox x:Name="GoalInput" Classes="kcapEmbedded" Text="{Binding Goal}"

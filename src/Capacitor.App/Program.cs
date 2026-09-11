@@ -1,4 +1,5 @@
 using Avalonia;
+using Capacitor.App.Prototypes;
 using ReactiveUI.Avalonia.Reactive;
 using Velopack;
 
@@ -12,6 +13,19 @@ internal static class Program
 
     [STAThread]
     public static void Main(string[] args) {
+#if DEBUG
+        if (args.Contains("--glass-prototype", StringComparer.Ordinal)) {
+            AppBuilder.Configure<LiquidGlassPrototypeApp>()
+                .UsePlatformDetect()
+                .With(new AvaloniaNativePlatformOptions {
+                    RenderingMode = [AvaloniaNativeRenderingMode.OpenGl, AvaloniaNativeRenderingMode.Software],
+                })
+                .UseReactiveUI(_ => { })
+                .LogToTrace()
+                .StartWithClassicDesktopLifetime(args);
+            return;
+        }
+#endif
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
         // during those operations. Auto-apply stays off: pending packages are applied by
         // UpdateCoordinator after the install-location guard and the prerelease rule.
