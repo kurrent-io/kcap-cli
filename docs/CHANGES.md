@@ -6,6 +6,15 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## The application menu keeps its exported Settings item
+
+Avalonia's macOS exporter captures the application menu after initialization and observes its
+items, but does not observe replacement of the application's menu property. The app therefore
+keeps one menu for its lifetime and enables its existing Settings item when a profile is ready.
+Replacing the menu at that point leaves macOS showing the disabled startup item even though
+Settings works from the tray. The regression test retains that startup item through composition
+and checks both its enabled state and its action.
+
 ## The npm wrapper waits for its platform packages
 
 `npm publish` returns while the registry is still processing a tarball, and a platform package carrying
