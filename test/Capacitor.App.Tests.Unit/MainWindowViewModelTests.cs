@@ -39,8 +39,9 @@ public class MainWindowViewModelTests {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory);
     }
 
-    /// The remote host's dependencies, held together so a test disposes them once. Rows carry no
-    /// session id, so no lease is ever acquired and the routing assertions stay deterministic.
+    /// The remote host's dependencies, held together so a test disposes them once. The lane is
+    /// never connected, so even a row that carries a session id dials nothing and the routing
+    /// assertions stay deterministic.
     sealed class RemoteHost : IDisposable {
         readonly FakeServerLane _lane = new();
         readonly SessionAccessService _access;
@@ -50,9 +51,15 @@ public class MainWindowViewModelTests {
 
         public FakeAgentDirectory Directory { get; } = new();
 
-        public RemoteSessionViewModel New(string agentId) {
+        // A separate overload rather than an optional parameter: the factory parameter takes this
+        // as a method group, and that conversion needs an exact one-argument signature.
+        public RemoteSessionViewModel New(string agentId) => New(agentId, null);
+
+        /// A session id only where a test needs one: it is what a local row is compared against
+        /// before the removal counts as an origin change rather than an ended session.
+        public RemoteSessionViewModel New(string agentId, string? sessionId) {
             var row = AgentRow.FromRemote(new AgentInstanceDto {
-                AgentId = agentId, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                AgentId = agentId, SessionId = sessionId, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
                 Vendor = "claude", RegisteredAt = DateTime.UtcNow,
             });
             Directory.Rows.AddOrUpdate(row);
@@ -739,14 +746,16 @@ public class MainWindowViewModelTests {
             var vm = NewVm(service,
                 workspaceFactory: id => NewWorkspace(service, id),
                 originOf: _ => origin,
-                remoteWorkspaceFactory: host.New,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
                 trackWorkspaceTeardown: teardown => _ = teardown());
 
             vm.OpenSession("r1");
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
 
+            // One session id across both rows is what proves the twin; without it the removal
+            // reads as an ended session, not a change of origin.
             host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
-                WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli"),
+                WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             host.Directory.Rows.Remove("remote:r1");
             origin = AgentOrigin.Local;
