@@ -191,15 +191,16 @@
                                                                                                IsVisible="{Binding HasTitle}"
                                                                                                Foreground="{StaticResource KcapTextBrush}"
                                                                                                TextTrimming="CharacterEllipsis" />
+                                                                                    <!-- Every externally-sourced label is width-capped and trims, so a long
+                                                                                         vendor token, model id, or daemon name cannot overflow the 310px rail. -->
                                                                                     <StackPanel Orientation="Horizontal" Spacing="6">
-                                                                                        <!-- Vendor chip: web-UI palette via VendorChipPalette. -->
-                                                                                        <Border IsVisible="{Binding HasVendor}" CornerRadius="999"
+                                                                                        <Border IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
                                                                                                 Padding="6,1" VerticalAlignment="Center"
                                                                                                 Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
                                                                                             <TextBlock Text="{Binding Vendor}" FontSize="10" FontWeight="SemiBold"
+                                                                                                       TextTrimming="CharacterEllipsis"
                                                                                                        Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
                                                                                         </Border>
-                                                                                        <!-- Model chip: one info tint for every model, matching the web UI. -->
                                                                                         <Border IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
                                                                                                 Padding="6,1" VerticalAlignment="Center"
                                                                                                 Background="{StaticResource KcapInfoDimBrush}">
@@ -208,9 +209,10 @@
                                                                                                        TextTrimming="CharacterEllipsis" />
                                                                                         </Border>
                                                                                         <Border IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                                                                                Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                                                                                Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
                                                                                                 CornerRadius="3" Padding="4,0" VerticalAlignment="Center">
                                                                                             <TextBlock Text="{Binding MachineBadge}" FontSize="10"
+                                                                                                       TextTrimming="CharacterEllipsis"
                                                                                                        Foreground="{StaticResource KcapFaintBrush}" />
                                                                                         </Border>
                                                                                         <TextBlock Text="{Binding Meta}" FontSize="11" VerticalAlignment="Center"
