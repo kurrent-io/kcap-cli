@@ -9,7 +9,8 @@ namespace Capacitor.App.Services;
 /// pending ping names no request, so it marks the session dirty and a headless reconciliation
 /// of the session's stream fills the set; the dirty mark outlives disconnects and fetch failures
 /// until a reconciliation completes. A response removes one id; one the set never held means
-/// the set is out of date, so it re-reconciles rather than trusting the count.
+/// the set is out of date, so it re-reconciles rather than trusting the count. A change of
+/// signed-in subject retires every set, and every fetch in flight, with it.
 public sealed class SessionAttentionTracker : IDisposable {
     static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
 
@@ -31,12 +32,14 @@ public sealed class SessionAttentionTracker : IDisposable {
     readonly Lock _lock = new();
     bool _connected;
     bool _disposed;
+    string? _subject;
+    bool? _laneConnected;
 
     public SessionAttentionTracker(IServerLane lane, SessionDetailReader readDetail, TimeProvider time, TimeSpan? debounce = null) {
         _readDetail = readDetail;
         _time = time;
         _debounce = debounce ?? TimeSpan.FromMilliseconds(300);
-        var status = lane.Status.Select(s => s.State == ServerLaneState.Connected).DistinctUntilChanged().Subscribe(OnLane);
+        var status = lane.Status.Subscribe(OnStatus);
         var pending = lane.PermissionPending.Subscribe(OnPending);
         var responded = lane.PermissionResponded.Subscribe(OnResponded);
         _subscriptions = new CompositeDisposable(status, pending, responded);
@@ -90,6 +93,35 @@ public sealed class SessionAttentionTracker : IDisposable {
         s.Timer?.Dispose();
         s.Timer = null;
         _sessions.Remove(sessionId);
+    }
+
+    // Only the status carries the signed-in subject, and a re-auth as another account can stay
+    // Connected throughout: read as a connected flag alone, that change is swallowed whole.
+    void OnStatus(ServerLaneStatus status) {
+        var connected = status.State == ServerLaneState.Connected;
+        if (connected && status.Subject is { } subject) OnSubject(subject);
+        if (_laneConnected == connected) return;
+        _laneConnected = connected;
+        OnLane(connected);
+    }
+
+    // The first subject seen is not a change.
+    void OnSubject(string subject) {
+        var known = _subject;
+        _subject = subject;
+        if (known is not null && known != subject) Forget();
+    }
+
+    // Nothing the previous account could see may survive, a fetch it started included: moving
+    // every session's attempt is what makes an outstanding reconciliation land as superseded
+    // rather than refilling the new account's view with the old one's ids.
+    void Forget() {
+        lock (_lock) {
+            if (_disposed) return;
+            foreach (var s in _sessions.Values) { s.Attempt++; s.Ids.Clear(); s.Timer?.Dispose(); s.Timer = null; }
+            _sessions.Clear();
+            Publish();
+        }
     }
 
     void OnLane(bool connected) {

@@ -21,7 +21,7 @@ public class SessionAttentionTrackerTests {
             Tracker.SessionsWithAttention.Subscribe(s => Sessions = s);
         }
 
-        public void Connect(int epoch = 1) => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: epoch));
+        public void Connect(int epoch = 1, string subject = "u1") => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: subject, Epoch: epoch));
         public void Drop() => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
         public void Dispose() => Tracker.Dispose();
     }
@@ -131,6 +131,32 @@ public class SessionAttentionTrackerTests {
 
         await WaitUntilAsync(() => h.Fetches == 3, what: "the re-armed reconciliation");
         await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "the fetched snapshot applied");
+    }
+
+    /// Signing in as another account must leave none of the previous user's pips on screen, and
+    /// the fetch that account started must not put them back. The lane stays Connected across the
+    /// change, so nothing about the connection itself reports it.
+    [Test]
+    public async Task An_identity_change_drops_every_session_and_the_fetch_it_started() {
+        using var h = new Harness();
+        h.Connect(subject: "u1");
+        h.Detail = _ => Pending("r1");
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "attention on under u1");
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.DetailTask = async _ => { await gate.Task; return Pending("r1", "r2"); };
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Fetches == 2, what: "u1's fetch in flight");
+
+        h.Connect(subject: "u2");
+        await Assert.That(h.Sessions).IsEmpty();
+
+        gate.SetResult();
+        await Task.Delay(100);
+        await Assert.That(h.Sessions).IsEmpty();
     }
 
     [Test]
