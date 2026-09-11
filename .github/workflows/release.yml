@@ -564,6 +564,16 @@ jobs:
 
           for dir in npm-artifacts/npm-kcap-*/; do
             pkg_name=$(basename "$dir" | sed 's/^npm-//')
+
+            # A re-run after a later step failed finds this commit's packages already on npm, and npm
+            # refuses to publish a version twice: skip those, refuse one published from another commit.
+            published=$(npm view "@kurrent/$pkg_name@$VERSION" kcapReleaseCommit --registry https://registry.npmjs.org 2>/dev/null || true)
+            case "$(bash scripts/verify-release-not-recut.sh "${{ github.sha }}" "$published" || true)" in
+              ok) ;;
+              republish) echo "@kurrent/$pkg_name@$VERSION is already published from this commit; skipping"; continue ;;
+              *) echo "::error::@kurrent/$pkg_name@$VERSION is already published from commit $published"; exit 1 ;;
+            esac
+
             cp "npm/$pkg_name/package.json" "$dir/package.json"
             cp LICENSE.md "$dir/LICENSE.md"
 
