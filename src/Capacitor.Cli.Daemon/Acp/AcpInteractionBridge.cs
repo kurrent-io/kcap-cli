@@ -828,7 +828,15 @@ internal sealed partial class AcpInteractionBridge(
     /// deny:reject_once]</c> — never <see cref="PermissionOptionDto.Name"/>, which is an
     /// agent-supplied label, not a stable identifier.</summary>
     static string FormatOptions(IReadOnlyList<PermissionOptionDto> options) =>
-        "[" + string.Join(", ", options.Select(o => $"{o.OptionId}:{o.Kind ?? "?"}")) + "]";
+        "[" + string.Join(", ", options.Select(o => $"{Clip(o.OptionId)}:{Clip(o.Kind ?? "?")}")) + "]";
+
+    /// The id and kind are agent-controlled, and the file logger writes a value verbatim: strip
+    /// control characters so a newline cannot inject a forged log line, and cap the length so a
+    /// hostile or buggy agent cannot flood the log.
+    static string Clip(string value) {
+        var stripped = new string(value.Where(c => !char.IsControl(c)).ToArray());
+        return stripped.Length <= 64 ? stripped : stripped[..64] + "…";
+    }
 
     // ── LoggerMessage source-generated methods ──────────────────────────────────────────────────
     // The lifecycle pair stays payload-free: kind ("permission"/"elicitation") and decision

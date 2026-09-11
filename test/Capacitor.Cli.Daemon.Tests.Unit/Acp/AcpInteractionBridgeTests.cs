@@ -703,11 +703,8 @@ public class AcpInteractionBridgeTests {
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
         var result  = await bridge.HandleAsync(request, CancellationToken.None);
 
-        // The mapped ACP result still fails closed to cancelled...
         await Assert.That(result!.Value.GetProperty("outcome").GetProperty("outcome").GetString()).IsEqualTo("cancelled");
 
-        // ...but the daemon log now shows exactly why: the raw decision that arrived, and that it
-        // didn't match anything this request offered.
         var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
         await Assert.That(infoEntries).Contains(e =>
             e.Message.Contains("decision received")

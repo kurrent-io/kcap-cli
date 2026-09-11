@@ -1337,8 +1337,15 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
             using var silenceNotice = ArmTurnSilenceNotice(turn);
 
+            // Only a turn that reaches its stopReason emits the silent-refusal note below. A fault
+            // (caught) or a cancellation (propagates past the catch) leaves this false, so a transport
+            // drop — whose reconnect sweep answers the pending permission with a cancelled decline —
+            // never renders as a user-facing "not permitted" note.
+            var completedNormally = false;
+
             try {
                 await SendPromptAsync(connection, turn, ct).ConfigureAwait(false);
+                completedNormally = true;
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 // Only reachable once write entry succeeded: faulting the ack is correct for
                 // `entered` and a structural no-op for `written` (the TCS already resolved at
@@ -1352,9 +1359,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // run cannot be duplicated; it is the only copy of what the agent said before dying.
                 FlushOpenRun();
 
-                // A permission cancelled mid-turn with nothing else said leaves the chat looking
-                // idle rather than refused — say so once the turn is otherwise silent.
-                if (Volatile.Read(ref _turnPermissionCancelled) == 1 && Volatile.Read(ref _turnHadAssistantOutput) == 0)
+                // A permission refused mid-turn with nothing else said leaves the chat looking idle
+                // rather than refused — say so, but only for a turn that ran to its stopReason, so a
+                // teardown/transport-drop cancellation cannot forge a refusal the user never made.
+                if (completedNormally
+                    && Volatile.Read(ref _turnPermissionCancelled) == 1
+                    && Volatile.Read(ref _turnHadAssistantOutput) == 0)
                     EmitSilentPermissionRefusalNote();
 
                 // However this turn ended — stopReason, fault, cancellation — it is settled, which
@@ -2769,13 +2779,13 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     /// <summary>
-    /// Phase one, under the reconnect lock: (installed ∧ Running) or immediate decline, and — when
-    /// admitted — atomic registration in the pending registry. Phase two, outside the lock: a
-    /// lock-acquired may-start re-check (a filter, not an atomicity claim — the post-check/pre-invoke
-    /// window's contract is surfaced-then-cancelled), then the real bridge under the entry's token,
-    /// RACED against the sweep's bookkeeping signal so a blocked foreign cancellation callback can
-    /// never strand the response or the entry's removal (r5–r8). Exactly one response per request is
-    /// the connection layer's own guarantee; the entry's claim decides real-vs-cancelled.
+    /// Under the reconnect lock: admit only while (installed ∧ Running), else decline immediately,
+    /// and on admission register the request atomically in the pending registry. Then, outside the
+    /// lock: a may-start re-check (a filter, not an atomicity claim — the post-check/pre-invoke window
+    /// resolves to surfaced-then-cancelled), then the real bridge under the entry's token, raced
+    /// against the sweep's bookkeeping signal so a blocked foreign cancellation callback can never
+    /// strand the response or the entry's removal. Exactly one response per request is the connection
+    /// layer's own guarantee; the entry's claim decides real-vs-cancelled.
     /// </summary>
     async Task<JsonElement?> RouteServerRequestCoreAsync(long incarnationId, AcpRequest request, CancellationToken ct) {
         PendingInteraction entry;

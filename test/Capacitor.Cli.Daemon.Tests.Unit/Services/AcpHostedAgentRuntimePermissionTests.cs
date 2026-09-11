@@ -291,8 +291,6 @@ public class AcpHostedAgentRuntimePermissionTests {
         await fake.DisposeAsync();
     }
 
-    // ── No blank chat after a cancelled permission with no assistant output ─────────────────────
-
     static async Task<AcpEventEnvelope?> WaitForEnvelopeAsync(
             AcpHostedAgentRuntime runtime, Func<AcpEventEnvelope, bool> predicate,
             List<AcpEventEnvelope>? seen = null, TimeSpan? timeout = null) {
@@ -352,6 +350,46 @@ public class AcpHostedAgentRuntimePermissionTests {
         await Assert.That(note!.Value.Text).IsEqualTo("The tool call was not permitted; the turn ended.");
 
         cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>Negative control: a cancelled permission whose turn never reaches its stopReason —
+    /// the transport drops and its reconnect sweep declines the pending request. The note is only for
+    /// a turn that ended normally, so a teardown-driven cancellation must not forge a refusal.</summary>
+    [Test]
+    public async Task PermissionCancelled_ButTransportDropsBeforeStopReason_EmitsNoSystemNote() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn,
+            process,
+            NullLogger.Instance,
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null)));
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run rm -rf /"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]""");
+        // No stopReason enqueued: after the permission is declined the prompt never completes, so the
+        // turn ends only when the transport below drops it — the exact case that must not emit a note.
+
+        _ = runtime.SendUserInputAsync("do it");
+
+        var seen = new List<AcpEventEnvelope>();
+        await Task.Delay(300); // let the permission be issued and declined so the cancelled flag is set
+        cts.Cancel();          // drop the fake agent → transport ends → the pending turn is cancelled
+        await WaitForEnvelopeAsync(runtime, _ => false, seen, timeout: TimeSpan.FromMilliseconds(600));
+
+        await Assert.That(seen).DoesNotContain(e => e.Kind == AcpEventKind.SystemNote);
+
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await runtime.DisposeAsync();
         await fake.DisposeAsync();
