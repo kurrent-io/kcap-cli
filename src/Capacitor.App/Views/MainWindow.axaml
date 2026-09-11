@@ -11,6 +11,10 @@
                      Width="1200" MinWidth="1200" Height="760" MinHeight="560"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
+        <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
+    </Window.KeyBindings>
     <!-- Sessions is the home surface: rail | launcher-or-workspace. The right pane's empty state
          IS the launcher. Home stays in the tree but hidden (ShowHomeCommand still exists).
          Workspace content is a template so the terminal is only built once a session opens.
