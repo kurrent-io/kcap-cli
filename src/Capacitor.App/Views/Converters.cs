@@ -2,7 +2,6 @@ using System.Globalization;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
-using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
@@ -63,31 +62,6 @@ public sealed class OffscreenWhenInactiveConverter : IValueConverter {
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is true ? Avalonia.Automation.IsOffscreenBehavior.Default : Avalonia.Automation.IsOffscreenBehavior.Offscreen;
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
-}
-
-/// The vendor chip's fill, keyed on the vendor string. RailSessionViewModel stays free of Avalonia
-/// brushes (UI-thread affinity, same reason as the dot brushes), so the vendor→colour lookup lives
-/// here over VendorChipPalette.
-public sealed class VendorChipBackgroundConverter : IValueConverter {
-    public static readonly VendorChipBackgroundConverter Instance = new();
-
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        new ImmutableSolidColorBrush(Color.Parse(VendorChipPalette.For(value as string).Background));
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
-}
-
-/// The vendor chip's text colour, paired with VendorChipBackgroundConverter for contrast on each
-/// vendor's fill.
-public sealed class VendorChipForegroundConverter : IValueConverter {
-    public static readonly VendorChipForegroundConverter Instance = new();
-
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        new ImmutableSolidColorBrush(Color.Parse(VendorChipPalette.For(value as string).Foreground));
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

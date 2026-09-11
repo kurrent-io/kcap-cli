@@ -15,16 +15,13 @@ namespace Capacitor.App.ViewModels;
 /// point-in-time snapshot (SessionCardViewModel precedent).
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Id { get; }
-    /// The session title; null when the row has none, in which case the chips line stands alone.
+    /// Null when the row has no title, in which case the chips line stands alone as the row.
     public string? Primary { get; }
     public bool HasTitle { get; }
-    /// The vendor key — both the chip's label and its palette lookup (VendorChipPalette).
     public string Vendor { get; }
     public bool HasVendor { get; }
-    /// The model in use; null when the daemon has not resolved one (then no model chip is shown).
     public string? Model { get; }
     public bool HasModel { get; }
-    /// The faint trailing line: any non-agent kind, a borrowed marker, and the age.
     public string Meta { get; }
     public IBrush StatusDot { get; }
     public string Tooltip { get; }
