@@ -14,26 +14,7 @@ public sealed partial class PullRequestContextViewModel {
     public string ReviewSummary => CanDisplay ? _overview?.ReviewDecision switch {
         "approved" => "Approved", "changes_requested" => "Changes requested", "review_required" => "Review required", _ => "Review decision unknown"
     } : "";
-    public string CheckSummary {
-        get {
-            if (!CanDisplay) return "";
-            var checks = _sections.GetValueOrDefault("checks");
-            if (checks is { Coverage: "complete", Stopped: false, Total.Kind: "exact", Completed: { } completed }
-                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < TimeSpan.FromSeconds(30)
-                && completed >= _overview?.Checks?.Availability.FetchedAt && checks.Pages.Sum(page => page.Rows.Length) == checks.Total.Value) {
-                var rows = checks.Pages.SelectMany(page => page.Rows).ToArray();
-                if (rows.Length == 0) return "No checks reported";
-                var failed = rows.Count(row => row.Outcome is "failure" or "timed_out" or "action_required");
-                var pending = rows.Count(row => row.Outcome == "pending");
-                var passed = rows.Count(row => row.Outcome == "success");
-                var other = rows.Length - failed - pending - passed;
-                return $"{failed} failed · {pending} pending · {passed} passed" + (other > 0 ? $" · {other} other" : "");
-            }
-            return _overview?.Checks?.Availability.Status == "ready" ? _overview.Checks.Rollup switch {
-                "success" => "GitHub summary: successful", "failure" => "GitHub summary: failing", "pending" => "GitHub summary: pending", _ => "GitHub summary: unknown"
-            } : "Checks unavailable";
-        }
-    }
+    public string CheckSummary => ChecksStatus.Detail ?? ChecksStatus.Text;
     public string? Description => CanDisplayReader && _section == "overview" ? _overview?.Description : null;
     public bool DescriptionTruncated => CanDisplayReader && _overview?.DescriptionTruncated == true;
     public string DescriptionNote => !CanDisplayReader ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
@@ -74,12 +55,14 @@ public sealed partial class PullRequestContextViewModel {
             : _primaryRepo?.Invoke() is { } repository ? _readers.NoteFor(repository.Provider, repository.Host) : null;
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
         if (!_visibleRows.SequenceEqual(rows)) _visibleRows = rows;
-        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(IsLegacy), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
+        if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
+        foreach (var property in new[] { nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(IsLegacy), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
             nameof(Title), nameof(Lifecycle), nameof(Branches), nameof(FetchedLabel), nameof(AccessLabel), nameof(ReviewSummary), nameof(CheckSummary),
             nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved),
             nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
             nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(SectionTitle),
             nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel) }) this.RaisePropertyChanged(property);
+        NotifyPresentation();
     }
     static string Reason<T>(PullRequestRead<T> read) where T : class => read.Kind switch {
         PullRequestReadKind.SignedOut => "Sign in to see pull requests.",
@@ -114,20 +97,27 @@ public sealed partial class PullRequestContextViewModel {
     static PullRequestRow Unavailable(string id, string title, string? url, string? availability) => new(id, title, "", null, null, url,
         availability == "redacted" ? "redacted" : "unavailable");
     PullRequestRow ToRow(PullRequestCommentDto item, PullRequestSubjectDto subject) => item.Availability == "available"
-        ? new(item.Id, Author(item.Author), Dated(item.CreatedAt), item.Body, null, PrLink(item.Url, subject), "available", item.BodyTruncated)
+        ? new(item.Id, Author(item.Author), Dated(item.CreatedAt), item.Body, null, PrLink(item.Url, subject), "available", item.BodyTruncated, ActorKind: item.Author?.Kind)
         : Unavailable(item.Id, "Comment", PrLink(item.Url, subject), item.Availability);
     PullRequestRow ToRow(PullRequestReviewDto item, PullRequestSubjectDto subject) => item.Availability == "available" && item.State is not ("pending" or "PENDING")
         ? new(item.Id, Author(item.Author), ReviewState(item.State) + " · " + Dated(item.SubmittedAt), item.Body, null, PrLink(item.Url, subject), "available", item.BodyTruncated)
         : Unavailable(item.Id, "Review", PrLink(item.Url, subject), item.Availability);
     PullRequestRow ToRow(PullRequestReviewerDto item, PullRequestSubjectDto subject) => item.Availability == "available"
         ? new(item.Id, Author(item.Actor), (item.Requested == true ? "Review requested · " : "") + ReviewState(item.ReviewState),
-            null, null, PrLink(item.Url, subject), "available")
-        : Unavailable(item.Id, "Reviewer", null, item.Availability);
+            null, null, PrLink(item.Url, subject), "available", IsReviewer: true, ActorKind: item.Actor?.Kind,
+            Status: ReviewRowStatus(item.ReviewState), ReviewRequested: item.Requested == true)
+        : Unavailable(item.Id, "Reviewer", null, item.Availability) with { IsReviewer = true };
     PullRequestRow ToRow(PullRequestCheckDto item, PullRequestSubjectDto subject) => item.Availability == "available"
         ? new(item.Id, item.Name ?? "Unnamed check", Outcome(item.Outcome) + " · " + (item.AppName ?? item.Source ?? "Unknown source")
             + (PullRequestWire.CheckLink(item.Url) is { } url ? " · " + new Uri(url).Host : ""),
-            null, null, PullRequestWire.CheckLink(item.Url), "available", IsCheck: true, Outcome: item.Outcome ?? "unknown")
+            null, null, PullRequestWire.CheckLink(item.Url), "available", IsCheck: true, Outcome: item.Outcome ?? "unknown",
+            Status: new(Outcome(item.Outcome), item.Outcome switch {
+                "success" => "success", "failure" or "timed_out" or "action_required" => "failure", "pending" => "pending", _ => "neutral"
+            }))
         : Unavailable(item.Id, "Check", PullRequestWire.CheckLink(item.Url), item.Availability) with { IsCheck = true, Outcome = "unknown" };
+    static PullRequestStatus ReviewRowStatus(string? state) => new(ReviewState(state), state switch {
+        "approved" => "success", "changes_requested" => "failure", "commented" => "commented", _ => "neutral"
+    });
     PullRequestRow ToRow(PullRequestThreadDto item, PullRequestSubjectDto subject) => item.Availability == "available"
         ? new(item.Id, (item.Path ?? "Unknown file") + (item.Line is { } line ? ":" + line.ToString(CultureInfo.InvariantCulture) : ""),
             (item.IsResolved == true ? "Resolved" : item.IsResolved == false ? "Unresolved" : "Resolution unknown")

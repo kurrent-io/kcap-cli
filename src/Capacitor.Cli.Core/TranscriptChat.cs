@@ -9,7 +9,7 @@ public interface IChatDisplayRules {
 }
 
 /// The chat's view of a transcript: the leaf projection, the envelope mapping, one vendor's rules.
-public sealed class TranscriptChatProjection(ITranscriptProjection projection, IChatDisplayRules rules) {
+public sealed class TranscriptChatProjection(ITranscriptProjection projection, IChatDisplayRules rules) : IChatTranscriptProjection {
     public TranscriptContext CreateContext(string sessionId, string? agentId) => projection.CreateContext(sessionId, agentId);
 
     public IReadOnlyList<AcpEventEnvelope> Project(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) {
@@ -26,6 +26,8 @@ public sealed class TranscriptChatProjection(ITranscriptProjection projection, I
 /// The one registration site in Core: a vendor's chat rules live under Harness/&lt;Vendor&gt;/ and
 /// are paired with the leaf's projection here, nowhere else.
 public static class TranscriptChat {
+    public static readonly IChatTranscriptProjection Journal = new EnvelopeJournalProjection();
+
     public static TranscriptChatProjection? For(string vendor) =>
         TranscriptProjection.For(vendor) is not { } projection ? null
         : vendor.ToLowerInvariant() switch {

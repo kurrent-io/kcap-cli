@@ -8,8 +8,8 @@ public sealed class ServerWorkContextSource : IWorkContextSource, IAsyncDisposab
     public delegate Task<(HttpClient Client, AuthStatus Status)> ClientFactory(ConfigRoot config, ProfileContext profiles, string serverUrl, CancellationToken ct);
     readonly AuthenticatedServerReads<WorkContextClient> _reads;
 
-    public ServerWorkContextSource(ConfigRoot config, ProfileContext? profiles, ClientFactory? factory = null) {
-        _reads = new(config, profiles, (http, url) => new WorkContextClient(http, url),
+    public ServerWorkContextSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env, ClientFactory? factory = null) {
+        _reads = new(config, profiles, env, (http, url) => new WorkContextClient(http, url),
             factory is null ? null : (c, p, url, ct) => factory(c, p, url, ct));
     }
     public Task<WorkContextRead> ReadAsync(string sessionId, CancellationToken ct) => _reads.ReadAsync(

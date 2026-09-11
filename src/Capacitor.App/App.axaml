@@ -29,6 +29,7 @@
             <SolidColorBrush x:Key="KcapPurpleBrush" Color="#A994FF" />
             <SolidColorBrush x:Key="KcapPurpleDimBrush" Color="#29233E" />
             <SolidColorBrush x:Key="KcapDangerBrush" Color="#FF7272" />
+            <SolidColorBrush x:Key="KcapDangerDimBrush" Color="#321F29" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
             </ResourceDictionary.MergedDictionaries>
@@ -38,6 +39,7 @@
         <FluentTheme />
         <StyleInclude Source="avares://MarkView.Avalonia/Themes/MarkdownTheme.axaml" />
         <StyleInclude Source="avares://Kurrent Capacitor/Views/MarkdownStyles.axaml" />
+        <StyleInclude Source="avares://Kurrent Capacitor/Views/PullRequestStyles.axaml" />
         <!-- Popup panels drawn on our tokens: the flyout presenter IS the panel (no inner Border
              fighting the theme's own chrome). Opted into per flyout via FlyoutPresenterClasses.
              Fluent's ControlTheme defaults ScrollViewer.HorizontalScrollBarVisibility=Auto on the

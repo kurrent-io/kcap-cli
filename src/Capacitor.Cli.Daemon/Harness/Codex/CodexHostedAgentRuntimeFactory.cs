@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -72,10 +74,14 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     ///
     /// <para>Interactive is stated positively — neither a review flow nor a PR review — rather than as
     /// "not a review flow": the launch classes here are review-flow, PR review and interactive, so the
-    /// negative form would sweep PR review along with it and widen the opt-in past what it names.</para></summary>
+    /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
+    /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
+    /// function the daemon advertises to the server — which refuses a registration whose transport
+    /// differs from the advertisement.</para></summary>
     internal bool UsesAppServer(RuntimeStartContext ctx) =>
         _config.CodexAppServerActive
-     && (ctx.IsReviewFlow || (_config.CodexAppServerInteractive && !ctx.IsReview));
+     && (ctx.IsReviewFlow
+         || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         // §2.7 B4: resume is app-server-only (thread/resume). A resume request routed to the PTY path can't
@@ -123,6 +129,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         CodexAppServerSpawn spawn = (seed, spawnCt) =>
             _spawnFactory(_launcher.CliPath, appServerArgs, seed, ctx.Worktree.Path, env, _config, _loggerFactory);
 
+        ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
+
         var runtime = new CodexAppServerHostedAgentRuntime(
             spawn, launch, ctx.ActivityClock,
             _loggerFactory.CreateLogger<CodexAppServerHostedAgentRuntime>(),
@@ -130,7 +138,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             deferFirstTurn: envelopeSourced,
             agentId: ctx.AgentId,
             requestInteraction: _connection is { } c ? c.RequestAcpInteractionAsync : null,
-            approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)));
+            approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)),
+            journal: ctx.Journal);
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a
@@ -170,13 +179,13 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
-            ["KCAP_RENDERED_AGENT"] = "1",
-            ["KCAP_AGENT_ID"]       = ctx.AgentId,
+            [HostedAgent.RenderedVar] = HostedAgent.Rendered,
+            [HostedAgent.AgentIdVar]  = ctx.AgentId,
         };
-        if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]    = ctx.DaemonId;
-        if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
-        if (!string.IsNullOrEmpty(ctx.ServerUrl))       env["KCAP_URL"]          = ctx.ServerUrl;
-        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env["KCAP_DAEMON_URL"]   = ctx.DaemonBridgeUrl;
+        if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]         = ctx.DaemonId;
+        if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
+        if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
+        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
         // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
         // and stand down so the rollout is not double-ingested alongside the envelopes.
         if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";

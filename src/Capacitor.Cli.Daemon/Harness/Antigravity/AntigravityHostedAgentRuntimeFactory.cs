@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -204,7 +206,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         if (!IsAvailable())
             return $"antigravity_reviewer_binary_missing: '{config.AntigravityPath}' does not resolve to "
                  + "an executable. Install the Antigravity CLI (the `agy` binary — the IDE alone is not "
-                 + "enough), or set KCAP_ANTIGRAVITY_PATH to its location.";
+                 + $"enough), or set {HarnessId.Antigravity.PathEnvVar} to its location.";
 
         // ONCE: the verdict and its explanation both need the version, and resolving it per consumer
         // spawns the vendor binary twice to produce one refusal.
@@ -300,6 +302,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
         var model = ResolveModel(config, ctx);
 
+        ctx.Journal?.Open(ctx.Worktree.Path, model);
+
         // Recorded so a failed launch can explain ITSELF — an unauthenticated agy produces no `init`,
         // and "the conversation id never arrived" is not a reason anyone can act on.
         IAgyTurnProcess? firstTurnProcess = null;
@@ -324,7 +328,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
             // Disposal, not disk hygiene: the home holds the reviewer's own conversation JSONL — the
             // caller's diff, source excerpts and findings. The daemon-epoch sweep is the crash
             // backstop, not the disposal path.
-            onDisposed: () => AntigravityReviewerHome.Delete(home, stateDir, _logger));
+            onDisposed: () => AntigravityReviewerHome.Delete(home, stateDir, _logger),
+            journal: ctx.Journal);
 
         // MUST precede the first turn: a clock assigned later makes every stamp inside the launch a
         // silent no-op, and the reaper then judges this reviewer from an empty record.
@@ -338,7 +343,10 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         launchDeadline.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, config.AntigravityReviewerLaunchTimeoutSeconds)));
 
         try {
-            await runtime.SendUserInputAsync(ctx.Prompt ?? "").ConfigureAwait(false);
+            // A dispose racing this launch can already have closed the turn queue; the launch still
+            // proceeds to the barrier below, which is where that shows up as a real failure.
+            try { await runtime.SendUserInputAsync(ctx.Prompt ?? "").ConfigureAwait(false); }
+            catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "Antigravity: initial prompt not queued — the runtime is already being torn down."); }
 
             // The ordering guarantee. SendUserInputAsync returns as soon as the turn is enqueued, and
             // WaitForTurnIdleAsync is not a substitute (its enqueue→gate hand-off is itself async), so
@@ -573,12 +581,12 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // its config, MCP servers and result channel at the operator's profile, not this home.
         psi.Environment.Remove("GEMINI_CLI_HOME");
 
-        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;
+        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         // Without these a surviving turn child is invisible to OrphanReaper's env-marker pass — and
         // nothing fails visibly when they are omitted, which is exactly why they are stamped here
         // rather than left to the runtime.
-        psi.Environment["KCAP_AGENT_ID"] = ctx.AgentId;
+        psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 

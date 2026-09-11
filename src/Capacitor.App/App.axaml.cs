@@ -49,6 +49,9 @@ public partial class App : Application {
 
     // And its one read of KCAP_CONFIG_DIR.
     readonly ConfigRoot _config = ConfigRoot.FromEnvironment();
+
+    // And its one read of KCAP_URL / KCAP_PROFILE.
+    readonly ProfileOverrides _serverEnv = ProfileOverrides.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
 
     /// Process-lifetime rather than per wizard run — a provisioning poll can outlive the window that
@@ -56,7 +59,7 @@ public partial class App : Application {
     /// holds, and why it holds only that, is <see cref="AppHttpServices.AddAppForeignHttp"/>.
     readonly ServiceProvider _foreignHttp;
 
-    public App() => _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config).BuildValidated();
+    public App() => _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
     /// resolved server, and the app starts before a profile has named one. Process-lifetime for the
@@ -70,7 +73,7 @@ public partial class App : Application {
             .AddSingleton(_config)
             .AddSingleton(profiles)
             .AddSingleton(new CapacitorServer(url, _config, profiles))
-            .AddCapacitorHttp()
+            .AddCapacitorHttp(_serverEnv)
             .BuildValidated();
 
         return _serverHttp.GetRequiredService<ICapacitorHttpClient>();
@@ -190,7 +193,12 @@ public partial class App : Application {
         }
     }
 
-    public override void Initialize() => AvaloniaXamlLoader.Load(this);
+    public override void Initialize() {
+        AvaloniaXamlLoader.Load(this);
+        // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
+        // "About Avalonia" when there is none.
+        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel));
+    }
 
     public override void OnFrameworkInitializationCompleted() {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -201,11 +209,18 @@ public partial class App : Application {
             // comment explains the exit-code bug that pin fixes).
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             desktop.ShutdownRequested += OnShutdownRequested;
+            // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
+            new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator)).Install();
             _ = StartAsync(desktop);
         }
 
         base.OnFrameworkInitializationCompleted();
     }
+
+    // A failed startup latches the coordinator but keeps it, and a quit latches it too: showing a
+    // window from either would run the window factory over a graph that is being torn down.
+    internal static Action? MainWindowAction(MainWindowCoordinator? coordinator) =>
+        coordinator is { QuitInProgress: false } c ? c.ShowMainWindow : null;
 
     // This continuation is the ONLY path to a visible window: OnFrameworkInitializationCompleted
     // fires it fire-and-forget and returns immediately, so an exception escaping here would
@@ -230,7 +245,7 @@ public partial class App : Application {
                 TimeProvider.System);
             _lane = lane;
 
-            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _shutdown.Token);
+            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _shutdown.Token);
             // A graph built while the lane still owns a live action must not also drive automatic
             // ones (spec §6a) — only the wizard's own handoff can answer this with anything but true.
             var laneQuiesced = true;
@@ -241,7 +256,7 @@ public partial class App : Application {
             if (gate is GateResult.Incomplete) {
                 laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles);
                 if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
-                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _shutdown.Token);
+                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _shutdown.Token);
             }
 
             BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);
@@ -389,8 +404,8 @@ public partial class App : Application {
     // cannot be read off a second one, and the post-wizard build re-runs this rather than reusing a
     // startup value the wizard may have invalidated.
     internal static Task<(GateResult Gate, ProfileContext? Profiles)> ResolveAndEvaluateGateAsync(
-            ConfigRoot config, TokenStore tokenStore, CancellationToken ct) =>
-        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore).EvaluateAsync, ct);
+            ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, CancellationToken ct) =>
+        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env).EvaluateAsync, ct);
 
     // The steady-state graph, over the resolution the gate was evaluated on (never a second resolve).
     void BuildDaemonGraph(
@@ -495,8 +510,8 @@ public partial class App : Application {
         // coordinator builds — each owns a live transport, and only a held instance can be
         // disposed at teardown.
         serverLane.Start();
-        var workContext = new ServerWorkContextSource(_config, profiles);
-        var pullRequests = new ServerPullRequestSource(_config, profiles);
+        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv);
+        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv);
         var ghRunner = new ProcessRunner();
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
@@ -563,7 +578,7 @@ public partial class App : Application {
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), TimeProvider.System, opener, permissions,
-            workContext, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
+            workContext, ops, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             });
@@ -742,7 +757,7 @@ public partial class App : Application {
             surface,
             ResolveCli: () => NewWizardCli(_config, runner, cliPath, probe),
             ResolveOps: name => new LocalControlOps(_daemonStore, name),
-            ResolveIdentity: () => ResolveWizardIdentity(_config),
+            ResolveIdentity: () => ResolveWizardIdentity(_config, _serverEnv),
             ResolveConsentFlipIdentity: () => ResolveConsentFlipIdentity(_config),
             RunMutation: lane.RunAsync,
             Observation: new OneShotObservation(_daemonStore, OneShotProbeTimeout),
@@ -754,7 +769,7 @@ public partial class App : Application {
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,
-            DefaultDaemonName: ResolveWizardIdentity(_config)?.DaemonName,
+            DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv)?.DaemonName,
             Time: TimeProvider.System,
             ShutdownToken: _shutdown.Token));
 
@@ -1125,13 +1140,11 @@ public partial class App : Application {
     /// the resolution the gate was evaluated on, and side-effect-free. Null — never
     /// an empty-string sentinel — when nothing resolves, which is what keeps its factories fail-closed.
     /// </summary>
-    internal static (string Profile, string Server, string DaemonName)? ResolveWizardIdentity(ConfigRoot root) {
+    internal static (string Profile, string Server, string DaemonName)? ResolveWizardIdentity(ConfigRoot root, ProfileOverrides env) {
         if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var config)) return null;
 
-        var envUrl     = Environment.GetEnvironmentVariable("KCAP_URL");
-        var envProfile = Environment.GetEnvironmentVariable("KCAP_PROFILE");
         var resolved = new ProfileResolver(
-            config, cliServerUrl: null, envUrl, envProfile,
+            config, cliServerUrl: null, env.Url, env.Profile,
             repoConfig: null, repoRemoteUrls: [], repoPath: null).Resolve();
 
         if (resolved.ProfileName is not { Length: > 0 } profileName) return null;

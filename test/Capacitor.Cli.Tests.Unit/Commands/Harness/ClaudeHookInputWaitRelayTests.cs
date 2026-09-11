@@ -11,9 +11,10 @@ using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
-/// The input-wait relay a daemon-hosted Claude session sends its daemon. Every test here mutates
-/// process-wide environment, hence the bare constraint on each and a class of its own — the
-/// command's main suite carries a keyed one, and a method may not shadow it.
+/// The input-wait relay a daemon-hosted Claude session sends its daemon: which turn boundaries
+/// reach it, and what silences it. Bare <c>[NotInParallel]</c> because the relay drops its own POST
+/// once <see cref="DaemonInputWaitRelay.Cap"/> is spent and says nothing — on a saturated runner
+/// that is the whole second, and a test asserting the POST landed fails for the runner's reasons.
 public class ClaudeHookInputWaitRelayTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -35,10 +36,10 @@ public class ClaudeHookInputWaitRelayTests {
 
     /// The relay rides ahead of client creation, so it is exercised through HandleWithDeps and
     /// asserted on the bridge itself, never on the server.
-    async Task<int> RunAsync(string eventName, HookClock? clock = null, string extraFields = "") {
+    async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
         using var client = new HttpClient(new OkHandler());
         var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
-        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient())
+        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
             .HandleWithDeps(new HookSpool(Config.Root), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
     }
 
@@ -50,10 +51,9 @@ public class ClaudeHookInputWaitRelayTests {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(204));
-        using var daemonUrl = EnvScope.Exclusive("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/tok");
-        using var agentId   = EnvScope.Exclusive("KCAP_AGENT_ID", "agent-1");
+        var hosted = new HostedAgent("agent-1", IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
 
-        var exit = await RunAsync(eventName);
+        var exit = await RunAsync(hosted, eventName);
 
         await Assert.That(exit).IsEqualTo(0);
         var relayed = bridge.LogEntries.Single(e => e.RequestMessage.Path == "/tok/claude/input-wait");
@@ -69,10 +69,9 @@ public class ClaudeHookInputWaitRelayTests {
     [Test, NotInParallel]
     public async Task An_unhosted_stop_relays_nothing() {
         using var bridge = WireMockServer.Start();
-        using var daemonUrl = EnvScope.Exclusive("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/tok");
-        using var agentId   = EnvScope.Exclusive("KCAP_AGENT_ID", null);
+        var unhosted = new HostedAgent(null, IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
 
-        await RunAsync("Stop");
+        await RunAsync(unhosted, "Stop");
 
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
     }
@@ -85,10 +84,9 @@ public class ClaudeHookInputWaitRelayTests {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(204));
-        using var daemonUrl = EnvScope.Exclusive("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/tok");
-        using var agentId   = EnvScope.Exclusive("KCAP_AGENT_ID", "agent-1");
+        var hosted = new HostedAgent("agent-1", IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
 
-        var exit = await RunAsync("PreToolUse", extraFields: ",\"agent_id\":\"3f2504e04f8911d39a0c0305e82c3301\"");
+        var exit = await RunAsync(hosted, "PreToolUse", extraFields: ",\"agent_id\":\"3f2504e04f8911d39a0c0305e82c3301\"");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
@@ -101,10 +99,9 @@ public class ClaudeHookInputWaitRelayTests {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(204));
-        using var daemonUrl = EnvScope.Exclusive("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/tok");
-        using var agentId   = EnvScope.Exclusive("KCAP_AGENT_ID", "agent-1");
+        var hosted = new HostedAgent("agent-1", IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
 
-        var exit = await RunAsync("PreToolUse", Aged(TimeSpan.FromSeconds(10)));
+        var exit = await RunAsync(hosted, "PreToolUse", Aged(TimeSpan.FromSeconds(10)));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);

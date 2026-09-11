@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Pty;
 /// <summary>PTY double whose every write throws — simulates a dead/closed PTY
 /// (<see cref="IPtyProcess.WriteAsync(string)"/> is documented "unguarded and throws on a closed
 /// pipe" — see <c>PtyHostedAgentRuntime.WriteSubmitCarriageReturnAsync</c>'s remarks), so
-/// <c>AgentOrchestrator.HandleSendInput</c>'s delivery await never completes without an
+/// <c>AgentOrchestrator.DeliverInputAsync</c>'s delivery await never completes without an
 /// exception and the activity-clock advance it gates on must not run.</summary>
 internal sealed class AlwaysThrowsPtyProcess : IPtyProcess {
     public int  Pid       => 5151;

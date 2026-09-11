@@ -290,6 +290,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// successful review's home would otherwise sit on disk until a later daemon epoch swept it.</summary>
     readonly Action? _onDisposed;
 
+    /// <summary>Recorded from <see cref="EmitEnvelope"/>, opened by the factory before construction. Null
+    /// for every launch/test that carries no journal.</summary>
+    readonly TranscriptJournal? _journal;
+
     /// <summary>
     /// The in-flight out-of-band reap, if one was started. Awaited by disposal so cleanup never runs
     /// ahead of the termination it depends on.
@@ -507,6 +511,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// by production code.</summary>
     internal Task TurnWorkerTaskForTest => _turnWorkerTask;
 
+    /// <summary>Test-only: completes <see cref="_pendingTurns"/> the same way <see cref="DisposeAsync"/>
+    /// does, so a test can force <see cref="EnqueueTurn"/>'s channel-closed branch deterministically —
+    /// simulating a dispose that raced the tail of <see cref="StartAsync"/>'s handshake without
+    /// actually racing a concurrent dispose. Never touched by production code.</summary>
+    internal void CompletePendingTurnsForTest() => _pendingTurns.Writer.TryComplete();
+
     /// <summary>Test-only: installs a throwing owner CTS so <see cref="DisposeAsync"/>'s owner-cancel
     /// (the EARLY cancellation callback) faults. Never touched by production code.</summary>
     internal void SetOwnerCtsForTest(CancellationTokenSource cts) { lock (_reconnectLock) _ownerCts = cts; }
@@ -628,8 +638,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             Action<AcpAutoApprovalNotice>?                                                  notifyAutoApproval = null,
             PolicySnapshot?                                                                 policySnapshot = null,
             Action<PolicyDecisionEventV1>?                                                  notifyPolicyDecision = null,
-            string?                                                                         policyCwd = null
+            string?                                                                         policyCwd = null,
+            TranscriptJournal?                                                              journal = null
         ) {
+        _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
         _firstOutputDeadline = firstOutputDeadline;
@@ -1073,7 +1085,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt)) {
-            _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false);
+            // A dispose racing the tail of this handshake can already have completed
+            // _pendingTurns by the time this runs — the only reachable refusal here, since a
+            // fresh queue can't be full, so it is Debug rather than Warning.
+            try { _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false); }
+            catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "ACP: initial prompt not queued — the runtime is already being torn down."); }
             ArmFirstOutputWatchdog();
         } else {
             // Deterministic backstop (design spec §3.3): no turn will ever run to settle the marker
@@ -1174,13 +1190,17 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
                 _pendingTurnsCapacity, dropped);
 
-            written?.TrySetException(new InvalidOperationException("ACP pending-turns queue is full."));
-            return written?.Task ?? Task.CompletedTask;
+            var full = new InputNotAdmittedException("ACP pending-turns queue is full.");
+            if (written is null) throw full;
+            written.TrySetException(full);
+            return written.Task;
         }
 
         if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
             _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
-            written?.TrySetException(new ObjectDisposedException(nameof(AcpHostedAgentRuntime)));
+            var closed = new InputNotAdmittedException("ACP runtime is terminal; this input was not queued.");
+            if (written is null) throw closed;
+            written.TrySetException(closed);
         }
         return written?.Task ?? Task.CompletedTask;
     }
@@ -1428,9 +1448,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>
     /// Sends a follow-up <c>session/prompt</c> for hosted-UI text input (server <c>SendInput</c>).
     /// Returns as soon as the text is enqueued (see <see cref="EnqueueTurn"/>) — it does NOT await the
-    /// turn's <c>stopReason</c> response: a real turn can run arbitrarily long, and the
-    /// pre-fix behavior (awaiting the full round trip) blocked this call — and therefore the
-    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. If a prior turn is still in
+    /// turn's <c>stopReason</c> response: a real turn can run arbitrarily long, and awaiting the
+    /// full round trip would block this call — and therefore the orchestrator's
+    /// <c>DeliverInputAsync</c> — for the whole turn. If a prior turn is still in
     /// flight, this text is queued FIFO and the worker sends it only once that turn's own
     /// <c>stopReason</c> has been received and its buffer flushed — turn completion is
     /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.
@@ -1829,6 +1849,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
             if (!_transcript.Writer.TryWrite(envelope))
                 _logger.LogDebug("ACP: dropped an ACP transcript envelope (Kind={Kind}) — transcript channel already completed.", envelope.Kind);
+            else
+                _journal?.Record(envelope);
         }
     }
 

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Harness.Pi;
 
@@ -118,13 +120,18 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         PiRpcHostedAgentRuntime runtime;
 
         try {
+            // Unopened until now — the orchestrator hands the factory an unopened journal so the
+            // header's cwd/model are this launch's own.
+            ctx.Journal?.Open(ctx.Worktree.Path, ResolveModel(config, ctx));
+
             runtime = new PiRpcHostedAgentRuntime(
                 process,
                 loggerFactory.CreateLogger<PiRpcHostedAgentRuntime>(),
                 ctx.AgentId,
                 ResolveModel(config, ctx),
                 ctx.Worktree.Path,
-                readyDeadline: readyDeadline);
+                readyDeadline: readyDeadline,
+                journal: ctx.Journal);
         } catch {
             // Construction itself failing (it should not, in practice) still leaves a spawned child —
             // no orphan pi processes.
@@ -232,9 +239,9 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         // The dual-capture gate — unconditional, see PiLaunchEnvironment's doc.
         PiLaunchEnvironment.Apply(psi.Environment);
 
-        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment["KCAP_URL"] = ctx.ServerUrl;
+        if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
-        psi.Environment["KCAP_AGENT_ID"] = ctx.AgentId;
+        psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 

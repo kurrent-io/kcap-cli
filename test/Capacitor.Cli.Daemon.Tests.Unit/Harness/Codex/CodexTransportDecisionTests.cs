@@ -81,4 +81,16 @@ public class CodexTransportDecisionTests {
         await Assert.That(transportOnly.CodexTransport).IsEqualTo("app-server");
         await Assert.That(transportOnly.CodexAppServerInteractive).IsFalse();
     }
+
+    /// <summary>The one function both the launch router and the advertisement read: app-server only when
+    /// the transport resolved active AND this daemon opted interactive in.</summary>
+    [Test]
+    [Arguments(false, false, "pty")]
+    [Arguments(true,  false, "pty")]
+    [Arguments(false, true,  "pty")]
+    [Arguments(true,  true,  "app-server")]
+    public async Task InteractiveTransport_is_app_server_only_when_active_and_opted_in(bool active, bool optIn, string expected) {
+        var config = new DaemonConfig { CodexAppServerActive = active, CodexAppServerInteractive = optIn };
+        await Assert.That(CodexTransportDecision.InteractiveTransport(config)).IsEqualTo(expected);
+    }
 }

@@ -75,13 +75,23 @@ public sealed record AgentStatusDto(
     // The daemon's verdict that the agent finished a turn and waits on the user: true only while
     // Running, from a runtime-attested turn end or a PTY vendor's relayed Stop hook. Trailing +
     // nullable: null is an older daemon, which a client must read as unknown, never as working.
-    bool? AwaitingInput = null);
+    bool? AwaitingInput = null,
+    // Which reader a client uses for TranscriptPath: TranscriptFormats.Vendor for a PTY runtime's own
+    // file, TranscriptFormats.Envelopes for the daemon-written envelope journal. Always emitted by a
+    // current daemon, so null means an older daemon and nothing else.
+    string? TranscriptFormat = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.
 public static class WorkLocationText {
     public const string Owned    = "owned";
     public const string Borrowed = "borrowed";
+}
+
+/// Wire tokens for <see cref="AgentStatusDto.TranscriptFormat"/>, compared literally by every client.
+public static class TranscriptFormats {
+    public const string Vendor    = "vendor";
+    public const string Envelopes = "envelopes";
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]

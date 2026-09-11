@@ -38,13 +38,13 @@ public class ClaudeMemoryIndexLiveCertTests {
     /// <summary>The real container, built against this machine's actual config — a stub client
     /// cannot exercise the real refresh/discovery chain a live-cert run is meant to certify.</summary>
     static async Task<ServiceProvider> AuthenticatedContainerAsync(ConfigRoot root, string baseUrl) {
-        var profiles = await AppConfig.ResolveActiveProfile([], root);
+        var profiles = await AppConfig.ResolveActiveProfile([], root, ProfileOverrides.None);
         var services = new ServiceCollection();
 
         services.AddSingleton(root);
         services.AddSingleton(profiles);
         services.AddSingleton(new CapacitorServer(baseUrl, root, profiles));
-        services.AddCapacitorHttp();
+        services.AddCapacitorHttp(ProfileOverrides.None);
 
         return services.BuildServiceProvider();
     }

@@ -9,6 +9,7 @@ using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -94,7 +95,8 @@ public static partial class DaemonRunner {
         // Program.cs, but the daemon is a separate process so its statics start
         // empty. Skips repo discovery (the daemon isn't bound to a working dir);
         // honors --server-url, KCAP_URL, KCAP_PROFILE.
-        var profiles = await AppConfig.ResolveActiveProfile(args, configRoot);
+        var serverEnv = ProfileOverrides.FromEnvironment();
+        var profiles  = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv);
         config.Profiles  = profiles;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
@@ -180,11 +182,8 @@ public static partial class DaemonRunner {
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
         }
 
-        if (Environment.GetEnvironmentVariable("KCAP_CLAUDE_PATH") is { Length: > 0 } envClaudePath)
-            config.ClaudePath = envClaudePath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_CODEX_PATH") is { Length: > 0 } envCodexPath)
-            config.CodexPath = envCodexPath;
+        // Before the transport decision below, which probes whatever CodexPath ends up naming.
+        BindVendorOverrides(config, harnesses.Select(h => h.Id), Environment.GetEnvironmentVariable);
 
         if (Environment.GetEnvironmentVariable("KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS") is { Length: > 0 } envApprovalTimeout
          && int.TryParse(envApprovalTimeout, out var approvalTimeoutSeconds) && approvalTimeoutSeconds > 0)
@@ -196,40 +195,6 @@ public static partial class DaemonRunner {
         config.CodexAppServerActive = Harness.Codex.CodexTransportDecision.ResolveActive(
             config.CodexTransport, () => ProbeCliVersion(config.CodexPath));
 
-        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_PATH") is { Length: > 0 } envCursorPath)
-            config.CursorPath = envCursorPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_MODEL") is { Length: > 0 } envCursorModel)
-            config.CursorModel = envCursorModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_COPILOT_PATH") is { Length: > 0 } envCopilotPath)
-            config.CopilotPath = envCopilotPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_KIRO_PATH") is { Length: > 0 } envKiroPath)
-            config.KiroPath = envKiroPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_KIRO_MODEL") is { Length: > 0 } envKiroModel)
-            config.KiroModel = envKiroModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_PATH") is { Length: > 0 } envOpenCodePath)
-            config.OpenCodePath = envOpenCodePath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_OPENCODE_MODEL") is { Length: > 0 } envOpenCodeModel)
-            config.OpenCodeModel = envOpenCodeModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_PI_PATH") is { Length: > 0 } envPiPath)
-            config.PiPath = envPiPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_PI_MODEL") is { Length: > 0 } envPiModel)
-            config.PiModel = envPiModel;
-
-        if (Environment.GetEnvironmentVariable("KCAP_GEMINI_PATH") is { Length: > 0 } envGeminiPath)
-            config.GeminiPath = envGeminiPath;
-
-        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_PATH") is { Length: > 0 } agyPath)
-            config.AntigravityPath = agyPath;
-        if (Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_MODEL") is { Length: > 0 } agyModel)
-            config.AntigravityModel = agyModel;
         // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
         // Claude/Codex/Cursor/Copilot, which have never been gated. See ParseConsentFlag for the full
         // argument and its three precisions — in short, the reviewer vendor is a caller-chosen
@@ -371,7 +336,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(harnesses);
         builder.Services.AddSingleton(daemonLock);
-        builder.Services.AddDaemonHttp(configRoot, config);
+        builder.Services.AddDaemonHttp(configRoot, config, serverEnv);
         builder.Services.AddSingleton<ServerConnection>();
 
         // The owner consent gate — policy store + append-only decision log share the
@@ -586,6 +551,10 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<LocalControlServer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalControlServer>());
 
+        builder.Services.AddSingleton(sp => new TranscriptJournalSweep(
+            config.Store.StateDirectory(config.Name), TimeProvider.System, sp.GetRequiredService<ILogger<TranscriptJournalSweep>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptJournalSweep>());
+
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
 
@@ -740,6 +709,8 @@ public static partial class DaemonRunner {
                 // handler. Under the daemon lock; best-effort (swallows its own faults).
                 orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
                 await orchestrator.ReapOrphansOnceAsync();
+
+                await host.Services.GetRequiredService<TranscriptJournalSweep>().RunOnceAsync(lifetime.ApplicationStopping);
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
@@ -1191,6 +1162,57 @@ public static partial class DaemonRunner {
     internal static bool ParseConsentFlag(string? value) => ReviewerConsent.IsEnabled(value);
 
     /// <summary>
+    /// Applies every vendor's path and model override, over whatever the profile and the harness
+    /// defaults have already put in <paramref name="config"/>.
+    ///
+    /// <para>Ranges over the vendors rather than naming each variable, so a vendor cannot arrive with
+    /// an override <see cref="HarnessOverrides"/> declares and nothing applies: the
+    /// appliers below switch over the same closed set, and a new member of it fails the build
+    /// here.</para>
+    /// </summary>
+    internal static void BindVendorOverrides(
+            DaemonConfig config, IEnumerable<HarnessId> vendors, Func<string, string?> read) {
+        foreach (var vendor in vendors) {
+            if (read(vendor.PathEnvVar) is { Length: > 0 } path)
+                PathApplier(config, vendor)(path);
+
+            if (vendor.ModelEnvVar is { } modelVar && read(modelVar) is { Length: > 0 } model)
+                ModelApplier(config, vendor)(model);
+        }
+    }
+
+    internal static Action<string> PathApplier(DaemonConfig config, HarnessId vendor) => vendor switch {
+        HarnessId.Claude      => v => config.ClaudePath      = v,
+        HarnessId.Codex       => v => config.CodexPath       = v,
+        HarnessId.Cursor      => v => config.CursorPath      = v,
+        HarnessId.Copilot     => v => config.CopilotPath     = v,
+        HarnessId.Gemini      => v => config.GeminiPath      = v,
+        HarnessId.Kiro        => v => config.KiroPath        = v,
+        HarnessId.Pi          => v => config.PiPath          = v,
+        HarnessId.OpenCode    => v => config.OpenCodePath    = v,
+        HarnessId.Antigravity => v => config.AntigravityPath = v,
+    };
+
+    /// <summary>
+    /// The four vendors that pick their own model throw rather than being absent: the binder reaches
+    /// one only once <see cref="HarnessOverrides"/> names a variable for it, so arriving
+    /// here means a knob was declared without an accessor to receive it.
+    /// </summary>
+    internal static Action<string> ModelApplier(DaemonConfig config, HarnessId vendor) => vendor switch {
+        HarnessId.Cursor      => v => config.CursorModel      = v,
+        HarnessId.Kiro        => v => config.KiroModel        = v,
+        HarnessId.Pi          => v => config.PiModel          = v,
+        HarnessId.OpenCode    => v => config.OpenCodeModel    = v,
+        HarnessId.Antigravity => v => config.AntigravityModel = v,
+
+        HarnessId.Claude or HarnessId.Codex
+            or HarnessId.Copilot or HarnessId.Gemini =>
+            throw new NotSupportedException(
+                $"{vendor} declares a model override variable but no DaemonConfig accessor is wired to "
+              + "it, so setting it would silently do nothing. Add the accessor here."),
+    };
+
+    /// <summary>
     /// Where a gated reviewer's opt-out lands on <see cref="DaemonConfig"/>.
     ///
     /// <para><b>Throws for an unknown vendor rather than returning null or a no-op.</b> The one caller
@@ -1443,7 +1465,10 @@ public static partial class DaemonRunner {
                 ReviewerModelPolicyVersion: modelResolver?.PolicyVersion,
                 // Caller-selected launch posture, advertised per vendor rather than per platform —
                 // the seam is platform-neutral, and only the Codex launcher honours a posture block.
-                SupportsLaunchPosture: string.Equals(vendor, "codex", StringComparison.Ordinal)));
+                SupportsLaunchPosture: string.Equals(vendor, "codex", StringComparison.Ordinal),
+                InteractiveTransport: string.Equals(vendor, "codex", StringComparison.Ordinal)
+                    ? Harness.Codex.CodexTransportDecision.InteractiveTransport(config)
+                    : null));
         }
         return capabilities;
     }
@@ -1535,14 +1560,45 @@ public static partial class DaemonRunner {
                 RedirectStandardError = true,
                 ArgumentList = { "--version" }
             });
-            if (process is null || !process.WaitForExit(timeoutMs)) {
-                try { if (process is not null) ProcessTree.Kill(process); } catch { }
+            if (process is null) return null;
+
+            // Drain both pipes WHILE the child runs. A --version that writes more than the OS pipe
+            // buffer — some vendor CLIs emit a banner or an "update available" notice — blocks on
+            // write until the parent reads, so reading only after WaitForExit deadlocks: the child
+            // parks on a full pipe, the wait never returns, and the probe hangs until the timeout
+            // kills it. The drains never fault (they swallow to ""), so the abandoned timeout path
+            // leaves no unobserved task exception.
+            var stdout = DrainToEndAsync(process.StandardOutput);
+            var stderr = DrainToEndAsync(process.StandardError);
+
+            if (!process.WaitForExit(timeoutMs)) {
+                try { ProcessTree.Kill(process); } catch { }
                 return null;
             }
-            var output = process.StandardOutput.ReadToEnd().Trim();
-            if (output.Length == 0) output = process.StandardError.ReadToEnd().Trim();
+
+            var output = stdout.GetAwaiter().GetResult().Trim();
+            if (output.Length == 0) output = stderr.GetAwaiter().GetResult().Trim();
             return ParseProbedVersion(output);
         } catch { return null; }
+    }
+
+    /// Enough for any real vendor <c>--version</c> (a line or two); a version that needed more would
+    /// fail the parser anyway. Past the cap the stream is still read to EOF so the child never blocks
+    /// on a full pipe, but nothing more is retained — a noisy or runaway CLI cannot grow this buffer
+    /// for the whole probe budget.
+    const int ProbeOutputCap = 8 * 1024;
+
+    static async Task<string> DrainToEndAsync(System.IO.StreamReader reader) {
+        try {
+            var buffer = new char[4096];
+            var kept   = new System.Text.StringBuilder();
+            int read;
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0) {
+                var room = ProbeOutputCap - kept.Length;
+                if (room > 0) kept.Append(buffer, 0, Math.Min(read, room));
+            }
+            return kept.ToString();
+        } catch { return ""; }
     }
 
     /// <summary>

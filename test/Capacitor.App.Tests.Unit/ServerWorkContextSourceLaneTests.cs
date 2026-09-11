@@ -1,5 +1,6 @@
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.App.Tests.Unit;
@@ -32,7 +33,7 @@ public class ServerWorkContextSourceLaneTests {
             ServerUrl      = Url,
         });
 
-        await using var source = new ServerWorkContextSource(Config.Root, profiles);
+        await using var source = new ServerWorkContextSource(Config.Root, profiles, ProfileOverrides.None);
 
         var read = await source.ReadAsync(Session, CancellationToken.None);
 

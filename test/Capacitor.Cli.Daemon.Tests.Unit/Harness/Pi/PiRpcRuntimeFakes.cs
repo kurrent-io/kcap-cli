@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Daemon.Harness.Pi;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
@@ -183,7 +184,8 @@ internal static class PiRpcRuntimeFakes {
             string?    requestedModel = RequestedModel,
             TimeSpan?  readyDeadline  = null,
             TimeSpan?  stopGrace      = null,
-            Action?    onDisposed     = null) {
+            Action?    onDisposed     = null,
+            TranscriptJournal? journal = null) {
         var process = new FakePiRpcProcess {
             AutoStateResponse = answerGetState ? stateResponse ?? GetStateResponse() : null,
         };
@@ -196,7 +198,8 @@ internal static class PiRpcRuntimeFakes {
             cwd:            "/w",
             readyDeadline:  readyDeadline,
             stopGrace:      stopGrace,
-            onDisposed:     onDisposed);
+            onDisposed:     onDisposed,
+            journal:        journal);
 
         return (runtime, process);
     }

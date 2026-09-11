@@ -64,6 +64,28 @@ public class ProactiveTokenRefreshDecisionTests {
     }
 
     [Test]
+    public async Task Two_minute_window_leaves_a_token_beyond_it_not_due() {
+        // The daemon's 2-minute window: a token 2m30s out is still comfortably valid, so a
+        // freshly-issued token is not refreshed the instant after login.
+        var window   = TimeSpan.FromMinutes(2);
+        var tokens   = Tokens(AuthProvider.WorkOS, Now.AddSeconds(150));
+        var decision = TokenStore.DecideProactiveRefresh(tokens, Now, window);
+
+        await Assert.That(decision).IsEqualTo(TokenStore.RefreshDecision.NotDueYet);
+    }
+
+    [Test]
+    public async Task Two_minute_window_refreshes_a_token_inside_it() {
+        // 1m30s out is inside the 2-minute window — proactive refresh fires before the reactive
+        // 30s IsExpired margin, keeping the window above the 60s tick plus that margin.
+        var window   = TimeSpan.FromMinutes(2);
+        var tokens   = Tokens(AuthProvider.WorkOS, Now.AddSeconds(90));
+        var decision = TokenStore.DecideProactiveRefresh(tokens, Now, window);
+
+        await Assert.That(decision).IsEqualTo(TokenStore.RefreshDecision.RefreshWorkOS);
+    }
+
+    [Test]
     public async Task Already_expired_workos_token_still_refreshes() {
         var tokens   = Tokens(AuthProvider.WorkOS, Now.AddMinutes(-10));
         var decision = TokenStore.DecideProactiveRefresh(tokens, Now, Window);

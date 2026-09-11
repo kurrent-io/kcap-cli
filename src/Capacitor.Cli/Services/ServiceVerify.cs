@@ -187,8 +187,8 @@ sealed class ServiceVerify(
     internal string? LastBootRefusalToken { get; private set; }
 
     const string ConsentSeedVar = "KCAP_CONSENT_SEED_DEFAULT";
-    const string ProfileVar     = "KCAP_PROFILE";
-    const string UrlVar         = "KCAP_URL";
+    const string ProfileVar     = ProfileOverrides.ProfileVar;
+    const string UrlVar         = ProfileOverrides.UrlVar;
     const string ExpectVar      = "KCAP_EXPECT_SERVER_URL";
 
     /// <summary>Closed-stdio tolerance: the npm grandchild shares the GUI's pipes, so a broken pipe

@@ -3,7 +3,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using DynamicData;
@@ -19,8 +18,6 @@ public enum WorkspaceTab { Chat, Terminal, PullRequest }
 public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     const string UnresolvedKind = "unresolved";
 
-    sealed record AgentPresence(AgentStatusDto? Dto, bool SessionEnded);
-
     public string AgentId { get; }
 
     readonly ObservableAsPropertyHelper<string> _title;
@@ -33,18 +30,14 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly ObservableAsPropertyHelper<bool> _showsTerminalTab;
     public bool ShowsTerminalTab => _showsTerminalTab.Value;
 
-    readonly ObservableAsPropertyHelper<string> _noTerminalNote;
-    public string NoTerminalNote => _noTerminalNote.Value;
-
     readonly ObservableAsPropertyHelper<bool> _sessionEnded;
     public bool SessionEnded => _sessionEnded.Value;
 
     public TerminalTabViewModel Terminal { get; }
 
     ChatTabViewModel? _chat;
-    /// Built once, on the first resolved dto -- the projection is chosen by the dto's vendor and
-    /// is null for a vendor with no chat projection, which renders the cards pane alone. Null only
-    /// before any dto has arrived.
+    /// Built once, on the first dto; the reader comes from transcript_format and the input channel
+    /// from has_terminal.
     public ChatTabViewModel? Chat {
         get => _chat;
         private set => this.RaiseAndSetIfChanged(ref _chat, value);
@@ -54,7 +47,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     /// subscription per workspace, not two.
     public WorkContextViewModel WorkContext { get; }
     public PullRequestContextViewModel? PullRequests { get; }
-    public bool ShowsPullRequestTab => PullRequests is not null;
+    bool _showsPullRequestTab;
+    public bool ShowsPullRequestTab {
+        get => _showsPullRequestTab;
+        private set => this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+    }
 
     WorkspaceTab _activeTab = WorkspaceTab.Chat;
     public WorkspaceTab ActiveTab {
@@ -71,7 +68,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public bool IsChatActive => ActiveTab == WorkspaceTab.Chat;
     public bool IsTerminalActive => ActiveTab == WorkspaceTab.Terminal;
     public bool IsPullRequestActive => ActiveTab == WorkspaceTab.PullRequest;
-    public bool ShowsTerminalBanners => !IsPullRequestActive && (IsTerminalActive || !ShowsTerminalTab);
+    public bool ShowsTerminalBanners => !IsPullRequestActive && IsTerminalActive;
 
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
@@ -90,7 +87,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public WorkspaceViewModel(
             string agentId, IDaemonClientService daemon, AgentActionService actions,
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
-            IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext,
+            IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
@@ -106,6 +103,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
+        PullRequests?.HasPullRequestChanges.Subscribe(has => {
+            ShowsPullRequestTab = has;
+            if (!has && IsPullRequestActive) ActiveTab = WorkspaceTab.Chat;
+        }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
@@ -121,25 +122,26 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _showsTerminalTab = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
-        presence.Subscribe(_ => this.RaisePropertyChanged(nameof(ShowsTerminalBanners))).DisposeWith(_disposables);
-        // Blank whenever ShowsTerminalTab is true (or the dto isn't resolved yet): the note
-        // replaces the Terminal tab button in the tab strip, so it must never render alongside it.
-        _noTerminalNote = presence
-            .Select(p => p.Dto is null || HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor) ? "" : HostedHarnessCatalog.NoTerminalNote(p.Dto.HasTerminal, p.Dto.Vendor))
-            .ToProperty(this, x => x.NoTerminalNote, "")
-            .DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);
 
-        presence.Where(p => p.Dto is not null).Take(1)
-            .Subscribe(p => Chat = new ChatTabViewModel(
-                agentId, daemon, Terminal, TranscriptChat.For(p.Dto!.Vendor), opener, time, permissions))
+        presence
+            .Where(p => p.Dto is not null)
+            .Take(1)
+            .Subscribe(p => {
+                var dto = p.Dto!;
+                var (projection, note) = ChatTranscriptSource.Resolve(dto);
+                ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
+                    ? new TerminalChatInput(Terminal)
+                    : new LocalFrameChatInput(agentId, daemon, ops, presence);
+                Chat = new ChatTabViewModel(agentId, daemon, input, projection, opener, time, permissions, note);
+            })
             .DisposeWith(_disposables);
 
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = WorkspaceTab.Chat; });
         ShowTerminalCommand = ReactiveCommand.Create(() => { ActiveTab = WorkspaceTab.Terminal; });
-        ShowPullRequestCommand = ReactiveCommand.Create(() => { if (PullRequests is not null) ActiveTab = WorkspaceTab.PullRequest; });
+        ShowPullRequestCommand = ReactiveCommand.Create(() => { if (ShowsPullRequestTab) ActiveTab = WorkspaceTab.PullRequest; });
         _disposables.Add(ShowChatCommand);
         _disposables.Add(ShowTerminalCommand);
         _disposables.Add(ShowPullRequestCommand);

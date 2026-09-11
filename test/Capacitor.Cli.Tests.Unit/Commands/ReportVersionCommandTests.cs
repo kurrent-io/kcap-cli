@@ -46,7 +46,7 @@ public class ReportVersionCommandTests : IDisposable {
         // no-base-url case has to exercise, and a placeholder would hand it a reachable one.
         services.AddSingleton(
             new CapacitorServer(profiles.Resolution.ServerUrl ?? "", Config.Root, profiles));
-        services.AddCapacitorHttp();
+        services.AddCapacitorHttp(ProfileOverrides.None);
         _sp = services.BuildServiceProvider();
 
         return new ReportVersionCommand(

@@ -23,7 +23,7 @@ public class PullRequestViewSmokeTests {
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time);
         var vm = new WorkspaceViewModel("agent", daemon, NewActions(), attach.Factory, () => new FakeTerminalSurface(), time,
-            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), pullRequests: source);
+            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source);
         var view = new WorkspaceView { DataContext = vm };
         var window = new Window { Content = view, Width = 1200, Height = 800 };
         window.Show();
@@ -56,6 +56,47 @@ public class PullRequestViewSmokeTests {
             if (chat is not null) await Assert.That(chat.ComposerText).IsEqualTo("Unsent draft");
             vm.PullRequests.SetForeground(false);
             await Assert.That(vm.PullRequests.Description).IsNull();
+        } finally { window.Close(); await vm.TeardownAsync(); }
+    });
+
+    [Test]
+    public Task The_tab_shows_only_while_the_session_has_a_linked_PR_and_the_sidebar_card_always_shows() => RunOnUiAsync(async () => {
+        var daemon = new FakeDaemonClientService();
+        var time = new FakeTimeProvider();
+        var source = new FakePullRequestSource(time) { Links = [] };
+        var vm = new WorkspaceViewModel("agent", daemon, NewActions(), new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), time,
+            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source);
+        var view = new WorkspaceView { DataContext = vm };
+        var window = new Window { Content = view, Width = 1200, Height = 800 };
+        window.Show();
+        try {
+            daemon.Agents.AddOrUpdate(Agent("agent", "claude", hasTerminal: false, sessionId: "session"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var tab = view.FindControl<Button>("PullRequestTabButton")!;
+            var card = view.FindControl<WorkContextView>("WorkContextHost")!.FindControl<PullRequestCard>("PullRequestCard")!;
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => source.Lists == 1 && !vm.PullRequests.IsReading, what: "empty PR list applied");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(tab.IsVisible).IsFalse();
+            await Assert.That(card.IsVisible).IsTrue();
+
+            source.Links = [FakePullRequestSource.Link(1)];
+            time.Advance(TimeSpan.FromSeconds(16));
+            await vm.PullRequests.RefreshCommand.Execute();
+            await WaitUntilAsync(() => vm.PullRequests.CanReveal, what: "linked PR loaded");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(tab.IsVisible).IsTrue();
+            await Assert.That(card.IsVisible).IsTrue();
+
+            await vm.ShowPullRequestCommand.Execute();
+            source.Links = [];
+            time.Advance(TimeSpan.FromSeconds(16));
+            await vm.PullRequests.RefreshCommand.Execute();
+            await WaitUntilAsync(() => !vm.PullRequests.HasPullRequest, what: "PR unlinked");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(tab.IsVisible).IsFalse();
+            await Assert.That(card.IsVisible).IsTrue();
+            await Assert.That(vm.IsChatActive).IsTrue();
         } finally { window.Close(); await vm.TeardownAsync(); }
     });
 }

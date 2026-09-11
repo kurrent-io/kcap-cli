@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Config;
+
 namespace Capacitor.Tests.Helpers.Guards;
 
 /// <summary>
@@ -13,15 +15,15 @@ public class ProfileOverridesGlobalSetup {
 
     [BeforeEvery(Assembly)]
     public static void PinProfileOverrides() {
-        _savedKcapUrl     = Environment.GetEnvironmentVariable("KCAP_URL");
-        _savedKcapProfile = Environment.GetEnvironmentVariable("KCAP_PROFILE");
-        Environment.SetEnvironmentVariable("KCAP_URL", null);
-        Environment.SetEnvironmentVariable("KCAP_PROFILE", null);
+        _savedKcapUrl     = Environment.GetEnvironmentVariable(ProfileOverrides.UrlVar);
+        _savedKcapProfile = Environment.GetEnvironmentVariable(ProfileOverrides.ProfileVar);
+        Environment.SetEnvironmentVariable(ProfileOverrides.UrlVar, null);
+        Environment.SetEnvironmentVariable(ProfileOverrides.ProfileVar, null);
     }
 
     [AfterEvery(Assembly)]
     public static void RestoreProfileOverrides() {
-        Environment.SetEnvironmentVariable("KCAP_URL", _savedKcapUrl);
-        Environment.SetEnvironmentVariable("KCAP_PROFILE", _savedKcapProfile);
+        Environment.SetEnvironmentVariable(ProfileOverrides.UrlVar, _savedKcapUrl);
+        Environment.SetEnvironmentVariable(ProfileOverrides.ProfileVar, _savedKcapProfile);
     }
 }

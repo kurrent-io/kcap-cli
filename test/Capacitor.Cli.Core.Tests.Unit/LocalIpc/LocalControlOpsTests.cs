@@ -583,4 +583,73 @@ public class LocalControlOpsTests {
             await Assert.ThrowsAsync<OperationCanceledException>(async () => await task);
         }, configure: ops => ops.StopReplyTimeout = TimeSpan.FromSeconds(30));
     }
+
+    // ---- SendTextAsync ----
+
+    static ConnScript SendTextAckThen(string json, Action<string>? capture = null) => async (_, s, ct) => {
+        var f = await FrameCodec.ReadAsync(s, ct);
+        if (f?.Type == FrameType.SendText) {
+            capture?.Invoke(f.Text);
+            await FrameCodec.WriteAsync(s, LocalFrame.InputJson(FrameType.SendTextAck, json), ct);
+        }
+    };
+
+    [Test]
+    public async Task SendText_passes_all_four_ack_members_through() {
+        if (OperatingSystem.IsWindows()) return;
+        string? sent = null;
+        await WithOpsAsync([SendTextAckThen("""{"ok":true,"reason":null,"error":null,"outcome":"stopped"}""", j => sent = j)], async ops => {
+            var result = await ops.SendTextAsync("a1", "/quit", CancellationToken.None);
+            await Assert.That(result).IsEqualTo(new SendTextResult(true, null, null, "stopped"));
+            await Assert.That(sent).IsEqualTo("""{"agent_id":"a1","text":"/quit"}""");
+        });
+    }
+
+    [Test]
+    public async Task SendText_maps_eof_to_transport() {
+        if (OperatingSystem.IsWindows()) return;
+        await WithOpsAsync([Eof()], async ops => {
+            var result = await ops.SendTextAsync("a1", "hi", CancellationToken.None);
+            await Assert.That(result.Ok).IsFalse();
+            await Assert.That(result.Reason).IsEqualTo(SendTextReasons.Transport);
+            await Assert.That(result.Outcome).IsNull();
+        });
+    }
+
+    [Test]
+    public async Task SendText_waits_past_the_reply_timeout_for_a_late_ack() {
+        if (OperatingSystem.IsWindows()) return;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConnScript late = async (_, s, ct) => {
+            await FrameCodec.ReadAsync(s, ct);
+            await release.Task;
+            await FrameCodec.WriteAsync(s, LocalFrame.InputJson(FrameType.SendTextAck, """{"ok":true,"reason":null,"error":null,"outcome":"delivered"}"""), ct);
+        };
+        await WithOpsAsync([late], async ops => {
+            var pending = ops.SendTextAsync("a1", "hi", CancellationToken.None);
+            await Task.Delay(300);
+            await Assert.That(pending.IsCompleted).IsFalse();
+            release.SetResult();
+            await Assert.That((await pending).Outcome).IsEqualTo("delivered");
+        }, configure: ops => { ops.ReplyTimeout = TimeSpan.FromMilliseconds(50); ops.StopReplyTimeout = TimeSpan.FromMilliseconds(50); });
+    }
+
+    [Test]
+    public async Task SendText_cancellation_closes_the_connection_and_propagates() {
+        if (OperatingSystem.IsWindows()) return;
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConnScript holdUntilEof = async (_, s, ct) => {
+            await FrameCodec.ReadAsync(s, ct);
+            var eof = await FrameCodec.ReadAsync(s, ct); // null once the client closes
+            if (eof is null) closed.SetResult();
+        };
+        using var cts = new CancellationTokenSource();
+        await WithOpsAsync([holdUntilEof], async ops => {
+            var pending = ops.SendTextAsync("a1", "hi", cts.Token);
+            await Task.Delay(100);
+            cts.Cancel();
+            await Assert.That(async () => await pending).Throws<OperationCanceledException>();
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        });
+    }
 }

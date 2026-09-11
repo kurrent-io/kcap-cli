@@ -21,7 +21,7 @@ public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBind
 /// inverse of "does TokenStore already consider this profile authenticated" — so every branch
 /// here mirrors a specific TokenStore rule rather than inventing its own.
 /// </summary>
-public sealed class OnboardingGate(ConfigRoot config, TokenStore tokenStore) {
+public sealed class OnboardingGate(ConfigRoot config, TokenStore tokenStore, ProfileOverrides env) {
     /// <summary>
     /// The ONE shared validator for "is this usable as a server identity" — also used by
     /// <c>App.ValidProfileName</c> so the gate and the lifecycle-controller precondition can
@@ -37,7 +37,7 @@ public sealed class OnboardingGate(ConfigRoot config, TokenStore tokenStore) {
     /// different profiles.
     public async Task<(GateResult Result, ProfileContext Profiles)> EvaluateAsync(CancellationToken ct) {
         // Daemon-style resolution — no repo/git discovery, matching decision 1's "local" scope.
-        var profiles = await AppConfig.ResolveActiveProfile([], config);
+        var profiles = await AppConfig.ResolveActiveProfile([], config, env);
         GateResult result;
         try {
             result = await EvaluateResolvedAsync(profiles.Resolution.ProfileName, profiles.Resolution.Profile, ct);

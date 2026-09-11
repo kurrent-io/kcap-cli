@@ -1,7 +1,9 @@
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Pty;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -87,8 +89,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var mcpConfigPath = launchArgs.McpConfigPath;
 
         var env = new Dictionary<string, string> {
-            ["KCAP_RENDERED_AGENT"] = "1",
-            ["KCAP_AGENT_ID"]       = ctx.AgentId
+            [HostedAgent.RenderedVar] = HostedAgent.Rendered,
+            [HostedAgent.AgentIdVar]  = ctx.AgentId
         };
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
@@ -99,7 +101,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) {
-            env["KCAP_URL"] = ctx.ServerUrl;
+            env[ProfileOverrides.UrlVar] = ctx.ServerUrl;
         }
 
         // Tell the spawned Claude's permission-request hook where to find this daemon's local
@@ -107,7 +109,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         // /hooks/permission-request long-poll. CLI falls back to KCAP_URL if this var is absent
         // (e.g. older CLI builds).
         if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) {
-            env["KCAP_DAEMON_URL"] = ctx.DaemonBridgeUrl;
+            env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
         }
 
         if (ctx.IsReview && ctx.Review is { } reviewEnv) {

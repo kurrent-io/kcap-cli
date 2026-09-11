@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -207,7 +208,10 @@ public class AntigravityActivityClockTests {
         await rt.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
 
         var envelopes = 0;
-        while (rt.Envelopes.TryRead(out _)) envelopes++;
+        while (rt.Envelopes.TryRead(out var env))
+            // The synthesized user_message is daemon-authored (Write(agentActivity: false)), not
+            // agent-forwarded, so it never advances the clock and must not count here.
+            if (env.Kind != AcpEventKind.UserMessage) envelopes++;
 
         await Assert.That(envelopes).IsGreaterThan(0);
 

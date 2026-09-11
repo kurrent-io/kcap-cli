@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,8 +16,10 @@ public static class AppHttpServices {
     /// unregistered name yields a plain pooled client rather than an error — which is what this
     /// process wants, since that lane's handlers need a server it does not have.</para>
     /// </summary>
-    public static IServiceCollection AddAppForeignHttp(this IServiceCollection services, ConfigRoot config) {
+    public static IServiceCollection AddAppForeignHttp(
+            this IServiceCollection services, ConfigRoot config, ProfileOverrides env) {
         services.AddSingleton(config);
+        services.AddSingleton(env);
         services.AddCapacitorForeignClients();
         services.AddSingleton<TokenStore>();
 

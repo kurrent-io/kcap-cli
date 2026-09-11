@@ -935,8 +935,8 @@ public sealed class DaemonCommands(
 /// reject at startup.</summary>
 static class ServiceInstallViability {
     public static async Task<bool> PinnedProfileServerUrlValidAsync(IReadOnlyDictionary<string, string> env, ConfigRoot root) {
-        var envUrl     = env.GetValueOrDefault("KCAP_URL");
-        var envProfile = env.GetValueOrDefault("KCAP_PROFILE");
+        var envUrl     = env.GetValueOrDefault(ProfileOverrides.UrlVar);
+        var envProfile = env.GetValueOrDefault(ProfileOverrides.ProfileVar);
 
         var config   = await AppConfig.LoadProfileConfig(root);
         var resolver = new ProfileResolver(config, cliServerUrl: null, envUrl, envProfile,

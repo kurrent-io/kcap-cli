@@ -63,4 +63,89 @@ public class WorkOSClientTests : IDisposable {
         await Assert.That(result.Problem!).Contains("403");
         await Assert.That(result.Problem!).DoesNotContain("sekrit");
     }
+
+    /// <summary>A refresh that WorkOS honours rotates and carries the parsed tokens back to the caller.</summary>
+    [Test]
+    public async Task A_honoured_refresh_rotates_and_carries_the_response() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"user":{"id":"user_x"},"access_token":"acc","refresh_token":"rt2"}"""));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
+        await Assert.That(result.Response!.AccessToken).IsEqualTo("acc");
+        await Assert.That(result.Response!.RefreshToken).IsEqualTo("rt2");
+    }
+
+    /// <summary>
+    /// A refused refresh reads as Rejected with no response — the token WorkOS declined must not be
+    /// mistaken for a live one — and the refresh is sent once, never retried onto a consumed token.
+    /// </summary>
+    [Test]
+    public async Task A_refused_refresh_is_rejected_and_sent_exactly_once() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400).WithBody(
+                """{"error":"invalid_grant"}"""));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
+        await Assert.That(result.Response).IsNull();
+
+        var posts = _server.FindLogEntries(
+            Request.Create().WithPath("/user_management/authenticate").UsingPost());
+        await Assert.That(posts.Count).IsEqualTo(1);
+    }
+
+    /// <summary>A 5xx is the server faltering, not the token being refused: it must read as a
+    /// transport failure (retry with the same live token), not Rejected (which would strand the
+    /// daemon on the hour-long re-login backoff over a transient blip).</summary>
+    [Test]
+    public async Task A_server_error_is_a_transport_failure_not_a_rejection() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(503));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
+        await Assert.That(result.Response).IsNull();
+    }
+
+    /// <summary>A WorkOS that accepts the connection but stalls must not hold auth — and every peer's
+    /// refresh, since a refresh runs under the cross-process lock — for the client's 100 s default.
+    /// The single attempt has its own short deadline, and a stall reads as a transport failure (the
+    /// token was not spent), never a rejection.</summary>
+    [Test]
+    public async Task A_stalled_refresh_times_out_as_a_transport_failure() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithBody("""{"access_token":"acc","refresh_token":"rt2"}""")
+                .WithDelay(TimeSpan.FromSeconds(3)));
+
+        var client = new WorkOSClient(
+            new PlainHttpClientFactory(new StubHost(_server.Urls[0])), refreshTimeout: TimeSpan.FromMilliseconds(200));
+
+        var result = await client.RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
+    }
+
+    /// <summary>A success status means WorkOS already consumed the old token and rotated; an unreadable
+    /// body loses the new token, so the outcome is Rejected (re-login) — never a retryable failure that
+    /// would re-send the spent token and trip reuse detection.</summary>
+    [Test]
+    public async Task An_unreadable_success_body_is_rejected_not_retried() {
+        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("not-json"));
+
+        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
+        await Assert.That(result.Response).IsNull();
+    }
 }

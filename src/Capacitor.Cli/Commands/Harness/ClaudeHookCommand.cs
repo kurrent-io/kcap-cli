@@ -22,7 +22,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
     readonly WatcherManager _watchers = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -89,7 +89,7 @@ public sealed class ClaudeHookCommand(
         // parent's turn: a background subagent must not clear a wait the parent just began.
         if (agentId is null
          && command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
-            await DaemonInputWaitRelay.NotifyAsync("claude", sessionId, cwd, waiting, budget.Remaining);
+            await DaemonInputWaitRelay.NotifyAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
 
         var clientCap = budget.Remaining;
 
@@ -109,7 +109,7 @@ public sealed class ClaudeHookCommand(
                 // not be recorded, and the audit contract is that every engine decision is.
                 if (await ShouldSuppressCaptureAsync(sessionId, body, command, profiles.Effective, budget)) return 0;
 
-                var rendered = Environment.GetEnvironmentVariable("KCAP_RENDERED_AGENT") is "1";
+                var rendered = hosted.IsRendered;
 
                 return await new Cli.Harness.Claude.ClaudePolicySeam(config)
                     .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out);
@@ -352,7 +352,7 @@ public sealed class ClaudeHookCommand(
 
                 node["home_dir"] = home.Path;
 
-                var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
+                var agentHostId = hosted.AgentId;
 
                 if (agentHostId is not null) {
                     node["agent_host_id"] = agentHostId;
@@ -394,7 +394,7 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
-            return await new PermissionRequestCommand(config, profiles, http)
+            return await new PermissionRequestCommand(config, profiles, hosted, http)
                 .Handle(body, selfHeal, stdout);
         }
 

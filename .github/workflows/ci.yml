@@ -217,8 +217,11 @@ jobs:
           bash scripts/assert-bundle-digest.sh "$APP" publish/daemon.sha256
           "$APP/Contents/MacOS/kcap" --version --no-update-check
           "$APP/Contents/MacOS/kcap-daemon" --version
-          # Pins the manifest field names the alias-promotion script depends on.
-          bash scripts/promote-desktop-aliases.sh releases/releases.osx-arm64.json "${{ steps.version.outputs.VERSION }}" | grep -qx beta
+          # Pins the manifest field names the alias-promotion script depends on. Captured rather
+          # than piped: grep -q closes the pipe at its first match, and a stable candidate prints a
+          # second line after it.
+          aliases="$(bash scripts/promote-desktop-aliases.sh releases/releases.osx-arm64.json "${{ steps.version.outputs.VERSION }}")"
+          grep -qx beta <<<"$aliases"
 
       - name: Upload unsigned bundle
         uses: actions/upload-artifact@v7

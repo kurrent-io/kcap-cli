@@ -21,7 +21,7 @@ static class WireMockLane {
         });
         var provider = new ServiceCollection()
             .AddSingleton(root).AddSingleton(profiles).AddSingleton(new CapacitorServer(server.Url!, root, profiles))
-            .AddCapacitorHttp().BuildValidated();
+            .AddCapacitorHttp(ProfileOverrides.None).BuildValidated();
         return (provider.GetRequiredService<ICapacitorHttpClient>(), profiles, provider);
     }
 }

@@ -94,13 +94,15 @@ if (isHook && args.Contains("--claude")) {
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
-var profiles = await AppConfig.ResolveForRepo(args, config, gitTimeoutMs: isHook ? 1000 : 5000);
+var serverEnv = ProfileOverrides.FromEnvironment();
+
+var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
 
 // Composition root. Every context resolved above is registered once here; the dispatch switch below
 // asks for a command rather than handing each one its arguments.
 var services = new ServiceCollection()
-    .AddCapacitorCli(config, home, daemonPaths, profiles, clock, baseUrl);
+    .AddCapacitorCli(config, home, daemonPaths, profiles, serverEnv, clock, baseUrl);
 
 await using var sp = services.BuildValidated();
 
@@ -194,7 +196,7 @@ string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout",
 var offlineDiscover = command == "import" && args.Contains("--discover");
 
 if (baseUrl is null && !offlineCommands.Contains(command) && !offlineDiscover) {
-    Console.Error.WriteLine("No server configured. Run `kcap setup` or set KCAP_URL.");
+    Console.Error.WriteLine($"No server configured. Run `kcap setup` or set {ProfileOverrides.UrlVar}.");
 
     return 1;
 }

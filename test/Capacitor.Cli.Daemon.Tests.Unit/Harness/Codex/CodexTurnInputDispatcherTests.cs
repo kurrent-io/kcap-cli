@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Capacitor.Cli.Daemon.Harness.Codex;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
@@ -222,6 +223,33 @@ public class CodexTurnInputDispatcherTests {
         d.FaultAll(new ObjectDisposedException("runtime"));
 
         await Assert.That(async () => await ack2.WaitAsync(Guard)).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
+    public async Task Enqueue_after_fault_all_is_refused_never_left_pending() {
+        var sink = new FakeTurnSink();
+        var d = new CodexTurnInputDispatcher(sink.Start, sink.Steer, NullLogger.Instance, CancellationToken.None);
+        d.FaultAll(new ObjectDisposedException("runtime"));
+
+        await Assert.That(() => d.EnqueueAsync("late")).Throws<InputNotAdmittedException>();
+    }
+
+    [Test]
+    public async Task Enqueue_racing_fault_all_is_either_faulted_or_refused() {
+        for (var round = 0; round < 50; round++) {
+            var sink = new FakeTurnSink();
+            var d = new CodexTurnInputDispatcher(sink.Start, sink.Steer, NullLogger.Instance, CancellationToken.None, sealedAtStart: true);
+            var fault = Task.Run(() => d.FaultAll(new ObjectDisposedException("runtime")));
+            Task ack;
+            try { ack = d.EnqueueAsync("racing"); } catch (InputNotAdmittedException) { await fault; continue; }
+            await fault;
+            // Settled, then faulted: awaiting a WaitAsync would accept its own TimeoutException and
+            // pass on exactly the stranded ack this exists to catch.
+            await Task.WhenAny(ack, Task.Delay(TimeSpan.FromSeconds(2)));
+            await Assert.That(ack.IsCompleted).IsTrue();
+            await Assert.That(ack.IsFaulted).IsTrue();
+            _ = ack.Exception; // observed: 50 faulted tasks must not raise UnobservedTaskException on GC
+        }
     }
 
     // ── Deferred-first-turn seal ─────────────────────────────────────────────────────────────────

@@ -26,6 +26,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct) =>
         bind().ResolvePermissionAsync(resolve, ct);
+
+    public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) =>
+        bind().SendTextAsync(agentId, text, ct);
 }
 
 /// <summary>

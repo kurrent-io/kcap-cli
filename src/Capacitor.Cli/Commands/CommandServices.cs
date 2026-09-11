@@ -18,7 +18,7 @@ public static class CommandServices {
     /// </summary>
     public static IServiceCollection AddCapacitorCli(
             this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
-            ProfileContext profiles, HookClock clock, string? baseUrl) {
+            ProfileContext profiles, ProfileOverrides env, HookClock clock, string? baseUrl) {
         services
             .AddCapacitorContext(config, home, daemons, profiles)
             .AddCapacitorCommands();
@@ -29,6 +29,7 @@ public static class CommandServices {
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.
         services.AddSingleton(_ => BinaryProbe.FromEnvironment());
+        services.AddSingleton(_ => HostedAgent.FromEnvironment());
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
@@ -37,7 +38,7 @@ public static class CommandServices {
                 sp.GetRequiredService<HarnessRegistry>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
-        services.AddCapacitorHttp();
+        services.AddCapacitorHttp(env);
 
         return services;
     }

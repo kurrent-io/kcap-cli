@@ -9,33 +9,37 @@
     <UserControl.Styles>
         <Style Selector="Button.tab">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="0" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="FontSize" Value="12.5" />
-            <Setter Property="Padding" Value="12,5" />
+            <Setter Property="Padding" Value="3,9" />
+            <Setter Property="Margin" Value="0,0,16,0" />
         </Style>
         <Style Selector="Button.tab.active">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <!-- Fluent hover paints PART_ContentPresenter; keep tab chrome on our tokens. -->
         <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.tab:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <Style Selector="Button.tab.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.tab.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
     </UserControl.Styles>
 
     <!-- Two columns: the workspace proper, and the work-context pane at its fixed width. The
          terminal keeps its own column, so the size it reports to the PTY is the real center width. -->
-    <Grid ColumnDefinitions="*,400">
+    <Grid ColumnDefinitions="*,320">
     <Grid Grid.Column="0" RowDefinitions="56,42,*">
         <!-- Header: title over checkout · spacer · actions.
              Harness/transport live in the work-context pane; leaving is the rail's job. -->
@@ -56,18 +60,15 @@
                     Foreground="{StaticResource KcapDangerBrush}" Padding="10,5" FontSize="12.5" />
         </Grid>
 
-        <!-- Tab strip: Chat and Terminal when the daemon reports this session has a PTY; the muted
-             family-aware note in their place otherwise (it never names a vendor). -->
+        <!-- Chat for every session; Terminal only when the daemon reports a PTY. -->
         <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,1">
             <Grid Margin="20,0">
                 <StackPanel Orientation="Horizontal" Spacing="6"
                             HorizontalAlignment="Left" VerticalAlignment="Center">
                     <Button x:Name="ChatTabButton" Content="Chat" Classes="tab" Classes.active="{Binding IsChatActive}"
-                            Command="{Binding ShowChatCommand}" IsVisible="{Binding ShowsTerminalTab}" />
+                            Command="{Binding ShowChatCommand}" />
                     <Button x:Name="TerminalTabButton" Content="Terminal" Classes="tab" Classes.active="{Binding IsTerminalActive}"
                             Command="{Binding ShowTerminalCommand}" IsVisible="{Binding ShowsTerminalTab}" />
-                <TextBlock x:Name="NoTerminalNote" Text="{Binding NoTerminalNote}" IsVisible="{Binding !ShowsTerminalTab}"
-                           Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5" VerticalAlignment="Center" />
                     <Button x:Name="PullRequestTabButton" Content="Pull request" Classes="tab" Classes.active="{Binding IsPullRequestActive}"
                             Command="{Binding ShowPullRequestCommand}" IsVisible="{Binding ShowsPullRequestTab}" />
                 </StackPanel>
@@ -93,9 +94,8 @@
                                        CaretBrush="{StaticResource KcapTextBrush}"
                                        Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
 
-            <!-- A session with no tabs at all has no Terminal tab to activate, and these banners
-                 are the only content its cell ever gets — so they stay up whenever the strip is
-                 showing the muted note instead of the tabs. -->
+            <!-- Terminal-tab-only: a session with no PTY reports its own end through the chat
+                 composer's hint instead, so this layer never overlaps the live ChatHost. -->
             <Panel x:Name="TerminalBanners" IsVisible="{Binding ShowsTerminalBanners}">
 
                 <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Connecting}"
@@ -154,9 +154,11 @@
             </Panel>
 
             <!-- The automation peer reports offscreen from the control's OWN IsVisible, so hiding
-                 an ancestor instead would leave the inactive chat announced as onscreen. -->
+                 an ancestor instead would leave the inactive chat announced as onscreen — and the
+                 active-tab flag lives on the workspace VM, which is not this control's
+                 DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
-                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive}" />
+                               IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
         </Grid>
     </Grid>

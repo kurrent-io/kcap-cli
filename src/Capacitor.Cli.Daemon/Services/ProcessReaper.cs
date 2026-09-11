@@ -73,7 +73,7 @@ internal static class ProcessReaper {
         // invariant is unweakened: only a proven exact identity match reaches here (Ambiguous/null still
         // SPARES above); Dead / a conclusive token recycle return confirmed-gone above.
         if (OperatingSystem.IsLinux()) {
-            var envAgentId = ProcessIdentity.ReadAgentEnv(pid, "KCAP_AGENT_ID");
+            var envAgentId = ProcessIdentity.ReadAgentEnv(pid, HostedAgent.AgentIdVar);
             if (envAgentId is null || !string.Equals(envAgentId, record.AgentId, StringComparison.Ordinal)) {
                 logger.LogWarning(
                     "ProcessReaper: env unreadable/mismatched for pid {Pid} (agent {AgentId}) — sparing (ambiguity never kills)",

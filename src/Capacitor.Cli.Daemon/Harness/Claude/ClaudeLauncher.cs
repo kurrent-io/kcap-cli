@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
@@ -209,8 +210,8 @@ internal sealed partial class ClaudeLauncher(
             ["command"] = (JsonNode?)config.CapacitorPath,
             ["args"]    = argsNode,
             ["env"]     = new JsonObject {
-                ["KCAP_URL"]            = (JsonNode?)config.ServerUrl,
-                ["KCAP_FLOW_AGENT_ID"] = (JsonNode?)ctx.AgentId
+                [ProfileOverrides.UrlVar] = (JsonNode?)config.ServerUrl,
+                ["KCAP_FLOW_AGENT_ID"]    = (JsonNode?)ctx.AgentId
             }
         };
 
@@ -238,7 +239,7 @@ internal sealed partial class ClaudeLauncher(
                 ["command"] = (JsonNode?)config.CapacitorPath,
                 ["args"]    = entryArgs,
                 ["env"]     = new JsonObject {
-                    ["KCAP_URL"] = (JsonNode?)config.ServerUrl
+                    [ProfileOverrides.UrlVar] = (JsonNode?)config.ServerUrl
                 }
             };
         }

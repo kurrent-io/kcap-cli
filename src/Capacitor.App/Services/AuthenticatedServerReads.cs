@@ -24,15 +24,18 @@ public sealed class AuthenticatedServerReads<TChannel> : IAsyncDisposable where 
     readonly CancellationTokenSource _dispose = new();
     readonly List<Task> _active = [];
     Lease? _lease;
+    readonly ProfileOverrides _env;
     ServiceProvider? _lane;
     readonly bool _allowAutoRedirect;
     long _generation;
     bool _disposed;
 
-    public AuthenticatedServerReads(ConfigRoot config, ProfileContext? profiles, Func<HttpClient, string, TChannel> channelFactory,
+    public AuthenticatedServerReads(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
+        Func<HttpClient, string, TChannel> channelFactory,
         ClientFactory? factory = null, bool allowAutoRedirect = true) {
         _config = config;
         _profiles = profiles;
+        _env = env;
         _channelFactory = channelFactory;
         _allowAutoRedirect = allowAutoRedirect;
         _factory = factory ?? RegisteredLaneAsync;
@@ -43,7 +46,7 @@ public sealed class AuthenticatedServerReads<TChannel> : IAsyncDisposable where 
             .AddSingleton(config)
             .AddSingleton(profiles)
             .AddSingleton(new CapacitorServer(url, config, profiles))
-            .AddCapacitorHttp()
+            .AddCapacitorHttp(_env)
             .BuildValidated();
         var clients = _lane.GetRequiredService<ICapacitorHttpClient>();
         var attempt = _allowAutoRedirect
