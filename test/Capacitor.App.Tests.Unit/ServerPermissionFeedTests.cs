@@ -184,11 +184,15 @@ public class ServerPermissionFeedTests {
         h.Detail = _ => Task.FromResult(DetailWith("""[{"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}}]"""));
         h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
         h.Lane.SessionAccessChangedSubject.OnNext("s1");
-        await WaitUntilAsync(() => h.Fetches == 1, what: "the grant's fetch");
+        await WaitUntilAsync(() => Current(lease) == SessionAccessState.Established, what: "the grant");
+        await Task.Delay(100); // the grant's own attempt bump lands here, ahead of the release
 
         held.Dispose();
 
-        await Task.Delay(100); // the superseded drop resumes here, behind the grant
+        // The superseded drop resumes here and finds its attempt stale; the grant's reconciliation
+        // follows it through the same gate.
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the grant's fetch");
+        await Task.Delay(100);
         await Assert.That(h.View.Lookup("server:p1").HasValue).IsTrue();
     }
 
@@ -275,6 +279,50 @@ public class ServerPermissionFeedTests {
     [Test]
     public async Task A_fetch_held_at_its_commit_cannot_outlive_the_attempt_that_replaced_it() {
         using var h = new Harness();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Detail = async _ => {
+            await gate.Task;
+            return DetailWith("""
+                [
+                {"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}},
+                {"event_type":"InterruptIssued","event_number":2,"payload":{"request_id":"p2","kind":"permission","tool_name":"Bash"}}
+                ]
+                """);
+        };
+        h.Connect();
+        h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "p1", "Bash", null, null));
+        using var lease = h.Access.Acquire("s1");
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the first fetch");
+
+        // Taken while that fetch is in flight, so what it holds is the fetch's COMMIT, not the
+        // marker capture that preceded it.
+        using var held = await h.Feed.CommitGates.EnterAsync("s1");
+        gate.SetResult();
+        await Task.Delay(100); // the commit, were it not ordered, lands here
+        // p2 is this fetch's alone, so its absence is what says the commit has not run yet.
+        await Assert.That(h.View.Lookup("server:p2").HasValue).IsFalse();
+
+        // The reconnect's own fetch is authoritative that both settled while the hub was down.
+        h.Detail = _ => Task.FromResult(DetailWith("[]"));
+        h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        await WaitUntilAsync(() => Current(lease) == SessionAccessState.Unavailable, what: "the lane drop");
+        h.Connect();
+        await WaitUntilAsync(() => Current(lease) == SessionAccessState.Established, what: "the reconnect's attempt");
+        await Task.Delay(100); // its bump lands here, and its marker capture queues behind the gate
+
+        held.Dispose();
+
+        await WaitUntilAsync(() => !h.View.Lookup("server:p1").HasValue, what: "the reconnect's fetch removed the card");
+        await Assert.That(h.View.Lookup("server:p2").HasValue).IsFalse();
+    }
+
+    /// A denial and a grant are whole units per session, marker capture included. Taken outside the
+    /// gate, the grant's marker names the generation the queued drop is about to move, and its own
+    /// commit — whose attempt is current — is rejected: the authorized session stays Ready with the
+    /// cards its fetch proved pending missing.
+    [Test]
+    public async Task A_grants_marker_waits_for_the_drop_queued_ahead_of_it() {
+        using var h = new Harness();
         h.Detail = _ => Task.FromResult(DetailWith("""
             [
             {"event_type":"InterruptIssued","event_number":1,"payload":{"request_id":"p1","kind":"permission","tool_name":"Bash"}},
@@ -285,22 +333,22 @@ public class ServerPermissionFeedTests {
         h.Lane.PermissionRequestsSubject.OnNext(new ServerPermissionRequest("s1", "p1", "Bash", null, null));
 
         using var held = await h.Feed.CommitGates.EnterAsync("s1");
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
         using var lease = h.Access.Acquire("s1");
-        await WaitUntilAsync(() => h.Fetches == 1, what: "the first fetch");
-        await Task.Delay(100); // the commit, were it not ordered, lands here
-        // p2 is this fetch's alone, so its absence is what says the commit has not run yet.
-        await Assert.That(h.View.Lookup("server:p2").HasValue).IsFalse();
+        await WaitUntilAsync(() => Current(lease) == SessionAccessState.Denied, what: "the denial");
 
-        // The reconnect's own fetch is authoritative that both settled while the hub was down.
-        h.Detail = _ => Task.FromResult(DetailWith("[]"));
-        h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
-        h.Connect();
-        await WaitUntilAsync(() => h.Fetches == 2, what: "the reconnect's fetch");
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        h.Lane.SessionAccessChangedSubject.OnNext("s1");
+        await WaitUntilAsync(() => Current(lease) == SessionAccessState.Established, what: "the grant");
+        await Task.Delay(100); // the marker capture, were it not gated, lands here — ahead of the drop
+
+        await Assert.That(h.Fetches).IsEqualTo(0);
 
         held.Dispose();
 
-        await WaitUntilAsync(() => !h.View.Lookup("server:p1").HasValue, what: "the reconnect's fetch removed the card");
-        await Assert.That(h.View.Lookup("server:p2").HasValue).IsFalse();
+        // p2 is the fetch's alone, so its presence is what says the grant's commit landed.
+        await WaitUntilAsync(() => h.View.Lookup("server:p2").HasValue, what: "the grant's commit");
+        await Assert.That(h.View.Lookup("server:p1").HasValue).IsTrue();
     }
 
     [Test]
