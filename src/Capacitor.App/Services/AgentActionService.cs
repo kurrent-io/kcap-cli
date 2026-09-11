@@ -19,6 +19,7 @@ public sealed class AgentActionService {
     readonly IUrlOpener _opener;
     readonly CancellationToken _shutdownToken;
     readonly Func<string, Task<bool>> _confirmForceStop;
+    readonly IServerLane? _lane;
 
     // ONE lock guards both the in-flight set and the latest server URL — both are cheap,
     // occasional writes, never held across the async stop call itself.
@@ -46,12 +47,14 @@ public sealed class AgentActionService {
     public AgentActionService(
             ILocalControlOps ops, IAppNotifier notifier, IUrlOpener opener,
             IObservable<DaemonStatusDto> snapshots, CancellationToken shutdownToken,
-            Func<string, Task<bool>> confirmForceStop, string? fallbackServerUrl = null) {
+            Func<string, Task<bool>> confirmForceStop, string? fallbackServerUrl = null,
+            IServerLane? lane = null) {
         _ops = ops;
         _notifier = notifier;
         _opener = opener;
         _shutdownToken = shutdownToken;
         _confirmForceStop = confirmForceStop;
+        _lane = lane;
         _stopsInFlight = new BehaviorSubject<IReadOnlySet<string>>(_inFlight);
         _serverUrl = fallbackServerUrl;
         _remoteServerUrl = fallbackServerUrl;
@@ -62,9 +65,13 @@ public sealed class AgentActionService {
         snapshots.Subscribe(s => { lock (_lock) _serverUrl = s.Daemon.ServerUrl; });
     }
 
-    /// Replay-1, starts empty. Consumed by TrayViewModel (and later the main-window grid) to
-    /// disable a Stop control while its op is pending (spec §7).
+    /// Replay-1, starts empty. Consumed by the tray menu and the workspace headers to disable a
+    /// Stop control while its op is pending. Membership is StopKey, never a bare agent id.
     public IObservable<IReadOnlySet<string>> StopsInFlight => _stopsInFlight.AsObservable();
+
+    /// How a stop is named in StopsInFlight. The two lanes allocate agent ids independently, so
+    /// the same id on each is two different agents and neither may gate the other.
+    public static string StopKey(AgentOrigin origin, string agentId) => $"{origin}:{agentId}";
 
     /// A kind other than exactly "agent" is protected (KindText vocabulary: agent|review|
     /// review-flow). Any non-"agent" value — including one this build doesn't recognise — fails
@@ -72,20 +79,46 @@ public sealed class AgentActionService {
     /// CLI's `IsProtectedKind`.
     internal static bool IsProtectedKind(string kind) => kind is not "agent";
 
-    /// Per-id gating: a second Stop for the same id no-ops while one is pending — including while
-    /// a protected kind's confirm-then-force dialog is still open, since the id stays in-flight
-    /// for the whole RunStopAsync call — different ids run concurrently (spec §7, decision 5).
+    /// Per-agent gating: a second Stop for the same agent no-ops while one is pending — including
+    /// while a protected kind's confirm-then-force dialog is still open, since the agent stays
+    /// in-flight for the whole RunStopAsync call — other agents run concurrently.
     /// Never throws — this is a UI command target, not a Task the caller awaits.
-    public void RequestStop(string agentId, string label, string kind) {
+    public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local) {
+        var key = StopKey(origin, agentId);
         lock (_lock) {
-            if (_inFlight.Contains(agentId)) return;
-            _inFlight = _inFlight.Add(agentId);
+            if (_inFlight.Contains(key)) return;
+            _inFlight = _inFlight.Add(key);
             _stopsInFlight.OnNext(_inFlight);
         }
-        _ = Task.Run(() => RunStopAsync(agentId, label, kind));
+        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label, key) : RunStopAsync(agentId, label, kind, key));
     }
 
-    async Task RunStopAsync(string agentId, string label, string kind) {
+    /// A remote row's stop never reaches ILocalControlOps — it goes to the server hub, which
+    /// forwards it to the owning daemon. Ok is silent: the row's disappearance comes from the
+    /// next registry update, same as a local stop's confirmation-by-absence.
+    async Task RunRemoteStopAsync(string agentId, string label, string key) {
+        try {
+            if (_lane is null) { _notifier.Notify("Not signed in to a server"); return; }
+            var outcome = await _lane.RequestStopAgentAsync(agentId, _shutdownToken).ConfigureAwait(false);
+            switch (outcome.Result) {
+                case HubCallResult.Ok: break;
+                case HubCallResult.NotConnected: _notifier.Notify("Not connected to the server"); break;
+                case HubCallResult.Denied: _notifier.Notify($"The server declined to stop {label}"); break;
+                default: _notifier.Notify($"Couldn't stop {label}: {outcome.Reason}"); break;
+            }
+        } catch (OperationCanceledException) {
+            // Deliberate shutdown: absorbed quietly, no toast, no log.
+        } catch (Exception ex) {
+            _notifier.Notify($"Couldn't stop {label}: {ex.Message}");
+        } finally {
+            lock (_lock) {
+                _inFlight = _inFlight.Remove(key);
+                _stopsInFlight.OnNext(_inFlight);
+            }
+        }
+    }
+
+    async Task RunStopAsync(string agentId, string label, string kind, string key) {
         try {
             var force = false;
             if (IsProtectedKind(kind)) {
@@ -123,7 +156,7 @@ public sealed class AgentActionService {
             // A completion into an already-vanished row/entry is naturally a no-op — the set
             // just loses a member nothing is rendering against anymore.
             lock (_lock) {
-                _inFlight = _inFlight.Remove(agentId);
+                _inFlight = _inFlight.Remove(key);
                 _stopsInFlight.OnNext(_inFlight);
             }
         }

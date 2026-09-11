@@ -64,4 +64,15 @@ public static class SpecialKeys {
 public static class WireTokens {
     /// LaunchFailed reason prefix for a consent-gate denial on the target machine.
     public const string LaunchDeniedByOwnerPrefix = "launch_denied_by_owner";
+    /// HubException message fragment for a session the caller may not see.
+    public const string SessionNotVisible = "Session not visible to caller";
+    /// HubException message for a transient post-admit re-check fault; retryable, never a denial.
+    public const string SessionAccessRecheckFailed = "Session access recheck failed; retry";
+}
+
+/// Behaviors the permission-response route accepts.
+public static class PermissionBehaviors {
+    public const string Allow = "allow";
+    public const string Deny = "deny";
+    public const string Answered = "answered";
 }

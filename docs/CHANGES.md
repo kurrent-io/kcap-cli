@@ -226,6 +226,36 @@ from the picker's own filtered list: `ReactiveCommand.Execute()` does not gate i
 `CanExecute`, so a selection whose daemon was reassigned to another owner between selection and
 launch is refused inside `StartAsync` itself, not left to the affordance alone.
 
+## Desktop shell: remote control — stop, permission and question cards
+
+A remote session's prompts are answerable in the app, a remote agent can be stopped, and a local
+ACP-hosted agent's questions (which never reach the local socket) render for the first time. Three
+invariants hold it together.
+
+**A pending request is answered only on the lane that delivered it.** A local-socket item carries
+the daemon's request id and settles over the socket; a server-lane item carries the server's id and
+settles over the permission-response route. The two ids are allocated independently and each
+transport rejects the other's, so `PermissionService` never cross-submits, whatever the agent row's
+origin says — an ACP question on a local agent is a server-lane item and goes over HTTP.
+
+**Dedup is by proven correlation, and it fails open.** The daemon publishes its local↔server mapping
+as `server_request_id` on the local permission wire, re-broadcasting the pending item when the
+server leg learns the id. A server-lane copy is shadowed only by a live local item claiming that
+exact id; no claim — an older daemon, a lost local subscription, the daemon's server-only path —
+leaves the server copy standing. The correlation update mutates the local item in place and
+refreshes it, so the card, its draft and an in-flight submit survive. A local settlement retires the
+claimed twin: the daemon has answered the hook, so the server copy is moot even when the relay
+fails.
+
+**Attention is a per-session set of request ids, never a boolean.** The org-wide pending ping names
+no request, so it marks the session dirty and a headless reconciliation of the session's stream
+fills the set; the dirty mark outlives disconnects and fetch failures until a reconciliation
+completes. A response removes one id, a response naming an id the set never held re-reconciles, and
+every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a prompt raised before
+the lane connected in a session never opened still need the server's pending-interrupts seed; until
+it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
+session discovers.
+
 ## A vendor update under a running daemon is re-advertised
 
 The vendor CLI version a daemon advertises was a startup probe cached for the process lifetime, and

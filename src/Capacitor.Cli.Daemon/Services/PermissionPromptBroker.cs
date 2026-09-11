@@ -58,6 +58,18 @@ internal sealed class PermissionPromptBroker {
         lock (_gate) return _subscribers.IsEmpty && SettleLocked(requestId, decision, outcome, source);
     }
 
+    /// Records the server's id for a still-pending request and re-broadcasts its Pending so a
+    /// subscriber can pair the two lanes. False once settled: a settled request never re-appears.
+    public bool TryCorrelate(string requestId, string serverRequestId) {
+        lock (_gate) {
+            if (!_pending.TryGetValue(requestId, out var entry)) return false;
+            var updated = entry with { Dto = entry.Dto with { ServerRequestId = serverRequestId } };
+            _pending[requestId] = updated;
+            Broadcast(new PermissionStreamItem.Pending(updated.Dto));
+            return true;
+        }
+    }
+
     public (Guid id, ChannelReader<PermissionStreamItem> reader) Subscribe() {
         var id = Guid.NewGuid();
         var ch = Channel.CreateUnbounded<PermissionStreamItem>(new UnboundedChannelOptions { SingleReader = true });

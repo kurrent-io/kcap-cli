@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -107,7 +106,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(QueueSummary));
     }
 
-    public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards { get; }
+    public PendingCardsViewModel Cards { get; }
+    public ReadOnlyObservableCollection<PendingCardViewModel> PendingCards => Cards.PendingCards;
     public IObservable<string?> Root => _rootSubject;
 
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
@@ -235,7 +235,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
     public ChatTabViewModel(
             string agentId, IDaemonClientService daemon, ChatInput input,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
-            string? unavailableNote = null) {
+            string? unavailableNote = null, IObservable<string?>? sessionId = null,
+            IObservable<bool>? localDaemonOnAppServer = null) {
         _agentId = agentId;
         _input = input;
         _disposables.Add(input);
@@ -247,43 +248,18 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _lifetimeToken = _lifetime.Token;
         _phase = projection is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
-        // ObserveOn BEFORE the binding operator: the cache is mutated on the service's
-        // background continuations (IPermissionService.Pending's own doc comment).
-        var cards = permissions.Pending
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Filter(p => p.AgentId == agentId)
-            .Transform(p => p.Questions is null
-                ? (PendingCardViewModel)new PermissionCardViewModel(p, permissions, _rootSubject)
-                : new QuestionCardViewModel(p, permissions))
-            .DisposeMany()
-            .SortAndBind(out var pendingCards, Comparer<PendingCardViewModel>.Create((a, b) => {
-                var byTime = a.RequestedAt.CompareTo(b.RequestedAt);
-                return byTime != 0 ? byTime : string.CompareOrdinal(a.RequestId, b.RequestId);
-            }));
-        PendingCards = pendingCards;
-
-        // Hooked before the pipeline subscribes: on the UI thread the scheduler delivers an
-        // already-populated cache inline, so a hook installed afterwards would miss the first fill.
-        // The delegate-based overload, not the reflection one: ReadOnlyObservableCollection's
-        // CollectionChanged is only reachable through this interface, and the reflection overload
-        // (Observable.FromEventPattern(target, eventName)) looks up public events only.
-        var notifications = (INotifyCollectionChanged)pendingCards;
-        _hasPendingCards = Observable
-            .FromEventPattern<NotifyCollectionChangedEventHandler, NotifyCollectionChangedEventArgs>(
-                h => notifications.CollectionChanged += h, h => notifications.CollectionChanged -= h)
-            .Select(_ => pendingCards.Count > 0)
-            .ToProperty(this, x => x.HasPendingCards, initialValue: pendingCards.Count > 0)
+        Cards = new PendingCardsViewModel(
+            agentId, AgentOrigin.Local, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
+            localDaemonOnAppServer);
+        _hasPendingCards = Cards.WhenAnyValue(c => c.HasPendingCards)
+            .ToProperty(this, x => x.HasPendingCards, initialValue: Cards.HasPendingCards)
             .DisposeWith(_disposables);
 
         this.WhenAnyValue(x => x.HasPendingCards)
             .Subscribe(_ => RefreshActivityNote())
             .DisposeWith(_disposables);
 
-        cards.Subscribe().DisposeWith(_disposables);
-
-        permissions.Pending
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Filter(p => p.AgentId == agentId)
+        Cards.Requests
             .Subscribe(changes => {
                 foreach (var change in changes) {
                     switch (change.Reason) {
@@ -604,13 +580,13 @@ public sealed class ChatTabViewModel : ReactiveObject {
     void WithdrawSettled() {
         if (_lifetimeToken.IsCancellationRequested) return;
         foreach (var request in _requests.Values) {
-            if (request.ToolUseId is not { } id || !_settledTools.Contains(id) || !_withdrawing.Add(request.RequestId)) continue;
+            if (request.ToolUseId is not { } id || !_settledTools.Contains(id) || !_withdrawing.Add(request.Key)) continue;
             _ = WithdrawAsync(request);
         }
     }
 
     async Task WithdrawAsync(PendingPermissionRequest request) {
-        var id = request.RequestId;
+        var id = request.Key;
         try {
             var outcome = await _permissions.WithdrawAsync(request, _lifetimeToken);
             if (outcome.Kind != PermissionResolveKind.TransportFailure) { _withdrawFailures.Remove(id); return; }
@@ -645,6 +621,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         // the cancellation before the channel it is sending through goes away.
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
+        Cards.Dispose();
         _rootSubject.Dispose();
         _lifetime.Dispose();
         return Task.CompletedTask;

@@ -112,6 +112,8 @@ public class LocalPermissionBridgeInteractiveTests {
         var response = h.PostAsync();
         var pending = await h.WaitPendingAsync();
         _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token); // Pending
+        var correlated = ((PermissionStreamItem.Pending)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
+        await Assert.That(correlated.ServerRequestId).IsEqualTo("srv-1");
 
         serverDecision.SetResult(Deny);
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("deny");
@@ -229,6 +231,26 @@ public class LocalPermissionBridgeInteractiveTests {
         await Assert.That(pending.ToolInput).IsNull();
         await Assert.That(pending.ToolInputOmitted).IsTrue();
         h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
+    public async Task The_server_leg_publishes_the_server_request_id_to_local_subscribers_before_the_decision() {
+        await using var h = new Harness();
+        h.Server.BeginScript = (_, _) => Task.FromResult("srv-42");
+        var decided = new TaskCompletionSource<PermissionDecision>();
+        h.Server.AwaitScript = (_, ct) => decided.Task.WaitAsync(ct);
+        await h.StartAsync();
+        var (_, reader) = h.Broker.Subscribe();
+
+        var response = h.PostAsync();
+        var first = ((PermissionStreamItem.Pending)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
+        await Assert.That(first.ServerRequestId).IsNull();
+        var correlated = ((PermissionStreamItem.Pending)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
+        await Assert.That(correlated.RequestId).IsEqualTo(first.RequestId);
+        await Assert.That(correlated.ServerRequestId).IsEqualTo("srv-42");
+
+        decided.SetResult(Allow);
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
     }
 

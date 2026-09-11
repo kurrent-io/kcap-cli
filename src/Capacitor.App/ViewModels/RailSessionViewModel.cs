@@ -32,6 +32,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _needsYou;
     public bool NeedsYou => _needsYou.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _isStale;
+    /// A remote row greys out while the lane is stale; a local row is never stale.
+    public bool IsStale => _isStale.Value;
+
     readonly ObservableAsPropertyHelper<string> _statusBadge;
     public string StatusBadge => _statusBadge.Value;
 
@@ -39,8 +43,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
 
     public RailSessionViewModel(
             AgentRow row, IObservable<string?> selectedAgentId,
-            IObservable<IReadOnlySet<string>> agentsWithPending,
-            Action<string> openLocal, Action<string> openRemoteInWeb) {
+            IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
+            Action<string> openLocal, Action<string> openRemote) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
         var kindLine = row.Kind == "agent" ? row.Vendor : $"{row.Vendor} · {row.Kind}";
@@ -70,8 +74,11 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.StatusBadge, initialValue: SessionStatusDots.WaitsOnUser(row) ? "zzz" : "")
             .DisposeWith(_disposables);
 
-        // Remote rows are read-only in-app; opening deep-links to the web.
-        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemoteInWeb : openLocal)(row.Id));
+        _isStale = (IsRemote ? remoteStale : Observable.Return(false))
+            .ToProperty(this, x => x.IsStale, initialValue: false)
+            .DisposeWith(_disposables);
+
+        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));
         _disposables.Add(OpenCommand);
     }
 

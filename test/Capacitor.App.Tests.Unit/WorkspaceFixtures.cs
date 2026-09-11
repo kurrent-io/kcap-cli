@@ -38,4 +38,12 @@ static class WorkspaceFixtures {
             await Task.Delay(10);
         }
     }
+
+    public static async Task WaitUntilAsync(Func<Task<bool>> condition, string what = "condition", TimeSpan? timeout = null) {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        while (!await condition()) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for: {what}");
+            await Task.Delay(10);
+        }
+    }
 }

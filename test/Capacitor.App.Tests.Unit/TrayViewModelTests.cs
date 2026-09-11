@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
@@ -38,6 +39,23 @@ public class TrayViewModelTests {
     // construct it for real against a scripted ILocalControlOps.
     static AgentActionService NewActions(FakeDaemonClientService service, ScriptedLocalControlOps? ops = null) =>
         new(ops ?? new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
+
+    /// A ready-to-assert TrayViewModel over fresh fakes: status defaults to Connected and snap to
+    /// an idle connected snapshot, so callers exercising the pendingAttention/remote gating land
+    /// on an Idle/Running baseState without repeating that setup at every call site.
+    static TrayViewModel NewTray(
+            AttachStatus? status = null, DaemonStatusDto? snap = null,
+            IObservable<PendingSummary>? permissionsSummary = null,
+            IObservable<RemoteTraySummary>? remote = null) {
+        var service = new FakeDaemonClientService();
+        var actions = NewActions(service);
+        IPermissionService? permissions = permissionsSummary is null ? null : new FakePermissionService(permissionsSummary);
+        var vm = new TrayViewModel(service, new FakePauseController(), actions, new FakeConsentService(),
+            permissions: permissions, remote: remote);
+        service.StatusSubject.OnNext(status ?? new AttachStatus(AttachState.Connected, null, []));
+        service.SnapshotsSubject.OnNext(snap ?? Snap());
+        return vm;
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -289,6 +307,41 @@ public class TrayViewModelTests {
                 Vendor = "claude", RepoOwner = "o", RepoName = "r",
             });
             await Assert.That(seen!.Value.RemoteLiveAgents).IsEqualTo(1); // Completed doesn't count
+        });
+    }
+
+    [Test]
+    public async Task Idle_upgrades_to_running_only_while_the_lane_is_connected() {
+        var idle = new AttachStatus(AttachState.Connected, null, ["consent/1"]);
+        var snap = Snap("connected", 0);
+        await Assert.That(TrayViewModel.ProjectAggregate(idle, snap, new RemoteTraySummary(2, LaneConnected: true)).State).IsEqualTo(TrayState.Running);
+        await Assert.That(TrayViewModel.ProjectAggregate(idle, snap, new RemoteTraySummary(2, LaneConnected: false)).State).IsEqualTo(TrayState.Idle);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_prompt_asserts_attention_with_the_local_daemon_stopped_and_lists_the_session() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = NewTray(status: new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null),
+                remote: Observable.Return(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+                    AttentionEntries: [new TrayAgentEntry("r1", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)])));
+
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Attention);
+            await Assert.That(vm.MenuModel.Header).Contains("1 remote session waiting");
+            await Assert.That(vm.MenuModel.Agents.Single().Origin).IsEqualTo(AgentOrigin.Remote);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_server_lane_card_asserts_attention_only_while_the_lane_is_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var summary = new PendingSummary(1, 0, LocalCount: 0, ServerCount: 1);
+            var down = NewTray(permissionsSummary: Observable.Return(summary), remote: Observable.Return(new RemoteTraySummary(0, false)));
+            await Assert.That(down.MenuModel.State).IsNotEqualTo(TrayState.Attention);
+
+            var up = NewTray(permissionsSummary: Observable.Return(summary), remote: Observable.Return(new RemoteTraySummary(0, true)));
+            await Assert.That(up.MenuModel.State).IsEqualTo(TrayState.Attention);
         });
     }
 
@@ -858,7 +911,7 @@ public class TrayViewModelTests {
             service.SnapshotsSubject.OnNext(Snap("connected", 1, agents));
 
             ops.QueueStop(new StopAgentResult(false, "failed", null));
-            await vm.StopAgentCommand.Execute("a").ToTask();
+            await vm.StopAgentCommand.Execute("Local:a").ToTask();
 
             await WaitUntilAsync(() => notifier.Notified.Count >= 1, what: "stop banner");
             await Assert.That(notifier.Notified).IsEquivalentTo(["Couldn't stop agent · claude · kcap-cli"], CollectionOrdering.Matching);
@@ -889,7 +942,7 @@ public class TrayViewModelTests {
 
             confirmer.Queue(true);
             ops.QueueStop(new StopAgentResult(true, "stopped", null));
-            await vm.StopAgentCommand.Execute("a").ToTask();
+            await vm.StopAgentCommand.Execute("Local:a").ToTask();
 
             await WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued after confirm");
             await Assert.That(confirmer.Prompted).IsEquivalentTo(["review-flow · codex · kcap-cli"], CollectionOrdering.Matching);
@@ -911,9 +964,80 @@ public class TrayViewModelTests {
 
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://x.kcap.ai"));
 
-            await vm.OpenInWebCommand.Execute("agent-1").ToTask();
+            await vm.OpenInWebCommand.Execute("Local:agent-1").ToTask();
 
             await Assert.That(opener.Opened).IsEquivalentTo(["https://x.kcap.ai/agents/agent-1"], CollectionOrdering.Matching);
+        });
+    }
+
+    // Two lanes, one agent id, two different agents: the entry's key is what says which of them a
+    // menu item names, and the remote one's Stop must reach the hub rather than the local socket.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task StopAgentCommand_stops_the_entry_the_key_names_when_two_lanes_share_an_id() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var ops = new ScriptedLocalControlOps();
+            var lane = new FakeServerLane();
+            var actions = new AgentActionService(ops, new RecordingNotifier(), new RecordingOpener(), service.SnapshotsSubject,
+                CancellationToken.None, NeverConfirm.Confirm, lane: lane);
+            var consent = new FakeConsentService();
+            using var remote = new BehaviorSubject<RemoteTraySummary>(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+                AttentionEntries: [new TrayAgentEntry("a", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)]));
+            using var vm = new TrayViewModel(service, pause, actions, consent, remote: remote);
+            var states = new StopStateRecorder();
+            using var sub = actions.StopsInFlight.Subscribe(states.Add);
+
+            var agents = new List<AgentStatusDto> {
+                new("a", "agent", "claude", "/repos/kcap-cli", "Running", null, null, null, DateTime.UtcNow, null, null),
+            };
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(Snap("connected", 1, agents));
+            await Assert.That(vm.MenuModel.Agents.Select(e => e.Key)).IsEquivalentTo(["Local:a", "Remote:a"], CollectionOrdering.Matching);
+
+            await vm.StopAgentCommand.Execute("Remote:a").ToTask();
+
+            await WaitUntilAsync(() => lane.Stops.Contains("a"), what: "the hub stop");
+            await Assert.That(ops.StopCalls).IsEqualTo(0);
+            await WaitUntilAsync(() => states[^1].Count == 0, what: "the first stop to settle");
+
+            // The entry can leave the model between the rebuild that rendered it and the click; the
+            // key is still the only thing that says which agent was named.
+            remote.OnNext(new RemoteTraySummary(0, true));
+            await Assert.That(vm.MenuModel.Agents.Select(e => e.Key)).IsEquivalentTo(["Local:a"], CollectionOrdering.Matching);
+
+            await vm.StopAgentCommand.Execute("Remote:a").ToTask();
+
+            await WaitUntilAsync(() => lane.Stops.Count == 2, what: "the hub stop for the entry that left the model");
+            await Assert.That(ops.StopCalls).IsEqualTo(0);
+        });
+    }
+
+    // A remote entry's URL is the app profile's own server, never the local daemon's snapshot —
+    // the two can point at different servers entirely.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task OpenInWebCommand_for_a_remote_entry_opens_the_app_profiles_server_not_the_local_snapshot() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var pause = new FakePauseController();
+            var ops = new ScriptedLocalControlOps();
+            var opener = new RecordingOpener();
+            var actions = new AgentActionService(ops, new RecordingNotifier(), opener, service.SnapshotsSubject,
+                CancellationToken.None, NeverConfirm.Confirm, fallbackServerUrl: "https://app.kcap.ai");
+            var consent = new FakeConsentService();
+            var remote = Observable.Return(new RemoteTraySummary(1, true, SessionsNeedingAttention: 1,
+                AttentionEntries: [new TrayAgentEntry("r1", "fix tests · on work-mac", "agent", true, AgentOrigin.Remote)]));
+            using var vm = new TrayViewModel(service, pause, actions, consent, remote: remote);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://local-daemon.kcap.ai"));
+            await Assert.That(vm.MenuModel.Agents.Single().Origin).IsEqualTo(AgentOrigin.Remote);
+
+            await vm.OpenInWebCommand.Execute("Remote:r1").ToTask();
+
+            await Assert.That(opener.Opened).IsEquivalentTo(["https://app.kcap.ai/agents/r1"], CollectionOrdering.Matching);
         });
     }
 

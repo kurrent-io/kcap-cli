@@ -38,13 +38,13 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     // not track in-flight state.
     public ReactiveCommand<bool, Unit> TogglePauseCommand { get; }
 
-    // The parameter is an agent id; RequestStop's label/kind come from the CURRENT MenuModel
-    // (the TrayAgentEntry for this id, consistent with spec §7's one code path for both the tray
-    // menu item and the main-window row button), not a captured value, so they reflect whatever
-    // is rendered at click time. A missing entry (defensive only — cannot happen from a live
-    // menu) falls back to a kind that IsProtectedKind treats as protected, fail-safe rather than
-    // silently allowing an unforced stop. Fire-and-forget: AgentActionService never throws and
-    // tracks its own in-flight state (StopsInFlight below).
+    // The parameter is a TrayAgentEntry.Key, not a bare agent id — a local and a remote entry can
+    // share one id, and the key is what says which was clicked. RequestStop's label/kind come from
+    // the entry under that key in the CURRENT MenuModel, not a captured value, so they reflect
+    // whatever is rendered at click time. A missing entry (defensive only — cannot happen from a
+    // live menu) falls back to a kind that IsProtectedKind treats as protected, fail-safe rather
+    // than silently allowing an unforced stop. Fire-and-forget: AgentActionService never throws
+    // and tracks its own in-flight state (StopsInFlight below).
     public ReactiveCommand<string, Unit> StopAgentCommand { get; }
     public ReactiveCommand<string, Unit> OpenInWebCommand  { get; }
 
@@ -97,11 +97,18 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         _pause = pause;
 
         TogglePauseCommand = ReactiveCommand.Create<bool>(pause.RequestToggle);
-        StopAgentCommand = ReactiveCommand.Create<string>(id => {
-            var entry = MenuModel.Agents.FirstOrDefault(a => a.Id == id);
-            actions.RequestStop(id, entry?.Label ?? id, entry?.Kind ?? "");
+        StopAgentCommand = ReactiveCommand.Create<string>(key => {
+            if (ParseKey(key) is not { } clicked) return;
+            var entry = EntryFor(key);
+            actions.RequestStop(clicked.Id, entry?.Label ?? clicked.Id, entry?.Kind ?? "", clicked.Origin);
         });
-        OpenInWebCommand = ReactiveCommand.Create<string>(actions.OpenInWeb);
+        // Same origin dispatch as StopAgentCommand above: a remote entry's URL is the app's own
+        // server, never the local daemon's snapshot — see AgentActionService.OpenInWebRemote.
+        OpenInWebCommand = ReactiveCommand.Create<string>(key => {
+            if (ParseKey(key) is not { } clicked) return;
+            if (clicked.Origin == AgentOrigin.Remote) actions.OpenInWebRemote(clicked.Id);
+            else actions.OpenInWeb(clicked.Id);
+        });
         OpenMainWindowCommand = ReactiveCommand.Create(openMainWindow ?? (() => { }));
         OpenSettingsCommand = ReactiveCommand.Create(openSettings ?? (() => { }), Observable.Return(openSettings is not null))
             .DisposeWith(_disposables);
@@ -182,6 +189,23 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             .DisposeWith(_disposables);
     }
 
+    TrayAgentEntry? EntryFor(string key) => MenuModel.Agents.FirstOrDefault(a => a.Key == key);
+
+    /// The lane and agent a TrayAgentEntry.Key names. The entry can leave the model between the
+    /// rebuild that rendered it and the click, so the lane is read from the key rather than from
+    /// the entry: defaulting it would send a remote row's stop to the local socket, which on a
+    /// same-id pair is a different agent. Null for anything that is not a key, which acts on nothing.
+    static (AgentOrigin Origin, string Id)? ParseKey(string key) {
+        var split = key.IndexOf(':');
+        if (split <= 0 || split == key.Length - 1) return null;
+        AgentOrigin? origin = key[..split] switch {
+            nameof(AgentOrigin.Local) => AgentOrigin.Local,
+            nameof(AgentOrigin.Remote) => AgentOrigin.Remote,
+            _ => null,
+        };
+        return origin is { } lane ? (lane, key[(split + 1)..]) : null;
+    }
+
     /// IPauseController owns the drop-while-busy rule.
     public void RequestPauseRefresh() => _pause.RequestRefresh();
 
@@ -194,13 +218,15 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         var (state, count) = ProjectAggregate(status, snap, remote);
         var baseState = state; // the connection/agent-count verdict, before either upgrade below
 
-        // Pending consent, a pending permission request, or a pending question asserts Attention
-        // only while Connected — the owner has something waiting. Judged against baseState (not
-        // state) so a later independent upgrade can never make this fire retroactively;
-        // connection-trouble rows above already left baseState non-Idle/Running and keep
-        // precedence for free, and the running-count badge (count) keeps the agent count
-        // regardless.
-        var pendingAttention = status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.Total > 0)
+        // Pending consent, a pending local permission/question, a pending server-lane
+        // permission/question, or a remote session needing attention asserts Attention only
+        // while its own lane is up (local: Connected; server: LaneConnected) — the owner has
+        // something waiting. Judged against baseState (not state) so a later independent upgrade
+        // can never make this fire retroactively; connection-trouble rows above already left
+        // baseState non-Idle/Running and keep precedence for free, and the running-count badge
+        // (count) keeps the agent count regardless.
+        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0))
+            || (remote.LaneConnected && (pendingSummary.ServerCount > 0 || remote.SessionsNeedingAttention > 0)))
             && baseState is TrayState.Idle or TrayState.Running;
         if (pendingAttention) state = TrayState.Attention;
 
@@ -218,8 +244,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return new TrayMenuModel(
             state, count,
             HeaderText(daemonName, status, snap, state, count, pendingAttention, pendingConsent,
-                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary),
-            BuildEntries(status, snap, stopsInFlight), BuildPause(status, pauseState), pendingConsent);
+                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention),
+            BuildEntries(status, snap, stopsInFlight, remote), BuildPause(status, pauseState), pendingConsent);
     }
 
     /// Pure ten-row mapping (spec §4), precedence top-down.
@@ -253,38 +279,47 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
 
     /// Layers the server lane's live count onto Project's local verdict: a local Stopped or Idle
     /// row is only the whole story when the remote lane has nothing running, so either upgrades
-    /// to Running with the combined count once it does. Never touches a local Attention or
-    /// Connecting verdict — a remote-only problem is not surfaced as Attention here.
+    /// to Running with the combined count once the lane is actually connected and has something
+    /// running — a stale lane's last-known count is not evidence anything is running now. Never
+    /// touches a local Attention or Connecting verdict — a remote-only problem is not surfaced as
+    /// Attention here.
     internal static (TrayState State, int Count) ProjectAggregate(
             AttachStatus status, DaemonStatusDto? snap, RemoteTraySummary remote) {
         var (state, count) = Project(status, snap);
         var total = count + remote.RemoteLiveAgents;
-
-        if (state == TrayState.Stopped && remote.LaneConnected && remote.RemoteLiveAgents > 0)
+        if (state is TrayState.Stopped or TrayState.Idle && remote.LaneConnected && remote.RemoteLiveAgents > 0)
             return (TrayState.Running, total);
-        if (state is TrayState.Idle && remote.RemoteLiveAgents > 0)
-            return (TrayState.Running, total);
-        if (state is TrayState.Running)
-            return (TrayState.Running, total);
+        if (state is TrayState.Running) return (TrayState.Running, total);
         return (state, count);
     }
 
     /// RemoteStale wraps a replay-1 lane status, so it alone would emit synchronously — but
     /// Rows.Connect() emits nothing on subscribe while the cache is still empty (no edit has ever
     /// run to replay), so an all-local-agents startup would leave this combined stream silent.
-    /// StartWith(0) supplies the missing seed, matching the ctor's synchronous-seed requirement.
-    internal static IObservable<RemoteTraySummary> SummaryFrom(IAgentDirectory directory) {
-        var remoteLiveCount = directory.Rows.Connect()
+    /// StartWith supplies the missing seed, matching the ctor's synchronous-seed requirement.
+    /// sessionsWithAttention names the remote SESSION ids (not agent ids) the owner has been
+    /// asked to attend to — null (a caller with no such feed) means no remote row ever carries
+    /// attention.
+    internal static IObservable<RemoteTraySummary> SummaryFrom(
+            IAgentDirectory directory, IObservable<IReadOnlySet<string>>? sessionsWithAttention = null) {
+        var attention = sessionsWithAttention ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>());
+        var remoteRows = directory.Rows.Connect()
             .Filter(r => r.Origin == AgentOrigin.Remote && r.Status is "Starting" or "Running")
-            .QueryWhenChanged(q => q.Count)
-            .StartWith(0);
+            .QueryWhenChanged(q => (IReadOnlyList<AgentRow>)q.Items.ToList())
+            .StartWith((IReadOnlyList<AgentRow>)[]);
         var laneConnected = directory.RemoteStale.Select(stale => !stale);
-        return remoteLiveCount.CombineLatest(laneConnected, (count, connected) => new RemoteTraySummary(count, connected));
+        return remoteRows.CombineLatest(laneConnected, attention, (rows, connected, sessions) => {
+            var entries = rows.Where(r => r.SessionId is { } sid && sessions.Contains(sid))
+                .Select(r => new TrayAgentEntry(r.Id, $"{r.Title ?? r.Vendor} · on {r.MachineBadge}", r.Kind, StopEnabled: true, AgentOrigin.Remote))
+                .ToList();
+            return new RemoteTraySummary(rows.Count, connected, entries.Count, entries);
+        });
     }
 
     static string HeaderText(
             string daemonName, AttachStatus status, DaemonStatusDto? snap, TrayState state, int count,
-            bool pendingAttention, int pendingConsent, string? lifecycleAttentionText, PendingSummary pendingSummary) {
+            bool pendingAttention, int pendingConsent, string? lifecycleAttentionText, PendingSummary pendingSummary,
+            int remoteSessionsNeedingAttention) {
         if (state == TrayState.Attention && status.State == AttachState.Unreachable && status.Reason == IncompatibleReason)
             return SkewMessage; // no daemon-name prefix
 
@@ -295,7 +330,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         // lane) — "not running" stays true of THIS machine, so the header says so instead of
         // claiming a local connection that isn't there.
         var body = pendingAttention
-            ? PendingBody(pendingSummary, pendingConsent)
+            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention)
             : state switch {
                 TrayState.Stopped    => "not running",
                 TrayState.Connecting => "connecting…",
@@ -309,11 +344,13 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return $"{daemonName}: {body}";
     }
 
-    static string PendingBody(PendingSummary summary, int consent) {
-        var parts = new List<string>(3);
+    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention) {
+        var parts = new List<string>(4);
         if (summary.Questions > 0) parts.Add($"{summary.Questions} question{(summary.Questions == 1 ? "" : "s")} waiting");
         if (summary.Permissions > 0) parts.Add($"{summary.Permissions} permission request{(summary.Permissions == 1 ? "" : "s")} waiting");
         if (consent > 0) parts.Add($"{consent} launch{(consent == 1 ? "" : "es")} awaiting approval");
+        if (remoteSessionsNeedingAttention > 0)
+            parts.Add($"{remoteSessionsNeedingAttention} remote session{(remoteSessionsNeedingAttention == 1 ? "" : "s")} waiting");
         return string.Join(", ", parts);
     }
 
@@ -331,17 +368,28 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return "needs attention";
     }
 
-    // Only while Connected (spec §5) — the daemon's own upstream link status (rows 5–6, 9) does
-    // not hide the entries, since the snapshot Agents array is still the app's local truth.
-    static IReadOnlyList<TrayAgentEntry> BuildEntries(AttachStatus status, DaemonStatusDto? snap, IReadOnlySet<string> stopsInFlight) {
-        if (status.State != AttachState.Connected || snap is null) return [];
+    // Local entries need a Connected local socket AND a snapshot — the daemon's own upstream link
+    // status does not hide them once both hold, since the snapshot's Agents array is still the
+    // app's local truth regardless of that link's state. Remote entries are appended regardless
+    // of the LOCAL daemon's own status — a remote prompt still needs the owner's attention with
+    // the local daemon stopped — and carry the same in-flight gate as a local entry, recomputed
+    // here since SummaryFrom has no StopsInFlight.
+    static IReadOnlyList<TrayAgentEntry> BuildEntries(
+            AttachStatus status, DaemonStatusDto? snap, IReadOnlySet<string> stopsInFlight, RemoteTraySummary remote) {
+        IEnumerable<TrayAgentEntry> local = status.State != AttachState.Connected || snap is null
+            ? []
+            : snap.Agents
+                .Where(a => a.Status is "Starting" or "Running")
+                .OrderBy(a => a.CreatedAt)
+                .ThenBy(a => a.Id, StringComparer.Ordinal)
+                .Select(a => new TrayAgentEntry(
+                    a.Id, Label(a), a.Kind,
+                    StopEnabled: !stopsInFlight.Contains(AgentActionService.StopKey(AgentOrigin.Local, a.Id))));
 
-        return snap.Agents
-            .Where(a => a.Status is "Starting" or "Running")
-            .OrderBy(a => a.CreatedAt)
-            .ThenBy(a => a.Id, StringComparer.Ordinal)
-            .Select(a => new TrayAgentEntry(a.Id, Label(a), a.Kind, StopEnabled: !stopsInFlight.Contains(a.Id)))
-            .ToList();
+        var remoteEntries = (remote.AttentionEntries ?? [])
+            .Select(e => e with { StopEnabled = !stopsInFlight.Contains(e.Key) });
+
+        return [.. local, .. remoteEntries];
     }
 
     static string Label(AgentStatusDto agent) {

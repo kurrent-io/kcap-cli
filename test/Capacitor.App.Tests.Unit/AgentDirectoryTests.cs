@@ -8,8 +8,13 @@ namespace Capacitor.App.Tests.Unit;
 public class AgentDirectoryTests {
     const string Server = "http://localhost:9999"; // FakeDaemonClientService.Snap's default ServerUrl
 
-    static AgentInstanceDto Remote(string id, string daemon = "work-mac", string owner = "u1", string status = "Running") =>
-        new() { AgentId = id, Status = status, DaemonName = daemon, OwnerUserId = owner, Vendor = "claude", RepoOwner = "o", RepoName = "r" };
+    static AgentInstanceDto Remote(
+            string id, string daemon = "work-mac", string owner = "u1", string status = "Running",
+            string? sessionId = null) =>
+        new() {
+            AgentId = id, Status = status, DaemonName = daemon, OwnerUserId = owner, Vendor = "claude",
+            RepoOwner = "o", RepoName = "r", SessionId = sessionId,
+        };
 
     static (FakeDaemonClientService Local, FakeRemoteAgents Remote, FakeServerLane Lane, AgentDirectory Dir) Build(
             string? machineId = "m1") {
@@ -22,10 +27,10 @@ public class AgentDirectoryTests {
         return (local, remote, lane, dir);
     }
 
-    static AgentStatusDto LocalAgent(string id) => new(
-        Id: id, Kind: "agent", Vendor: "claude", RepoPath: "/r", Status: "Running",
+    static AgentStatusDto LocalAgent(string id, string? sessionId = null, string vendor = "claude", string status = "Running") => new(
+        Id: id, Kind: "agent", Vendor: vendor, RepoPath: "/r", Status: status,
         FlowRunId: null, FlowRole: null, Requester: null, CreatedAt: DateTime.UtcNow, Model: null,
-        RequesterDisplay: null);
+        RequesterDisplay: null, SessionId: sessionId);
 
     [Test]
     public async Task LocalAndRemoteRowsMerge() {
@@ -199,5 +204,73 @@ public class AgentDirectoryTests {
         await Assert.That(stale).IsTrue();
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
         await Assert.That(stale).IsFalse();
+    }
+
+    /// The twin row (id "z9", same session) is unproven — no matching DaemonInfo/local-connected
+    /// state — so both rows stand; SessionAgents must still resolve the tie to the LOCAL row's id.
+    [Test]
+    public async Task Session_agents_maps_every_row_with_a_session_and_prefers_the_local_row_on_a_tie() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap()); // the daemon is on the app's server
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "s1"));
+        remote.Cache.AddOrUpdate(Remote("z9", daemon: "elsewhere", owner: "u2", sessionId: "s1"));
+        remote.Cache.AddOrUpdate(Remote("r2", daemon: "elsewhere", owner: "u2", sessionId: "s2"));
+
+        IReadOnlyDictionary<string, string>? map = null;
+        using var sub = dir.SessionAgents.Subscribe(m => map = m);
+
+        await Assert.That(map!["s1"]).IsEqualTo("a1");
+        await Assert.That(map["s2"]).IsEqualTo("r2");
+        await Assert.That(dir.VendorOfSession("s2")).IsNotNull();
+    }
+
+    /// A session id is unique only within one server. While the local daemon reports another one,
+    /// its rows carry that server's ids, so a server-lane session sharing an id is the remote row's
+    /// — resolving it to the local agent stamps that session's cards and its rail pip onto an
+    /// unrelated process.
+    [Test]
+    public async Task Server_session_lookups_skip_local_rows_while_the_daemon_is_on_another_server() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "http://elsewhere:8080"));
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "s1", vendor: "codex"));
+        remote.Cache.AddOrUpdate(Remote("r1", daemon: "elsewhere", owner: "u2", sessionId: "s1"));
+
+        IReadOnlyDictionary<string, string>? map = null;
+        using var sub = dir.SessionAgents.Subscribe(m => map = m);
+
+        await Assert.That(map!["s1"]).IsEqualTo("r1");
+        await Assert.That(dir.VendorOfSession("s1")).IsEqualTo("claude");
+
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+
+        await Assert.That(map["s1"]).IsEqualTo("a1");
+        await Assert.That(dir.VendorOfSession("s1")).IsEqualTo("codex");
+    }
+
+    /// Twin proof is a takeover verdict, so the pairing alone is not enough: with the local socket
+    /// down, a remote row retiring is the server's own verdict on the agent and the local row that
+    /// stands is history. A local row that has itself finished says the same.
+    [Test]
+    public async Task Twin_proof_needs_the_local_lane_connected_and_the_agent_live_on_it() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/1"]));
+        local.Agents.AddOrUpdate(LocalAgent("a1"));
+        remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "daemon-a", MachineId = "m1", OwnerUserId = "u1", Connected = true }]);
+        remote.Cache.AddOrUpdate(Remote("a1", daemon: "daemon-a"));
+
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsTrue();
+
+        local.StatusSubject.OnNext(new(AttachState.Unreachable, "daemon_unreachable", null));
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsFalse();
+
+        local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/2"]));
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsTrue();
+
+        local.Agents.AddOrUpdate(LocalAgent("a1", status: "Completed"));
+        await Assert.That(dir.IsProvenLocalTwin("a1")).IsFalse();
     }
 }

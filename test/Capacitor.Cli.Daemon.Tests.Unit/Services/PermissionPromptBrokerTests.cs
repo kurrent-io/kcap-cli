@@ -132,4 +132,35 @@ public class PermissionPromptBrokerTests {
         await reader.Completion.WaitAsync(Bounded);
         await Assert.That(broker.HasSubscriber).IsFalse();
     }
+
+    [Test]
+    public async Task Correlate_rebroadcasts_the_pending_with_the_server_id_and_replays_it_to_late_subscribers() {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        _ = broker.Register(Dto());
+        _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token); // the first Pending
+
+        await Assert.That(broker.TryCorrelate("r1", "srv-1")).IsTrue();
+        var update = ((PermissionStreamItem.Pending)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
+        await Assert.That(update.RequestId).IsEqualTo("r1");
+        await Assert.That(update.ServerRequestId).IsEqualTo("srv-1");
+
+        var (_, late) = broker.Subscribe();
+        var replayed = ((PermissionStreamItem.Pending)await late.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
+        await Assert.That(replayed.ServerRequestId).IsEqualTo("srv-1");
+        await Assert.That(broker.PendingSnapshot().Single().ServerRequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
+    public async Task Correlate_after_settlement_is_a_no_op_and_broadcasts_nothing() {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        _ = broker.Register(Dto());
+        _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token);
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+        _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token); // the Resolved
+
+        await Assert.That(broker.TryCorrelate("r1", "srv-1")).IsFalse();
+        await Assert.That(reader.TryRead(out _)).IsFalse();
+    }
 }

@@ -12,6 +12,7 @@ namespace Capacitor.App.Tests.Unit;
 /// AvaloniaSession.WithImmediateRxScheduler and carries [NotInParallel("AvaloniaSession")].
 public class RailSessionViewModelTests {
     static readonly IObservable<IReadOnlySet<string>> NoPending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
+    static readonly IObservable<bool> NotStale = new BehaviorSubject<bool>(false);
     static readonly RepoIdentity Repo = new("path:/repo", "repo");
 
     static AgentRow Row(
@@ -22,11 +23,18 @@ public class RailSessionViewModelTests {
                 Title: title, AwaitingInput: awaitingInput),
             Repo);
 
+    static AgentRow LocalRow(string id) => Row(id: id);
+
+    static AgentRow RemoteRow(string id) => AgentRow.FromRemote(new AgentInstanceDto {
+        AgentId = id, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+        Vendor = "claude", RepoOwner = "o", RepoName = "r",
+    });
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Title_is_primary_with_vendor_model_age_sub() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var row = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
             await Assert.That(row.Sub).StartsWith("claude · Opus 5 · ");
         });
@@ -36,7 +44,7 @@ public class RailSessionViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Null_title_promotes_vendor_and_drops_it_from_sub() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var row = new RailSessionViewModel(Row(title: null), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(title: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.Primary).IsEqualTo("claude");
             await Assert.That(row.Sub).StartsWith("Opus 5 · ");
         });
@@ -46,7 +54,7 @@ public class RailSessionViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Review_kind_is_appended_to_the_vendor() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var row = new RailSessionViewModel(Row(kind: "review", title: null), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(kind: "review", title: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.Primary).IsEqualTo("claude · review");
         });
     }
@@ -58,7 +66,7 @@ public class RailSessionViewModelTests {
             var dto = new AgentStatusDto("a1", "review-flow", "codex", "/repo", "Running", null, null, null, DateTime.UtcNow, "Opus 5", null, Title: "Fix the flaky test") with {
                 WorktreePath = "/repo/.capacitor/worktrees/agent-1", WorkLocation = "borrowed",
                 BorrowedFrom = "/repo/.capacitor/worktrees/agent-1" };
-            using var row = new RailSessionViewModel(AgentRow.FromLocal(dto, Repo), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(AgentRow.FromLocal(dto, Repo), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.Sub).StartsWith("codex · review-flow · borrowed · Opus 5 · ");
             await Assert.That(row.Tooltip).Contains("/repo/.capacitor/worktrees/agent-1");
         });
@@ -68,7 +76,7 @@ public class RailSessionViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Null_model_is_omitted_from_sub() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var row = new RailSessionViewModel(Row(model: null), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(model: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.Sub).DoesNotContain("· ·");
             await Assert.That(row.Sub).DoesNotStartWith("·");
         });
@@ -78,8 +86,8 @@ public class RailSessionViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Failed_status_sets_the_pip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var ok = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
-            using var bad = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var ok = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
+            using var bad = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(ok.NeedsYou).IsFalse();
             await Assert.That(bad.NeedsYou).IsTrue();
         });
@@ -91,9 +99,9 @@ public class RailSessionViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Awaiting_input_sets_the_pip_and_names_it_in_the_tooltip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var waiting = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
-            using var working = new RailSessionViewModel(Row(awaitingInput: false), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
-            using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var waiting = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
+            using var working = new RailSessionViewModel(Row(awaitingInput: false), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
+            using var older   = new RailSessionViewModel(Row(awaitingInput: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(waiting.NeedsYou).IsTrue();
             await Assert.That(waiting.StatusBadge).IsEqualTo("zzz");
             await Assert.That(waiting.Tooltip).Contains("waiting for input");
@@ -110,7 +118,7 @@ public class RailSessionViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Awaiting_input_on_a_flow_participant_does_not_set_the_pip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var row = new RailSessionViewModel(Row(kind: "review-flow", awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(kind: "review-flow", awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.NeedsYou).IsFalse();
             await Assert.That(row.Tooltip).DoesNotContain("waiting for input");
         });
@@ -121,7 +129,7 @@ public class RailSessionViewModelTests {
     public async Task IsSelected_tracks_the_selection_observable() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var selected = new BehaviorSubject<string?>(null);
-            using var row = new RailSessionViewModel(Row(id: "a1"), selected, NoPending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(id: "a1"), selected, NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.IsSelected).IsFalse();
             selected.OnNext("a1");
             await Assert.That(row.IsSelected).IsTrue();
@@ -135,7 +143,7 @@ public class RailSessionViewModelTests {
     public async Task OpenCommand_invokes_the_local_callback_with_the_id() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             string? opened = null;
-            using var row = new RailSessionViewModel(Row(id: "a9"), new BehaviorSubject<string?>(null), NoPending, id => opened = id, _ => { });
+            using var row = new RailSessionViewModel(Row(id: "a9"), new BehaviorSubject<string?>(null), NoPending, NotStale, id => opened = id, _ => { });
             row.OpenCommand.Execute().Subscribe();
             await Assert.That(opened).IsEqualTo("a9");
         });
@@ -143,19 +151,21 @@ public class RailSessionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Remote_row_is_read_only_and_carries_its_machine_badge() {
+    public async Task OpenCommand_invokes_the_remote_callback_and_the_row_carries_its_machine_badge() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var dto = new AgentInstanceDto {
                 AgentId = "b1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
                 Vendor = "claude", RepoOwner = "o", RepoName = "r",
             };
             string? openedRemote = null;
+            string? openedLocal = null;
             using var row = new RailSessionViewModel(
-                AgentRow.FromRemote(dto), new BehaviorSubject<string?>(null), NoPending, _ => { }, id => openedRemote = id);
+                AgentRow.FromRemote(dto), new BehaviorSubject<string?>(null), NoPending, NotStale, id => openedLocal = id, id => openedRemote = id);
             await Assert.That(row.IsRemote).IsTrue();
             await Assert.That(row.MachineBadge).IsEqualTo("work-mac");
             row.OpenCommand.Execute().Subscribe();
             await Assert.That(openedRemote).IsEqualTo("b1");
+            await Assert.That(openedLocal).IsNull();
         });
     }
 
@@ -164,23 +174,38 @@ public class RailSessionViewModelTests {
     public async Task Needs_you_follows_the_pending_set_and_the_status() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var pending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
-            using var row = new RailSessionViewModel(Row(status: "Running"), new BehaviorSubject<string?>(null), pending, _ => { }, _ => { });
+            using var row = new RailSessionViewModel(Row(status: "Running"), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { });
             await Assert.That(row.NeedsYou).IsFalse();
             pending.OnNext(new HashSet<string> { "a1" });
             await Assert.That(row.NeedsYou).IsTrue();
             pending.OnNext(new HashSet<string>());
             await Assert.That(row.NeedsYou).IsFalse();
 
-            using var failed = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), pending, _ => { }, _ => { });
+            using var failed = new RailSessionViewModel(Row(status: "Failed"), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { });
             await Assert.That(failed.NeedsYou).IsTrue();
             await Assert.That(failed.StatusBadge).IsEqualTo("!");
 
-            using var idle = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), pending, _ => { }, _ => { });
+            using var idle = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), pending, NotStale, _ => { }, _ => { });
             await Assert.That(idle.StatusBadge).IsEqualTo("zzz");
             pending.OnNext(new HashSet<string> { "a1" });
             await Assert.That(idle.StatusBadge).IsEqualTo("!");
             pending.OnNext(new HashSet<string>());
             await Assert.That(idle.StatusBadge).IsEqualTo("zzz");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_row_greys_out_while_the_lane_is_stale_and_a_local_row_never_does() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var stale = new BehaviorSubject<bool>(true);
+            using var remote = new RailSessionViewModel(RemoteRow("r1"), new BehaviorSubject<string?>(null), NoPending, stale, _ => { }, _ => { });
+            using var local = new RailSessionViewModel(LocalRow("a1"), new BehaviorSubject<string?>(null), NoPending, stale, _ => { }, _ => { });
+            await Assert.That(remote.IsStale).IsTrue();
+            await Assert.That(local.IsStale).IsFalse();
+
+            stale.OnNext(false);
+            await Assert.That(remote.IsStale).IsFalse();
         });
     }
 }

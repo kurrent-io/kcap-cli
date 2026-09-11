@@ -216,11 +216,11 @@ public class TrayAdapterTests {
             await Assert.That(result.Item1).IsEqualTo("agent · claude · repo-one");
             await Assert.That(result.Item2).IsEqualTo("review-flow · codex · —");
             await Assert.That(result.Item3).IsEqualTo("Stop");
-            await Assert.That(result.Item4).IsEqualTo("a1");
+            await Assert.That(result.Item4).IsEqualTo("Local:a1");
             await Assert.That(result.Item5).IsTrue();
             await Assert.That(result.Item6).IsTrue();
             await Assert.That(result.Item7).IsEqualTo("Open in web");
-            await Assert.That(result.Item8).IsEqualTo("a1");
+            await Assert.That(result.Item8).IsEqualTo("Local:a1");
             await Assert.That(result.Item9).IsTrue();
             await Assert.That(result.Item10).IsFalse(); // stop2.IsEnabled — StopEnabled: false
             await Assert.That(result.Item11).IsEqualTo(10);
