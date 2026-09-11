@@ -1209,7 +1209,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 return written.Task;
             }
 
-            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text));
+            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text), advanceActivity: false);
 
             if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
                 // The channel was completed (the runtime went terminal) — the only way a not-full
@@ -1828,7 +1828,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// relying on <c>TryWrite</c>'s return value, which is <see langword="true"/> for BOTH a normal
     /// write and a drop-and-evict write under this FullMode — it cannot distinguish the two.
     /// </summary>
-    void EmitEnvelope(AcpEventEnvelope envelope) {
+    void EmitEnvelope(AcpEventEnvelope envelope, bool advanceActivity = true) {
         // Liveness-supervision spec §1: advance BEFORE the channel write below, never after — a
         // reader blocked on Envelopes.ReadAsync can wake and run the instant TryWrite makes the item
         // visible, on another thread, with no ordering relationship to whatever this thread does
@@ -1841,8 +1841,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // admitted — session_info_update/usage_update reach here with no turn in flight at all (see
         // AggregateUpdate's standalone-emit case). Advance even on the dropped-because-completed path
         // below: the content was genuinely produced, and by the time the channel is completed nothing
-        // downstream is reading idle state for this agent anyway.
-        ActivityClock?.Advance();
+        // downstream is reading idle state for this agent anyway. The one exception is the accept-time
+        // user row (advanceActivity: false): a prompt queued behind an in-flight turn is the person's
+        // input, not that turn's progress, so advancing here would reset a stalled turn's idle timer
+        // every time the user queues another prompt and let a wedged reviewer dodge the turn-wedge reap.
+        if (advanceActivity) ActivityClock?.Advance();
 
         // Named positively, so a metadata kind added later cannot count as the agent speaking by
         // accident: usage and session-info envelopes reach here with no turn in flight at all, and a
