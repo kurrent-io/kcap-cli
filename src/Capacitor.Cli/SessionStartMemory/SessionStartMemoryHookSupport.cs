@@ -29,8 +29,9 @@ internal static class SessionStartMemoryHookSupport {
     public static ISessionStartContextProvider CompositeProvider(
             ConfigRoot config,
             Func<CancellationToken, Task<HttpClient>> client,
+            TimeProvider time,
             ISessionStartMemoryScopeResolver? scopeResolver = null) {
-        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(config);
+        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(config, time);
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client);
         var guidelines = new SessionStartGuidelinesLane(client);

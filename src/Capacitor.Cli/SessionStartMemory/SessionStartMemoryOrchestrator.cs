@@ -3,6 +3,7 @@ namespace Capacitor.Cli.SessionStartMemory;
 internal sealed class SessionStartMemoryOrchestrator(
     SessionStartMemoryLeaseStore store,
     ISessionStartContextProvider provider,
+    TimeProvider time,
     Action<string>? diagnostic = null) {
 
     /// <param name="commitGate">
@@ -27,9 +28,9 @@ internal sealed class SessionStartMemoryOrchestrator(
         // here — the composite provider runs the enabled lane and contributes its content.
         if (request.Disabled && request.GuidelinesDisabled) return null;
 
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var started = time.GetTimestamp();
         TimeSpan Remaining() {
-            var value = request.Budget - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            var value = request.Budget - time.GetElapsedTime(started);
             return value > TimeSpan.Zero ? value : TimeSpan.Zero;
         }
 

@@ -2,11 +2,11 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.SessionStartMemory;
 
-internal sealed class SessionStartMemoryScopeResolver(ConfigRoot config) : ISessionStartMemoryScopeResolver {
+internal sealed class SessionStartMemoryScopeResolver(ConfigRoot config, TimeProvider time) : ISessionStartMemoryScopeResolver {
     public async Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct) {
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var started = time.GetTimestamp();
         TimeSpan Remaining() {
-            var value = budget - System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            var value = budget - time.GetElapsedTime(started);
             return value > TimeSpan.Zero ? value : TimeSpan.Zero;
         }
 

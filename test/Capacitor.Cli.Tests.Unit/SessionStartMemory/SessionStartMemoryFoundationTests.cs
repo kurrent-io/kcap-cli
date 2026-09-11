@@ -2,12 +2,25 @@ using System.Net;
 using System.Text;
 using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 
 public class SessionStartMemoryFoundationTests {
     /// The lanes resolve their client inside the fetch, so a test hands them one already built.
     static Func<CancellationToken, Task<HttpClient>> Lazy(HttpClient client) => _ => Task.FromResult(client);
+
+    /// <summary>
+    /// A store and orchestrator sharing one stopped clock, so lease expiry and the fetch budget are
+    /// measured against the same instant and neither can run out while a loaded runner is slow.
+    /// A test that needs time to pass advances the returned clock.
+    /// </summary>
+    static (SessionStartMemoryOrchestrator Orchestrator, FakeTimeProvider Time) Frozen(
+            TempDir root, ISessionStartContextProvider provider) {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero));
+        return (new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, time), provider, time),
+                time);
+    }
 
     [Test]
     public async Task Canonical_key_distinguishes_absent_token_from_literal_text() {
@@ -154,7 +167,7 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Lease_store_has_one_winner_and_fences_stale_owner() {
         using var root = new TempDir();
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
         var store = new SessionStartMemoryLeaseStore(root.Path, time);
         var first = await store.TryBeginAsync(new string('a', 64), TimeSpan.FromSeconds(1));
         var blocked = await store.TryBeginAsync(new string('a', 64), TimeSpan.FromSeconds(1));
@@ -183,7 +196,7 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Completion_guarantee_expires_at_thirty_day_sweep_boundary() {
         using var root = new TempDir();
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
         var store = new SessionStartMemoryLeaseStore(root.Path, time);
         var key = new string('e', 64);
         var lease = await store.TryBeginAsync(key, TimeSpan.FromSeconds(1));
@@ -199,7 +212,7 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Sweep_advances_past_poison_record() {
         using var root = new TempDir();
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
         var store = new SessionStartMemoryLeaseStore(root.Path, time);
         foreach (var key in new[] { new string('a', 64), new string('c', 64) }) {
             var lease = await store.TryBeginAsync(key, TimeSpan.FromSeconds(1));
@@ -219,7 +232,7 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Retry_pending_obeys_cooldown_and_then_heals() {
         using var root = new TempDir();
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 7, 23, 0, 0, 0, TimeSpan.Zero));
         var store = new SessionStartMemoryLeaseStore(root.Path, time);
         var key = new string('b', 64);
         var lease = await store.TryBeginAsync(key, TimeSpan.FromSeconds(1));
@@ -343,7 +356,7 @@ public class SessionStartMemoryFoundationTests {
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
             Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK,
                 "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Claude, "session", null,
             true, true, SessionLifecycleReason.New, true);
         var request = new SessionStartMemoryContextRequest(
@@ -367,12 +380,10 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task A_refused_commit_gate_releases_the_lease_so_a_later_start_still_injects() {
         using var root = new TempDir();
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero));
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
             Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK,
                 "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
-        var orchestrator = new SessionStartMemoryOrchestrator(
-            new SessionStartMemoryLeaseStore(root.Path, time), provider);
+        var (orchestrator, time) = Frozen(root, provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Copilot, "3f2504e0-4f89-41d3-9a0c-0305e82c3301", null,
             true, true, SessionLifecycleReason.New, true);
         var request = new SessionStartMemoryContextRequest(
@@ -396,7 +407,7 @@ public class SessionStartMemoryFoundationTests {
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
             Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK,
                 "[{\"memory_id\":\"1\",\"slug\":\"s\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"feedback\"}]"))));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Copilot, "3f2504e0-4f89-41d3-9a0c-0305e82c3301", null,
             true, true, SessionLifecycleReason.New, true);
         var request = new SessionStartMemoryContextRequest(
@@ -419,9 +430,7 @@ public class SessionStartMemoryFoundationTests {
             IsTopLevel: true, ClassificationAuthoritative: true,
             SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
 
-    // The budget is wall-clock and none of these tests assert on exhausting it, so it only has
-    // to outlast a loaded runner; the callers that do care pass their own.
-    static SessionStartMemoryContextRequest KiroRequest(double seconds = 20) =>
+    static SessionStartMemoryContextRequest KiroRequest(double seconds = 1) =>
         new("https://example.test", null, false, TimeSpan.FromSeconds(seconds), CancellationToken.None);
 
     // THE Kiro acceptance criterion. Kiro has no once-per-session hook: agentSpawn fires on every
@@ -433,7 +442,7 @@ public class SessionStartMemoryFoundationTests {
         using var handler = new CountingHandler(HttpStatusCode.OK, OneMemoryJson);
         var provider = new SessionStartMemoryContextProvider(
             new FixedScopeResolver(null, null), Lazy(new HttpClient(handler)));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
 
         var first  = await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
         var second = await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
@@ -461,8 +470,7 @@ public class SessionStartMemoryFoundationTests {
         var provider = new SessionStartMemoryContextProvider(
             new FixedScopeResolver(null, null),
             _ => { asked++; return Task.FromResult(client); });
-        var orchestrator = new SessionStartMemoryOrchestrator(
-            new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
 
         await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
         await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
@@ -478,7 +486,7 @@ public class SessionStartMemoryFoundationTests {
         using var root = new TempDir();
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
             Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson))));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
 
         var a = await orchestrator.GetFragmentAsync(KiroLifecycle("session-a"), KiroRequest());
         var b = await orchestrator.GetFragmentAsync(KiroLifecycle("session-b"), KiroRequest());
@@ -493,12 +501,10 @@ public class SessionStartMemoryFoundationTests {
     [Test]
     public async Task Kiro_retryable_failure_lets_a_later_prompt_still_inject() {
         using var root = new TempDir();
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 29, 0, 0, 0, TimeSpan.Zero));
         using var handler = new FailsOnceHandler(OneMemoryJson);
         var provider = new SessionStartMemoryContextProvider(
             new FixedScopeResolver(null, null), Lazy(new HttpClient(handler)));
-        var orchestrator = new SessionStartMemoryOrchestrator(
-            new SessionStartMemoryLeaseStore(root.Path, time), provider);
+        var (orchestrator, time) = Frozen(root, provider);
 
         var failed = await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
 
@@ -518,7 +524,7 @@ public class SessionStartMemoryFoundationTests {
         using var handler = new CountingHandler(HttpStatusCode.NoContent, "");
         var provider = new SessionStartMemoryContextProvider(
             new FixedScopeResolver(null, null), Lazy(new HttpClient(handler)));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
 
         await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
         var second = await orchestrator.GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest());
@@ -536,6 +542,9 @@ public class SessionStartMemoryFoundationTests {
     // So: start the winner, wait until its provider signals from INSIDE the fetch (at which point the
     // lease is provably held), run the losers to completion against that held lease, and only then
     // release the winner. No timeout participates in the passing path.
+    //
+    // The process clock, not a stopped one: the losers contend for the store's file lock, and its
+    // retry loop waits on the same clock it measures, so a clock nothing advances never leaves it.
     [Test]
     public async Task Kiro_agent_spawns_arriving_while_the_lease_is_held_are_fenced_out() {
         using var root = new TempDir();
@@ -547,14 +556,14 @@ public class SessionStartMemoryFoundationTests {
             new FixedScopeResolver(null, null), Lazy(new HttpClient(handler)));
         var store = new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System);
 
-        var winner = Task.Run(() => new SessionStartMemoryOrchestrator(store, provider)
+        var winner = Task.Run(() => new SessionStartMemoryOrchestrator(store, provider, TimeProvider.System)
             .GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest(20)));
 
         // The winner is now inside its fetch, holding the lease.
         await winnerHolding.Task;
 
         var losers = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ =>
-            new SessionStartMemoryOrchestrator(store, provider)
+            new SessionStartMemoryOrchestrator(store, provider, TimeProvider.System)
                 .GetFragmentAsync(KiroLifecycle("kiro-session"), KiroRequest(20))));
 
         // The winner is provably STILL inside its fetch, so the lease was genuinely held for the
@@ -571,6 +580,27 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(handler.Sends).IsEqualTo(1);
     }
 
+    // Every deadline the orchestrator enforces must be measured on the clock it was handed, or a
+    // caller cannot bound it at all and a test can only ever wait out the real one. Proved through
+    // behaviour the budget alone decides: a fetch that returns AFTER the budget is gone leaves
+    // nothing to commit the lease with, so its fragment is dropped rather than injected late.
+    [Test]
+    public async Task A_fetch_that_outlives_its_budget_is_dropped_rather_than_injected() {
+        using var root = new TempDir();
+        FakeTimeProvider? clock = null;
+        var provider = new DelegatingProvider(() => {
+            clock!.Advance(TimeSpan.FromSeconds(30));
+            return new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, "- s: d");
+        });
+        var (orchestrator, time) = Frozen(root, provider);
+        clock = time;
+
+        var fragment = await orchestrator.GetFragmentAsync(
+            KiroLifecycle("kiro-session"), KiroRequest(seconds: 5));
+
+        await Assert.That(fragment).IsNull();
+    }
+
     // Exactly what AntigravityHookCommand.LifecycleFor builds: PreInvocation fires once per
     // INVOCATION within a conversation, so the callback repeats like Kiro's agentSpawn and the
     // lease is the only thing preventing re-injection every turn.
@@ -579,9 +609,7 @@ public class SessionStartMemoryFoundationTests {
             IsTopLevel: true, ClassificationAuthoritative: true,
             SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
 
-    // The budget is wall-clock and none of these tests assert on exhausting it, so it only has
-    // to outlast a loaded runner; the callers that do care pass their own.
-    static SessionStartMemoryContextRequest AntigravityRequest(double seconds = 20) =>
+    static SessionStartMemoryContextRequest AntigravityRequest(double seconds = 1) =>
         new("https://example.test", null, false, TimeSpan.FromSeconds(seconds), CancellationToken.None);
 
     // THE Antigravity acceptance criterion, mirroring Kiro's: without the lease the index would be
@@ -592,7 +620,7 @@ public class SessionStartMemoryFoundationTests {
         using var handler = new CountingHandler(HttpStatusCode.OK, OneMemoryJson);
         var provider = new SessionStartMemoryContextProvider(
             new FixedScopeResolver(null, null), Lazy(new HttpClient(handler)));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
 
         // A real GUID — Antigravity is on the fail-closed identity arm, which normalizes any
         // non-GUID id to null and would short-circuit before the lease is ever consulted,
@@ -613,7 +641,7 @@ public class SessionStartMemoryFoundationTests {
         using var root = new TempDir();
         var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver(null, null),
             Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK, OneMemoryJson))));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
 
         var a = await orchestrator.GetFragmentAsync(
             AntigravityLifecycle("e80c33bfc10f4d2fb626b0043f488fc0"), AntigravityRequest());
@@ -642,7 +670,7 @@ public class SessionStartMemoryFoundationTests {
         using var handler = new CountingHandler(HttpStatusCode.NoContent, "");
         var provider = new SessionStartMemoryContextProvider(
             new FixedScopeResolver(null, null), Lazy(new HttpClient(handler)));
-        var orchestrator = new SessionStartMemoryOrchestrator(new SessionStartMemoryLeaseStore(root.Path, TimeProvider.System), provider);
+        var (orchestrator, _) = Frozen(root, provider);
         var lifecycle = new SessionMemoryLifecycle(HarnessId.Claude, "session", null,
             true, true, SessionLifecycleReason.New, false);
 
@@ -655,10 +683,9 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(Directory.EnumerateFiles(root.Path)).IsEmpty();
     }
 
-    sealed class ManualTimeProvider(DateTimeOffset now) : TimeProvider {
-        DateTimeOffset _now = now;
-        public override DateTimeOffset GetUtcNow() => _now;
-        public void Advance(TimeSpan value) => _now += value;
+    sealed class DelegatingProvider(Func<SessionStartMemoryContextResult> fetch) : ISessionStartContextProvider {
+        public Task<SessionStartMemoryContextResult> GetAsync(SessionStartMemoryContextRequest request) =>
+            Task.FromResult(fetch());
     }
 
     sealed class FixedScopeResolver(string? repo, string? machine) : ISessionStartMemoryScopeResolver {
