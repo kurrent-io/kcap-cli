@@ -19,6 +19,7 @@ internal static class VerifyExitCodes {
     public const int RestoreVerification = 27;
     public const int StartGate           = 28;
     public const int StartGateDrift      = 29;
+    public const int RetireRefused       = 30;
     public const int DigestGate          = 43; // not a VerifyExit code (DaemonCommands' own digest gate) — mapped in Token() below like every other coded exit
 
     public static string Token(int exitCode) => exitCode switch {
@@ -32,6 +33,7 @@ internal static class VerifyExitCodes {
         RestoreVerification => "verify_restore_verification",
         StartGate           => "verify_start_gate",
         StartGateDrift      => "verify_start_gate_drift",
+        RetireRefused       => "verify_retire_refused",
         DigestGate          => "daemon_start_gate",
         _                   => $"verify_unknown_{exitCode}",
     };
@@ -52,6 +54,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     internal const string AlreadyRunningReconnectStatus =
         "Daemon service is already running. Reconnecting…";
 
+    internal const string RenameRestartStatus = "The daemon name changed. Restart this app before managing it.";
+
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
     readonly IDaemonClientService _client;
@@ -68,6 +72,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly Func<MutationRequest, CancellationToken, Task<MutationOutcome>> _runMutation;
     // When true, RunStartupBranchAsync never admits; PhaseClosed still resolves, StartActionAsync unaffected.
     readonly bool _autoActionsPermanentlyClosed;
+    readonly Func<bool> _requiresAppRestart;
 
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly CancellationTokenSource _lifetime = new();
@@ -84,7 +89,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe,
             ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time,
             string? canonicalServer, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            bool autoActionsPermanentlyClosed = false) {
+            bool autoActionsPermanentlyClosed = false, Func<bool>? requiresAppRestart = null) {
         _client                        = client;
         _cli                           = cli;
         _probe                         = probe;
@@ -94,6 +99,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _canonicalServer               = canonicalServer;
         _runMutation                   = runMutation;
         _autoActionsPermanentlyClosed  = autoActionsPermanentlyClosed;
+        _requiresAppRestart             = requiresAppRestart ?? (() => false);
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
@@ -354,8 +360,15 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return null;
     }
 
-    /// Routes execution through the lane. A guard refusal is presented here directly; anything reaching the lane fires an idempotent reattach kick and makes no surface call of its own.
+    bool RequireAppRestart() {
+        if (!_requiresAppRestart()) return false;
+        _surface.Status(RenameRestartStatus);
+        return true;
+    }
+
+    /// Routes execution through the lane, then kicks reattach unless the graph requires a restart.
     async Task<bool> RunLaneMutationAsync(MutationVerb verb, CancellationToken ct) {
+        if (RequireAppRestart()) return false;
         var profileName = await _resolveProfileName().ConfigureAwait(false);
         var refusal = MutationRequestFactory.TryBuild(verb, profileName, _canonicalServer, _client.DaemonName, out var request);
         if (refusal is MutationOutcome.Refused(var guardReason, _)) {
@@ -364,6 +377,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
 
         var outcome = await _runMutation(request!, ct).ConfigureAwait(false);
+        if (RequireAppRestart()) return false;
         _ = _client.RestartLoopAsync(); // any mutation attempt may have restarted the daemon; kicking reattach is idempotent
         return outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
     }
@@ -372,9 +386,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// grow a second `MutationVerb.Replace` call site. A consent that outlived an attach transition
     /// is discarded: the evidence the dialog disclosed may no longer hold.
     async Task ConfirmAndReplaceAsync(LifecyclePrompt prompt, CancellationToken ct) {
+        if (RequireAppRestart()) return;
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
-        if (!accepted) return;
+        if (!accepted || RequireAppRestart()) return;
 
         if (CurrentGeneration() != gen0) {
             _surface.Status("The daemon changed while the prompt was open — canceled, nothing changed.");
@@ -474,6 +489,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// — a click must never crash the app.
     public async Task StartActionAsync(CancellationToken ct) {
         try {
+            if (RequireAppRestart()) return;
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
             var lct = linked.Token;
 
@@ -490,8 +506,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 // Fresh evidence every call — a Start racing an in-flight mutation blocks on the
                 // gate above and, once it clears, re-queries rather than acting on anything it
                 // might have observed before the wait.
+                if (RequireAppRestart()) return;
                 var snap = await QueryStatusForActionAsync(lct).ConfigureAwait(false);
-                if (snap is null) return; // unknown — already surfaced, no action
+                if (RequireAppRestart() || snap is null) return; // unknown — already surfaced, no action
 
                 var state = ServiceStateClassifier.Parse(snap.State);
                 if (state == ServiceState.Unknown) {
@@ -540,6 +557,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// also arrive later via Attention (outcome consumer); that overwrites this one-liner.
     async Task ReportStartMutationAsync(MutationVerb verb, CancellationToken ct) {
         var ok = await RunLaneMutationAsync(verb, ct).ConfigureAwait(false);
+        if (RequireAppRestart()) return;
         _surface.Status(ok
             ? "Daemon start requested. Waiting to connect…"
             : "Daemon start did not finish. Press Retry.");

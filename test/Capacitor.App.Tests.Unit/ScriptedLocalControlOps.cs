@@ -28,6 +28,7 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public int PermissionResolveCalls;
     public int SendTextCalls;
     public int PutSettingsCalls;
+    public Action? SettingsPutStarted;
     public readonly List<ConsentPolicyDto> PutPayloads = [];
     public readonly List<ConsentPolicyPutV2Dto> PutV2Payloads = [];
     public readonly List<(string AgentId, bool Force)> StopPayloads = [];
@@ -180,6 +181,7 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         Interlocked.Increment(ref PutSettingsCalls);
         PutSettingsPayloads.Add(put);
+        SettingsPutStarted?.Invoke();
         if (ct.IsCancellationRequested) return Task.FromCanceled<DaemonSettingsAckDto>(ct);
         if (_settingsPuts.Count == 0) throw new InvalidOperationException("ScriptedLocalControlOps: unscripted PutDaemonSettings call");
         var tcs = _settingsPuts.Dequeue();

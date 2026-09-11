@@ -115,6 +115,76 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    [Arguments(MutationVerb.Install)]
+    [Arguments(MutationVerb.StartVerified)]
+    [Arguments(MutationVerb.Replace)]
+    [Arguments(MutationVerb.DetachedStart)]
+    public async Task A_confirmed_rename_refuses_queued_and_later_mutations_for_the_retired_name(MutationVerb verb) {
+        var gate = new TaskCompletionSource<ProcessResult>();
+        var cli = new FakeKcapCli { InstallVerifiedBehavior = (_, _) => gate.Task };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory, classify: CannedSucceeded);
+        var rename = lane.RunAsync(Req(MutationVerb.Replace, daemonName: "new-name") with { RetireServiceId = "daemon-a" }, CancellationToken.None);
+        var queued = lane.RunAsync(Req(verb), CancellationToken.None);
+        gate.SetResult(new ProcessResult(0, "", "", false));
+        await Assert.That(await rename).IsTypeOf<MutationOutcome.Succeeded>();
+        var expected = new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention);
+        await Assert.That(await queued).IsEqualTo(expected);
+        await Assert.That(await lane.RunAsync(Req(verb, daemonName: "Daemon-A"), CancellationToken.None)).IsEqualTo(expected);
+        await Assert.That(await lane.RunAsync(Req(MutationVerb.Replace, daemonName: "third-name") with { RetireServiceId = "daemon-a" }, CancellationToken.None)).IsEqualTo(expected);
+        await Assert.That(factory.Calls.Count).IsEqualTo(1);
+        await Assert.That(lane.IsRetired("Daemon-A")).IsTrue();
+    }
+
+    [Test]
+    [Arguments("unsupported")]
+    [Arguments("unconfirmed")]
+    [Arguments("rollback")]
+    [Arguments("skew")]
+    [Arguments("repair")]
+    [Arguments("refused")]
+    [Arguments("fault")]
+    public async Task Rename_outcomes_require_a_fresh_graph_except_known_untouched_unsupported_CLI(string mode) {
+        var gate = new TaskCompletionSource<string?>();
+        var cli = new FakeKcapCli { VersionBehavior = _ => gate.Task };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        MutationOutcome result = mode switch {
+            "unsupported" => new MutationOutcome.Failed(30, "cli_unsupported", RecoverySurface.Attention),
+            "unconfirmed" => new MutationOutcome.UnconfirmedNoAttach(),
+            "rollback" => new MutationOutcome.Failed(VerifyExitCodes.RollbackBudget, null, RecoverySurface.Attention),
+            "skew" => new MutationOutcome.AttentionSkew("ownership_unknown"),
+            "repair" => new MutationOutcome.AttentionRepair("stale_txn_marker"),
+            _ => new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention),
+        };
+        await using var lane = MakeLane(factory, classify: (request, _, _, _, _, _) =>
+            request.RetireServiceId is null ? Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded())
+                : mode == "fault" ? Task.FromException<MutationOutcome>(new IOException("probe failed")) : Task.FromResult(result));
+        var rename = lane.RunAsync(Req(MutationVerb.Replace, daemonName: "new-name") with { RetireServiceId = "daemon-a" }, CancellationToken.None);
+        var queued = lane.RunAsync(Req(), CancellationToken.None);
+        gate.SetResult("9.9.9");
+        await rename;
+        var after = await queued;
+        await Assert.That(lane.IsRetired("daemon-a")).IsEqualTo(mode != "unsupported");
+        if (mode == "unsupported") await Assert.That(after).IsTypeOf<MutationOutcome.Succeeded>();
+        else await Assert.That(after).IsEqualTo(new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention));
+        await Assert.That(factory.Calls.Count).IsEqualTo(mode == "unsupported" ? 2 : 1);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Retire_preflight_uses_the_lane_CLI_without_mutating(bool supported) {
+        var cli = new FakeKcapCli { SupportsRetire = supported };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory, cliOverride: () => null,
+            shellProbe: new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>("/terminal/kcap") });
+        await Assert.That(await lane.CanRetireAsync(Req(MutationVerb.Replace), CancellationToken.None)).IsEqualTo(supported);
+        await Assert.That(factory.Calls.Single().PinnedPath).IsEqualTo("/terminal/kcap");
+        await Assert.That(cli.InstallVerifiedCallCount).IsEqualTo(0);
+        await Assert.That(cli.StartVerifiedCallCount).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Identical_concurrent_requests_coalesce_into_one_probe_and_one_mutation() {
         var request = Req();
         var gate = new TaskCompletionSource<string?>();
@@ -450,6 +520,18 @@ public class DaemonMutationLaneTests {
         await Assert.That(cli.LastInstallReplace).IsTrue();
 
         await lane.DisposeAsync();
+    }
+
+    [Test]
+    public async Task Rename_dispatches_the_retired_id_and_preserves_the_refusal_reason() {
+        var cli = new FakeKcapCli {
+            InstallVerifiedBehavior = (_, _) => Task.FromResult(new ProcessResult(30, "", "retire_reason=foreign_profile\nverify_retire_refused", false))
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        var request = Req(MutationVerb.Replace) with { RetireServiceId = "old-name" };
+        var outcome = await lane.RunAsync(request, CancellationToken.None);
+        await Assert.That(cli.LastRetireServiceId).IsEqualTo("old-name");
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(30, "foreign_profile", RecoverySurface.Attention));
     }
 
     [Test]

@@ -14,7 +14,11 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
     const string HelpMenuTitle = "Help";
 
     /// The app menu's own items; Avalonia appends Services, Hide and Quit after them.
-    public static NativeMenu BuildAppMenu(Action showAbout) => new() { Item("About Kurrent Capacitor", showAbout) };
+    public static NativeMenu BuildAppMenu(Action showAbout, Action? showSettings = null) => new() {
+        Item("About Kurrent Capacitor", showAbout),
+        new NativeMenuItemSeparator(),
+        Item("Settings…", showSettings ?? (() => { }), new KeyGesture(Key.OemComma, KeyModifiers.Meta), showSettings is not null),
+    };
 
     /// Once per process: the class handler cannot be removed.
     public void Install() => Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) => Attach(window));

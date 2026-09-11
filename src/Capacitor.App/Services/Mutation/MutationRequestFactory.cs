@@ -10,14 +10,22 @@ namespace Capacitor.App.Services.Mutation;
 public static class MutationRequestFactory {
     /// Non-null return means refused (no request built); null return means `request` is usable.
     public static MutationOutcome? TryBuild(
-            MutationVerb verb, string? profileName, string? serverUrl, string daemonName, out MutationRequest? request) {
+            MutationVerb verb, string? profileName, string? serverUrl, string daemonName, out MutationRequest? request,
+            string? retireServiceId = null) {
         var canonical = ServerIdentity.Canonicalize(serverUrl);
         if (string.IsNullOrWhiteSpace(profileName) || canonical is null) {
             request = null;
             return new MutationOutcome.Refused("no_server_configured", RecoverySurface.Attention);
         }
 
-        request = new MutationRequest(verb, profileName, canonical, daemonName);
+        if (retireServiceId is not null && (verb != MutationVerb.Replace ||
+                string.IsNullOrWhiteSpace(retireServiceId) || DaemonStore.Sanitize(retireServiceId) == DaemonStore.Sanitize(daemonName))) {
+            request = null;
+            return new MutationOutcome.Refused("invalid_retire_target", RecoverySurface.Attention);
+        }
+
+        request = new MutationRequest(verb, profileName, canonical, daemonName,
+            retireServiceId is null ? null : DaemonStore.Sanitize(retireServiceId));
         return null;
     }
 }

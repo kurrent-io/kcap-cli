@@ -31,6 +31,30 @@ public class DaemonLifecycleControllerTests {
             bool txnActive = false) =>
         new("default", unitPresent, state, binaryPath, installBinaryPath, jobPid, daemonPid, txnMarker, txnActive);
 
+    [Test]
+    [Arguments("before-start")]
+    [Arguments("during-query")]
+    [Arguments("during-mutation")]
+    public async Task Start_after_rename_reports_restart_without_retry_or_repair(string phase) {
+        await using var h = new Harness();
+        h.NeedsAppRestart = phase == "before-start";
+        h.Cli.StatusBehavior = _ => {
+            if (phase == "during-query") h.NeedsAppRestart = true;
+            return Task.FromResult<ServiceSnapshot?>(phase == "during-query"
+                ? Snap(unitPresent: false, state: "installed") : Snap());
+        };
+        h.Lane.Behavior = (_, _) => {
+            h.NeedsAppRestart = true;
+            return Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention));
+        };
+        await h.Controller.StartActionAsync(CancellationToken.None);
+        await Assert.That(h.Surface.StatusMessages.Last()).IsEqualTo(DaemonLifecycleController.RenameRestartStatus);
+        await Assert.That(h.Surface.StatusMessages.Any(x => x.Contains("Retry", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(phase == "during-mutation" ? 1 : 0);
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(phase == "before-start" ? 0 : 1);
+    }
+
     // ---- startup matrix rows (§4.2) ----
 
     [Test]
@@ -893,6 +917,7 @@ public class DaemonLifecycleControllerTests {
         public readonly string? CanonicalServer;
 
         public string? ProfileName = "default";
+        public bool NeedsAppRestart;
 
         public Harness(
                 string? canonicalServer = "https://kcap.example.com:443", bool autoActionsPermanentlyClosed = false) {
@@ -900,7 +925,7 @@ public class DaemonLifecycleControllerTests {
             Time  = new TimerCountingTimeProvider(Clock);
             Controller = new DaemonLifecycleController(
                 Client, Cli, Probe, Surface, () => Task.FromResult<string?>(ProfileName), Time,
-                CanonicalServer, Lane.RunAsync, autoActionsPermanentlyClosed);
+                CanonicalServer, Lane.RunAsync, autoActionsPermanentlyClosed, () => NeedsAppRestart);
         }
 
         public void Start() => Controller.Start();
@@ -943,6 +968,9 @@ sealed class FakeKcapCli : IKcapCli {
         return StatusBehavior(ct);
     }
 
+    public bool SupportsRetire = true;
+    public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => Task.FromResult(SupportsRetire);
+
     public int StartVerifiedCallCount;
     public Func<CancellationToken, Task<ProcessResult>> StartVerifiedBehavior = _ => Task.FromResult(new ProcessResult(0, "", "", false));
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {
@@ -952,11 +980,13 @@ sealed class FakeKcapCli : IKcapCli {
 
     public int InstallVerifiedCallCount;
     public bool? LastInstallReplace;
+    public string? LastRetireServiceId;
     public Func<bool, CancellationToken, Task<ProcessResult>> InstallVerifiedBehavior =
         (_, _) => Task.FromResult(new ProcessResult(0, "", "", false));
-    public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct) {
+    public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null) {
         InstallVerifiedCallCount++;
         LastInstallReplace = replace;
+        LastRetireServiceId = retireServiceId;
         return InstallVerifiedBehavior(replace, ct);
     }
 
@@ -994,4 +1024,3 @@ sealed class FakeKcapCli : IKcapCli {
 // FakeLoginShellProbe is shared via Capacitor.Tests.Helpers (the controller only ever calls
 // TerminalPathAsync — the install precondition; KcapOnPathAsync serves the ShimOfferCoordinator
 // tests, and the fresh-answer seam scripts the post-install re-probe).
-
