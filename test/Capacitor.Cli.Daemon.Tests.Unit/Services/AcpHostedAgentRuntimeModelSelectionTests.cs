@@ -125,6 +125,25 @@ public class AcpHostedAgentRuntimeModelSelectionTests {
         await Assert.That(h.Runtime.ResolvedModel).IsEqualTo("claude-haiku-4.5");
     }
 
+    /// A default launch (no requested model) applies no selection, but the desktop rail still needs
+    /// the running model — so the runtime reports the handshake's current model as ResolvedModel,
+    /// the same "show the running model" Pi has. No set_* is sent.
+    [Test]
+    public async Task StartAsync_DefaultLaunch_ExposesTheHandshakeCurrentModelAsResolved() {
+        await using var h = new Harness();
+        h.Fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(
+            FakeAcpAgent.FixedSessionId, currentModelId: "composer-2.5[fast=true]", TeamAvailableModels));
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.StartAsync(
+            "/abs/worktree", "do the thing", h.Cts.Token, requestedModel: null
+        ).WaitAsync(HangGuard);
+
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/set_config_option")).IsFalse();
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/set_model")).IsFalse();
+        await Assert.That(h.Runtime.ResolvedModel).IsEqualTo("composer-2.5[fast=true]");
+    }
+
     [Test]
     public async Task StartAsync_ExactModelId_SendsSetConfigOptionWithThatExactId_BeforeThePrompt() {
         await using var h = new Harness();

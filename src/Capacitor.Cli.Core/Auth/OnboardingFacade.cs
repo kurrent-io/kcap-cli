@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Duende.IdentityModel.OidcClient.Browser;
@@ -148,6 +149,8 @@ public sealed class OnboardingFacade(
         IBrowserLauncher                                            launcher,
         ITenantPicker                                               picker,
         ITenantProvisioner?                                         provisioner,
+        CliTelemetry                                                telemetry,
+        AuthEndpoints                                               endpoints,
         Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit) {
     /// <summary>Test seam for the one WorkOS effect with no HTTP surface (loopback browser + OidcClient).</summary>
     internal Func<CancellationToken, Task<WorkOSAuthResponse?>>? WorkOSOrglessLogin { get; init; }
@@ -227,7 +230,8 @@ public sealed class OnboardingFacade(
     async Task<AuthResult> LoginGitHubAsync(
             HttpClient http, AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
         var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
-            github, config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice, launcher, ct, progress);
+            github, config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice, launcher,
+            telemetry.Join, ct, progress);
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
@@ -241,12 +245,11 @@ public sealed class OnboardingFacade(
 
     async Task<AuthResult> LoginWorkOSAsync(
             AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
-        // No local browser any more: construction moved into OAuthLoginFlow.AcquireWorkOSAsync, which
-        // is where the join collaborator is attached and where the instance is owned. One site instead
-        // of three — see the ownership guard, which enumerates them.
+        // The loopback browser is owned by OAuthLoginFlow.AcquireWorkOSAsync, which is where the join
+        // collaborator is attached — see the ownership guard, which enumerates every site.
         var authenticated = await OAuthLoginFlow.WorkOSTokensForServerAsync(
             workos, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
-            WorkOSBrowser, ct, progress,
+            telemetry.Join, WorkOSBrowser, ct, progress,
             WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase, KeyWatcher);
 
         if (authenticated is null) return Stop("WorkOS sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
@@ -276,7 +279,7 @@ public sealed class OnboardingFacade(
     }
 
     async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
-        var proxyConfig = await proxy.GetConfigAsync(AuthProxyEndpoint.Url, ct);
+        var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 
         if (proxyConfig is null) {
             return Fail("Cannot reach the Kurrent auth service.", ct, AuthFailureReason.Unreachable);
@@ -294,12 +297,13 @@ public sealed class OnboardingFacade(
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            AuthProxyEndpoint.Url, proxyConfig, proxy, picker,
+            endpoints.ProxyUrl, proxyConfig, proxy, picker, telemetry.Funnel,
             orglessLogin: () => WorkOSOrglessLogin is not null
                 ? WorkOSOrglessLogin(ct)
                 // Org-less: the sign-in picks the organization, and discovery reconciles it afterwards.
                 : OAuthLoginFlow.AcquireWorkOSAsync(
-                    workos, clientId, organizationId: null, forceDevice, launcher, browser: null,
+                    workos, clientId, organizationId: null, forceDevice, launcher, telemetry.Join,
+                    browser: null,
                     apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
                     ct: ct, progress: progress, keys: KeyWatcher),
             orgSwitch: (refreshToken, organizationId) =>
@@ -313,7 +317,7 @@ public sealed class OnboardingFacade(
             // proxy half is knowable here.
             pickContext: new TenantPickContext(
                 Proxy: proxy,
-                ProxyUrl: AuthProxyEndpoint.Url,
+                ProxyUrl: endpoints.ProxyUrl,
                 PickerVersion: proxyConfig.CliPickerVersion));
 
         return flow switch {
@@ -333,11 +337,11 @@ public sealed class OnboardingFacade(
 
         var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
             github, proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice, launcher,
-            ct, progress);
+            telemetry.Join, ct, progress);
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
-        var outcome = await new TenantDiscovery(proxy, picker).RunAsync(AuthProxyEndpoint.Url, accessToken, ct);
+        var outcome = await new TenantDiscovery(proxy, picker).RunAsync(endpoints.ProxyUrl, accessToken, ct);
 
         if (outcome.ErrorMessage is not null) {
             var reason = outcome.NoTenantsFound ? AuthFailureReason.NoTenantsFound : AuthFailureReason.Other;

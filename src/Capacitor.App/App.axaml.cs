@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Reactive.Linq;
@@ -51,7 +52,13 @@ public partial class App : Application {
     // And its one read of KCAP_URL / KCAP_PROFILE.
     readonly ProfileOverrides _serverEnv  = ProfileOverrides.FromEnvironment();
     readonly MachineAuth      _machineEnv = MachineAuth.FromEnvironment();
+    readonly AuthEndpoints    _endpoints  = AuthEndpoints.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
+
+    /// The wizard signs in through the CLI's own stack, which reports the signup funnel. The app
+    /// shows no privacy notice and offers no opt-out of its own, so it hands that stack a facade
+    /// that is off — nothing a wizard run does can emit.
+    readonly CliTelemetry _telemetry = CliTelemetry.Disabled();
 
     /// Process-lifetime rather than per wizard run — a provisioning poll can outlive the window that
     /// started it, and this client degrades a transport failure but not a disposed handler. What it
@@ -152,6 +159,7 @@ public partial class App : Application {
     // subscribes to both _remoteAgents and serverLane, so it goes first.
     RemoteAgentsService? _remoteAgents;
     AgentDirectory? _directory;
+    ServerVendorModelCatalog? _modelCatalog;
     TrayViewModel? _trayVm;
     TrayIconManager? _tray;
     // No disposal needed — RefCount tears its Interval down with its last subscriber, and every
@@ -173,6 +181,7 @@ public partial class App : Application {
     // counterpart of the wizard sign-in quiesce.
     SignInWindow? _signInWindow;
     SettingsWindow? _settingsWindow;
+    readonly AppMenu _appMenu = new(AppKitMenus.ShowAboutPanel);
     Task? _reauthSettle;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
@@ -197,18 +206,17 @@ public partial class App : Application {
         AvaloniaXamlLoader.Load(this);
         // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
         // "About Avalonia" when there is none.
-        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel));
+        NativeMenu.SetMenu(this, _appMenu.Menu);
     }
 
     public override void OnFrameworkInitializationCompleted() {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
-            // The steady-state mode (spec §9): closing the main window hides it to the tray, so
-            // the app must never exit on last-window-close. Set here, before StartAsync fires, so
-            // it holds from the very first window onward; ShowStartupError pins the same value
-            // again on the failure path, where it is now redundant but self-documenting (its own
-            // comment explains the exit-code bug that pin fixes).
+            // Closing the main window hides it; only an explicit quit ends the process.
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             desktop.ShutdownRequested += OnShutdownRequested;
+            var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
+                () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
+            desktop.Exit += (_, _) => windowLifecycle.Dispose();
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator)).Install();
             _ = StartAsync(desktop);
@@ -530,6 +538,12 @@ public partial class App : Application {
         _remoteAgents = remoteAgents;
         _directory = directory;
 
+        // The launcher's model dropdown, fetched once from the server (same catalog the web UI
+        // uses). Best-effort: a miss leaves the curated per-vendor fallback in place.
+        var modelCatalog = new ServerVendorModelCatalog(ServerVendorModelCatalog.HttpFetch(sessionHttp, profiles));
+        _modelCatalog = modelCatalog;
+        _ = modelCatalog.LoadAsync(_shutdown.Token);
+
         // After the directory, which feeds it the session→agent map: a server-lane item names a
         // session, and only that map turns it into the agent whose card it belongs on.
         var readDetail = ServerSessionHttp.DetailReader(sessionHttp, profiles);
@@ -571,8 +585,13 @@ public partial class App : Application {
         ILaunchClient launch = serverLane;
         _serverClients = serverClients;
         // The single restart trigger for a completed sign-in — RestartAsync serializes rather
-        // than coalesces, so RefreshAfterReauthAsync deliberately does not also await it.
-        serverClients.SignInCompleted.Subscribe(signedIn => { _ = serverLane.RestartAsync(); });
+        // than coalesces, so RefreshAfterReauthAsync deliberately does not also await it. The model
+        // catalog reloads here too: the endpoint needs auth, so a signed-out start left it empty and
+        // only a successful sign-in can fill it.
+        serverClients.SignInCompleted.Subscribe(signedIn => {
+            _ = serverLane.RestartAsync();
+            _ = modelCatalog.LoadAsync(_shutdown.Token);
+        });
 
         // One attach client per attempt, dialed at the daemon's own control socket; 80x24 is a
         // placeholder only — TerminalControl resizes its model to the real pane the moment it is
@@ -610,7 +629,8 @@ public partial class App : Application {
                 originOf: id => directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
                     : null,
-                remoteWorkspaceFactory: BuildRemote),
+                remoteWorkspaceFactory: BuildRemote,
+                modelCatalog: modelCatalog.Catalog),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -630,7 +650,7 @@ public partial class App : Application {
         Action? openSettings = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
             ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier, lifecycle.PhaseClosed)
             : null;
-        NativeMenu.SetMenu(this, AppMenuBar.BuildAppMenu(AppKitMenus.ShowAboutPanel, openSettings));
+        ConfigureSettingsMenu(openSettings);
 
         // LAST, deliberately (spec §9): anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
@@ -644,6 +664,8 @@ public partial class App : Application {
             restartPending: restartPending.Pending, openSettings: openSettings);
         _tray = new TrayIconManager(this, _trayVm);
     }
+
+    internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled) {
@@ -710,7 +732,7 @@ public partial class App : Application {
             profiles.Name, serverUrl,
             WizardComposition.BuildBridges(
                 action => Dispatcher.UIThread.Post(action),
-                _foreignHttp.GetRequiredService<TenantProvisioningClient>()),
+                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints),
             new ConsentFlipClaims(_config),
             new AppStateStore(_config.Path("app-state.json")),
             new ShellUrlOpener(),
@@ -786,7 +808,7 @@ public partial class App : Application {
             OperatingSystem.IsMacOS(), shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(
             action => Dispatcher.UIThread.Post(action),
-            _foreignHttp.GetRequiredService<TenantProvisioningClient>());
+            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var graph = WizardComposition.BuildGraph(new WizardGraphOptions(
@@ -1075,7 +1097,8 @@ public partial class App : Application {
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null,
-            Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null) {
+            Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
+            IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1105,7 +1128,8 @@ public partial class App : Application {
             openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
-            localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory);
+            localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
+            modelCatalog: modelCatalog);
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
@@ -1668,6 +1692,7 @@ public partial class App : Application {
     async ValueTask DisposeServerClientsAsync() {
         _directory?.Dispose();
         _remoteAgents?.Dispose();
+        _modelCatalog?.Dispose();
         if (_serverClients is null) return;
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }

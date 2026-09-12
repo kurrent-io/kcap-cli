@@ -29,12 +29,11 @@ namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 /// below has <c>$device_id</c> ONLY. That still exercises the full merge — the device id is what
 /// crosses back — while writing nothing into the real PostHog project.</para>
 /// </summary>
-// Bare [NotInParallel], not the CliTelemetry.TestSink key: this captures Console, which is
+// Bare [NotInParallel]: this captures Console, which is
 // process-global, and ConsoleOutput rejects an overlapping capture. Ungrouped is strictly stronger.
 [NotInParallel]
-public class JoinChainLiveTests : IDisposable {
-    readonly TempDir _tmp = new();
-    public void Dispose() => _tmp.Dispose();
+public class JoinChainLiveTests {
+    [TempDir] public required TempDir Tmp { get; init; }
 
     const string GateEnvVar = "KCAP_JOIN_E2E";
 
@@ -55,91 +54,69 @@ public class JoinChainLiveTests : IDisposable {
 
         using var console = ConsoleOutput.StartErrorCapture();
 
-        var priorSignup = Environment.GetEnvironmentVariable("KCAP_SIGNUP_URL");
-        var priorDebug  = Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG");
+        var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), debug: true, signupUrl: new AuthEndpoints(null, baseUrl).SignupUrl);
+        var key   = probe.Join.Mint();
+        await Assert.That(key).IsNotNull();
 
-        try {
-            // FirstHopUrl reads this, which is the whole reason the override exists.
-            Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", baseUrl);
-            Environment.SetEnvironmentVariable("KCAP_TELEMETRY_DEBUG", "1");
+        var port     = OAuthLoginFlow.GetAvailablePort();
+        var redirect = $"http://127.0.0.1:{port}/callback";
 
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
+        using var browser = new LoopbackBrowser(new RecordingBrowser(), join: probe.Join) {
+            DrainCap = TimeSpan.FromSeconds(30), DisposeWait = TimeSpan.FromSeconds(10),
+        };
 
-            var config = new ConfigRoot(_tmp.Path);
-            var sink = new List<TelemetryEvent>();
-            CliTelemetry.TestSink = sink;
-            CliTelemetry.Initialize("setup", null, loggedIn: false, config);
-            TelemetryTestGuards.AssertEnabled("setup", config);
+        // The authorize URL carries the CSRF state OidcClient generates per login, and the
+        // callback below echoes it — the redirect is gated on that match, so an authorize URL
+        // without it would (correctly) suppress the whole chain.
+        var invoke = browser.InvokeAsync(
+            new BrowserOptions($"http://example.test/authorize?state={E2eState}", redirect));
 
-            var key = SetupJoin.Mint();
-            await Assert.That(key).IsNotNull();
+        // Stand in for the browser: carry the site's cookies, and follow redirects the way a
+        // navigation would. $device_id only — see the class doc on firing no event.
+        var jar = new CookieContainer();
+        var web = new Uri(baseUrl!);
+        jar.Add(web, new Cookie("kcap_consent", "accepted"));
+        jar.Add(web, new Cookie("kcap_ab", "redesign"));
+        jar.Add(web, new Cookie(PhCookie,
+            Uri.EscapeDataString(JsonSerializer.Serialize(new JsonObject { ["$device_id"] = CapDeviceId }))));
 
-            var port     = OAuthLoginFlow.GetAvailablePort();
-            var redirect = $"http://127.0.0.1:{port}/callback";
+        using var handler = new HttpClientHandler { CookieContainer = jar, AllowAutoRedirect = true };
+        using var http    = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
 
-            using var browser = new LoopbackBrowser(new RecordingBrowser(), join: SetupJoin.Loopback) {
-                DrainCap = TimeSpan.FromSeconds(30), DisposeWait = TimeSpan.FromSeconds(10),
-            };
+        // 1. The callback lands on the CLI's own listener and gets today's page plus a redirect.
+        var closing = await http.GetStringAsync($"{redirect}?code=e2e-fake-code&state={E2eState}");
+        await Assert.That(closing).Contains("Authentication successful!");
 
-            // The authorize URL carries the CSRF state OidcClient generates per login, and the
-            // callback below echoes it — the redirect is gated on that match, so an authorize URL
-            // without it would (correctly) suppress the whole chain.
-            var invoke = browser.InvokeAsync(
-                new BrowserOptions($"http://example.test/authorize?state={E2eState}", redirect));
+        var emitted = Regex.Match(closing, @"location\.replace\(""([^""]+)""\)");
+        await Assert.That(emitted.Success).IsTrue().Because("the closing page must carry the first hop");
 
-            // Stand in for the browser: carry the site's cookies, and follow redirects the way a
-            // navigation would. $device_id only — see the class doc on firing no event.
-            var jar = new CookieContainer();
-            var web = new Uri(baseUrl!);
-            jar.Add(web, new Cookie("kcap_consent", "accepted"));
-            jar.Add(web, new Cookie("kcap_ab", "redesign"));
-            jar.Add(web, new Cookie(PhCookie,
-                Uri.EscapeDataString(JsonSerializer.Serialize(new JsonObject { ["$device_id"] = CapDeviceId }))));
+        // JsonEncodedText escapes & as & inside the JS string literal.
+        var firstHop = Regex.Unescape(emitted.Groups[1].Value);
+        await Assert.That(firstHop).StartsWith($"{baseUrl}/api/cli/return");
+        await Assert.That(firstHop).Contains($"j={key}");
+        await Assert.That(firstHop).Contains($"p={port}");
 
-            using var handler = new HttpClientHandler { CookieContainer = jar, AllowAutoRedirect = true };
-            using var http    = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+        // 2. Follow it the way a browser would: hop 1 -> hop 2 -> back to /joined on our listener.
+        var landed = await http.GetAsync(firstHop);
+        await Assert.That(landed.IsSuccessStatusCode).IsTrue();
+        await Assert.That(landed.RequestMessage!.RequestUri!.ToString()).Contains("/joined");
+        await Assert.That(await landed.Content.ReadAsStringAsync()).Contains("history.replaceState(");
 
-            // 1. The callback lands on the CLI's own listener and gets today's page plus a redirect.
-            var closing = await http.GetStringAsync($"{redirect}?code=e2e-fake-code&state={E2eState}");
-            await Assert.That(closing).Contains("Authentication successful!");
+        var result = await invoke;
+        await Assert.That(result.ResultType).IsEqualTo(BrowserResultType.Success);
 
-            var emitted = Regex.Match(closing, @"location\.replace\(""([^""]+)""\)");
-            await Assert.That(emitted.Success).IsTrue().Because("the closing page must carry the first hop");
+        // 3. The merge actually happened, on the real return trip.
+        probe.Sink.Discard();
+        probe.Telemetry.Capture("cli_e2e_probe", new JsonObject());
+        var props = probe.Events[^1].Properties;
 
-            // JsonEncodedText escapes & as & inside the JS string literal.
-            var firstHop = Regex.Unescape(emitted.Groups[1].Value);
-            await Assert.That(firstHop).StartsWith($"{baseUrl}/api/cli/return");
-            await Assert.That(firstHop).Contains($"j={key}");
-            await Assert.That(firstHop).Contains($"p={port}");
+        await Assert.That(props["join_id"]!.GetValue<string>()).IsEqualTo(key);
+        await Assert.That(props["web_device_id_capacitor"]!.GetValue<string>()).IsEqualTo(CapDeviceId);
+        await Assert.That(props["site_variant"]!.GetValue<string>()).IsEqualTo("redesign");
 
-            // 2. Follow it the way a browser would: hop 1 -> hop 2 -> back to /joined on our listener.
-            var landed = await http.GetAsync(firstHop);
-            await Assert.That(landed.IsSuccessStatusCode).IsTrue();
-            await Assert.That(landed.RequestMessage!.RequestUri!.ToString()).Contains("/joined");
-            await Assert.That(await landed.Content.ReadAsStringAsync()).Contains("history.replaceState(");
-
-            var result = await invoke;
-            await Assert.That(result.ResultType).IsEqualTo(BrowserResultType.Success);
-
-            // 3. The merge actually happened, on the real return trip.
-            sink.Clear();
-            CliTelemetry.Capture("cli_e2e_probe", new JsonObject());
-            var props = sink[^1].Properties;
-
-            await Assert.That(props["join_id"]!.GetValue<string>()).IsEqualTo(key);
-            await Assert.That(props["web_device_id_capacitor"]!.GetValue<string>()).IsEqualTo(CapDeviceId);
-            await Assert.That(props["site_variant"]!.GetValue<string>()).IsEqualTo("redesign");
-
-            // 4. Debug shows the key is ATTACHED without ever showing the key.
-            var printed = console.GetCapturedError();
-            await Assert.That(printed).Contains("\"join_id\":\"[set]\"");
-            await Assert.That(printed).DoesNotContain(key!);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", priorSignup);
-            Environment.SetEnvironmentVariable("KCAP_TELEMETRY_DEBUG", priorDebug);
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
-        }
+        // 4. Debug shows the key is ATTACHED without ever showing the key.
+        var printed = console.GetCapturedError();
+        await Assert.That(printed).Contains("\"join_id\":\"[set]\"");
+        await Assert.That(printed).DoesNotContain(key!);
     }
 }

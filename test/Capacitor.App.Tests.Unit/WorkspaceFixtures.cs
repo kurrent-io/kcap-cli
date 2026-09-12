@@ -28,9 +28,10 @@ static class WorkspaceFixtures {
             new ReplaySubject<DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm);
 
     /// Real-time poll for a condition an async continuation settles OUTSIDE the test's own await
-    /// chain (e.g. a Task.ContinueWith observer attached to an abandoned task) -- never used to
-    /// gate FakeTimeProvider-driven logic itself, only to let its already-fired continuations
-    /// flush. Same idiom as ConsentServiceTests/PauseControllerTests etc.
+    /// chain (e.g. a Task.ContinueWith observer attached to an abandoned task), letting an
+    /// already-fired continuation flush. A condition may also advance a FakeTimeProvider itself,
+    /// for the one case where the code under test arms its timer just after publishing the state
+    /// the test waits on: a single advance can fall in that gap and fire nothing.
     public static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
         while (!condition()) {

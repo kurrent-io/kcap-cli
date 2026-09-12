@@ -65,7 +65,7 @@ public class AuthProgressTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: () => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch: (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
             progress: progress);

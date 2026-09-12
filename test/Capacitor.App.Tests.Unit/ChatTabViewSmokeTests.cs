@@ -147,6 +147,22 @@ public class ChatTabViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
         }
 
+        public void Press(PhysicalKey key) {
+            Window.KeyPressQwerty(key, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        /// Types, sends with Enter and lets the CR go out, so the next send is accepted.
+        public async Task SendAsync(params string[] lines) {
+            for (var i = 0; i < lines.Length; i++) {
+                if (i > 0) PressEnter(RawInputModifiers.Shift);
+                Type(lines[i]);
+            }
+            PressEnter(RawInputModifiers.None);
+            Time.Advance(CrDelay);
+            await Terminal.PendingDeliveryForTesting!;
+        }
+
         public async Task LoadAsync(string path) {
             Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
             await (Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
@@ -419,6 +435,101 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsTrue();
             await host.AppendLinesAndTickAsync(path, UserLine.Replace("hello", "queued follow-up"));
             await Assert.That(banner.IsVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    /// Pins the arrow keys' contract: ↑ in an empty composer recalls the last sent prompt, ↑ inside
+    /// a multi-line recall climbs to the first line before stepping older, ↓ past the newest
+    /// restores the empty box, and neither key touches a draft the user typed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Up_recalls_sent_prompts_and_down_returns_to_the_empty_draft() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall.jsonl", UserLine));
+            await host.SendAsync("first");
+            await host.SendAsync("top", "bottom");
+            var multi = "top" + Environment.NewLine + "bottom";
+            await Assert.That(host.Composer.Text ?? "").IsEqualTo("");
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(multi);
+            await Assert.That(host.Composer.CaretIndex).IsEqualTo(multi.Length);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(multi);
+            await Assert.That(host.Composer.CaretIndex).IsLessThanOrEqualTo(3);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
+
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text).IsEqualTo(multi);
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text ?? "").IsEqualTo("");
+
+            host.Type("typing");
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("typing");
+            await host.CloseAsync();
+        });
+    }
+
+    /// A selection makes ↑/↓ the TextBox's own collapse-and-move, so a recall must not replace
+    /// the text underneath it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Arrow_keys_over_a_selection_leave_the_recalled_text_alone() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall-selection.jsonl", UserLine));
+            await host.SendAsync("first");
+            await host.SendAsync("second");
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+            host.Composer.SelectionStart = 0;
+            host.Composer.SelectionEnd = 3;
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+
+            host.Composer.SelectionStart = 6;
+            host.Composer.SelectionEnd = 2;
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+            await host.CloseAsync();
+        });
+    }
+
+    /// The composer wraps, so a long prompt with no newline still has rows above the caret: ↑ from
+    /// its end climbs those rows first and recalls the older prompt only from the top one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Up_climbs_the_wrapped_rows_of_a_recall_before_stepping_older() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall-wrap.jsonl", UserLine));
+            await host.SendAsync("first");
+            var wrapped = string.Join(' ', Enumerable.Repeat("wrapped", 60));
+            await host.SendAsync(wrapped);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(wrapped);
+            await Assert.That(host.Composer.GetLineCount()).IsGreaterThan(1);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(wrapped);
+            await Assert.That(host.Composer.CaretIndex).IsLessThan(wrapped.Length);
+
+            var presses = 1;
+            while (host.Composer.Text == wrapped && presses < 20) {
+                host.Press(PhysicalKey.ArrowUp);
+                presses++;
+            }
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
             await host.CloseAsync();
         });
     }

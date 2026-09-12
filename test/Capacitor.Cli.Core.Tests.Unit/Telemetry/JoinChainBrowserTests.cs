@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Cli.Core.Telemetry;
 using Duende.IdentityModel.OidcClient.Browser;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
@@ -36,10 +35,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 /// analytics cookie carries a <c>distinct_id</c>; the cookie the driver sets has <c>$device_id</c>
 /// ONLY. The device id is what crosses back, so the merge is still fully exercised.</para>
 /// </summary>
-[NotInParallel]
-public class JoinChainBrowserTests : IDisposable {
-    readonly TempDir _tmp = new();
-    public void Dispose() => _tmp.Dispose();
+public class JoinChainBrowserTests {
+    [TempDir] public required TempDir Tmp { get; init; }
 
     const string GateEnvVar      = "KCAP_JOIN_BROWSER_E2E";
     const string HandshakeEnvVar = "KCAP_JOIN_BROWSER_HANDSHAKE";
@@ -61,26 +58,15 @@ public class JoinChainBrowserTests : IDisposable {
         Skip.Unless(!string.IsNullOrWhiteSpace(baseUrl) && !string.IsNullOrWhiteSpace(handshake),
             $"Set {GateEnvVar}=<base url> and {HandshakeEnvVar}=<path> to run the browser chain.");
 
-        var priorSignup = Environment.GetEnvironmentVariable("KCAP_SIGNUP_URL");
-
         try {
-            Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", baseUrl);
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
-
-            var config = new ConfigRoot(_tmp.Path);
-            var sink = new List<TelemetryEvent>();
-            CliTelemetry.TestSink = sink;
-            CliTelemetry.Initialize("setup", null, loggedIn: false, config);
-            TelemetryTestGuards.AssertEnabled("setup", config);
-
-            var key = SetupJoin.Mint();
+            var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), signupUrl: new AuthEndpoints(null, baseUrl).SignupUrl);
+            var key   = probe.Join.Mint();
             await Assert.That(key).IsNotNull();
 
             var port     = OAuthLoginFlow.GetAvailablePort();
             var redirect = $"http://127.0.0.1:{port}/callback";
 
-            using var browser = new LoopbackBrowser(new RecordingBrowser(), join: SetupJoin.Loopback) {
+            using var browser = new LoopbackBrowser(new RecordingBrowser(), join: probe.Join) {
                 DrainCap = DriverBudget, DisposeWait = TimeSpan.FromSeconds(10),
             };
 
@@ -97,7 +83,7 @@ public class JoinChainBrowserTests : IDisposable {
 
             // The hops and the return to /joined happen in the browser after the closing page is
             // served, so the merge lands asynchronously. Poll the shared properties for it.
-            var merged = await WaitForMerge(sink, DriverBudget);
+            var merged = await WaitForMerge(probe, DriverBudget);
 
             await Assert.That(merged).IsNotNull()
                 .Because("a real browser must carry the web identity back to /joined");
@@ -106,10 +92,7 @@ public class JoinChainBrowserTests : IDisposable {
                 .Because("SameSite=Lax cookies must travel on this top-level navigation — the whole "
                        + "reason the closing page navigates instead of firing a beacon");
         } finally {
-            Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", priorSignup);
             try { File.Delete(handshake!); } catch { /* best effort */ }
-            CliTelemetry.Reset();
-            SetupJoin.Reset();
         }
     }
 
@@ -136,15 +119,15 @@ public class JoinChainBrowserTests : IDisposable {
     /// Probing with a real capture is how the other suites read shared state, and it is what a real
     /// event would carry.
     /// </summary>
-    static async Task<JsonObject?> WaitForMerge(List<TelemetryEvent> sink, TimeSpan budget) {
+    static async Task<JsonObject?> WaitForMerge(TelemetryProbe probe, TimeSpan budget) {
         var deadline = DateTimeOffset.UtcNow + budget;
 
         while (DateTimeOffset.UtcNow < deadline) {
-            sink.Clear();
-            CliTelemetry.Capture("cli_browser_e2e_probe", new JsonObject());
+            probe.Sink.Discard();
+            probe.Telemetry.Capture("cli_browser_e2e_probe", new JsonObject());
 
-            if (sink.Count > 0 && sink[^1].Properties["web_device_id_capacitor"] is not null)
-                return sink[^1].Properties;
+            if (probe.Events.Count > 0 && probe.Events[^1].Properties["web_device_id_capacitor"] is not null)
+                return probe.Events[^1].Properties;
 
             await Task.Delay(500);
         }

@@ -77,7 +77,8 @@ public class WizardCompositionHappyPathTests {
             Proxy       = new AuthProxyClient(new HttpClient(authHandler, disposeHandler: false)),
             Operation = spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.BeforeCommit), spec.Profile),
+                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
+                spec.BeforeCommit), spec.Profile),
         };
 
         var summary = await AvaloniaSession.DispatchAsync(async () => {

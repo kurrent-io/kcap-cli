@@ -111,14 +111,14 @@ public static partial class DaemonRunner {
                 case "--log-file": logFile = args[++i]; break;
                 case "--stderr-file": stderrFile = args[++i]; break;
                 case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
-                case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
+                case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 0:
                     config.MaxConcurrentAgents = n;
                     maxAgentsFromArgs = true;
                     i++;
 
                     break;
                 case "--max-agents":
-                    await Console.Error.WriteLineAsync($"Invalid --max-agents value: {args[i + 1]} (must be a positive integer)");
+                    await Console.Error.WriteLineAsync($"Invalid --max-agents value: {args[i + 1]} (must be 0 for unlimited, or a positive integer)");
 
                     return 1;
             }
@@ -179,7 +179,7 @@ public static partial class DaemonRunner {
             config.CodexPath = profileDaemon.CodexPath;
 
         if (Environment.GetEnvironmentVariable("KCAP_MAX_AGENTS") is { } maxAgents) {
-            if (int.TryParse(maxAgents, out var n) && n >= 1)
+            if (int.TryParse(maxAgents, out var n) && n >= 0)
                 config.MaxConcurrentAgents = n;
             else
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
@@ -462,7 +462,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Cursor,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>() // spec-review Finding 4 — real production wiring
+                sp.GetRequiredService<ServerConnection>(),
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -470,7 +472,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Copilot,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(),
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -478,7 +482,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Kiro,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(),
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -486,7 +492,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.Gemini,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(),
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -494,7 +502,9 @@ public static partial class DaemonRunner {
                 AcpVendorDescriptors.OpenCode,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<ServerConnection>()
+                sp.GetRequiredService<ServerConnection>(),
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
 
@@ -1555,8 +1565,12 @@ public static partial class DaemonRunner {
             IEnumerable<string> vendors, Func<string, T> probe, T timedOut,
             int ceilingMs = ConcurrentProbeCeilingMs) {
         var tasks = new Dictionary<string, Task<T>>(StringComparer.Ordinal);
+        // A probe blocks its thread for its whole budget, so each gets a dedicated one. Queued on the
+        // thread pool they start only as the pool grows — one thread a second once it is saturated —
+        // which serializes the very pass this seam exists to overlap.
         foreach (var vendor in vendors)
-            tasks.TryAdd(vendor, Task.Run(() => probe(vendor)));
+            tasks.TryAdd(vendor, Task.Factory.StartNew(
+                () => probe(vendor), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
 
         if (tasks.Count == 0) return FrozenDictionary<string, T>.Empty;
 

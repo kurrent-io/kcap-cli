@@ -1,5 +1,6 @@
 using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -566,6 +567,47 @@ public class MainWindowSmokeTests {
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
             await Assert.That(opened.WorktreeAlpha).IsGreaterThan((byte)0);
+        });
+    }
+
+    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
+    /// which drops an open workspace back to the launcher (the new-session empty state).
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task New_session_shortcut_is_bound_and_returns_to_the_launcher() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var (actions, _) = NewActions(service);
+                var vm = new MainWindowViewModel(
+                    service, CancellationToken.None, TestActivity.New(),
+                    workspaceFactory: id => NewWorkspace(service, actions, id));
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+
+                vm.OpenSession("0123456789abcdef0123456789abcdef");
+                Dispatcher.UIThread.RunJobs();
+                var had = vm.CurrentWorkspace is not null;
+
+                bool Bound(KeyModifiers mod) => window.KeyBindings.Any(
+                    k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(mod));
+                var meta = Bound(KeyModifiers.Meta);
+                var ctrl = Bound(KeyModifiers.Control);
+
+                window.KeyBindings.First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta))
+                    .Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                var after = vm.CurrentWorkspace;
+
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return (had, meta, ctrl, after);
+            });
+            await Assert.That(hadWorkspace).IsTrue();
+            await Assert.That(hasMeta).IsTrue();
+            await Assert.That(hasCtrl).IsTrue();
+            await Assert.That(afterInvoke).IsNull();
         });
     }
 

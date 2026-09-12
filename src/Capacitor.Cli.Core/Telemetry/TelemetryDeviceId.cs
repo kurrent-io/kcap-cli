@@ -29,7 +29,7 @@ public static class TelemetryDeviceId {
     /// Returns the stable device id, creating and persisting one on first call. Returns null only
     /// when the id could neither be read, created, nor healed (e.g. the config directory itself is
     /// unwritable) — callers must fall back to an in-memory-only id rather than treat null as a
-    /// reason to disable telemetry (see <c>CliTelemetry.Initialize</c>): a disk hiccup here costs a
+    /// reason to disable telemetry: a disk hiccup here costs a
     /// marginally inflated unique-device count, not an entire session's worth of events.
     /// </summary>
     public static string? GetOrCreate(ConfigRoot config) {

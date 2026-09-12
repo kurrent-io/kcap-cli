@@ -1,7 +1,6 @@
 using Capacitor.Cli.Core.Auth;
 using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 using DiscoveryResult = Capacitor.Cli.Core.Auth.DiscoveryResult;
 
@@ -10,10 +9,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// <summary>
 /// The ordered commit boundary itself: the claim hook runs last-cancellable and sees every
 /// identity before anything durable exists, then config + stamp + tokens publish to completion
-/// even under a cancel. Shares the sink key: WorkOS discovery emits into CliTelemetry's
-/// process-global sink.
+/// even under a cancel.
 /// </summary>
-[NotInParallel(nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink))]
 public class CommitBoundaryTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -207,7 +204,7 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched));
 
@@ -348,7 +345,7 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { User = new() { Id = "u", FirstName = "Ada" }, AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(
@@ -368,7 +365,7 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { OrganizationId = "org_a", AccessToken = "acc2", RefreshToken = "rt2" }));
@@ -395,7 +392,7 @@ public class CommitBoundaryTests {
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
-            proxy, Substitute.For<ITenantPicker>(),
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(
                 new WorkOSAuthResponse { User = new() { Id = "u", FirstName = "Ada" }, AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(

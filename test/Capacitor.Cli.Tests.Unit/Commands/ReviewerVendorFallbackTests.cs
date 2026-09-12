@@ -20,7 +20,7 @@ public class ReviewerVendorFallbackTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient());
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup);
 
     // The wire shape TryParseCodedError accepts: a JSON object with a non-empty string "error"
     // plus a string "message" — the CLI-side reading of the server's FlowReviewerResultError.

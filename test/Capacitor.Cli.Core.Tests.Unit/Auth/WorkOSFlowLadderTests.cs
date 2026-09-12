@@ -91,7 +91,7 @@ public class WorkOSFlowLadderTests {
         var opener = new RecordingBrowser(opens: false);
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: true, opener, browser,
+            workos, "client_d", organizationId: null, forceDevice: true, opener, NoTelemetry.Join, browser,
             progress: new RecordingAuthProgress(), keys: ScriptedKeyWatcher.Blind());
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
@@ -108,7 +108,8 @@ public class WorkOSFlowLadderTests {
         var       progress = new RecordingAuthProgress();
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false), new HangingBrowser(),
+            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
+            NoTelemetry.Join, new HangingBrowser(),
             progress: progress, keys: keys);
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
@@ -132,7 +133,8 @@ public class WorkOSFlowLadderTests {
         var       keys   = new ScriptedKeyWatcher('d', '\r', '\n');
 
         await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false), new HangingBrowser(),
+            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
+            NoTelemetry.Join, new HangingBrowser(),
             progress: new RecordingAuthProgress(), keys: keys);
 
         await Assert.That(keys.Drained).IsEqualTo(2);
@@ -148,7 +150,7 @@ public class WorkOSFlowLadderTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub));
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(),
+            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(), NoTelemetry.Join,
             FakeBrowser.NonSuccess(Duende.IdentityModel.OidcClient.Browser.BrowserResultType.UserCancel),
             progress: new RecordingAuthProgress(), keys: ScriptedKeyWatcher.Blind());
 
@@ -167,7 +169,7 @@ public class WorkOSFlowLadderTests {
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
             workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
-            new FakeBrowser(_ => throw new HttpListenerException(5, "Access is denied")),
+            NoTelemetry.Join, new FakeBrowser(_ => throw new HttpListenerException(5, "Access is denied")),
             progress: progress, keys: ScriptedKeyWatcher.Blind());
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
@@ -189,7 +191,8 @@ public class WorkOSFlowLadderTests {
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
             workos, "client_d", organizationId: null, forceDevice: false,
-            new RecordingBrowser(opens: false), new FakeBrowser(_ => throw new BrowserLaunchException()),
+            new RecordingBrowser(opens: false), NoTelemetry.Join,
+            new FakeBrowser(_ => throw new BrowserLaunchException()),
             progress: progress, keys: ScriptedKeyWatcher.Blind());
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
@@ -231,7 +234,7 @@ public class WorkOSFlowLadderTests {
 
         await Assert.That(async () => await OAuthLoginFlow.AcquireWorkOSAsync(
                   workos, "client_d", organizationId: null, forceDevice: false,
-                  new RecordingBrowser(), new HangingBrowser(),
+                  new RecordingBrowser(), NoTelemetry.Join, new HangingBrowser(),
                   server.Urls[0], cts.Token, new RecordingAuthProgress(), ScriptedKeyWatcher.Blind()))
             .Throws<OperationCanceledException>();
     }

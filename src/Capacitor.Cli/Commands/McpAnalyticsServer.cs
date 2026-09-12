@@ -18,7 +18,8 @@ namespace Capacitor.Cli.Commands;
 /// the agent fetches the schema document, writes SQL, and self-repairs from the server's
 /// rejection reasons. Structure cloned from McpMemoryServer.
 /// </summary>
-sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
+sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
+        TelemetryStartup startup) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     internal const string NotSupportedMessage =
@@ -39,13 +40,19 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
         var repository = new CwdRepository(config, Directory.GetCurrentDirectory());
         var tools      = BuildToolsList();
 
-        // MCP servers are long-lived and denylisted under the top-level "mcp" command
-        // (CommandEvents.Denylisted) — re-initialise under the reportable pseudo-command
-        // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
-        // disk must never block the server from starting.
+        // Best-effort, and recorded even when the read throws: a stale token on disk must never
+        // block the server from starting, and an absent property is a different value in a funnel
+        // from a false one — "could not tell" belongs with "not logged in", not with a gap.
         var loggedIn = false;
         try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
-        CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
+
+        // MCP servers are long-lived and denylisted under the top-level "mcp" command
+        // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
+        // "mcp-server" is what lets per-tool-call events leave at all.
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        telemetry.AddSharedProperty("logged_in", loggedIn);
+
+        await using var mcp = new McpTelemetry(telemetry);
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
@@ -79,7 +86,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                McpTelemetry.ToolCalled("kcap-analytics", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-analytics", tool, ok, CommandTiming.ElapsedMs(start));
             }
         }
 

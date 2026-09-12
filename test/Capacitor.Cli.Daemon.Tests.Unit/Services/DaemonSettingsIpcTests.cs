@@ -143,7 +143,6 @@ public class DaemonSettingsIpcTests {
     [Arguments("[]", "malformed")]
     [Arguments("{}", "malformed")]
     [Arguments("""{"max_agents":null}""", "malformed")]
-    [Arguments("""{"max_agents":0}""", "invalid_max_agents")]
     [Arguments("""{"max_agents":-3}""", "invalid_max_agents")]
     public async Task An_invalid_put_changes_nothing_and_names_why(string payload, string reason) {
         var server = new CaptureServerConnection();
@@ -154,6 +153,36 @@ public class DaemonSettingsIpcTests {
             await Assert.That(h.Config.MaxConcurrentAgents).IsEqualTo(5);
             await h.Orchestrator.CapabilityRefreshForTest;
             await Assert.That(server.RegisterDaemonCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    public async Task Zero_max_agents_is_accepted_as_unlimited() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            var ack = await PutAsync(h, """{"max_agents":0}""", ct);
+
+            await Assert.That(ack).IsEqualTo(new DaemonSettingsAckDto(true, null, 0));
+            await Assert.That(h.Config.MaxConcurrentAgents).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    public async Task Unlimited_capacity_admits_a_launch_past_the_capacity_gate() {
+        var server = new SeqCaptureServerConnection();
+        await RunAsync(server, async (h, ct) => {
+            h.Orchestrator.SeedAgentForTest("s1");
+            h.Orchestrator.SeedAgentForTest("s2");
+            await PutAsync(h, """{"max_agents":0}""", ct);
+
+            await h.Orchestrator.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "past", Prompt: "hi", Model: "opus", Effort: null,
+                RepoPath: "/tmp/does-not-matter", Tools: null, AttachmentIds: null, Vendor: "claude",
+                Epoch: h.Orchestrator.DaemonEpochForTest, Seq: 1, CommandId: "cmd-1"));
+            await WaitHarness.SpinUntilAsync(() => server.Rejects.Count > 0, TimeSpan.FromSeconds(10));
+
+            // Reached repo validation (Semantic) rather than being rejected for capacity — the
+            // gate is skipped when unlimited, even with two agents already seeded.
+            await Assert.That(server.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.Semantic);
         });
     }
 

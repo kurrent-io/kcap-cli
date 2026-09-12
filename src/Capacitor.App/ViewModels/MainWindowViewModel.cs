@@ -359,9 +359,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DisposeWith(disposables);
 
             _agentCountText = status.CombineLatest(snapshots, (st, snap) => (st, snap))
-                .Select(t => t.st.State == AttachState.Connected
-                    ? $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents"
-                    : "—")
+                .Select(t => t.st.State != AttachState.Connected ? "—"
+                    : t.snap.Daemon.MaxAgents == 0
+                        ? $"{t.snap.Daemon.ActiveAgents} agents (unlimited)"
+                        : $"{t.snap.Daemon.ActiveAgents} of {t.snap.Daemon.MaxAgents} agents")
                 .ToProperty(this, x => x.AgentCountText, "—")
                 .DisposeWith(disposables);
 

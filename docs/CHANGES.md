@@ -17,6 +17,24 @@ exactly that name. It does not guess: an upstream on another repository's remote
 default branch, or a remote whose default is unknown yields no fallback, because a branch cut from
 `origin/main` tracks `main` without being its PR. Every probe draws on the one provider deadline the
 normal lookup already had.
+## Vendor probes run on dedicated threads
+
+A startup probe pass overlaps N vendor `--version` probes so they cost one budget rather than the
+sum, but each probe blocks its thread on `WaitForExit` for up to its whole budget, and the thread
+pool is not told about that kind of block. Queued on the pool, the probes start only as the pool
+grows, about one thread a second once it is saturated, and the pass serializes again. Every probe
+therefore runs on its own long-running thread. The test that pins this saturates the pool first
+with the same silent kind of wait; a `Task.Wait` there would be compensated by the pool and prove
+nothing.
+
+## The application menu keeps its exported Settings item
+
+Avalonia's macOS exporter captures the application menu after initialization and observes its
+items, but does not observe replacement of the application's menu property. The app therefore
+keeps one menu for its lifetime and enables its existing Settings item when a profile is ready.
+Replacing the menu at that point leaves macOS showing the disabled startup item even though
+Settings works from the tray. The regression test retains that startup item through composition
+and checks both its enabled state and its action.
 
 ## The npm wrapper waits for its platform packages
 

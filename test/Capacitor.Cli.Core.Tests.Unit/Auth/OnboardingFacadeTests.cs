@@ -2,7 +2,6 @@ using System.Net;
 using Capacitor.Cli.Core.Auth;
 using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Telemetry;
 using NSubstitute;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -13,10 +12,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// <summary>
 /// Operation-level contract of <see cref="OnboardingFacade"/>: provider dispatch, discovery over
 /// every tenant, cancellation before the boundary, and the WorkOS retarget/provisioner arms.
-/// Shares the sink key because WorkOS discovery emits SetupFunnel events into CliTelemetry's
-/// process-global sink.
 /// </summary>
-[NotInParallel(nameof(CliTelemetry) + "." + nameof(CliTelemetry.TestSink))]
 public class OnboardingFacadeTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 

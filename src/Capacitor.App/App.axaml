@@ -30,6 +30,8 @@
             <SolidColorBrush x:Key="KcapPurpleDimBrush" Color="#29233E" />
             <SolidColorBrush x:Key="KcapDangerBrush" Color="#FF7272" />
             <SolidColorBrush x:Key="KcapDangerDimBrush" Color="#321F29" />
+            <SolidColorBrush x:Key="KcapInfoBrush" Color="#7BA7F7" />
+            <SolidColorBrush x:Key="KcapInfoDimBrush" Color="#1B2740" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
             </ResourceDictionary.MergedDictionaries>

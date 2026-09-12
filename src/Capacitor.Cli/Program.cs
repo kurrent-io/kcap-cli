@@ -96,14 +96,22 @@ var daemonPaths = DaemonStore.FromEnvironment();
 
 var serverEnv = ProfileOverrides.FromEnvironment();
 var machineEnv = MachineAuth.FromEnvironment();
+var endpoints  = AuthEndpoints.FromEnvironment();
 
 var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
 
+// An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
+// notice on an invisible stderr. Consume-and-REMOVE before anything can spawn, so no grandchild
+// (detached daemon, hosted agents) observes the marker.
+var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoints.SignupUrl);
+
 // Composition root. Every context resolved above is registered once here; the dispatch switch below
 // asks for a command rather than handing each one its arguments.
 var services = new ServiceCollection()
-    .AddCapacitorCli(config, home, daemonPaths, profiles, serverEnv, machineEnv, clock, baseUrl);
+    .AddCapacitorCli(
+        config, home, daemonPaths, profiles, serverEnv, machineEnv, endpoints, clock, baseUrl,
+        telemetryStartup);
 
 await using var sp = services.BuildValidated();
 
@@ -111,7 +119,7 @@ TCommand Run<TCommand>() where TCommand : notnull => sp.GetRequiredService<TComm
 
 ISessionsApi Api() => sp.GetRequiredService<ISessionsApi>();
 
-// Telemetry: initialised once the server URL is known (it decides the `organization` group) and
+// Telemetry: started once the server URL is known (it decides the `organization` group) and
 // torn down from ProcessExit, which observes the exit code returned by top-level Main. Every
 // call swallows, so nothing here can fail a command.
 //
@@ -119,22 +127,10 @@ ISessionsApi Api() => sp.GetRequiredService<ISessionsApi>();
 // ProcessExit handler outlives that block anyway.
 var commandStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
-// TokenStore.LoadAsync() is the LOCAL read (src/Capacitor.Cli.Core/Auth/TokenStore.cs:211) —
-// deliberately not GetValidTokensForProfileAsync(), which can refresh over the network. `logged_in` is a
-// cheap fact about disk, never a reason to make a request on the command path.
-//
-// Gated on IsReportable: denylisted commands (chiefly `hook`, thousands of invocations/day on
-// the agent's critical path) never send `logged_in` — CliTelemetry.Initialize below disables
-// itself for them regardless — so the disk read has no consumer and is worth skipping outright.
-var loggedIn = false;
-if (CommandEvents.IsReportable(command)) {
-    try { loggedIn = await sp.GetRequiredService<TokenStore>().LoadForProfileAsync(profiles.Name) is not null; } catch { }
-}
-
 // `kcap config set telemetry off` must never activate telemetry for the very invocation that
-// opts out: without this, Initialize below resolves Enabled from the not-yet-updated persisted
+// opts out: without this, the facade resolves enabled from the not-yet-updated persisted
 // flag, mints a device id, shows the first-run notice, and queues cli_first_run — all before
-// ConfigCommand ever runs. Pre-apply the "off" to disk here so Initialize sees it already
+// ConfigCommand ever runs. Pre-apply the "off" to disk here so the facade sees it already
 // persisted. Value recognition only (no throw on garbage — an invalid value is reported
 // normally once ConfigCommand actually dispatches); KCAP_TELEMETRY=1 still overrides a persisted
 // "off" exactly as it does everywhere else, since Resolve checks the env var first regardless of
@@ -145,14 +141,21 @@ if (args.Length >= 4 && command == "config" && args[1] == "set" && args[2] == "t
     TelemetryState.SetEnabled(false, config);
 }
 
-// spec decision 9: an app-spawned CLI child must not emit CLI-labeled telemetry nor consume
-// the one-time privacy notice on an invisible stderr. Consume-and-REMOVE before dispatch so
-// no grandchild (detached daemon, hosted agents) can observe the marker.
-var telemetrySuppressed = CliTelemetry.ConsumeSpawnMarker(
-    Environment.GetEnvironmentVariable,
-    k => Environment.SetEnvironmentVariable(k, null));
+var telemetry = sp.GetRequiredService<CliTelemetry>();
 
-CliTelemetry.Initialize(command, baseUrl, loggedIn, config, telemetrySuppressed);
+// TokenStore.LoadForProfileAsync is the LOCAL read — deliberately not the refreshing one, which can
+// go to the network. `logged_in` is a cheap fact about disk, never a reason to make a request on the
+// command path, and it is skipped for denylisted commands (chiefly `hook`, thousands of invocations
+// a day on the agent's critical path) whose facade is off anyway.
+if (telemetry.Enabled) {
+    var loggedIn = false;
+    try { loggedIn = await sp.GetRequiredService<TokenStore>().LoadForProfileAsync(profiles.Name) is not null; } catch { }
+    telemetry.AddSharedProperty("logged_in", loggedIn);
+}
+
+// After the bag is complete and before dispatch: this shows the one-time privacy notice and queues
+// cli_first_run, which is once per device — a property missing from it is missing for good.
+telemetry.Announce(config);
 
 AppDomain.CurrentDomain.ProcessExit += (_, _) => {
     // Environment.Exit runs no `finally` and no `using` disposal, so a leg that ends that way has no
@@ -161,8 +164,8 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) => {
     // once, so a leg that already sent stays silent and a process with none armed is a no-op.
     FirstRunInterruptRelinquish.RunBeforeExit(InteractiveLifetime.ExitNoticeBudget);
 
-    CliTelemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart));
-    CliTelemetry.FlushAndClose().GetAwaiter().GetResult();
+    telemetry.RecordCommand(command, args, Environment.ExitCode, CommandTiming.ElapsedMs(commandStart));
+    telemetry.FlushAndClose().GetAwaiter().GetResult();
 };
 
 // Everything from here to the end of command dispatch — including the --help,

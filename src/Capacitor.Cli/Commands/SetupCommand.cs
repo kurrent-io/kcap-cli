@@ -418,7 +418,8 @@ public sealed class SetupCommand(
         TokenStore store, IHttpClientFactory httpFactory,
         IAuthProxyClient proxy, WorkOSClient workos, GitHubOAuthClient github, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
-        TenantProvisioningClient provisioning, AuthProviderDiscovery discovery) {
+        TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
+        AuthEndpoints endpoints) {
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
 
@@ -486,7 +487,7 @@ public sealed class SetupCommand(
 
         var profile = await AppConfig.LoadProfileConfig(config);
 
-        SetupFunnel.Started(
+        telemetry.Funnel.Started(
             hasExistingProfile: AppConfig.HasConfiguredProfile(profile),
             serverUrlProvided:  serverUrlArg is not null,
             noPrompt:           noPrompt);
@@ -1052,7 +1053,7 @@ public sealed class SetupCommand(
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
         }.Count(installed => installed);
 
-        SetupFunnel.Succeeded(agentsConfigured);
+        telemetry.Funnel.Succeeded(agentsConfigured);
 
         return 0;
     }
@@ -1374,7 +1375,7 @@ public sealed class SetupCommand(
             ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null) =>
         FacadeOverride?.Invoke(provisioner)
             ?? new OnboardingFacade(config, store, httpFactory, proxy, github, workos, StepProgress, browser,
-                picker ?? DefaultPicker(browser, () => true), provisioner,
+                picker ?? DefaultPicker(browser, () => true), provisioner, telemetry, endpoints,
                 WorkspaceGuard(requested)) {
                 KeyWatcher = ConsoleKeyWatcher.Instance
             };
@@ -1778,7 +1779,7 @@ public sealed class SetupCommand(
         var chosen   = OAuthLoginFlow.ChooseDiscoveryProvider(args);
         var headless = HeadlessEnvironment.IsHeadless();
 
-        AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
+        AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(endpoints.ProxyUrl)}[/]");
 
         // WorkOS no longer follows headlessness: its ladder opens the browser either way, and only an
         // explicit --device takes the device grant. GitHub's exchange URL is not known until the proxy
@@ -1786,7 +1787,7 @@ public sealed class SetupCommand(
         var signinMode = chosen == AuthProvider.WorkOS
             ? OAuthLoginFlow.ChooseWorkOSFlow(forceDevice) == WorkOSFlow.Device ? "device" : "browser"
             : forceDevice || headless ? "device" : "browser";
-        SetupFunnel.SigninOpened(signinMode, chosen);
+        telemetry.Funnel.SigninOpened(signinMode, chosen);
 
         // Armed for every WorkOS session, headless included: that path has a device grant now, so
         // a zero-workspace headless user now completes a sign-in and would otherwise hold a live
@@ -1798,7 +1799,7 @@ public sealed class SetupCommand(
 
         var provisioner = chosen == AuthProvider.WorkOS
             ? new SpectreTenantProvisioner(
-                provisioning, ProvisioningEndpoint.Url,
+                provisioning, endpoints.SignupUrl, telemetry,
                 isInteractive: () => canPrompt, requested: requested)
             : null;
 
@@ -1809,18 +1810,18 @@ public sealed class SetupCommand(
         if (chosen == AuthProvider.GitHubApp) {
             switch (result) {
                 case AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }:
-                    SetupFunnel.SigninFailed("github_token_denied");
+                    telemetry.Funnel.SigninFailed("github_token_denied");
 
                     break;
                 // Other and NoTenantsFound only occur once AcquireGitHubTokenAsync already succeeded.
                 case AuthResult.Committed:
                 case AuthResult.Failed { Reason: AuthFailureReason.Other }:
-                    SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
+                    telemetry.Funnel.SigninCompleted(AuthProvider.GitHubApp);
 
                     break;
                 case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound }:
-                    SetupFunnel.SigninCompleted(AuthProvider.GitHubApp);
-                    SetupFunnel.TenantNone(AuthProvider.GitHubApp);
+                    telemetry.Funnel.SigninCompleted(AuthProvider.GitHubApp);
+                    telemetry.Funnel.TenantNone(AuthProvider.GitHubApp);
 
                     break;
             }
@@ -1969,7 +1970,7 @@ public sealed class SetupCommand(
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
-                CliSetupPingBody(version, SetupJoin.Current),
+                CliSetupPingBody(version, telemetry.Join.Current),
                 System.Text.Encoding.UTF8,
                 "application/json");
 

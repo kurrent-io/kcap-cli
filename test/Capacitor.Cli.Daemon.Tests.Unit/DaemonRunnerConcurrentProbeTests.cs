@@ -7,39 +7,43 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// on — the probes overlap, and a probe still unfinished at the ceiling maps to the miss value without
 /// holding the rest of the pass hostage.
 /// </summary>
-[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerConcurrentProbeTests {
-    static void InterlockedMax(ref int target, int value) {
-        int seen;
-        do { seen = Volatile.Read(ref target); }
-        while (value > seen && Interlocked.CompareExchange(ref target, value, seen) != seen);
-    }
-
-    /// <summary>A sequential pass can never hold two probes in flight at once, so an observed peak of
-    /// two or more is proof the pass overlapped them.</summary>
+    /// <summary>Every probe waits for all of its peers to be in flight before it returns, so a pass that
+    /// ran them one at a time could never complete even one. The thread pool is saturated first: the
+    /// overlap has to hold when the daemon's pool is busy, and a probe queued on it would start only as
+    /// the pool grew. The pool is process-wide, hence the bare exclusion. Both waits are event waits,
+    /// like the real probe's WaitForExit: a Task.Wait on a pool thread tells the pool it is blocked and
+    /// gets a compensating thread, which is exactly what the probes do not get.</summary>
     [Test]
-    public async Task ProbeVendorsConcurrently_OverlapsProbes_RatherThanSerializing() {
+    [NotInParallel]
+    public async Task ProbeVendorsConcurrently_OverlapsProbes_EvenWhenThreadPoolIsSaturated() {
         string[] vendors = ["a", "b", "c", "d", "e"];
-        var current       = 0;
-        var maxConcurrent = 0;
+        using var hold  = new ManualResetEventSlim(false);
+        // Not disposed: a probe stranded by a regression can still be inside Wait when the pass returns.
+        var allInFlight = new CountdownEvent(vendors.Length);
 
-        var result = DaemonRunner.ProbeVendorsConcurrently(
-            vendors,
-            vendor => {
-                var now = Interlocked.Increment(ref current);
-                InterlockedMax(ref maxConcurrent, now);
-                Thread.Sleep(300);   // hold the slot so peers can pile up
-                Interlocked.Decrement(ref current);
+        ThreadPool.GetMinThreads(out var minWorkers, out _);
+        var blockers = Enumerable.Range(0, Math.Max(minWorkers, ThreadPool.ThreadCount) + 4)
+            .Select(_ => Task.Run(() => hold.Wait()))
+            .ToArray();
 
-                return vendor + "-ok";
-            },
-            timedOut: "TIMEOUT");
+        IReadOnlyDictionary<string, string> result;
+        try {
+            result = DaemonRunner.ProbeVendorsConcurrently(
+                vendors,
+                vendor => {
+                    allInFlight.Signal();
 
-        await Assert.That(maxConcurrent).IsGreaterThanOrEqualTo(2)
-            .Because("a sequential pass would never show two probes in flight at once");
+                    return allInFlight.Wait(2_000) ? vendor + "-ok" : vendor + "-alone";
+                },
+                timedOut: "TIMEOUT",
+                ceilingMs: 2_000);
+        }
+        finally { hold.Set(); }
+        await Task.WhenAll(blockers);
+
         await Assert.That(result.Keys).IsEquivalentTo(vendors);
-        await Assert.That(result.Values.All(v => v == "TIMEOUT")).IsFalse();
-        await Assert.That(result["c"]).IsEqualTo("c-ok");
+        await Assert.That(result.Values).IsEquivalentTo(vendors.Select(v => v + "-ok").ToArray());
     }
 
     /// <summary>A single slow vendor is cut at the ceiling and maps to the miss value; the vendors that
@@ -47,16 +51,21 @@ public class DaemonRunnerConcurrentProbeTests {
     [Test]
     public async Task ProbeVendorsConcurrently_SlowVendorMapsToTimeout_FastVendorsStillResolve() {
         string[] vendors = ["fast1", "slow", "fast2"];
+        var wedged = new TaskCompletionSource();
 
-        var result = DaemonRunner.ProbeVendorsConcurrently(
-            vendors,
-            vendor => {
-                if (vendor == "slow") Thread.Sleep(4_000);
+        IReadOnlyDictionary<string, string> result;
+        try {
+            result = DaemonRunner.ProbeVendorsConcurrently(
+                vendors,
+                vendor => {
+                    if (vendor == "slow") wedged.Task.Wait();
 
-                return vendor + "-v";
-            },
-            timedOut: "TIMEOUT",
-            ceilingMs: 800);
+                    return vendor + "-v";
+                },
+                timedOut: "TIMEOUT",
+                ceilingMs: 800);
+        }
+        finally { wedged.SetResult(); }
 
         await Assert.That(result["fast1"]).IsEqualTo("fast1-v");
         await Assert.That(result["fast2"]).IsEqualTo("fast2-v");

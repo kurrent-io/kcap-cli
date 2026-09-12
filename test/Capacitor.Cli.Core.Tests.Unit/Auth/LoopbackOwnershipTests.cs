@@ -99,7 +99,7 @@ public class LoopbackOwnershipTests {
         var fake = new DisposableFakeBrowser("?code=abc&state=mismatch");
 
         var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
-            Github, "client-id", "http://127.0.0.1:1/exchange", new RecordingBrowser(),
+            Github, "client-id", "http://127.0.0.1:1/exchange", new RecordingBrowser(), NoTelemetry.Join,
             browser: fake, timeout: TimeSpan.FromSeconds(1));
 
         await Assert.That(token).IsNull();
@@ -193,11 +193,55 @@ public class LoopbackOwnershipTests {
             if (!statement.Contains("using ", StringComparison.Ordinal))
                 violations.Add($"{file}:{line}: constructed outside a `using` declaration — {Squash(statement)}");
 
-            if (!arguments.Contains("SetupJoin.Loopback", StringComparison.Ordinal))
-                violations.Add($"{file}:{line}: does not pass the join collaborator — {Squash(arguments)}");
+            // Presence is not enough, and neither is the name: `join` is optional AND nullable on
+            // LoopbackBrowser, so a site can pass nothing, or pass null, and still compile. This
+            // guard is the only thing that refuses either.
+            switch (JoinArgument(arguments)) {
+                case null:
+                    violations.Add($"{file}:{line}: does not pass the join collaborator — {Squash(arguments)}");
+                    break;
+                case "null":
+                    violations.Add($"{file}:{line}: passes a null join collaborator — {Squash(arguments)}");
+                    break;
+            }
         }
 
         return violations;
+    }
+
+    /// <summary>
+    /// The value handed to <c>join</c>, or null when the site passes none. Named form first, then
+    /// the fourth positional slot; a ternary in the <c>hint</c> slot carries no top-level comma, so
+    /// depth-aware splitting is enough to keep the slots aligned.
+    /// </summary>
+    static string? JoinArgument(string arguments) {
+        var parts = SplitTopLevel(arguments);
+
+        foreach (var part in parts) {
+            var colon = part.IndexOf(':');
+            if (colon > 0 && part[..colon].Trim() == "join") return part[(colon + 1)..].Trim();
+        }
+
+        return parts.Count >= 4 && !parts[3].Contains(':') ? parts[3].Trim() : null;
+    }
+
+    static List<string> SplitTopLevel(string arguments) {
+        var parts = new List<string>();
+        var depth = 0;
+        var start = 0;
+
+        for (var i = 0; i < arguments.Length; i++) {
+            if (arguments[i] is '(' or '[' or '<') depth++;
+            else if (arguments[i] is ')' or ']' or '>') depth--;
+            else if (arguments[i] == ',' && depth == 0) {
+                parts.Add(arguments[start..i]);
+                start = i + 1;
+            }
+        }
+
+        parts.Add(arguments[start..]);
+
+        return parts;
     }
 
     static string Squash(string text) => string.Join(' ', text.Split('\n', StringSplitOptions.TrimEntries)).Trim();
@@ -212,10 +256,9 @@ public class LoopbackOwnershipTests {
     }
 
     // A guard that finds nothing to check reports success, so the floor is asserted rather than
-    // assumed. Both sites live in OAuthLoginFlow now — the GitHub flow and the WorkOS ladder —
-    // after upstream moved construction out of OnboardingFacade and into the ladder. The floor
-    // dropped from three sites in two files to two in one when that happened, which is exactly the
-    // kind of change worth re-deriving by hand rather than letting a scan quietly go empty.
+    // assumed. Both sites live in OAuthLoginFlow — the GitHub flow and the WorkOS ladder — so the
+    // floor is two sites in one file. Re-derive it by hand when it moves, rather than letting a
+    // scan quietly go empty.
     [Test]
     public async Task The_scan_actually_reaches_the_construction_sites() {
         var sites = FindSites(Path.Combine(RepoRoot(), "src"));
@@ -235,11 +278,11 @@ public class LoopbackOwnershipTests {
             "namespace Fixture;",
             "static class Owned {",
             "    static void Simple() {",
-            "        using var browser = new LoopbackBrowser(progress: progress, join: SetupJoin.Loopback);",
+            "        using var browser = new LoopbackBrowser(progress: progress, join: join);",
             "    }",
             "    static void NullableTernary(object? injected) {",
             "        using LoopbackBrowser? created =",
-            "            injected is null ? new LoopbackBrowser(progress: progress, join: SetupJoin.Loopback) : null;",
+            "            injected is null ? new LoopbackBrowser(progress: progress, join: join) : null;",
             "    }",
             "}",
         ]);
@@ -257,7 +300,7 @@ public class LoopbackOwnershipTests {
             "static class Leaked {",
             "    static void Go() {",
             "        var options = new OidcClientOptions {",
-            "            Browser = new LoopbackBrowser(progress: progress, join: SetupJoin.Loopback),",
+            "            Browser = new LoopbackBrowser(progress: progress, join: join),",
             "        };",
             "    }",
             "}",
@@ -267,6 +310,27 @@ public class LoopbackOwnershipTests {
 
         await Assert.That(violations.Count).IsEqualTo(1);
         await Assert.That(violations[0]).Contains("outside a `using` declaration");
+    }
+
+    // The form the compiler cannot refuse: `join` is optional and nullable, so this builds and runs
+    // with the collaborator silently absent.
+    [Test]
+    public async Task Scanner_flags_a_site_that_passes_a_null_join() {
+        using var tmp = new TempDir();
+
+        tmp.CreateFile("Nulled.cs", [
+            "namespace Fixture;",
+            "static class Nulled {",
+            "    static void Go() {",
+            "        using var browser = new LoopbackBrowser(progress: progress, join: null);",
+            "    }",
+            "}",
+        ]);
+
+        var violations = FindOwnershipViolations(tmp.Path);
+
+        await Assert.That(violations.Count).IsEqualTo(1);
+        await Assert.That(violations[0]).Contains("passes a null join collaborator");
     }
 
     [Test]
@@ -486,7 +550,7 @@ public class LoopbackOwnershipTests {
             "namespace Fixture;",
             "static class Nested {",
             "    static void Go() {",
-            "        using var browser = new LoopbackBrowser(openBrowser: Resolve(url), join: SetupJoin.Loopback);",
+            "        using var browser = new LoopbackBrowser(openBrowser: Resolve(url), join: join);",
             "    }",
             "}",
         ]);

@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// </summary>
 public sealed class TelemetryClient(
         HttpMessageHandler handler, TelemetrySpool spool, string token, string endpoint,
-        TimeProvider? timeProvider = null) {
+        TimeProvider? timeProvider = null) : ITelemetrySink {
     readonly List<TelemetryEvent> _queue = [];
 
     // Test seam only: production always uses the default (real) clock. Lets a test simulate a
@@ -19,6 +19,15 @@ public sealed class TelemetryClient(
 
     public void Enqueue(TelemetryEvent e) {
         lock (_queue) _queue.Add(e);
+    }
+
+    /// <summary>
+    /// Drops the queue without spooling it. Nothing here has been shipped, and the caller is
+    /// turning telemetry off — spilling to disk would park events for a later run to send, which
+    /// is the opposite of what the opt-out asked for.
+    /// </summary>
+    public void Discard() {
+        lock (_queue) _queue.Clear();
     }
 
     /// <summary>Ships queued + previously spooled events. Returns false when nothing reached

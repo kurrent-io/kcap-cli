@@ -142,6 +142,27 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
+    readonly ComposerHistory _history = new();
+    int _recallEdits = -1;
+    /// Replaces the composer text with the next older sent prompt; false when nothing changed.
+    public bool RecallOlder() => Recall(_history.Older(Recallable()));
+    /// Replaces the composer text with the next newer sent prompt, or the draft past the newest.
+    public bool RecallNewer() => Recall(_history.Newer(Recallable()));
+
+    /// Text equality cannot prove a recall was left alone — an edit undone by hand lands on the
+    /// same string — so the edit count decides, as it does for the sent draft.
+    string Recallable() {
+        if (_composerEdits != _recallEdits) _history.EndNavigation();
+        return ComposerText;
+    }
+
+    bool Recall(string? text) {
+        if (text is null) return false;
+        ComposerText = text;
+        _recallEdits = _composerEdits;
+        return true;
+    }
+
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
@@ -332,6 +353,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 outcome = ChatSendOutcome.Unconfirmed;
             }
             if (_lifetimeToken.IsCancellationRequested) return;
+            if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
             if (outcome == ChatSendOutcome.Rejected || (outcome == ChatSendOutcome.Accepted && _projection is null))
                 _queuedMessages.Remove(queued);
             else if (outcome == ChatSendOutcome.Unconfirmed)

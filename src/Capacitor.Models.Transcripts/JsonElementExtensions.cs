@@ -11,6 +11,7 @@ public static class JsonElementExtensions {
         public bool IsArray  => el.ValueKind == JsonValueKind.Array;
         public bool IsNumber => el.ValueKind == JsonValueKind.Number;
         public bool IsNull   => el.ValueKind == JsonValueKind.Null;
+        public bool IsTrue   => el.ValueKind == JsonValueKind.True;
 
         public string? Str(string property) => el.IsObject && el.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 

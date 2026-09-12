@@ -82,10 +82,10 @@ public static class OAuthLoginFlow {
     /// headless works; creating a workspace asks for an organization name and a slug, so without a
     /// terminal those two have to arrive as flags instead.
     /// </summary>
-    internal static string WorkspaceCreationNeedsATerminalMessage() =>
+    internal static string WorkspaceCreationNeedsATerminalMessage(string signupUrl) =>
         "Creating a workspace asks for a name and a slug, and this session is non-interactive.\n"
       + "  • Answer up front: kcap setup --org \"<name>\" --slug <slug> --no-prompt\n"
-      + $"  • Or create one at {ProvisioningEndpoint.Url}/signup, then run: kcap setup <slug> --no-prompt\n"
+      + $"  • Or create one at {signupUrl}/signup, then run: kcap setup <slug> --no-prompt\n"
       + "  • Or point at a workspace you already belong to: kcap setup --server-url <url> --no-prompt";
 
     /// <summary>
@@ -291,6 +291,7 @@ public static class OAuthLoginFlow {
     /// </summary>
     public static async Task<string?> RunGitHubBrowserFlowAsync(
             GitHubOAuthClient github, string clientId, string codeExchangeUrl, IBrowserLauncher launcher,
+            ILoopbackJoin join,
             IBrowser? browser = null, TimeSpan? timeout = null,
             CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
@@ -301,7 +302,7 @@ public static class OAuthLoginFlow {
         // injected one would tear down a test's stand-in, or a future caller's shared instance.
         // `using` on a nullable disposes only when non-null, which is exactly the distinction.
         using LoopbackBrowser? created =
-            browser is null ? new LoopbackBrowser(launcher, progress, join: SetupJoin.Loopback) : null;
+            browser is null ? new LoopbackBrowser(launcher, progress, join: join) : null;
         browser ??= created!; // non-null exactly when browser was null, which is when we built it
 
         var redirectUri = $"http://127.0.0.1:{GetAvailablePort()}/callback";
@@ -502,7 +503,7 @@ public static class OAuthLoginFlow {
 
     internal static async Task<string?> AcquireGitHubTokenAsync(
             GitHubOAuthClient github, string clientId, string? codeExchangeUrl, bool forceDevice,
-            IBrowserLauncher launcher,
+            IBrowserLauncher launcher, ILoopbackJoin join,
             CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
@@ -512,7 +513,7 @@ public static class OAuthLoginFlow {
         if (choice == GitHubFlow.Browser) {
             try {
                 var token = await RunGitHubBrowserFlowAsync(
-                    github, clientId, codeExchangeUrl!, launcher, ct: ct, progress: progress);
+                    github, clientId, codeExchangeUrl!, launcher, join, ct: ct, progress: progress);
 
                 return token ??
                     // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
@@ -680,11 +681,11 @@ public static class OAuthLoginFlow {
     /// device grant reachable by pressing <c>d</c> at any point and taken automatically when loopback
     /// cannot bind. A loopback attempt that RAN and failed returns <c>null</c> rather than falling
     /// through — a cancel or a state mismatch is an answer, and silently re-asking through another
-    /// channel would ignore it. Mirrors <see cref="AcquireGitHubTokenAsync(GitHubOAuthClient,string,string?,bool,IBrowserLauncher,CancellationToken,IAuthProgress?)"/>.
+    /// channel would ignore it. Mirrors <see cref="AcquireGitHubTokenAsync(GitHubOAuthClient,string,string?,bool,IBrowserLauncher,Telemetry.ILoopbackJoin,CancellationToken,IAuthProgress?)"/>.
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> AcquireWorkOSAsync(
             WorkOSClient workos, string clientId, string? organizationId, bool forceDevice,
-            IBrowserLauncher launcher,
+            IBrowserLauncher launcher, ILoopbackJoin join,
             IBrowser? browser = null, string apiBase = WorkOSApiBase, CancellationToken ct = default,
             IAuthProgress? progress = null, IKeyWatcher? keys = null, TimeProvider? time = null) {
         progress ??= ConsoleAuthProgress.Instance;
@@ -709,7 +710,7 @@ public static class OAuthLoginFlow {
         // round trip merged in under a second) but genuinely tighter, not equivalent.
         using LoopbackBrowser? created = browser is null
             ? new LoopbackBrowser(
-                launcher, progress, keys.CanWatch ? WorkOSBrowserHint() : null, SetupJoin.Loopback)
+                launcher, progress, keys.CanWatch ? WorkOSBrowserHint() : null, join)
             : null;
 
         var login = AuthenticateWorkOSAsync(
@@ -793,12 +794,12 @@ public static class OAuthLoginFlow {
     /// </summary>
     internal static async Task<(StoredTokens Tokens, string Username)?> WorkOSTokensForServerAsync(
             WorkOSClient workos, string serverUrl, string clientId, string? organizationId, bool forceDevice,
-            IBrowserLauncher launcher,
+            IBrowserLauncher launcher, ILoopbackJoin join,
             IBrowser? browser, CancellationToken ct, IAuthProgress progress, string apiBase = WorkOSApiBase,
             IKeyWatcher? keys = null, TimeProvider? time = null) {
         // AcquireWorkOSAsync already reported the specific failure reason.
         var json = await AcquireWorkOSAsync(
-            workos, clientId, organizationId, forceDevice, launcher, browser, apiBase, ct, progress, keys, time);
+            workos, clientId, organizationId, forceDevice, launcher, join, browser, apiBase, ct, progress, keys, time);
         if (json is null) return null;
 
         // Org gate: a multi-org user must not be "logged in" to the wrong org — every API call would

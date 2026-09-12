@@ -108,6 +108,7 @@ public sealed class WizardTenantProvisioner(
         TenantProvisioningClient client,
         string                   baseUrl,
         IAuthProgress            progress,
+        CliTelemetry             telemetry,
         TimeProvider?            time = null) : ITenantProvisioner {
     internal const int PollIntervalMs = 4000;
     internal const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
@@ -125,13 +126,13 @@ public sealed class WizardTenantProvisioner(
         // Says what was actually established, not more: single sign-on returned nothing.
         progress.Notice("Single sign-on found no Capacitor workspace for your account.");
         progress.Notice("A workspace that signs in with the GitHub App won't appear here.");
-        SetupFunnel.WorkspaceOffered();
+        telemetry.Funnel.WorkspaceOffered();
 
         var mode = OfferMode is null ? new ProvisionMode.Cancel() : await OfferMode(ct);
 
         switch (mode) {
             case ProvisionMode.Existing existing when !string.IsNullOrWhiteSpace(existing.Input):
-                SetupFunnel.WorkspaceRedirected();
+                telemetry.Funnel.WorkspaceRedirected();
 
                 return ProvisionOffer.ExistingWorkspace(existing.Input.Trim());
             case ProvisionMode.Create:
@@ -154,13 +155,14 @@ public sealed class WizardTenantProvisioner(
 
         if (ConfirmCreate is null || !await ConfirmCreate(slug, origin, ct)) return Declined();
 
-        SetupFunnel.WorkspaceRequested();
+        telemetry.Funnel.WorkspaceRequested();
 
-        var outcome = await client.ProvisionAsync(baseUrl, await tokens.GetAsync(ct), orgName, slug, ct);
+        var outcome = await client.ProvisionAsync(
+            baseUrl, await tokens.GetAsync(ct), orgName, slug, telemetry.Join.Current, ct);
 
         switch (outcome.StatusCode) {
             case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
-                SetupFunnel.WorkspaceProvisioned();
+                telemetry.Funnel.WorkspaceProvisioned();
 
                 return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
             case 202 or 200:
@@ -230,7 +232,7 @@ public sealed class WizardTenantProvisioner(
 
             switch (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)) {
                 case PollVerdict.Active:
-                    SetupFunnel.WorkspaceProvisioned();
+                    telemetry.Funnel.WorkspaceProvisioned();
 
                     return ProvisionOffer.Created(
                         new ProvisionedTenant(status.Body!.WorkosOrgId!, slug, orgName, status.Body.Url ?? origin));
@@ -252,7 +254,7 @@ public sealed class WizardTenantProvisioner(
         // Notice, not Error: the workspace is being created, nothing has gone wrong. The reason on the
         // result is what lets the step headline it as pending rather than failed.
         progress.Notice($"Still provisioning — finish later by joining '{slug}' from the Connect step.");
-        SetupFunnel.WorkspaceFailed("poll_timeout");
+        telemetry.Funnel.WorkspaceFailed("poll_timeout");
 
         return ProvisionOffer.InProgress(slug);
     }
@@ -261,14 +263,14 @@ public sealed class WizardTenantProvisioner(
     // or the step renders a bare failure for something the user chose.
     ProvisionOffer Declined() {
         progress.Notice("No workspace created.");
-        SetupFunnel.WorkspaceDeclined();
+        telemetry.Funnel.WorkspaceDeclined();
 
         return ProvisionOffer.Declined;
     }
 
     ProvisionOffer Failed(string message, string reason) {
         progress.Error(message);
-        SetupFunnel.WorkspaceFailed(reason);
+        telemetry.Funnel.WorkspaceFailed(reason);
 
         return ProvisionOffer.Failed;
     }
@@ -292,14 +294,20 @@ public sealed class WizardTenantProvisioner(
 /// not representable.
 /// </summary>
 public sealed class WizardBridges {
-    public WizardBridges(Action<Action> post, Func<IAuthProgress, WizardTenantProvisioner> provisioner) {
+    public WizardBridges(
+            Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints,
+            Func<IAuthProgress, WizardTenantProvisioner> provisioner) {
         Post        = post;
+        Telemetry   = telemetry;
+        Endpoints   = endpoints;
         Progress    = new UiAuthProgress(post);
         Picker      = new WizardTenantPicker(Progress);
         Provisioner = provisioner(Progress);
     }
 
     public Action<Action>          Post        { get; }
+    public CliTelemetry            Telemetry   { get; }
+    public AuthEndpoints           Endpoints   { get; }
     public UiAuthProgress          Progress    { get; }
     public WizardTenantPicker      Picker      { get; }
     public WizardTenantProvisioner Provisioner { get; }

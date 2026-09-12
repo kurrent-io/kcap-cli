@@ -701,7 +701,9 @@ public class ClaudeHookCommandTests {
         var exit  = await ClaudeHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+        // The property is that the cap beat the inner, not what scheduling latency the cap's own
+        // timer saw: anything under the inner's ten seconds can only be the cap having fired.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Test]

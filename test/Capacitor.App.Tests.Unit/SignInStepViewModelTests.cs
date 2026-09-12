@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using System.Net;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
@@ -82,9 +83,10 @@ public class SignInStepViewModelTests {
             Claims = new ConsentFlipClaims(_config.Root);
 
             var bridges = new WizardBridges(
-                action => action(),
+                action => action(), CliTelemetry.Disabled(), AuthEndpoints.Defaults,
                 progress => new WizardTenantProvisioner(
-                    new TenantProvisioningClient(new HttpClient(Signup)), "https://signup.example", progress, Time));
+                    new TenantProvisioningClient(new HttpClient(Signup)), "https://signup.example", progress,
+                    CliTelemetry.Disabled(), Time));
 
             Picker      = bridges.Picker;
             Progress    = bridges.Progress;

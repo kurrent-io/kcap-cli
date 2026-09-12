@@ -30,10 +30,10 @@
                     BorderThickness="1" CornerRadius="12" Padding="20">
                 <StackPanel Spacing="10">
                     <TextBlock Text="Capacity" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}" />
-                    <TextBlock Text="Maximum agents running at once. Existing agents keep running when you lower this limit."
+                    <TextBlock Text="Maximum agents running at once, or 0 for unlimited. Existing agents keep running when you lower this limit."
                                TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
                     <Grid ColumnDefinitions="140,*,Auto">
-                        <NumericUpDown x:Name="CapacityInput" Value="{Binding Capacity, Mode=TwoWay}" Minimum="1"
+                        <NumericUpDown x:Name="CapacityInput" Value="{Binding Capacity, Mode=TwoWay}" Minimum="0"
                                        Maximum="2147483647" Increment="1" FormatString="0" IsEnabled="{Binding CanEdit}" />
                         <Button Grid.Column="2" x:Name="SaveButton" Content="Save" Classes="kcapPrimary"
                                 Command="{Binding SaveCommand}" Padding="20,8" />

@@ -95,7 +95,7 @@ Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/
 
 The app must run from the Applications folder — launched from the disk image or from Downloads it offers to move itself there first, because the terminal link and the background service point at its location.
 
-Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
+Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. Set it to **0** for no limit. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
 
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
@@ -870,7 +870,7 @@ kcap daemon service ensure                 # install-or-start from a fresh statu
 kcap daemon service uninstall              # stop and remove the service
 ```
 
-`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override, or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
+`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
 
 `status --json` prints a machine-readable snapshot (service/job/daemon pids, binary paths, and transaction-marker state) instead of the human summary, and exits non-zero if the underlying service state can't be determined — for scripts that need to decide whether to attach, start, or repair a service without parsing human-readable text.
 
@@ -1466,6 +1466,7 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
+| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents`, the `KCAP_MAX_AGENTS` env var, or the desktop app's **Settings…**; a running daemon applies a change without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
 

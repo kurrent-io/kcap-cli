@@ -195,7 +195,7 @@ public class AppMenuBarTests {
     public async Task The_app_menu_opens_About() {
         var opened = 0;
         var layout = await AvaloniaSession.DispatchAsync(() => {
-            var menu = AppMenuBar.BuildAppMenu(() => opened++);
+            var menu = new AppMenu(() => opened++).Menu;
             Click(Item(menu, "About Kurrent Capacitor"));
             return Layout(menu);
         });
@@ -218,14 +218,36 @@ public class AppMenuBarTests {
     public async Task Settings_has_Command_comma_and_is_enabled_only_after_composition() {
         var opened = 0;
         var (before, after, gesture) = await AvaloniaSession.DispatchAsync(() => {
-            var disabled = Item(AppMenuBar.BuildAppMenu(() => { }), "Settings…");
-            var enabled = Item(AppMenuBar.BuildAppMenu(() => { }, () => opened++), "Settings…");
-            Click(enabled);
-            return (disabled.IsEnabled, enabled.IsEnabled, enabled.Gesture);
+            var appMenu = new AppMenu(() => { });
+            var settings = Item(appMenu.Menu, "Settings…");
+            var before = settings.IsEnabled;
+            appMenu.SetSettingsAction(() => opened++);
+            Click(settings);
+            return (before, settings.IsEnabled, settings.Gesture);
         });
         await Assert.That(before).IsFalse();
         await Assert.That(after).IsTrue();
         await Assert.That(gesture).IsEqualTo(new KeyGesture(Key.OemComma, KeyModifiers.Meta));
+        await Assert.That(opened).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Settings_exported_at_startup_becomes_enabled_and_opens_after_composition() {
+        var opened = 0;
+        var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+            var app = new Capacitor.App.App();
+            app.Initialize();
+            var settings = Item(NativeMenu.GetMenu(app)!, "Settings…");
+            var before = settings.IsEnabled;
+
+            app.ConfigureSettingsMenu(() => opened++);
+            Click(settings);
+            return (before, settings.IsEnabled);
+        });
+
+        await Assert.That(before).IsFalse();
+        await Assert.That(after).IsTrue();
         await Assert.That(opened).IsEqualTo(1);
     }
 

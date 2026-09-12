@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Core.Telemetry;
 
@@ -8,137 +9,133 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// The only telemetry surface call sites touch. Every method swallows every exception:
 /// an exception escaping to the NativeAOT runtime aborts the process (see Program.cs), so a
 /// telemetry bug must never become a crash-on-every-command regression.
+///
+/// <para>One facade per process entry, constructed by <see cref="Start(TelemetryStartup, ConfigRoot)"/> and injected. A process
+/// that starts a second one — an MCP server re-deriving its startup under the reportable
+/// <c>mcp-server</c> pseudo-command — passes the same <see cref="TelemetryStartup"/> forward, so
+/// suppression and the resolved server travel as values rather than as state the first facade left
+/// behind.</para>
 /// </summary>
-public static class CliTelemetry {
+public sealed class CliTelemetry {
     const string Endpoint = "https://phog.kurrent.io";
     const string Token    = "phc_DeHBgHGersY4LmDlADnPrsCPOAmMO7QFOH8f4DVEVmD";
 
     static readonly TimeSpan FlushBudget = TimeSpan.FromSeconds(1.5);
 
-    static TelemetryClient? _client;
-    static string?          _deviceId;
-    static string?          _orgGroup;
-    static JsonObject       _shared = new();
-    static bool             _debug;
-    static bool             _suppressedSticky; // Once set true, remains true for process lifetime
-
-    /// <summary>Test seam: when set, events are collected here instead of being queued.</summary>
-    public static List<TelemetryEvent>? TestSink { get; set; }
-
-    public static bool Enabled { get; private set; }
+    readonly ITelemetrySink _sink;
+    readonly string         _command;
+    readonly string?        _deviceId;
+    readonly string?        _orgGroup;
+    readonly bool           _debug;
 
     /// <summary>
-    /// Restores every static below to its pristine, never-initialized state. Every test that
-    /// touches these statics (assigns <see cref="TestSink"/>, calls <see cref="Initialize"/>,
-    /// or drives a code path that reaches <see cref="DiscardAndDisable"/>) must call this FIRST —
-    /// before assigning <see cref="TestSink"/> — because a prior test in the same process can
-    /// leave <see cref="Enabled"/> false: <see cref="DiscardAndDisable"/> is real production
-    /// behaviour (it runs whenever telemetry is persisted to "off"), not a test artifact, so its
-    /// effects are exactly the kind of thing a later test must not silently inherit.
+    /// Guards <see cref="_shared"/>, which is written after construction as well as during it: the
+    /// loopback browser's background wait merges the returned web identity whenever the browser
+    /// comes back, and that moment coincides with the foreground funnel by design, since sign-in
+    /// reports completion immediately after the browser call returns.
+    /// <para>Unsynchronised, an insert during a capture's read faults the read, the exception is
+    /// swallowed on the way out (telemetry must never throw), and the event silently never
+    /// appears. Reproduced, and it takes the event the feature exists to measure.</para>
     /// </summary>
-    public static void Reset() {
-        _client = null; _deviceId = null; _orgGroup = null;
-        lock (_sharedGate) _shared = new JsonObject();
-        Enabled = false; TestSink = null; _suppressedSticky = false;
+    readonly object _sharedGate = new();
+
+    readonly JsonObject _shared;
+
+    CliTelemetry(
+            ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
+            bool debug, string signupUrl, JsonObject shared) {
+        _sink     = sink;
+        _command  = command;
+        _deviceId = deviceId;
+        _orgGroup = orgGroup;
+        _debug    = debug;
+        _shared   = shared;
+        Enabled   = enabled;
+        Join      = new SetupJoin(this, signupUrl);
+        Funnel    = new SetupFunnel(this);
     }
 
-    /// <summary>
-    /// The app-spawned-child marker (spec decision 9): consumed for telemetry suppression and
-    /// REMOVED from the process environment before command dispatch, so nothing this process
-    /// spawns (a detached daemon, hosted children) can observe it. Never touches the user's own
-    /// KCAP_TELEMETRY choice.
-    /// </summary>
-    public const string SpawnNoTelemetryVar = "KCAP_APP_SPAWN_NO_TELEMETRY";
+    public bool Enabled { get; private set; }
+
+    /// <summary>The correlation key for this run, minted for the interactive auth commands.</summary>
+    public SetupJoin Join { get; }
+
+    /// <summary>The signup funnel's event vocabulary, for the setup and login lanes.</summary>
+    public SetupFunnel Funnel { get; }
+
+    /// <summary>A facade that is off: nothing resolved, nothing minted, nothing captured.</summary>
+    public static CliTelemetry Disabled() =>
+        new(new NullTelemetrySink(), command: "", enabled: false, deviceId: null, orgGroup: null,
+            debug: false, AuthEndpoints.DefaultSignupUrl, new JsonObject());
 
     /// <summary>
-    /// Consumes the spawn marker from the environment and marks suppression as sticky for this
-    /// process. Sets <see cref="_suppressedSticky"/> so every future Initialize call in this
-    /// process honors suppression regardless of its `suppressed` parameter.
+    /// Resolves the opt-out decision, mints the device id and builds the shared property bag,
+    /// returning a facade that is either live or <see cref="Disabled"/>.
+    ///
+    /// <para>Reaches no console and captures nothing: the one-time privacy notice and
+    /// <c>cli_first_run</c> belong to <see cref="Announce"/>, which the caller invokes once the
+    /// shared bag is complete. Keeping them apart is what lets a container resolve this without
+    /// printing a disclosure or consuming a once-per-device marker.</para>
     /// </summary>
-    public static bool ConsumeSpawnMarker(Func<string, string?> get, Action<string> clear) {
-        if (string.IsNullOrEmpty(get(SpawnNoTelemetryVar))) return false;
-        clear(SpawnNoTelemetryVar);
-        _suppressedSticky = true;
-        return true;
-    }
+    public static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config) =>
+        Start(startup, config,
+            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint));
 
-    public static void Initialize(string command, string? serverUrl, bool loggedIn, ConfigRoot config, bool suppressed = false) {
+    /// <param name="sink">
+    /// Invoked only when the facade comes up live, so a run that is opted out builds no HTTP
+    /// handler and touches no spool. Internal because the endpoint a run ships to is this class's
+    /// to decide, not a caller's; the test assemblies reach it through their grant.
+    /// </param>
+    internal static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config, Func<ITelemetrySink> sink) {
         try {
-            if (suppressed) {
-                _suppressedSticky = true;
-            }
-            if (_suppressedSticky) return; // app-spawned child: no notice, no device id, no events, _client stays null
-            Enabled = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
-                   && CommandEvents.IsReportable(command);
-            if (!Enabled) return;
+            // An app-spawned child: no notice, no device id, no events.
+            if (startup.Suppressed) return Disabled();
 
-            _debug = Environment.GetEnvironmentVariable("KCAP_TELEMETRY_DEBUG") == "1";
+            var enabled = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
+                       && CommandEvents.IsReportable(startup.Command);
+            if (!enabled) return Disabled();
+
+            var version = Version();
 
             // A device id that can't be persisted still gets an in-memory-only id for this
             // process, rather than disabling telemetry outright: silently going dark on a disk
             // hiccup costs more in data quality than a marginally inflated unique-device count in
             // this rare fallback case.
-            _deviceId = TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N");
+            var telemetry = new CliTelemetry(
+                sink(),
+                startup.Command,
+                enabled: true,
+                TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N"),
+                PostHogPayload.OrgGroup(startup.ServerUrl),
+                startup.Debug,
+                startup.SignupUrl,
+                new JsonObject {
+                    ["source"]        = "cli",
+                    ["cli_version"]   = version,
+                    ["build_channel"] = TelemetryEnvironment.BuildChannel(version),
+                    ["os"]            = OS(),
+                    ["arch"]          = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
+                    ["is_ci"]         = TelemetryEnvironment.IsCi(),
+                    ["is_headless"]   = Auth.HeadlessEnvironment.IsHeadless(),
+                    ["has_server"]    = startup.ServerUrl is not null,
+                });
 
-            var version = Version();
+            // Minted here rather than in Announce so the key is in the shared bag before ANY event
+            // can be captured — cli_first_run included, which is once per device and unrepairable by
+            // a later run. Gated to the two interactive auth commands so it never attaches to a
+            // recap or an import, which have no auth run to correlate, and minted ahead of any lane
+            // the command later chooses so every setup/login lane carries it.
+            if (startup.Command is "setup" or "login")
+                telemetry.Join.Mint();
 
-            _orgGroup = PostHogPayload.OrgGroup(serverUrl);
-            var shared = new JsonObject {
-                ["source"]        = "cli",
-                ["cli_version"]   = version,
-                ["build_channel"] = TelemetryEnvironment.BuildChannel(version),
-                ["os"]            = OS(),
-                ["arch"]          = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
-                ["is_ci"]         = TelemetryEnvironment.IsCi(),
-                ["is_headless"]   = Auth.HeadlessEnvironment.IsHeadless(),
-                ["has_server"]    = serverUrl is not null,
-                ["logged_in"]     = loggedIn,
-            };
-            lock (_sharedGate) _shared = shared;
-
-            if (TestSink is null)
-                _client = new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint);
-
-            // The join key has to be in the shared bag BEFORE cli_first_run fires just below, or that
-            // once-per-device event ships without it and no later run can repair it. Gated to the two
-            // interactive auth commands so it never attaches to a recap or an import — which have no
-            // auth run to correlate — and minted here, ahead of any lane the command later chooses, so
-            // every setup/login lane (loopback, device-code, headless) carries it. No-ops when
-            // telemetry is off, which by this point it is not.
-            if (command is "setup" or "login")
-                SetupJoin.Mint();
-
-            // "mcp-server" is the re-initialise long-lived MCP servers perform on top of the
-            // denylisted "mcp" (see McpTelemetry) — an agent-spawned, non-interactive process
-            // whose stderr no human is watching. kcap-memory/-sessions/-flows/-review
-            // auto-register and spawn on every agent session, so on a fresh machine one of them
-            // is plausibly the very first kcap-family process ever run. Letting the notice fire
-            // there would print the disclosure into a void AND consume the once-per-device
-            // marker, so no human-invoked command would ever show it — silently reproducing the
-            // silent-by-default posture this feature exists to avoid. Skip the notice, the
-            // marker, and the cli_first_run event for this pseudo-command; the first
-            // human-invoked (reportable, non-"mcp-server") command still shows it as designed.
-            if (command != "mcp-server")
-                NoticeAndFirstRun(config);
+            return telemetry;
         } catch {
-            Enabled = false;
+            return Disabled();
         }
     }
 
-    /// <summary>
-    /// Guards <see cref="_shared"/>. It used to be written once during <see cref="Initialize"/>
-    /// and only read afterwards, so no lock was needed. It is now also written from the loopback
-    /// browser's background wait, which merges the returned web identity at whatever moment the
-    /// browser comes back — and that moment coincides with the foreground funnel by design, since
-    /// sign-in reports completion immediately after the browser call returns.
-    /// <para>Unsynchronised, an insert during a capture's read faults the read, the exception is
-    /// swallowed on the way out (telemetry must never throw), and the event silently never
-    /// appears. Reproduced, and it takes the event the feature exists to measure.</para>
-    /// </summary>
-    static readonly object _sharedGate = new();
-
     /// <summary>Queue an event for the exit flush.</summary>
-    public static void Capture(string name, JsonObject properties) {
+    public void Capture(string name, JsonObject properties) {
         try {
             if (!Enabled) return;
 
@@ -150,16 +147,15 @@ public static class CliTelemetry {
 
             if (_debug) Console.Error.WriteLine($"[telemetry] {name} {DebugRender(properties)}");
 
-            if (TestSink is not null) TestSink.Add(e);
-            else                      _client?.Enqueue(e);
+            _sink.Enqueue(e);
         } catch { }
     }
 
     /// <summary>
-    /// Attach a property to every event this process captures from here on. Swallowing like
+    /// Attach a property to every event this facade captures from here on. Swallowing like
     /// everything else in this class.
     /// </summary>
-    public static void AddSharedProperty(string name, JsonNode? value) {
+    public void AddSharedProperty(string name, JsonNode? value) {
         try {
             if (!Enabled) return;
 
@@ -173,7 +169,7 @@ public static class CliTelemetry {
     /// holding one host's id while the other is still missing would read as a real absence rather
     /// than a moment mid-merge.
     /// </summary>
-    public static void AddSharedProperties(JsonObject properties) {
+    public void AddSharedProperties(JsonObject properties) {
         try {
             if (!Enabled) return;
 
@@ -191,12 +187,12 @@ public static class CliTelemetry {
     /// console app with no SynchronizationContext to deadlock against; do not convert to
     /// fire-and-forget.
     /// </summary>
-    public static void CaptureNow(string name, JsonObject properties) {
+    public void CaptureNow(string name, JsonObject properties) {
         Capture(name, properties);
         FlushAndClose().GetAwaiter().GetResult();
     }
 
-    public static void RecordCommand(string command, string[] args, int exitCode, long durationMs) {
+    public void RecordCommand(string command, string[] args, int exitCode, long durationMs) {
         try {
             if (!Enabled || !CommandEvents.IsReportable(command)) return;
 
@@ -227,46 +223,61 @@ public static class CliTelemetry {
         } catch { }
     }
 
-    public static async Task FlushAndClose() {
+    public async Task FlushAndClose() {
         try {
-            if (_client is null || _deviceId is null) return;
-            await _client.FlushAsync(_deviceId, _orgGroup, FlushBudget);
+            if (!Enabled || _deviceId is null) return;
+
+            await _sink.FlushAsync(_deviceId, _orgGroup, FlushBudget);
         } catch { }
     }
 
     /// <summary>
     /// Tears telemetry down in THIS process the instant the persisted flag flips to false.
-    /// Program.cs calls <see cref="Initialize"/> before any command handler runs, so by the time
+    /// Program.cs starts the facade before any command handler runs, so by the time
     /// `kcap config set telemetry off` executes, telemetry has already resolved enabled (no file
     /// on a fresh machine), minted a device id, and possibly queued <c>cli_first_run</c> — the
     /// persisted flag alone would not stop THIS process's own ProcessExit flush from shipping it.
     /// Called from <c>ConfigCommand.TryApplyTelemetry</c> right after
     /// <see cref="TelemetryState.SetEnabled"/> persists the "off" (which already clears the
-    /// on-disk id — this clears the in-memory copy and whatever was queued for it). Re-enabling
-    /// later mints a fresh id via the normal <see cref="Initialize"/> path.
+    /// on-disk id — this drops the queue it was minted for).
     /// </summary>
-    public static void DiscardAndDisable() {
+    public void DiscardAndDisable() {
         try {
-            TestSink?.Clear();
-            _client   = null;
-            _deviceId = null;
-            Enabled   = false;
+            _sink.Discard();
+            Enabled = false;
         } catch { }
     }
 
-    static void NoticeAndFirstRun(ConfigRoot config) {
-        if (TelemetryState.Read(config).NoticeShown) return;
+    /// <summary>
+    /// Shows the one-time privacy notice and queues <c>cli_first_run</c>. Called once the shared bag
+    /// is complete, because <c>cli_first_run</c> is captured here and is once per device — a
+    /// property missing from it is missing for good.
+    ///
+    /// <para>"mcp-server" is the pseudo-command long-lived MCP servers start under, on top of the
+    /// denylisted "mcp" (see <see cref="McpTelemetry"/>) — an agent-spawned, non-interactive process
+    /// whose stderr no human is watching. kcap-memory/-sessions/-flows/-review auto-register and
+    /// spawn on every agent session, so on a fresh machine one of them is plausibly the very first
+    /// kcap-family process ever run. Letting the notice fire there would print the disclosure into a
+    /// void AND consume the once-per-device marker, so no human-invoked command would ever show it —
+    /// silently reproducing the silent-by-default posture this feature exists to avoid. Refused here
+    /// rather than at the call site, so a new server cannot consume it by forgetting.</para>
+    /// </summary>
+    public void Announce(ConfigRoot config) {
+        try {
+            if (!Enabled || _command == "mcp-server") return;
+            if (TelemetryState.Read(config).NoticeShown) return;
 
-        Console.Error.WriteLine(
-            "kcap collects pseudonymous usage data — command and flag names only, never argument values,");
-        Console.Error.WriteLine(
-            "file paths, or transcript content. It can be associated with your workspace and its creator.");
-        Console.Error.WriteLine(
-            "Opt out: kcap config set telemetry off (or DO_NOT_TRACK=1).");
-        Console.Error.WriteLine("https://capacitor.kurrent.io/privacy");
+            Console.Error.WriteLine(
+                "kcap collects pseudonymous usage data — command and flag names only, never argument values,");
+            Console.Error.WriteLine(
+                "file paths, or transcript content. It can be associated with your workspace and its creator.");
+            Console.Error.WriteLine(
+                "Opt out: kcap config set telemetry off (or DO_NOT_TRACK=1).");
+            Console.Error.WriteLine("https://capacitor.kurrent.io/privacy");
 
-        TelemetryState.MarkNoticeShown(config);
-        Capture("cli_first_run", new JsonObject());
+            TelemetryState.MarkNoticeShown(config);
+            Capture("cli_first_run", new JsonObject());
+        } catch { }
     }
 
     /// <summary>

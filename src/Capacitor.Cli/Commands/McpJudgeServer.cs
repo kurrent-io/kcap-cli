@@ -13,7 +13,8 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http) {
+sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
+        TelemetryStartup startup) {
     /// <summary>
     /// Run as a session-scoped MCP server. All tool calls must use <paramref name="expectedSessionId"/>.
     /// </summary>
@@ -25,13 +26,19 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
         HttpClient? client = null;
 
-        // MCP servers are long-lived and denylisted under the top-level "mcp" command
-        // (CommandEvents.Denylisted) — re-initialise under the reportable pseudo-command
-        // "mcp-server" so per-tool-call events actually leave. Best-effort: a stale token on
-        // disk must never block the server from starting.
+        // Best-effort, and recorded even when the read throws: a stale token on disk must never
+        // block the server from starting, and an absent property is a different value in a funnel
+        // from a false one — "could not tell" belongs with "not logged in", not with a gap.
         var loggedIn = false;
         try { loggedIn = await tokens.LoadForProfileAsync(profiles.Name) is not null; } catch { }
-        CliTelemetry.Initialize("mcp-server", baseUrl, loggedIn, config);
+
+        // MCP servers are long-lived and denylisted under the top-level "mcp" command
+        // (CommandEvents.Denylisted) — a second facade under the reportable pseudo-command
+        // "mcp-server" is what lets per-tool-call events leave at all.
+        var telemetry = CliTelemetry.Start(startup with { Command = "mcp-server" }, config);
+        telemetry.AddSharedProperty("logged_in", loggedIn);
+
+        await using var mcp = new McpTelemetry(telemetry);
 
         var tools = BuildToolsList();
 
@@ -99,7 +106,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                McpTelemetry.ToolCalled("kcap-judge", tool, ok, CommandTiming.ElapsedMs(start));
+                mcp.ToolCalled("kcap-judge", tool, ok, CommandTiming.ElapsedMs(start));
             }
         }
     }

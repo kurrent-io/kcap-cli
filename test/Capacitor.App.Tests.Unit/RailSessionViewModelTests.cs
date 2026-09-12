@@ -32,53 +32,61 @@ public class RailSessionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Title_is_primary_with_vendor_model_age_sub() {
+    public async Task Title_is_primary_with_vendor_and_model_as_chips() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
             await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
-            await Assert.That(row.Sub).StartsWith("claude · Opus 5 · ");
+            await Assert.That(row.HasTitle).IsTrue();
+            await Assert.That(row.Vendor).IsEqualTo("claude");
+            await Assert.That(row.HasVendor).IsTrue();
+            await Assert.That(row.Model).IsEqualTo("Opus 5");
+            await Assert.That(row.HasModel).IsTrue();
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Null_title_promotes_vendor_and_drops_it_from_sub() {
+    public async Task Null_title_leaves_the_chips_line_to_carry_the_row() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(title: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
-            await Assert.That(row.Primary).IsEqualTo("claude");
-            await Assert.That(row.Sub).StartsWith("Opus 5 · ");
+            await Assert.That(row.HasTitle).IsFalse();
+            await Assert.That(row.Vendor).IsEqualTo("claude");
+            await Assert.That(row.Model).IsEqualTo("Opus 5");
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Review_kind_is_appended_to_the_vendor() {
+    public async Task Non_agent_kind_goes_to_the_meta_line_not_the_vendor_chip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(kind: "review", title: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
-            await Assert.That(row.Primary).IsEqualTo("claude · review");
+            await Assert.That(row.Vendor).IsEqualTo("claude");
+            await Assert.That(row.Meta).StartsWith("review · ");
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Borrowed_work_location_marks_the_vendor_line_and_the_tooltip_names_the_checkout() {
+    public async Task Borrowed_work_location_marks_the_meta_line_and_the_tooltip_names_the_checkout() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var dto = new AgentStatusDto("a1", "review-flow", "codex", "/repo", "Running", null, null, null, DateTime.UtcNow, "Opus 5", null, Title: "Fix the flaky test") with {
                 WorktreePath = "/repo/.capacitor/worktrees/agent-1", WorkLocation = "borrowed",
                 BorrowedFrom = "/repo/.capacitor/worktrees/agent-1" };
             using var row = new RailSessionViewModel(AgentRow.FromLocal(dto, Repo), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
-            await Assert.That(row.Sub).StartsWith("codex · review-flow · borrowed · Opus 5 · ");
+            await Assert.That(row.Vendor).IsEqualTo("codex");
+            await Assert.That(row.Model).IsEqualTo("Opus 5");
+            await Assert.That(row.Meta).StartsWith("review-flow · borrowed · ");
             await Assert.That(row.Tooltip).Contains("/repo/.capacitor/worktrees/agent-1");
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Null_model_is_omitted_from_sub() {
+    public async Task Null_model_hides_the_model_chip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(model: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
-            await Assert.That(row.Sub).DoesNotContain("· ·");
-            await Assert.That(row.Sub).DoesNotStartWith("·");
+            await Assert.That(row.Model).IsNull();
+            await Assert.That(row.HasModel).IsFalse();
         });
     }
 

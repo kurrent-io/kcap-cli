@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Telemetry;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -28,7 +29,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient()), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory()),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient())),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
@@ -55,7 +56,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient()), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory()),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient())),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
@@ -87,7 +88,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient()), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory()),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient())),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),

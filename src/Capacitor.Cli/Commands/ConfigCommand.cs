@@ -8,7 +8,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) {
+public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, CliTelemetry telemetry) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await Console.Error.WriteLineAsync("Usage: kcap config <show|set|unset> [key] [value]");
@@ -127,12 +127,12 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
         TelemetryState.SetEnabled(enabled, config);
 
         // Belt-and-braces, not the primary defence: Program.cs's pre-Initialize check (see
-        // Program.cs, right before CliTelemetry.Initialize) already stops telemetry from ever
+        // Program.cs, right before the facade starts) already stops telemetry from ever
         // activating for a plain `config set telemetry off`, so there is normally nothing left to
         // discard by the time this runs. But KCAP_TELEMETRY=1 legitimately overrides a persisted
         // "off" (finding: env outranks config), so Initialize can still have come up live despite
         // the value being applied here — tear it down in that case too.
-        if (!enabled) CliTelemetry.DiscardAndDisable();
+        if (!enabled) telemetry.DiscardAndDisable();
 
         return true;
     }
@@ -140,7 +140,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
     /// <summary>
     /// Pure recognizer for the "telemetry" value vocabulary. Shared by <see cref="TryApplyTelemetry"/>
     /// (which throws on an unrecognized value — invalid input is this command's problem to report)
-    /// and Program.cs's pre-<c>CliTelemetry.Initialize</c> short-circuit (which must NOT throw: an
+    /// and Program.cs's pre-start short-circuit (which must NOT throw: an
     /// invalid value there is reported normally once the command actually dispatches). Returns
     /// null for anything unrecognized.
     /// </summary>
@@ -208,7 +208,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http) 
         Console.Error.WriteLine("Keys:");
         Console.Error.WriteLine("  server_url                  Server URL");
         Console.Error.WriteLine("  daemon.name                 Daemon name");
-        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents");
+        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)");
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
         Console.Error.WriteLine("  update_check                All kcap update nudging: stderr hint, server headers (banner/notification), in-agent nudge (true/false)");
