@@ -414,12 +414,12 @@ sealed class SetupMachineActions : IFirstRunMachineActions {
 }
 
 public sealed class SetupCommand(
-        ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
+        ConfigRoot config, ProfileContext profiles,
         TokenStore store, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
-        AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports) {
-    readonly ChosenServerHttp _chosenHttp = new(config, profiles, env, machine);
+        AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
+        ChosenServerHttp chosenHttp) {
 
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -1240,7 +1240,7 @@ public sealed class SetupCommand(
 
     /// <inheritdoc cref="ChosenServerHttp.For"/>
     internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) =>
-        _chosenHttp.For(serverUrl, chosen);
+        chosenHttp.For(serverUrl, chosen);
 
     /// <summary>
     /// Every import source, one per catalogue vendor.

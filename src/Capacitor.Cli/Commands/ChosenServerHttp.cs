@@ -12,9 +12,10 @@ namespace Capacitor.Cli.Commands;
 /// <para>The process container resolved its server once at startup — before setup could pick one,
 /// and null on a first run — so every leg that runs after the choice has to build its own or it
 /// authenticates against the wrong server, or against none at all. The profile name and config root
-/// stay the process's, so the token lookup targets the profile it always did.</para>
+/// stay the process's, so the token lookup targets the active profile rather than one derived from
+/// the server just chosen.</para>
 /// </summary>
-sealed class ChosenServerHttp(
+public sealed class ChosenServerHttp(
         ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine) {
     public ServiceProvider For(string serverUrl, ProfileContext? chosen = null) {
         var context = chosen ?? new ProfileContext(profiles.Resolution with { ServerUrl = serverUrl }, profiles.Snapshot);

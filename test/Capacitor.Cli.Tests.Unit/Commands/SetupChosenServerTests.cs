@@ -22,12 +22,13 @@ public class SetupChosenServerTests {
         var factory = new PlainHttpClientFactory();
 
         return new SetupCommand(
-            Config.Root, startup, ProfileOverrides.None, MachineAuth.None,
+            Config.Root, startup,
             AuthFixtures.NewTokenStore(Config.Root),
             new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), new TenantProvisioningClient(new HttpClient()),
             new AuthProviderDiscovery(factory), NoTelemetry.Facade, AuthEndpoints.Defaults,
             new FakeFacadeFactory(_ => throw new InvalidOperationException("no façade in these tests")),
-            FakeImportRunner.Succeeding());
+            FakeImportRunner.Succeeding(),
+            new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None));
     }
 
     /// A first run: nothing resolved a server before the command started, which is the case that

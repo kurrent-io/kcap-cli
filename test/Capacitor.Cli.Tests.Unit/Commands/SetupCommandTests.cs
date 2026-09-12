@@ -29,10 +29,11 @@ public class SetupCommandTests {
 
     /// <summary>The command under test, with the import runner each test is pinning.</summary>
     SetupCommand Command(ISetupImportRunner imports) =>
-        new(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None,
+        new(Config.Root, Resolutions.None(Config.Root),
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
-            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports);
+            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None));
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>

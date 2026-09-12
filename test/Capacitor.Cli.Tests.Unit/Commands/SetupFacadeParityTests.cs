@@ -78,11 +78,12 @@ public class SetupFacadeParityTests {
     TelemetryProbe StartCapturingFunnel() => TelemetryProbe.Live("setup", Config.Root);
 
     SetupCommand Command(CliTelemetry telemetry, IOnboardingFacadeFactory facades) =>
-        new(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None,
+        new(Config.Root, Resolutions.None(Config.Root),
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(),
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
             Provisioning, Discovery, telemetry, AuthEndpoints.Defaults, facades,
-            FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")));
+            FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")),
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None));
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 
