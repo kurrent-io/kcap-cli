@@ -23,6 +23,7 @@ internal sealed record WizardFacadeSpec(
     ITenantPicker                                              Picker,
     ITenantProvisioner?                                        Provisioner,
     CliTelemetry                                               Telemetry,
+    AuthEndpoints                                              Endpoints,
     Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
@@ -77,16 +78,18 @@ internal static class WizardComposition {
     /// Production bridges: one marshalling boundary (Avalonia's dispatcher in the app) and a
     /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.
     internal static WizardBridges BuildBridges(
-            Action<Action> post, TenantProvisioningClient provisioning, CliTelemetry telemetry) =>
-        new(post, telemetry, progress => new WizardTenantProvisioner(
-            provisioning, ProvisioningEndpoint.Url, progress, telemetry));
+            Action<Action> post, TenantProvisioningClient provisioning, CliTelemetry telemetry,
+            AuthEndpoints endpoints) =>
+        new(post, telemetry, endpoints, progress => new WizardTenantProvisioner(
+            provisioning, endpoints.SignupUrl, progress, telemetry));
 
     /// Production operation: the spec IS the façade's arguments, and WizardSignInOperation owns
     /// the intent→call map (paste adopts the server; create/discover run WorkOS discovery).
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> NewOperation(WizardFacadeSpec spec) =>
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-            SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.BeforeCommit), spec.Profile);
+            SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
+            spec.BeforeCommit), spec.Profile);
 
     /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
     /// dead-ends "Create a workspace" at "ask your admin") and the decision-7 arming hook wired as
@@ -98,7 +101,8 @@ internal static class WizardComposition {
             Func<WizardFacadeSpec, Func<ConnectIntent, CancellationToken, Task<AuthResult>>> operation) =>
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
-            bridges.Provisioner, bridges.Telemetry, WizardAuthService.ArmingHook(claims)));
+            bridges.Provisioner, bridges.Telemetry, bridges.Endpoints,
+            WizardAuthService.ArmingHook(claims)));
 
     internal static WizardGraph BuildGraph(WizardGraphOptions options) {
         var claims = options.Claims;

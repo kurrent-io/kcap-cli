@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Http;
 /// build, so a missing registration cannot be caught by anything short of a real call.
 ///
 /// <para>Each container owns its own discovery memo and machine-token cache, and the credential it
-/// resolves against is the one handed in — only the two tests that capture stderr touch anything
+/// resolves against is the one handed in — only the tests that capture stderr touch anything
 /// process-global, and they carry the exclusion themselves.</para>
 /// </summary>
 public class CapacitorHttpContainerTests : IDisposable {
@@ -383,7 +383,7 @@ public class CapacitorHttpContainerTests : IDisposable {
             sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<IAuthProxyClient>(),
             sp.GetRequiredService<GitHubOAuthClient>(), sp.GetRequiredService<WorkOSClient>(),
             new RecordingAuthProgress(), new RecordingBrowser(), AuthFixtures.PickerReturningFirst(),
-            provisioner: null, NoTelemetry.Facade, beforeCommit: null);
+            provisioner: null, NoTelemetry.Facade, AuthEndpoints.Defaults, beforeCommit: null);
 
         await facade.LoginAsync(Url, forceDevice: false, _profile, CancellationToken.None, adoptServer: true);
 
@@ -584,6 +584,7 @@ public class CapacitorHttpContainerTests : IDisposable {
     /// the first one did not.
     /// </summary>
     [Test]
+    [NotInParallel]
     public async Task The_lapse_hint_is_printed_once_however_many_clients_a_command_builds() {
         StubProvider(AuthProvider.GitHubApp);
 

@@ -37,6 +37,6 @@ public class SlugValidatorTests {
 
     [Test]
     public async Task Url_defaults_to_capacitor_kurrent_io() {
-        await Assert.That(ProvisioningEndpoint.DefaultUrl).IsEqualTo("https://capacitor.kurrent.io");
+        await Assert.That(AuthEndpoints.DefaultSignupUrl).IsEqualTo("https://capacitor.kurrent.io");
     }
 }

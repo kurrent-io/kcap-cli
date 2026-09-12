@@ -26,7 +26,7 @@ public sealed record MachineAuth(string? ClientId, string? ClientSecret, string?
     /// WorkOS AuthKit's OAuth2 token endpoint.
     ///
     /// <para>Hardcoded, with an env override, for the same reason
-    /// <see cref="AuthProxyEndpoint.DefaultUrl"/> is: it is one value for the whole fleet, since every
+    /// <see cref="AuthEndpoints.DefaultProxyUrl"/> is: it is one value for the whole fleet, since every
     /// tenant shares a single WorkOS environment and application. It deliberately is NOT derived from
     /// the tenant's <c>/auth/config</c>, because the field that would carry it — <c>authkit_domain</c> —
     /// is blank on every tenant, so deriving it would produce a broken URL on all of them.</para>

@@ -48,7 +48,7 @@ public static class AuthFixtures {
                 new GitHubOAuthClient(factory), new WorkOSClient(factory),
                 progress, browser ?? new RecordingBrowser(),
                 picker ?? Substitute.For<ITenantPicker>(), provisioner,
-                telemetry ?? CliTelemetry.Disabled(), beforeCommit) {
+                telemetry ?? CliTelemetry.Disabled(), AuthEndpoints.Defaults, beforeCommit) {
             WorkOSOrglessLogin    = workosLogin,
             WorkOSBrowser         = workosBrowser,
             WorkOSApiBaseOverride = workosApiBase

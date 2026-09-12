@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Tests.Helpers;
@@ -12,7 +13,8 @@ public static class NoTelemetry {
     public static CliTelemetry Facade => CliTelemetry.Disabled();
 
     /// <summary>A suppressed startup, so anything that starts its own facade from it comes up off.</summary>
-    public static TelemetryStartup Startup => new("test", ServerUrl: null, Suppressed: true, Debug: false);
+    public static TelemetryStartup Startup =>
+        new("test", ServerUrl: null, AuthEndpoints.DefaultSignupUrl, Suppressed: true, Debug: false);
     public static SetupFunnel  Funnel => Facade.Funnel;
     public static SetupJoin    Join   => Facade.Join;
 }

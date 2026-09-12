@@ -58,14 +58,16 @@ public class SetupJoinTests {
         await Assert.That(probe.Join.Current).IsEqualTo(first);
     }
 
+    /// <summary>The host is the one the run was started with, not a constant: asserting against the
+    /// default would hold just as well for a facade that ignored what it was handed.</summary>
     [Test]
-    public async Task FirstHopUrl_targets_the_provisioning_endpoint_with_key_and_port() {
-        var probe = StartCapturing();
-        var key = probe.Join.Mint();
+    public async Task FirstHopUrl_targets_the_started_host_with_key_and_port() {
+        var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), signupUrl: "https://signup.test");
+        var key   = probe.Join.Mint();
 
         var url = probe.Join.FirstHopUrl(54321);
 
-        await Assert.That(url).IsEqualTo($"{ProvisioningEndpoint.Url}/api/cli/return?j={key}&p=54321");
+        await Assert.That(url).IsEqualTo($"https://signup.test/api/cli/return?j={key}&p=54321");
     }
 
     [Test]
@@ -148,7 +150,7 @@ public class SetupJoinTests {
         var key = probe.Join.Mint();
 
         await Assert.That(probe.Join.FirstHopUrl(4242))
-            .IsEqualTo($"{ProvisioningEndpoint.Url}/api/cli/return?j={key}&p=4242");
+            .IsEqualTo($"{AuthEndpoints.DefaultSignupUrl}/api/cli/return?j={key}&p=4242");
     }
 
     // Capture an event and read back the merged shared bag.

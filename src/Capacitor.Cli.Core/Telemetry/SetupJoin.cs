@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using System.Text;
-using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Core.Telemetry;
 
@@ -45,7 +44,7 @@ public interface ILoopbackJoin {
 /// one check: no key means no redirect and no <c>joinId</c> on any request, off by construction
 /// rather than by four separate guards.</para>
 /// </summary>
-public sealed class SetupJoin(CliTelemetry telemetry) : ILoopbackJoin {
+public sealed class SetupJoin(CliTelemetry telemetry, string signupUrl) : ILoopbackJoin {
     /// <summary>
     /// The property name the key travels under, shared by everything that has to recognise it.
     /// There are exactly two places the key could otherwise escape the process — the debug
@@ -83,15 +82,15 @@ public sealed class SetupJoin(CliTelemetry telemetry) : ILoopbackJoin {
     }
 
     /// <summary>
-    /// The URL the closing page navigates to. Reuses <see cref="ProvisioningEndpoint.Url"/> so
-    /// <c>KCAP_SIGNUP_URL</c> retargets it at a local miniflare for testing.
+    /// The URL the closing page navigates to, on the same host the run's signup lane uses, so a
+    /// build pointed at a local miniflare returns through it.
     /// <para><c>p</c> is a port integer, never a URL: the far side builds the loopback address
     /// itself, so accepting one here would make a production web page redirect anywhere a caller
     /// named.</para>
     /// </summary>
     public string? FirstHopUrl(int port) {
         try {
-            return _current is null ? null : $"{ProvisioningEndpoint.Url}/api/cli/return?j={_current}&p={port}";
+            return _current is null ? null : $"{signupUrl}/api/cli/return?j={_current}&p={port}";
         } catch {
             return null;
         }

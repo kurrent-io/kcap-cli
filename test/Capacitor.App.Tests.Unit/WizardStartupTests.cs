@@ -139,7 +139,7 @@ static class WizardFixtures {
         public GraphHarness(ConfigRoot root) {
             Root    = root;
             Claims  = new ConsentFlipClaims(_config.Root);
-            Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled());
+            Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
             Surface = new WizardLifecycleSurface((prompt, _) => {
                 Prompts.Add(prompt);
                 return Task.FromResult(false);
@@ -799,7 +799,7 @@ public class WizardStartupTests {
     public async Task The_production_bridges_marshal_through_the_avalonia_dispatcher() {
         var (marshalled, hasProvisioner) = await AvaloniaSession.DispatchAsync(async () => {
             var bridges = WizardComposition.BuildBridges(
-            action => Dispatcher.UIThread.Post(action), new(new HttpClient()), CliTelemetry.Disabled());
+            action => Dispatcher.UIThread.Post(action), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
             var posted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Posted from a background thread, exactly as the façade's flows raise their events.
@@ -1415,7 +1415,7 @@ public class WizardStartupResolutionTests {
 
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled());
+        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
         using var handler = new StubAuthHandler();
 
         var operation = WizardComposition.BuildOperation(
@@ -1424,7 +1424,8 @@ public class WizardStartupResolutionTests {
             bridges, claims,
             spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.BeforeCommit), spec.Profile));
+                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
+                spec.BeforeCommit), spec.Profile));
 
         var result = await operation(new ConnectIntent.Paste("https://acme.example"), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(10));
@@ -1446,7 +1447,7 @@ public class WizardStartupResolutionTests {
     public async Task Create_and_workos_discovery_route_through_the_auth_proxy(string intentName) {
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled());
+        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
         using var handler = new StubAuthHandler { Status = HttpStatusCode.ServiceUnavailable };
         ConnectIntent intent = intentName == "create"
             ? new ConnectIntent.Create()
@@ -1461,7 +1462,7 @@ public class WizardStartupResolutionTests {
                 spec = s;
                 return WizardSignInOperation.For(new OnboardingFacade(
                     s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
-                    new RecordingBrowser(), s.Picker, s.Provisioner, s.Telemetry, s.BeforeCommit), s.Profile);
+                    new RecordingBrowser(), s.Picker, s.Provisioner, s.Telemetry, s.Endpoints, s.BeforeCommit), s.Profile);
             });
 
         var result = await operation(intent, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));

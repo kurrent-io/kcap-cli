@@ -35,7 +35,6 @@ namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
 /// analytics cookie carries a <c>distinct_id</c>; the cookie the driver sets has <c>$device_id</c>
 /// ONLY. The device id is what crosses back, so the merge is still fully exercised.</para>
 /// </summary>
-[NotInParallel]
 public class JoinChainBrowserTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
@@ -59,11 +58,8 @@ public class JoinChainBrowserTests {
         Skip.Unless(!string.IsNullOrWhiteSpace(baseUrl) && !string.IsNullOrWhiteSpace(handshake),
             $"Set {GateEnvVar}=<base url> and {HandshakeEnvVar}=<path> to run the browser chain.");
 
-        var priorSignup = Environment.GetEnvironmentVariable("KCAP_SIGNUP_URL");
-
         try {
-            Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", baseUrl);
-            var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), debug: true);
+            var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), debug: true, signupUrl: new AuthEndpoints(null, baseUrl).SignupUrl);
             var key   = probe.Join.Mint();
             await Assert.That(key).IsNotNull();
 
@@ -96,7 +92,6 @@ public class JoinChainBrowserTests {
                 .Because("SameSite=Lax cookies must travel on this top-level navigation — the whole "
                        + "reason the closing page navigates instead of firing a beacon");
         } finally {
-            Environment.SetEnvironmentVariable("KCAP_SIGNUP_URL", priorSignup);
             try { File.Delete(handshake!); } catch { /* best effort */ }
         }
     }

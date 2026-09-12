@@ -418,7 +418,8 @@ public sealed class SetupCommand(
         TokenStore store, IHttpClientFactory httpFactory,
         IAuthProxyClient proxy, WorkOSClient workos, GitHubOAuthClient github, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
-        TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry) {
+        TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
+        AuthEndpoints endpoints) {
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
 
@@ -1374,7 +1375,7 @@ public sealed class SetupCommand(
             ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null) =>
         FacadeOverride?.Invoke(provisioner)
             ?? new OnboardingFacade(config, store, httpFactory, proxy, github, workos, StepProgress, browser,
-                picker ?? DefaultPicker(browser, () => true), provisioner, telemetry,
+                picker ?? DefaultPicker(browser, () => true), provisioner, telemetry, endpoints,
                 WorkspaceGuard(requested)) {
                 KeyWatcher = ConsoleKeyWatcher.Instance
             };
@@ -1778,7 +1779,7 @@ public sealed class SetupCommand(
         var chosen   = OAuthLoginFlow.ChooseDiscoveryProvider(args);
         var headless = HeadlessEnvironment.IsHeadless();
 
-        AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
+        AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(endpoints.ProxyUrl)}[/]");
 
         // WorkOS no longer follows headlessness: its ladder opens the browser either way, and only an
         // explicit --device takes the device grant. GitHub's exchange URL is not known until the proxy
@@ -1798,7 +1799,7 @@ public sealed class SetupCommand(
 
         var provisioner = chosen == AuthProvider.WorkOS
             ? new SpectreTenantProvisioner(
-                provisioning, ProvisioningEndpoint.Url, telemetry,
+                provisioning, endpoints.SignupUrl, telemetry,
                 isInteractive: () => canPrompt, requested: requested)
             : null;
 

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Tests.Helpers;
@@ -24,9 +25,10 @@ public sealed class TelemetryProbe {
     public IReadOnlyList<string>         Names  => Sink.Names;
 
     public static TelemetryProbe Start(
-            string command, ConfigRoot config, string? serverUrl = null,
-            bool loggedIn = false, bool suppressed = false, bool debug = false) =>
-        Start(new TelemetryStartup(command, serverUrl, suppressed, debug), config, loggedIn);
+            string command, ConfigRoot config, string? serverUrl = null, bool loggedIn = false,
+            bool suppressed = false, bool debug = false, string? signupUrl = null) =>
+        Start(new TelemetryStartup(command, serverUrl, signupUrl ?? AuthEndpoints.DefaultSignupUrl,
+                                   suppressed, debug), config, loggedIn);
 
     public static TelemetryProbe Start(TelemetryStartup startup, ConfigRoot config, bool loggedIn = false) {
         var sink      = new RecordingTelemetrySink();
@@ -47,8 +49,9 @@ public sealed class TelemetryProbe {
     /// contains no elements" from whatever assertion runs next.
     /// </summary>
     public static TelemetryProbe Live(
-            string command, ConfigRoot config, string? serverUrl = null, bool loggedIn = false, bool debug = false) {
-        var probe = Start(command, config, serverUrl, loggedIn, suppressed: false, debug);
+            string command, ConfigRoot config, string? serverUrl = null, bool loggedIn = false,
+            bool debug = false, string? signupUrl = null) {
+        var probe = Start(command, config, serverUrl, loggedIn, suppressed: false, debug, signupUrl);
 
         TelemetryTestGuards.AssertEnabled(command, config, probe.Telemetry);
         probe.Sink.Discard();

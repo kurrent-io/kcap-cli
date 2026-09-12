@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Core.Telemetry;
 
@@ -41,8 +42,8 @@ public sealed class CliTelemetry {
     readonly JsonObject _shared;
 
     CliTelemetry(
-            ITelemetrySink sink, string command, bool enabled,
-            string? deviceId, string? orgGroup, bool debug, JsonObject shared) {
+            ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
+            bool debug, string signupUrl, JsonObject shared) {
         _sink     = sink;
         _command  = command;
         _deviceId = deviceId;
@@ -50,7 +51,7 @@ public sealed class CliTelemetry {
         _debug    = debug;
         _shared   = shared;
         Enabled   = enabled;
-        Join      = new SetupJoin(this);
+        Join      = new SetupJoin(this, signupUrl);
         Funnel    = new SetupFunnel(this);
     }
 
@@ -64,8 +65,8 @@ public sealed class CliTelemetry {
 
     /// <summary>A facade that is off: nothing resolved, nothing minted, nothing captured.</summary>
     public static CliTelemetry Disabled() =>
-        new(new NullTelemetrySink(), command: "", enabled: false,
-            deviceId: null, orgGroup: null, debug: false, new JsonObject());
+        new(new NullTelemetrySink(), command: "", enabled: false, deviceId: null, orgGroup: null,
+            debug: false, AuthEndpoints.DefaultSignupUrl, new JsonObject());
 
     /// <summary>
     /// Resolves the opt-out decision, mints the device id and builds the shared property bag,
@@ -107,6 +108,7 @@ public sealed class CliTelemetry {
                 TelemetryDeviceId.GetOrCreate(config) ?? Guid.NewGuid().ToString("N"),
                 PostHogPayload.OrgGroup(startup.ServerUrl),
                 startup.Debug,
+                startup.SignupUrl,
                 new JsonObject {
                     ["source"]        = "cli",
                     ["cli_version"]   = version,
