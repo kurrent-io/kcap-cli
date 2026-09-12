@@ -150,6 +150,7 @@ public sealed class OnboardingFacade(
         ITenantPicker                                               picker,
         ITenantProvisioner?                                         provisioner,
         CliTelemetry                                                telemetry,
+        AuthEndpoints                                               endpoints,
         Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit) {
     /// <summary>Test seam for the one WorkOS effect with no HTTP surface (loopback browser + OidcClient).</summary>
     internal Func<CancellationToken, Task<WorkOSAuthResponse?>>? WorkOSOrglessLogin { get; init; }
@@ -278,7 +279,7 @@ public sealed class OnboardingFacade(
     }
 
     async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
-        var proxyConfig = await proxy.GetConfigAsync(AuthProxyEndpoint.Url, ct);
+        var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 
         if (proxyConfig is null) {
             return Fail("Cannot reach the Kurrent auth service.", ct, AuthFailureReason.Unreachable);
@@ -296,7 +297,7 @@ public sealed class OnboardingFacade(
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
-            AuthProxyEndpoint.Url, proxyConfig, proxy, picker, telemetry.Funnel,
+            endpoints.ProxyUrl, proxyConfig, proxy, picker, telemetry.Funnel,
             orglessLogin: () => WorkOSOrglessLogin is not null
                 ? WorkOSOrglessLogin(ct)
                 // Org-less: the sign-in picks the organization, and discovery reconciles it afterwards.
@@ -316,7 +317,7 @@ public sealed class OnboardingFacade(
             // proxy half is knowable here.
             pickContext: new TenantPickContext(
                 Proxy: proxy,
-                ProxyUrl: AuthProxyEndpoint.Url,
+                ProxyUrl: endpoints.ProxyUrl,
                 PickerVersion: proxyConfig.CliPickerVersion));
 
         return flow switch {
@@ -340,7 +341,7 @@ public sealed class OnboardingFacade(
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
-        var outcome = await new TenantDiscovery(proxy, picker).RunAsync(AuthProxyEndpoint.Url, accessToken, ct);
+        var outcome = await new TenantDiscovery(proxy, picker).RunAsync(endpoints.ProxyUrl, accessToken, ct);
 
         if (outcome.ErrorMessage is not null) {
             var reason = outcome.NoTenantsFound ? AuthFailureReason.NoTenantsFound : AuthFailureReason.Other;

@@ -295,9 +295,11 @@ public sealed class WizardTenantProvisioner(
 /// </summary>
 public sealed class WizardBridges {
     public WizardBridges(
-            Action<Action> post, CliTelemetry telemetry, Func<IAuthProgress, WizardTenantProvisioner> provisioner) {
+            Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints,
+            Func<IAuthProgress, WizardTenantProvisioner> provisioner) {
         Post        = post;
         Telemetry   = telemetry;
+        Endpoints   = endpoints;
         Progress    = new UiAuthProgress(post);
         Picker      = new WizardTenantPicker(Progress);
         Provisioner = provisioner(Progress);
@@ -305,6 +307,7 @@ public sealed class WizardBridges {
 
     public Action<Action>          Post        { get; }
     public CliTelemetry            Telemetry   { get; }
+    public AuthEndpoints           Endpoints   { get; }
     public UiAuthProgress          Progress    { get; }
     public WizardTenantPicker      Picker      { get; }
     public WizardTenantProvisioner Provisioner { get; }

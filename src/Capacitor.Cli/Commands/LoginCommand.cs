@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Commands;
 public sealed class LoginCommand(
         ConfigRoot config, ProfileContext profiles, TokenStore tokens, IHttpClientFactory httpFactory,
         IAuthProxyClient proxy, GitHubOAuthClient github, WorkOSClient workos, IBrowserLauncher browser,
-        TenantProvisioningClient provisioning, CliTelemetry telemetry) {
+        TenantProvisioningClient provisioning, CliTelemetry telemetry, AuthEndpoints endpoints) {
     public Task<int> HandleAsync(string[] args, string? baseUrl) =>
         HandleAsync(args, baseUrl, profiles.Name, NewFacade(), ConsoleAuthProgress.Instance);
 
@@ -82,8 +82,8 @@ public sealed class LoginCommand(
             // The same composite `kcap setup` uses: one operation must not behave differently
             // for being reached by a different command.
             new BrowserTenantPicker(browser, new SpectreTenantPicker(), ConsoleAuthProgress.Instance),
-            new SpectreTenantProvisioner(provisioning, ProvisioningEndpoint.Url, telemetry),
-            telemetry, beforeCommit: null) {
+            new SpectreTenantProvisioner(provisioning, endpoints.SignupUrl, telemetry),
+            telemetry, endpoints, beforeCommit: null) {
             KeyWatcher = ConsoleKeyWatcher.Instance
         };
 }

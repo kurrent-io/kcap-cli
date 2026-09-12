@@ -83,7 +83,7 @@ public class SignInStepViewModelTests {
             Claims = new ConsentFlipClaims(_config.Root);
 
             var bridges = new WizardBridges(
-                action => action(), CliTelemetry.Disabled(),
+                action => action(), CliTelemetry.Disabled(), AuthEndpoints.Defaults,
                 progress => new WizardTenantProvisioner(
                     new TenantProvisioningClient(new HttpClient(Signup)), "https://signup.example", progress,
                     CliTelemetry.Disabled(), Time));

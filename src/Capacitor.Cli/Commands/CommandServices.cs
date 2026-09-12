@@ -19,12 +19,14 @@ public static class CommandServices {
     /// </summary>
     public static IServiceCollection AddCapacitorCli(
             this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
-            ProfileContext profiles, ProfileOverrides env, MachineAuth machine, HookClock clock,
-            string? baseUrl, TelemetryStartup telemetryStartup) {
+            ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
+            AuthEndpoints endpoints, HookClock clock, string? baseUrl,
+            TelemetryStartup telemetryStartup) {
         services
             .AddCapacitorContext(config, home, daemons, profiles)
             .AddCapacitorCommands();
 
+        services.AddSingleton(endpoints);
         services.AddSingleton(clock);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
 

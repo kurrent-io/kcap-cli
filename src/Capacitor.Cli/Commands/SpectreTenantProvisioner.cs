@@ -49,7 +49,7 @@ public sealed class SpectreTenantProvisioner(
             // width, which breaks `kcap setup <slug>` across a line and hands the reader a command that
             // does not survive being copied. stderr also matches the non-zero exit this leads to.
             Console.Error.WriteLine();
-            Console.Error.WriteLine(OAuthLoginFlow.WorkspaceCreationNeedsATerminalMessage());
+            Console.Error.WriteLine(OAuthLoginFlow.WorkspaceCreationNeedsATerminalMessage(baseUrl));
 
             return ProvisionOffer.Declined;
         }

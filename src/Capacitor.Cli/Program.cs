@@ -96,6 +96,7 @@ var daemonPaths = DaemonStore.FromEnvironment();
 
 var serverEnv = ProfileOverrides.FromEnvironment();
 var machineEnv = MachineAuth.FromEnvironment();
+var endpoints  = AuthEndpoints.FromEnvironment();
 
 var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
@@ -103,13 +104,14 @@ var baseUrl  = profiles.Resolution.ServerUrl;
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
 // notice on an invisible stderr. Consume-and-REMOVE before anything can spawn, so no grandchild
 // (detached daemon, hosted agents) observes the marker.
-var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl);
+var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoints.SignupUrl);
 
 // Composition root. Every context resolved above is registered once here; the dispatch switch below
 // asks for a command rather than handing each one its arguments.
 var services = new ServiceCollection()
     .AddCapacitorCli(
-        config, home, daemonPaths, profiles, serverEnv, machineEnv, clock, baseUrl, telemetryStartup);
+        config, home, daemonPaths, profiles, serverEnv, machineEnv, endpoints, clock, baseUrl,
+        telemetryStartup);
 
 await using var sp = services.BuildValidated();
 

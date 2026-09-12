@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Telemetry;
@@ -14,7 +15,7 @@ public class SpawnMarkerTests {
     public async Task The_marker_is_read_once_and_removed_from_the_environment() {
         using var marker = EnvScope.Exclusive(TelemetryStartup.SpawnNoTelemetryVar, "1");
 
-        var startup = TelemetryStartup.FromEnvironment("login", serverUrl: null);
+        var startup = TelemetryStartup.FromEnvironment("login", serverUrl: null, AuthEndpoints.DefaultSignupUrl);
 
         await Assert.That(startup.Suppressed).IsTrue();
         await Assert.That(Environment.GetEnvironmentVariable(TelemetryStartup.SpawnNoTelemetryVar)).IsNull()
@@ -26,7 +27,7 @@ public class SpawnMarkerTests {
     public async Task No_marker_suppresses_nothing() {
         using var marker = EnvScope.Exclusive(TelemetryStartup.SpawnNoTelemetryVar, null);
 
-        await Assert.That(TelemetryStartup.FromEnvironment("login", serverUrl: null).Suppressed).IsFalse();
+        await Assert.That(TelemetryStartup.FromEnvironment("login", serverUrl: null, AuthEndpoints.DefaultSignupUrl).Suppressed).IsFalse();
     }
 
     /// <summary>The marker is ours; the opt-out is the user's, and consuming one must not touch the other.</summary>
@@ -36,7 +37,7 @@ public class SpawnMarkerTests {
         using var marker = EnvScope.Exclusive(TelemetryStartup.SpawnNoTelemetryVar, "1");
         using var choice = EnvScope.Exclusive("KCAP_TELEMETRY", "1");
 
-        TelemetryStartup.FromEnvironment("login", serverUrl: null);
+        TelemetryStartup.FromEnvironment("login", serverUrl: null, AuthEndpoints.DefaultSignupUrl);
 
         await Assert.That(Environment.GetEnvironmentVariable("KCAP_TELEMETRY")).IsEqualTo("1");
     }
@@ -58,7 +59,8 @@ public class SpawnMarkerTests {
     /// </summary>
     [Test]
     public async Task Suppression_travels_to_a_second_facade_in_the_same_process() {
-        var startup = new TelemetryStartup("mcp", ServerUrl: null, Suppressed: true, Debug: false);
+        var startup = new TelemetryStartup("mcp", ServerUrl: null, AuthEndpoints.DefaultSignupUrl,
+                                    Suppressed: true, Debug: false);
 
         var probe = TelemetryProbe.Start(startup with { Command = "mcp-server" }, Config.Root);
 

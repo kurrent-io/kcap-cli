@@ -52,6 +52,7 @@ public partial class App : Application {
     // And its one read of KCAP_URL / KCAP_PROFILE.
     readonly ProfileOverrides _serverEnv  = ProfileOverrides.FromEnvironment();
     readonly MachineAuth      _machineEnv = MachineAuth.FromEnvironment();
+    readonly AuthEndpoints    _endpoints  = AuthEndpoints.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
 
     /// The wizard signs in through the CLI's own stack, which reports the signup funnel. The app
@@ -732,7 +733,7 @@ public partial class App : Application {
             profiles.Name, serverUrl,
             WizardComposition.BuildBridges(
                 action => Dispatcher.UIThread.Post(action),
-                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry),
+                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints),
             new ConsentFlipClaims(_config),
             new AppStateStore(_config.Path("app-state.json")),
             new ShellUrlOpener(),
@@ -808,7 +809,7 @@ public partial class App : Application {
             OperatingSystem.IsMacOS(), shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(
             action => Dispatcher.UIThread.Post(action),
-            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry);
+            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var graph = WizardComposition.BuildGraph(new WizardGraphOptions(

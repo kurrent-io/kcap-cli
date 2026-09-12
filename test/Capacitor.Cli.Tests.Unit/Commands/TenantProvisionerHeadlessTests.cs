@@ -35,11 +35,11 @@ public class TenantProvisionerHeadlessTests {
     /// "ask your admin" would be a dead end dressed as advice.</summary>
     [Test]
     public async Task The_message_offers_the_flags_signup_and_an_existing_workspace() {
-        var message = OAuthLoginFlow.WorkspaceCreationNeedsATerminalMessage();
+        var message = OAuthLoginFlow.WorkspaceCreationNeedsATerminalMessage("https://signup.test");
 
         await Assert.That(message).Contains("--org");
         await Assert.That(message).Contains("--slug");
-        await Assert.That(message).Contains("/signup");
+        await Assert.That(message).Contains("https://signup.test/signup");
         await Assert.That(message).Contains("--server-url");
         await Assert.That(message).DoesNotContain("admin");
     }

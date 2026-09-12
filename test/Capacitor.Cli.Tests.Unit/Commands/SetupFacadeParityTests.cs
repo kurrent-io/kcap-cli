@@ -90,7 +90,7 @@ public class SetupFacadeParityTests {
         new(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None,
             AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(),
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
-            Provisioning, Discovery, telemetry);
+            Provisioning, Discovery, telemetry, AuthEndpoints.Defaults);
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 

@@ -75,9 +75,25 @@ public class SessionAccessServiceTests {
         h.Connect();
         var lease = h.Service.Acquire("s1");
         await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
-        h.Time.Advance(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established on retry");
+
+        // The ladder arms its timer just AFTER publishing Unavailable, so a single advance placed
+        // between the two fires nothing and the retry never comes. Advancing a slice on each poll
+        // is idempotent -- a no-op until the timer exists, and it fires once the rung is covered.
+        var advanced = TimeSpan.Zero;
+        await WaitUntilAsync(async () => {
+            h.Time.Advance(Slice);
+            advanced += Slice;
+            return await Harness.Current(lease) == SessionAccessState.Established;
+        }, "established on retry");
+
+        // What it cost to get there is the rung: the first is two seconds and the next is five, so
+        // a retry demoted to any later rung could not have arrived inside this budget.
+        await Assert.That(advanced).IsLessThan(TimeSpan.FromSeconds(5));
     }
+
+    /// <summary>Small enough that the two-second first rung and the five-second second one land on
+    /// different polls, so the budget above can tell them apart.</summary>
+    static readonly TimeSpan Slice = TimeSpan.FromMilliseconds(250);
 
     [Test]
     public async Task Two_leases_share_one_subscription_and_unsubscribe_on_the_last_release() {
@@ -172,8 +188,13 @@ public class SessionAccessServiceTests {
         using var lease = h.Service.Acquire("s1");
         await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
 
-        h.Time.Advance(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count(s => s == "s1") == 2, what: "the retry");
+        // Same arming gap as the ladder test: advance on each poll rather than once. Every attempt
+        // fails here, so a later rung can arm and fire too -- the count is a floor, and the dedup
+        // this test is about holds however many retries ran, since the reason never changes.
+        await WaitUntilAsync(() => {
+            h.Time.Advance(TimeSpan.FromSeconds(2));
+            return h.Lane.ChatSubscribes.Count(s => s == "s1") >= 2;
+        }, what: "the retry");
         await Task.Delay(100); // the second attempt's report, were it not deduped, lands here
 
         var lines = capture.GetCapturedError().Split('\n', StringSplitOptions.RemoveEmptyEntries);

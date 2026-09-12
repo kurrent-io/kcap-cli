@@ -26,7 +26,7 @@ public class SetupChosenServerTests {
             AuthFixtures.NewTokenStore(Config.Root), factory,
             new AuthProxyClient(new HttpClient()), new WorkOSClient(factory), new GitHubOAuthClient(factory),
             new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), new TenantProvisioningClient(new HttpClient()),
-            new AuthProviderDiscovery(factory), NoTelemetry.Facade);
+            new AuthProviderDiscovery(factory), NoTelemetry.Facade, AuthEndpoints.Defaults);
     }
 
     /// A first run: nothing resolved a server before the command started, which is the case that
