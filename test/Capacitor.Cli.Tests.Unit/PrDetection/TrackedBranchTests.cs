@@ -109,6 +109,7 @@ public class TrackedBranchTests {
     /// <summary>The first row keeps the fake honest: a plain name resolves through it.</summary>
     [Test]
     [Arguments("refs/heads/remote-name", "remote-name")]
+    [Arguments("refs/heads/feat%x,1=2", "feat%x,1=2")] // legal in a ref, and one argument
     [Arguments("refs/heads/x --repo evil/repo", null)]
     [Arguments("refs/heads/-x", null)]
     [Arguments("refs/heads/a\"b", null)]

@@ -25,6 +25,10 @@ internal static class GitHubPrDetector {
             return null;
         }
 
+        // gh reads an all-digit selector as a PR number, so a branch named "123" would look up PR
+        // #123. The head check below would refuse that answer anyway; asking spends a round trip.
+        if (branch.All(char.IsAsciiDigit)) return null;
+
         var json = await run("gh", $"pr view {branch} --repo {host}/{owner}/{repo} --json {Fields},isCrossRepository", cwd, cap);
 
         return Parse(json) is ({ } pr, var o)
