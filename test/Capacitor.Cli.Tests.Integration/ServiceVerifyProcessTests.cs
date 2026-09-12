@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Config;
 using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Services;
@@ -112,6 +113,11 @@ public class ServiceVerifyProcessTests {
                 [ConfigRoot.ConfigDirEnvVar]  = config,
             }
         };
+
+        // The one kcap spawn that goes through a shell rather than KcapProcess, so it clears server
+        // selection itself — the grandchild resolves both at its own root.
+        psi.Environment.Remove(ProfileOverrides.UrlVar);
+        psi.Environment.Remove(ProfileOverrides.ProfileVar);
 
         using var shell = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start /bin/sh");
         int? orphanPid = null;

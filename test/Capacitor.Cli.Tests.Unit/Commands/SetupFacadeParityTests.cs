@@ -22,8 +22,8 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// differs between the ubuntu-latest and windows-latest CI legs — not something a unit test can
 /// pin (mirrors why LoginFacadeParityTests always passes --github too).
 /// </summary>
-// Bare, and one level only: these drive Console and SetupCommand.FacadeOverride, both process-global,
-// so a group key that names neither is not exclusion. A method constraint would shadow this one.
+// Bare, and one level only: these swap the AnsiConsole singleton, which is process-global, so a group
+// key that does not name it is not exclusion. A method constraint would shadow this one.
 [NotInParallel]
 public class SetupFacadeParityTests {
     /// <summary>
@@ -62,10 +62,7 @@ public class SetupFacadeParityTests {
 
     // Never reached: these tests drive the import and discovery steps, which do not provision.
     static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
-    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
-    static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
-    static readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient());
     static readonly AuthProviderDiscovery Discovery = new(HttpFactory);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -74,23 +71,19 @@ public class SetupFacadeParityTests {
     string TokensDir  => Config.PathTo("tokens");
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 
-    [Before(Test)]
-    public void Cleanup() => SetupCommand.FacadeOverride = null;
-
-    [After(Test)]
-    public void ResetFacadeOverride() => SetupCommand.FacadeOverride = null;
-
     ProfileConfig ReadConfig() => ConfigMutator.LoadPure(ConfigPath);
 
     bool TokenFileExists(string profile) => File.Exists(Path.Combine(TokensDir, $"{profile}.json"));
 
     TelemetryProbe StartCapturingFunnel() => TelemetryProbe.Live("setup", Config.Root);
 
-    SetupCommand Command(CliTelemetry telemetry) =>
-        new(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None,
-            AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(),
+    SetupCommand Command(CliTelemetry telemetry, IOnboardingFacadeFactory facades) =>
+        new(Config.Root, Resolutions.None(Config.Root),
+            AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(),
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
-            Provisioning, Discovery, telemetry, AuthEndpoints.Defaults);
+            Provisioning, Discovery, telemetry, AuthEndpoints.Defaults, facades,
+            FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")),
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None));
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 
@@ -100,10 +93,10 @@ public class SetupFacadeParityTests {
             proxyConfig: """{"github_client_id":"cid"}""",
             tenants: TwoGitHubTenants);
 
-        SetupCommand.FacadeOverride = _ =>
-            NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst());
+        var facades = new FakeFacadeFactory(_ =>
+            NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst()));
 
-        var discovered = await Command(NoTelemetry.Facade).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(NoTelemetry.Facade, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNotNull();
         await Assert.That(discovered!.Value.LoginComplete).IsTrue();
@@ -126,10 +119,10 @@ public class SetupFacadeParityTests {
             proxyConfig: """{"github_client_id":"cid"}""",
             tenants: TwoGitHubTenants);
 
-        SetupCommand.FacadeOverride = _ =>
-            NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst());
+        var facades = new FakeFacadeFactory(_ =>
+            NewFacade(Config.Root, new RecordingAuthProgress(), handler, PickerReturningFirst()));
 
-        var discovered = await Command(probe.Telemetry).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(probe.Telemetry, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNotNull();
         await Assert.That(probe.Names).IsEquivalentTo(
@@ -142,9 +135,9 @@ public class SetupFacadeParityTests {
 
         using var handler = AuthHttp.Script(proxyConfig: """{"github_client_id":"cid"}""", tenants: "[]");
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var discovered = await Command(probe.Telemetry).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(probe.Telemetry, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         // Today's setup fires SigninCompleted unconditionally once the token is acquired, and
@@ -162,9 +155,9 @@ public class SetupFacadeParityTests {
         // token, landing AuthFailureReason.Other (not NoTenantsFound).
         using var handler = AuthHttp.Script(proxyConfig: """{"github_client_id":"cid"}""");
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var discovered = await Command(probe.Telemetry).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(probe.Telemetry, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         await Assert.That(probe.Names).IsEquivalentTo(
@@ -179,9 +172,9 @@ public class SetupFacadeParityTests {
             proxyConfig: """{"github_client_id":"cid"}""",
             devicePoll: () => AuthHttp.Json("""{"error":"access_denied"}"""));
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var discovered = await Command(probe.Telemetry).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(probe.Telemetry, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         await Assert.That(probe.Names).IsEquivalentTo(
@@ -194,9 +187,9 @@ public class SetupFacadeParityTests {
 
         using var handler = AuthHttp.Script(); // no /config route — proxy unreachable
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var discovered = await Command(probe.Telemetry).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(probe.Telemetry, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         // Other/Unreachable failures map to nothing beyond SigninOpened — only SigninDenied and
@@ -210,11 +203,11 @@ public class SetupFacadeParityTests {
     public async Task RunDiscoveryAsync_unreachable_proxy_still_prints_the_legacy_guidance_tail() {
         using var handler = AuthHttp.Script(); // no /config route — proxy unreachable
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
         using var console = ConsoleOutput.StartErrorCapture("\n");
 
-        var discovered = await Command(NoTelemetry.Facade).RunDiscoveryAsync(["--github"], forceDevice: true);
+        var discovered = await Command(NoTelemetry.Facade, facades).RunDiscoveryAsync(["--github"], forceDevice: true);
 
         await Assert.That(discovered).IsNull();
         await Assert.That(console.GetCapturedError()).Contains(SetupAuthProgress.UnreachableGuidance);
@@ -228,12 +221,13 @@ public class SetupFacadeParityTests {
         using var handler = AuthHttp.Script(); // no /config route — discovery fails after construction
 
         ITenantProvisioner? captured = null;
-        SetupCommand.FacadeOverride = provisioner => {
+        var facades = new FakeFacadeFactory(provisioner => {
             captured = provisioner;
-            return NewFacade(Config.Root, new RecordingAuthProgress(), handler);
-        };
 
-        await Command(NoTelemetry.Facade)
+            return NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        });
+
+        await Command(NoTelemetry.Facade, facades)
             .RunDiscoveryAsync([], forceDevice: true, new RequestedWorkspace("Acme", "acme"));
 
         await Assert.That(captured).IsTypeOf<SpectreTenantProvisioner>();
@@ -337,14 +331,14 @@ public class SetupFacadeParityTests {
             ServerUrl       = "https://acme.kcap.ai",
         });
 
-        SetupCommand.FacadeOverride = _ => throw new InvalidOperationException("loginComplete must not call the façade");
+        var facades = new FakeFacadeFactory(_ => throw new InvalidOperationException("loginComplete must not call the façade"));
 
         var console = SpectreCapture.Start();
 
         int exitCode;
 
         try {
-            exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+            exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
                 loginComplete: true, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
                 forceDevice: false, activeProfile: "acme");
         } finally {
@@ -360,9 +354,9 @@ public class SetupFacadeParityTests {
     public async Task RunLoginStepAsync_none_provider_commits_the_stamp_through_the_facade() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"None"}""");
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+        var exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.None, serverUrl: "https://none.example",
             forceDevice: false, activeProfile: "default");
 
@@ -382,9 +376,9 @@ public class SetupFacadeParityTests {
         // failure test below. A None-provider server that becomes unreachable must fail the same way.
         using var handler = AuthHttp.Script();
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+        var exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.None, serverUrl: "https://none.example",
             forceDevice: false, activeProfile: "default");
 
@@ -395,9 +389,9 @@ public class SetupFacadeParityTests {
     public async Task RunLoginStepAsync_explicit_login_commits_and_adopts_the_server_onto_the_active_profile() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
-        var exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+        var exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
             forceDevice: true, activeProfile: "acme");
 
@@ -417,11 +411,11 @@ public class SetupFacadeParityTests {
         using var handler  = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
         var       progress = new RecordingAuthProgress();
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, progress, handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, progress, handler));
 
         using var console = ConsoleOutput.StartCapture();
 
-        var exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+        var exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
             forceDevice: true, activeProfile: "acme");
 
@@ -441,12 +435,15 @@ public class SetupFacadeParityTests {
     [Arguments(AuthProvider.GitHubApp, true)]
     public async Task A_completed_discovery_names_the_identity_only_where_discovery_did_not(
             string provider, bool named) {
+        var facades = new FakeFacadeFactory(
+            _ => throw new InvalidOperationException("loginComplete must not call the façade"));
+
         var console = SpectreCapture.Start();
 
         int exitCode;
 
         try {
-            exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+            exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
                 loginComplete: true, provider: provider, serverUrl: "https://acme.kcap.ai",
                 forceDevice: false, activeProfile: "acme");
         } finally {
@@ -461,11 +458,11 @@ public class SetupFacadeParityTests {
     public async Task RunLoginStepAsync_explicit_login_failure_prints_login_failed_and_returns_one() {
         using var handler = AuthHttp.Script(authConfig: """{"provider":"martian"}""");
 
-        SetupCommand.FacadeOverride = _ => NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+        var facades = new FakeFacadeFactory(_ => NewFacade(Config.Root, new RecordingAuthProgress(), handler));
 
         // The provider param is Step 1's resolved value; Step 2 re-fetches /auth/config for the
         // actual login, so a server reporting an unrelated/unknown provider by then still fails.
-        var exitCode = await Command(NoTelemetry.Facade).RunLoginStepAsync(
+        var exitCode = await Command(NoTelemetry.Facade, facades).RunLoginStepAsync(
             loginComplete: false, provider: AuthProvider.GitHubApp, serverUrl: "https://acme.kcap.ai",
             forceDevice: false, activeProfile: "acme");
 

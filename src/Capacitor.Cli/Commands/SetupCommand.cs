@@ -414,12 +414,13 @@ sealed class SetupMachineActions : IFirstRunMachineActions {
 }
 
 public sealed class SetupCommand(
-        ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
-        TokenStore store, IHttpClientFactory httpFactory,
-        IAuthProxyClient proxy, WorkOSClient workos, GitHubOAuthClient github, IBrowserLauncher browser,
+        ConfigRoot config, ProfileContext profiles,
+        TokenStore store, IBrowserLauncher browser,
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
-        AuthEndpoints endpoints) {
+        AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
+        ChosenServerHttp chosenHttp) {
+
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
 
@@ -1180,9 +1181,9 @@ public sealed class SetupCommand(
     /// Step 6 (import past sessions) decision + best-effort execution, extracted from
     /// <see cref="HandleAsync"/> so it's unit-testable without driving the whole wizard: the
     /// eligibility/policy decision goes through <see cref="SetupDecisions.DecideImport"/>, and the
-    /// actual import call goes through <see cref="ImportRunnerOverride"/> (the real
-    /// <see cref="ImportCommand.HandleImport"/> when null) so tests can intercept the invocation
-    /// instead of running a real import. Import is best-effort: a thrown exception or a non-zero
+    /// actual import call goes through the injected <see cref="ISetupImportRunner"/> so a test can
+    /// intercept the invocation instead of running a real import. Import is best-effort: a thrown
+    /// exception or a non-zero
     /// exit code is reported with a warning and swallowed — this method never throws and never
     /// fails setup.
     /// </summary>
@@ -1225,7 +1226,7 @@ public sealed class SetupCommand(
             Profiles:           profiles);
 
         try {
-            var exitCode = await (ImportRunnerOverride ?? DefaultImportRunner)(invocation);
+            var exitCode = await imports.RunAsync(invocation);
 
             if (exitCode != 0) {
                 AnsiConsole.MarkupLine(
@@ -1237,66 +1238,9 @@ public sealed class SetupCommand(
         }
     }
 
-    /// <summary>
-    /// The arguments Step 6 pins into its embedded <see cref="ImportCommand.HandleImport"/> call.
-    /// A record (not a bare argument list) so tests can capture and assert on it via
-    /// <see cref="ImportRunnerOverride"/> without running a real import.
-    /// </summary>
-    internal sealed record ImportInvocation(
-        (string Owner, string Name) Repo,
-        string?                      DefaultVisibility,
-        bool                         AutoSkipExclusions,
-        bool                         ForcePrivate,
-        ProfileContext               Profiles);
-
-    /// <summary>
-    /// Test seam: when set, replaces the real <see cref="ImportCommand.HandleImport"/> call made
-    /// by <see cref="RunImportStepAsync"/>. Process-global static state — tests must reset it to
-    /// null (in a finally block) after use.
-    /// </summary>
-    internal static Func<ImportInvocation, Task<int>>? ImportRunnerOverride;
-
-    /// <summary>
-    /// A client aimed at the server THIS run chose. The process container resolved its server once
-    /// at startup — before this command could pick one, and null on a first run — so every leg that
-    /// runs after the choice has to build its own or it authenticates against the wrong server, or
-    /// against none at all. The profile name and config root stay the process's, so the token lookup
-    /// targets the profile it always did.
-    /// </summary>
-    internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) {
-        var context = chosen ?? new ProfileContext(profiles.Resolution with { ServerUrl = serverUrl }, profiles.Snapshot);
-
-        return new ServiceCollection()
-            .AddSingleton(config)
-            .AddSingleton(context)
-            .AddSingleton(new CapacitorServer(serverUrl, config, context))
-            .AddCapacitorHttp(env, machine)
-            .BuildValidated();
-    }
-
-    async Task<int> DefaultImportRunner(ImportInvocation inv) {
-        await using var scoped = HttpForChosenServer(inv.Profiles.Resolution.ServerUrl ?? "", inv.Profiles);
-
-        return await new ImportCommand(
-                config, inv.Profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>())
-            .HandleImport(
-            filterCwd:               null,
-            filterSession:           null,
-            minLines:                15,
-            generateSummaries:       false,
-            sources:                 BuildImportSources(config, harnesses),
-            explicitVendorSelection: false,
-            since:                   null,
-            scope:                   new ImportScope.Repo(inv.Repo.Owner, inv.Repo.Name),
-            skipConfirmation:        true,
-            forcePrivate:            inv.ForcePrivate,
-            currentRepo:             inv.Repo,
-            needOrgPick:             false,
-            storedOrg:               null,
-            autoSkipExclusions:      inv.AutoSkipExclusions,
-            defaultVisibility:       inv.DefaultVisibility,
-            nested:                  true);
-    }
+    /// <inheritdoc cref="ChosenServerHttp.For"/>
+    internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) =>
+        chosenHttp.For(serverUrl, chosen);
 
     /// <summary>
     /// Every import source, one per catalogue vendor.
@@ -1366,25 +1310,13 @@ public sealed class SetupCommand(
         }
     }
 
-    /// <summary>Test seam: overrides façade construction for Step 1/2. Reset to null in a finally block.</summary>
-    internal static Func<ITenantProvisioner?, OnboardingFacade>? FacadeOverride;
-
     internal static readonly SetupAuthProgress StepProgress = new(new ConsoleAuthProgress(SetupAuthProgress.StepIndent));
-
-    OnboardingFacade NewFacade(
-            ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null) =>
-        FacadeOverride?.Invoke(provisioner)
-            ?? new OnboardingFacade(config, store, httpFactory, proxy, github, workos, StepProgress, browser,
-                picker ?? DefaultPicker(browser, () => true), provisioner, telemetry, endpoints,
-                WorkspaceGuard(requested)) {
-                KeyWatcher = ConsoleKeyWatcher.Instance
-            };
 
     /// <summary>
     /// The workspace pick, in the browser where one is reachable and in the terminal otherwise. The
     /// composite decides per call, since only the completed login knows which channel it used.
     /// </summary>
-    static ITenantPicker DefaultPicker(IBrowserLauncher launcher, Func<bool> canPrompt) =>
+    internal static ITenantPicker DefaultPicker(IBrowserLauncher launcher, Func<bool> canPrompt) =>
         new BrowserTenantPicker(
             launcher, new SpectreTenantPicker(canPrompt), StepProgress, ConsoleKeyWatcher.Instance,
             canPrompt: canPrompt);
@@ -1434,7 +1366,7 @@ public sealed class SetupCommand(
             return 0;
         }
 
-        var result = await NewFacade(provisioner: null)
+        var result = await facades.Create(provisioner: null)
             .LoginAsync(serverUrl, forceDevice, activeProfile, CancellationToken.None, adoptServer: true);
 
         if (result is not AuthResult.Committed) {
@@ -1803,7 +1735,7 @@ public sealed class SetupCommand(
                 isInteractive: () => canPrompt, requested: requested)
             : null;
 
-        var result = await NewFacade(provisioner, DefaultPicker(browser, () => canPrompt), requested)
+        var result = await facades.Create(provisioner, DefaultPicker(browser, () => canPrompt), requested)
             .DiscoverAsync(chosen, forceDevice, CancellationToken.None);
 
         // WorkOS's own signin_completed/tenant_none fire from inside Core — only GitHub is derived here.
