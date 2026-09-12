@@ -205,9 +205,8 @@ static class RepositoryDetection {
             // (only ClaudeHookCommand does), else the historical 2s cap. Covers probe + detector.
             var providerCap = ghCap;
 
-            // Import passes detectPullRequest:false to skip the provider round-trip (it discards
-            // PR fields). ResolveAndDetectPrAsync (from #261) owns the probe+detector budget split;
-            // thread the injectable `run` through so the git/provider spawns stay unit-testable.
+            // Import passes detectPullRequest:false: it discards PR fields, so the round-trip is
+            // wasted latency. ResolveAndDetectPrAsync owns the split of providerCap across probes.
             if (detectPullRequest && providerCap > TimeSpan.Zero && host is not null) {
                 var pr = await ResolveAndDetectPrAsync(host, owner, repoName, branch, cwd, providerCap, run);
 
@@ -238,11 +237,10 @@ static class RepositoryDetection {
     }
 
     /// <summary>
-    /// Resolves the git provider for <paramref name="host"/> and detects the current PR/MR within a
-    /// single <paramref name="providerCap"/> ceiling shared by the probe and the detector. The
-    /// detector is given only the budget the probe left behind — never the full cap — so probe +
-    /// detector together can't overrun the deadline. <paramref name="getTimestamp"/> is a seam for
-    /// tests (defaults to <see cref="Stopwatch.GetTimestamp"/>).
+    /// Resolves the git provider for <paramref name="host"/> and detects the current PR/MR within one
+    /// <paramref name="providerCap"/> ceiling shared by the probe, the detector and the tracked-branch
+    /// fallback: each gets only what the ones before it left, never the full cap.
+    /// <paramref name="getTimestamp"/> is a seam for tests (defaults to <see cref="Stopwatch.GetTimestamp"/>).
     /// </summary>
     internal static async Task<PrInfo?> ResolveAndDetectPrAsync(
             string        host,
@@ -260,23 +258,40 @@ static class RepositoryDetection {
         var start = getTs();
         var kind  = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, run);
 
-        // The remainder after the probe — NOT the full providerCap. Passing providerCap here would
-        // let a slow probe + a full-length detector overrun the caller's deadline. Clamp the elapsed
-        // time to >= 0 so a non-monotonic timestamp seam can never inflate detectCap past providerCap
-        // (the invariant is "detector budget <= providerCap, always"). Production uses the monotonic
-        // Stopwatch.GetTimestamp, so this only hardens the injectable test seam.
-        var elapsed = Stopwatch.GetElapsedTime(start, getTs());
-        if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
-
-        var detectCap = providerCap - elapsed;
+        var detectCap = Remaining();
         if (detectCap <= TimeSpan.Zero) return null;
 
         return kind switch {
-            GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, run),
+            GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, run)
+                                   ?? await DetectTrackedGitHubPrAsync(host, owner, repoName, branch, cwd, Remaining, run),
             GitProviderKind.GitLab when owner is not null && repoName is not null
                 => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, run),
             _ => null
         };
+
+        // What is left of providerCap, so every probe after the first draws on one deadline. Elapsed
+        // clamps at zero so a non-monotonic timestamp seam can never raise it past providerCap.
+        TimeSpan Remaining() {
+            var elapsed = Stopwatch.GetElapsedTime(start, getTs());
+            return providerCap - (elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed);
+        }
+    }
+
+    // `gh pr view` finds the current branch's head through push.default: under the default `simple`,
+    // an upstream of another name has no push destination and gh queries the local name instead.
+    static async Task<PrInfo?> DetectTrackedGitHubPrAsync(
+            string host, string? owner, string? repoName, string? branch, string cwd, Func<TimeSpan> remaining,
+            CommandRunner run) {
+        if (owner is null || repoName is null) return null;
+
+        var tracked = await TrackedBranch.ResolveAsync(branch, host, owner, repoName, cwd, remaining, run);
+        if (tracked is null) return null;
+
+        var cap = remaining();
+
+        return cap > TimeSpan.Zero
+            ? await GitHubPrDetector.DetectForBranchAsync(host, owner, repoName, tracked, cwd, cap, run)
+            : null;
     }
 
     static async Task<string?> RunCommandAsync(string cmd, string arguments, string cwd, TimeSpan timeout) {

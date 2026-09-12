@@ -6,6 +6,18 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A PR is found under the name its branch was pushed as
+
+An argument-free `gh pr view` looks for the branch git would push to. Under the default
+`push.default=simple`, a branch whose upstream has another name has no push destination, so gh
+queries the local name and never finds a PR opened from a branch pushed with an explicit refspec —
+retrying every minute changes nothing. On a miss, detection asks for the tracked remote branch by
+name, pinned to the session's repository with `--repo`, and takes only a same-repository head of
+exactly that name. It does not guess: an upstream on another repository's remote, the remote's
+default branch, or a remote whose default is unknown yields no fallback, because a branch cut from
+`origin/main` tracks `main` without being its PR. Every probe draws on the one provider deadline the
+normal lookup already had.
+
 ## The npm wrapper waits for its platform packages
 
 `npm publish` returns while the registry is still processing a tarball, and a platform package carrying

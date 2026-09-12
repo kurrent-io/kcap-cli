@@ -80,4 +80,54 @@ public class ProviderBudgetSplitTests {
         await Assert.That(detectorCap).IsNotNull();
         await Assert.That(detectorCap!.Value).IsLessThanOrEqualTo(providerCap); // never exceeds the ceiling
     }
+
+    /// <summary>A branch tracking <c>remote-name</c> whose normal <c>gh pr view</c> misses after
+    /// advancing the injected clock by <paramref name="normalLookupCost"/>.</summary>
+    static CommandRunner TrackedBranchRunner(
+            Func<long> now, Action<long> setNow, TimeSpan normalLookupCost, List<(string Args, TimeSpan Cap)> calls) =>
+        (cmd, args, _, cap) => {
+            calls.Add(($"{cmd} {args}", cap));
+
+            if (cmd == "gh" && args.StartsWith("pr view --json", StringComparison.Ordinal)) {
+                setNow(now() + (long)(normalLookupCost.TotalSeconds * Stopwatch.Frequency));
+                return Task.FromResult<string?>(null);
+            }
+
+            string? reply = args switch {
+                "config --get branch.local-name.remote" => "origin",
+                "config --get branch.local-name.merge"  => "refs/heads/remote-name",
+                "remote get-url origin"                 => "git@github.com:acme/widget.git",
+                _ when args.StartsWith("symbolic-ref ", StringComparison.Ordinal) => "refs/remotes/origin/main",
+                _ => null
+            };
+
+            return Task.FromResult(reply);
+        };
+
+    [Test]
+    public async Task Tracked_branch_lookup_gets_only_what_the_normal_lookup_left() {
+        long now  = 0;
+        var calls = new List<(string Args, TimeSpan Cap)>();
+        var run   = TrackedBranchRunner(() => now, t => now = t, TimeSpan.FromSeconds(1.5), calls);
+
+        await RepositoryDetection.ResolveAndDetectPrAsync(
+            "github.com", "acme", "widget", "local-name", "/cwd", TimeSpan.FromSeconds(2), run, () => now);
+
+        var tracked = calls.Single(c => c.Args.StartsWith("gh pr view remote-name", StringComparison.Ordinal));
+        await Assert.That(tracked.Cap).IsGreaterThan(TimeSpan.Zero);
+        await Assert.That(tracked.Cap).IsLessThanOrEqualTo(TimeSpan.FromMilliseconds(500));
+    }
+
+    [Test]
+    public async Task No_tracked_branch_probe_once_the_normal_lookup_spends_the_budget() {
+        long now  = 0;
+        var calls = new List<(string Args, TimeSpan Cap)>();
+        var run   = TrackedBranchRunner(() => now, t => now = t, TimeSpan.FromSeconds(2), calls);
+
+        var pr = await RepositoryDetection.ResolveAndDetectPrAsync(
+            "github.com", "acme", "widget", "local-name", "/cwd", TimeSpan.FromSeconds(2), run, () => now);
+
+        await Assert.That(pr).IsNull();
+        await Assert.That(calls.Select(c => c.Args)).IsEquivalentTo(["gh pr view --json number,title,url,headRefName"]);
+    }
 }
