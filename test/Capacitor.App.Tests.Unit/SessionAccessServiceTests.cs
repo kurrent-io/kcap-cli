@@ -75,8 +75,14 @@ public class SessionAccessServiceTests {
         h.Connect();
         var lease = h.Service.Acquire("s1");
         await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
-        h.Time.Advance(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Established, "established on retry");
+
+        // The ladder arms its timer just AFTER publishing Unavailable, so a single advance placed
+        // between the two fires nothing and the retry never comes. Advancing on each poll is
+        // idempotent -- a no-op until the timer exists, and it fires on the first poll after.
+        await WaitUntilAsync(async () => {
+            h.Time.Advance(TimeSpan.FromSeconds(2));
+            return await Harness.Current(lease) == SessionAccessState.Established;
+        }, "established on retry");
     }
 
     [Test]
@@ -172,8 +178,13 @@ public class SessionAccessServiceTests {
         using var lease = h.Service.Acquire("s1");
         await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
 
-        h.Time.Advance(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count(s => s == "s1") == 2, what: "the retry");
+        // Same arming gap as the ladder test: advance on each poll rather than once. Every attempt
+        // fails here, so a later rung can arm and fire too -- the count is a floor, and the dedup
+        // this test is about holds however many retries ran, since the reason never changes.
+        await WaitUntilAsync(() => {
+            h.Time.Advance(TimeSpan.FromSeconds(2));
+            return h.Lane.ChatSubscribes.Count(s => s == "s1") >= 2;
+        }, what: "the retry");
         await Task.Delay(100); // the second attempt's report, were it not deduped, lands here
 
         var lines = capture.GetCapturedError().Split('\n', StringSplitOptions.RemoveEmptyEntries);
