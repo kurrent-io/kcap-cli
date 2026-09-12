@@ -142,6 +142,18 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
+    readonly ComposerHistory _history = new();
+    /// Replaces the composer text with the next older sent prompt; false when nothing changed.
+    public bool RecallOlder() => Recall(_history.Older(ComposerText));
+    /// Replaces the composer text with the next newer sent prompt, or the draft past the newest.
+    public bool RecallNewer() => Recall(_history.Newer(ComposerText));
+
+    bool Recall(string? text) {
+        if (text is null) return false;
+        ComposerText = text;
+        return true;
+    }
+
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
@@ -332,6 +344,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 outcome = ChatSendOutcome.Unconfirmed;
             }
             if (_lifetimeToken.IsCancellationRequested) return;
+            if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
             if (outcome == ChatSendOutcome.Rejected || (outcome == ChatSendOutcome.Accepted && _projection is null))
                 _queuedMessages.Remove(queued);
             else if (outcome == ChatSendOutcome.Unconfirmed)

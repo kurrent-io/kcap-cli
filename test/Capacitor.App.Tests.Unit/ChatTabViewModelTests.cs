@@ -757,6 +757,45 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A send that went out is recallable whether or not the transcript has echoed it yet; a
+    /// rejected one never left the box, so there is nothing to recall.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Recall_walks_the_sent_prompts_and_skips_a_rejected_send() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
+
+            h.Chat.ComposerText = "first";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            h.Chat.ComposerText = "refused";
+            send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
+            await send;
+            h.Chat.ComposerText = "second";
+            send = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+            await send;
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("second");
+            h.Chat.ComposerText = "";
+
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("second");
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("first");
+            await Assert.That(h.Chat.RecallOlder()).IsFalse();
+            await Assert.That(h.Chat.RecallNewer()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("second");
+            await Assert.That(h.Chat.RecallNewer()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            await Assert.That(h.Chat.RecallNewer()).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
     /// Text alone cannot decide this: an edit during the round trip that ends on the sent text is
     /// still the user's own draft, and clearing it would erase what they typed.
     [Test]

@@ -65,12 +65,25 @@ public partial class ChatTabView : UserControl {
 
     /// A bare Enter is always consumed — it sends when the composer can send, and otherwise does
     /// nothing, leaving the text and the hint that says why. Shift+Enter falls through to the
-    /// TextBox's own newline.
+    /// TextBox's own newline. ↑/↓ recall sent prompts only from the first/last line, so inside a
+    /// multi-line recall they stay the TextBox's own caret moves until the caret reaches an edge.
     void OnComposerKeyDown(object? sender, KeyEventArgs e) {
         if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None) {
             e.Handled = true;
             if (DataContext is ChatTabViewModel chat && ((ICommand)chat.InterruptCommand).CanExecute(null))
                 chat.InterruptCommand.Execute().Subscribe();
+            return;
+        }
+        if (e.Key is Key.Up or Key.Down && e.KeyModifiers == KeyModifiers.None) {
+            if (DataContext is not ChatTabViewModel tab) return;
+            var text = ComposerInput.Text ?? "";
+            var caret = Math.Clamp(ComposerInput.CaretIndex, 0, text.Length);
+            var recalled = e.Key == Key.Up
+                ? text.IndexOf('\n', 0, caret) < 0 && tab.RecallOlder()
+                : text.IndexOf('\n', caret) < 0 && tab.RecallNewer();
+            if (!recalled) return;
+            e.Handled = true;
+            ComposerInput.CaretIndex = ComposerInput.Text?.Length ?? 0;
             return;
         }
         if (e.Key != Key.Enter || e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
