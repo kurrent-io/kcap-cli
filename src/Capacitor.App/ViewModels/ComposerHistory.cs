@@ -42,7 +42,8 @@ public sealed class ComposerHistory {
 
     bool IsShowing(string current) => _shown is not null && string.Equals(_shown, current, StringComparison.Ordinal);
 
-    void EndNavigation() {
+    /// Leaves whatever the composer shows as the user's own draft.
+    public void EndNavigation() {
         _shown = null;
         _cursor = _entries.Count;
     }

@@ -796,6 +796,35 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Text equality cannot prove a recall was left alone: an edit undone by hand lands on the
+    /// same string, and that string is the user's own draft now.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Recall_ends_when_a_recalled_prompt_is_edited_and_restored() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
+
+            foreach (var text in new[] { "first", "second" }) {
+                h.Chat.ComposerText = text;
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+            }
+            h.Chat.ComposerText = "";
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("second");
+
+            h.Chat.ComposerText = "second!";
+            h.Chat.ComposerText = "second";
+            await Assert.That(h.Chat.RecallOlder()).IsFalse();
+            await Assert.That(h.Chat.RecallNewer()).IsFalse();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("second");
+            await h.TeardownAsync();
+        });
+    }
+
     /// Text alone cannot decide this: an edit during the round trip that ends on the sent text is
     /// still the user's own draft, and clearing it would erase what they typed.
     [Test]

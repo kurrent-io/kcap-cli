@@ -1,5 +1,6 @@
 using System.Windows.Input;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -63,6 +64,17 @@ public partial class ChatTabView : UserControl {
         if (_followTail && !atBottom) scroll.ScrollToEnd();
     }
 
+    /// The composer wraps, so the rendered rows, not the newlines, say whether the caret has a row
+    /// above or below it; the newline count stands in only before the box has a text presenter.
+    (int Line, int Lines) ComposerCaretLine() {
+        var text = ComposerInput.Text ?? "";
+        var caret = Math.Clamp(ComposerInput.CaretIndex, 0, text.Length);
+        var layout = ComposerInput.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault()?.TextLayout;
+        if (layout is { TextLines.Count: > 0 })
+            return (layout.GetLineIndexFromCharacterIndex(caret, false), layout.TextLines.Count);
+        return (text.AsSpan(0, caret).Count('\n'), text.AsSpan().Count('\n') + 1);
+    }
+
     /// A bare Enter is always consumed — it sends when the composer can send, and otherwise does
     /// nothing, leaving the text and the hint that says why. Shift+Enter falls through to the
     /// TextBox's own newline. ↑/↓ recall sent prompts only from the first/last line, so inside a
@@ -75,12 +87,9 @@ public partial class ChatTabView : UserControl {
             return;
         }
         if (e.Key is Key.Up or Key.Down && e.KeyModifiers == KeyModifiers.None) {
-            if (DataContext is not ChatTabViewModel tab) return;
-            var text = ComposerInput.Text ?? "";
-            var caret = Math.Clamp(ComposerInput.CaretIndex, 0, text.Length);
-            var recalled = e.Key == Key.Up
-                ? text.IndexOf('\n', 0, caret) < 0 && tab.RecallOlder()
-                : text.IndexOf('\n', caret) < 0 && tab.RecallNewer();
+            if (DataContext is not ChatTabViewModel tab || ComposerInput.SelectionStart != ComposerInput.SelectionEnd) return;
+            var (line, lines) = ComposerCaretLine();
+            var recalled = e.Key == Key.Up ? line == 0 && tab.RecallOlder() : line == lines - 1 && tab.RecallNewer();
             if (!recalled) return;
             e.Handled = true;
             ComposerInput.CaretIndex = ComposerInput.Text?.Length ?? 0;

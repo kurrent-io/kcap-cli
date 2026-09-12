@@ -478,6 +478,62 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A selection makes ↑/↓ the TextBox's own collapse-and-move, so a recall must not replace
+    /// the text underneath it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Arrow_keys_over_a_selection_leave_the_recalled_text_alone() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall-selection.jsonl", UserLine));
+            await host.SendAsync("first");
+            await host.SendAsync("second");
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+            host.Composer.SelectionStart = 0;
+            host.Composer.SelectionEnd = 3;
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+
+            host.Composer.SelectionStart = 6;
+            host.Composer.SelectionEnd = 2;
+            host.Press(PhysicalKey.ArrowDown);
+            await Assert.That(host.Composer.Text).IsEqualTo("second");
+            await host.CloseAsync();
+        });
+    }
+
+    /// The composer wraps, so a long prompt with no newline still has rows above the caret: ↑ from
+    /// its end climbs those rows first and recalls the older prompt only from the top one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Up_climbs_the_wrapped_rows_of_a_recall_before_stepping_older() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("recall-wrap.jsonl", UserLine));
+            await host.SendAsync("first");
+            var wrapped = string.Join(' ', Enumerable.Repeat("wrapped", 60));
+            await host.SendAsync(wrapped);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(wrapped);
+            await Assert.That(host.Composer.GetLineCount()).IsGreaterThan(1);
+
+            host.Press(PhysicalKey.ArrowUp);
+            await Assert.That(host.Composer.Text).IsEqualTo(wrapped);
+            await Assert.That(host.Composer.CaretIndex).IsLessThan(wrapped.Length);
+
+            var presses = 1;
+            while (host.Composer.Text == wrapped && presses < 20) {
+                host.Press(PhysicalKey.ArrowUp);
+                presses++;
+            }
+            await Assert.That(host.Composer.Text).IsEqualTo("first");
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the other half of the key contract: Shift+Enter stays the TextBox's own newline and
     /// sends nothing.
     [Test]

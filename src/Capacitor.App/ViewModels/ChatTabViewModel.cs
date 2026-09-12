@@ -143,14 +143,23 @@ public sealed class ChatTabViewModel : ReactiveObject {
     }
 
     readonly ComposerHistory _history = new();
+    int _recallEdits = -1;
     /// Replaces the composer text with the next older sent prompt; false when nothing changed.
-    public bool RecallOlder() => Recall(_history.Older(ComposerText));
+    public bool RecallOlder() => Recall(_history.Older(Recallable()));
     /// Replaces the composer text with the next newer sent prompt, or the draft past the newest.
-    public bool RecallNewer() => Recall(_history.Newer(ComposerText));
+    public bool RecallNewer() => Recall(_history.Newer(Recallable()));
+
+    /// Text equality cannot prove a recall was left alone — an edit undone by hand lands on the
+    /// same string — so the edit count decides, as it does for the sent draft.
+    string Recallable() {
+        if (_composerEdits != _recallEdits) _history.EndNavigation();
+        return ComposerText;
+    }
 
     bool Recall(string? text) {
         if (text is null) return false;
         ComposerText = text;
+        _recallEdits = _composerEdits;
         return true;
     }
 
