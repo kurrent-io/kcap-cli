@@ -77,13 +77,23 @@ public class SessionAccessServiceTests {
         await WaitUntilAsync(async () => await Harness.Current(lease) == SessionAccessState.Unavailable, "unavailable after the failure");
 
         // The ladder arms its timer just AFTER publishing Unavailable, so a single advance placed
-        // between the two fires nothing and the retry never comes. Advancing on each poll is
-        // idempotent -- a no-op until the timer exists, and it fires on the first poll after.
+        // between the two fires nothing and the retry never comes. Advancing a slice on each poll
+        // is idempotent -- a no-op until the timer exists, and it fires once the rung is covered.
+        var advanced = TimeSpan.Zero;
         await WaitUntilAsync(async () => {
-            h.Time.Advance(TimeSpan.FromSeconds(2));
+            h.Time.Advance(Slice);
+            advanced += Slice;
             return await Harness.Current(lease) == SessionAccessState.Established;
         }, "established on retry");
+
+        // What it cost to get there is the rung: the first is two seconds and the next is five, so
+        // a retry demoted to any later rung could not have arrived inside this budget.
+        await Assert.That(advanced).IsLessThan(TimeSpan.FromSeconds(5));
     }
+
+    /// <summary>Small enough that the two-second first rung and the five-second second one land on
+    /// different polls, so the budget above can tell them apart.</summary>
+    static readonly TimeSpan Slice = TimeSpan.FromMilliseconds(250);
 
     [Test]
     public async Task Two_leases_share_one_subscription_and_unsubscribe_on_the_last_release() {

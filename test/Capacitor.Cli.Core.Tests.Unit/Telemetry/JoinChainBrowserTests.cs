@@ -59,7 +59,7 @@ public class JoinChainBrowserTests {
             $"Set {GateEnvVar}=<base url> and {HandshakeEnvVar}=<path> to run the browser chain.");
 
         try {
-            var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), debug: true, signupUrl: new AuthEndpoints(null, baseUrl).SignupUrl);
+            var probe = TelemetryProbe.Live("setup", new ConfigRoot(Tmp.Path), signupUrl: new AuthEndpoints(null, baseUrl).SignupUrl);
             var key   = probe.Join.Mint();
             await Assert.That(key).IsNotNull();
 
