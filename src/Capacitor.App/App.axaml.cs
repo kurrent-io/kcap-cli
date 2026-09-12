@@ -203,13 +203,12 @@ public partial class App : Application {
 
     public override void OnFrameworkInitializationCompleted() {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
-            // The steady-state mode (spec §9): closing the main window hides it to the tray, so
-            // the app must never exit on last-window-close. Set here, before StartAsync fires, so
-            // it holds from the very first window onward; ShowStartupError pins the same value
-            // again on the failure path, where it is now redundant but self-documenting (its own
-            // comment explains the exit-code bug that pin fixes).
+            // Closing the main window hides it; only an explicit quit ends the process.
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             desktop.ShutdownRequested += OnShutdownRequested;
+            var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
+                () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
+            desktop.Exit += (_, _) => windowLifecycle.Dispose();
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator)).Install();
             _ = StartAsync(desktop);
