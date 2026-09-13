@@ -93,6 +93,9 @@ public static class CommandServices {
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddSingleton<ChosenServerHttp>();
+        services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
+        services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
