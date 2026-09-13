@@ -24,6 +24,14 @@ internal static class AvaloniaSession {
         new(static () => HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder)),
             LazyThreadSafetyMode.ExecutionAndPublication);
 
+    /// Dispatcher.UIThread binds to whichever thread first touches it and owns it for the process.
+    /// Building the Avalonia application inside a dispatch pins that binding to the session's own
+    /// worker thread; letting a parallel test on a thread-pool thread touch a Dispatcher-bound type
+    /// first instead makes the session's later app build fail VerifyAccess in the compositor ctor.
+    /// Forcing one dispatch before any test in this assembly runs claims the thread first.
+    [Before(Assembly)]
+    public static Task ClaimUiThread() => DispatchAsync(static () => { });
+
     /// ReactiveUI's builder state is process-global and effectively one-shot: whatever ran first
     /// keeps its registrations, so every later test inherits an Avalonia scheduler bound to a
     /// dispatcher nothing pumps — no ObserveOn(RxSchedulers.MainThreadScheduler) ever delivers and
