@@ -9,10 +9,10 @@ and delivered to the agent as files it can read.
 
 The daemon already knows how to deliver an attachment. A server-origin `SendInput` and a
 server-origin launch both carry `attachment_ids`; the daemon fetches each id from the server's
-temp store into `<worktree>/.attached/` and appends `[Attached files: .attached/x.png]` to the
-prompt. The web composer uses exactly this. What is missing is everything above it in the app,
-one new local input frame, and a few daemon rules the local lane and the fail-closed contract
-need.
+temp store to disk and appends `[Attached files: …]` to the prompt. The web composer uses exactly
+this. What is missing is everything above it in the app, one new local input frame, and a few
+daemon rules the local lane and the fail-closed contract need — plus one change to where the
+daemon puts the files, which the security review forced.
 
 ## Decisions
 
@@ -33,51 +33,65 @@ need.
    AI-2197's scope for a reason — the terminal send gate's semantics are tied to the attach
    lifecycle and nothing here needs them changed).
 3. **The agent learns about a file by path, the same way on every vendor.** The daemon's
-   `[Attached files: …]` trailer names each file relative to the agent's cwd. Claude Code reads
-   an image or a PDF through its `Read` tool; Codex through `view_image` and its shell; ACP, Pi
-   and Antigravity agents through their own file tools. Rejected: vendor-native image inputs
-   (`codex --image` at launch, ACP `image` content blocks) — a per-vendor capability matrix for
-   a result the path already gives, and a second delivery shape to keep in step with the first.
-4. **An attachment that cannot be delivered fails the send; it is never silently dropped.** Today
+   `[Attached files: …]` trailer names each file by absolute path. Claude Code reads an image or
+   a PDF through its `Read` tool, inside a directory the launcher adds with `--add-dir` so no
+   permission prompt stands in the way; Codex through `view_image` and its shell (its sandboxes
+   restrict writes, not reads); ACP, Pi and Antigravity agents through their own file tools.
+   Rejected: vendor-native image inputs (`codex --image` at launch, ACP `image` content blocks) —
+   a per-vendor capability matrix for a result the path already gives, and a second delivery shape
+   to keep in step with the first.
+4. **Attachments land in a daemon-owned directory outside every agent's cwd, never inside the
+   worktree.** Today they go to `<worktree>/.attached/`. A directory inside the agent's own tree is
+   one the agent can replace with a link before the daemon writes, and the daemon is not
+   sandboxed: a write-contained agent (a Codex sandbox) could steer the user's file to a path of
+   its choosing, and no check-then-create sequence over a pathname closes that — only a
+   directory-handle-relative create does, which .NET does not expose. So the files go to
+   `<daemon state dir>/attachments/<AgentFileNames.For(agentId)>/`, which no contained agent can
+   write to and an uncontained one gains nothing by touching (it can already write anywhere the
+   daemon can). The directory lives exactly as long as the agent's worktree and is removed with
+   it. This applies to every caller, the web's included. Rejected: keeping `.attached/` with
+   no-follow checks (racy by construction); a native `openat`/`NtCreateFile` shim (correct, and a
+   platform-specific surface to maintain for a problem the relocation removes).
+5. **An attachment that cannot be delivered fails the send; it is never silently dropped.** Today
    both daemon paths are best-effort: a missing id logs a warning and the text goes out without
    it. A user who attached a file meant the file, and text without it changes meaning. A fetch
-   failure (404, oversize, IO, containment) is a `delivery_failed` drop naming the id on both
-   callers, and a launch whose attachments cannot be fetched fails with `attachment_unavailable`.
-   This changes the web path as well, deliberately: the drop is reported through
-   `ReportInputDroppedAsync`, which the web already renders. **The app offers attachments only
-   to a daemon that enforces this** (decision 6); a daemon that predates it would still be
-   best-effort, so the app never hands it an id.
-5. **Attachments are refused for an agent that does not run in a daemon-owned worktree.** The
-   launch path already guards on `WorkLocation.OwnedWorktree`; the send path does not, so a
-   follow-up attachment to an in-place agent would write `.attached/` into the user's own
-   checkout. The daemon refuses with a coded reason, and the app hides the affordance when the
-   status dto's `work_location` is not the owned worktree.
-6. **Delivery to an older daemon fails closed at the byte level; the affordance is gated on
-   what the app can see.** A chat send with ids uses a new frame type, `SendTextWithAttachments`,
-   which an older daemon's codec rejects before routing — the fail-closed contract `FrameType`
-   already documents. The reserved alternative (a trailing `attachment_ids` on `SendTextDto`) is
-   rejected: an older decoder ignores an unknown member, delivers the text and loses the files
-   without a word, and the capability check that would prevent it runs on the status connection,
-   not on the one-shot socket the send opens — a daemon restarted to an older build between the
-   two would slip through. The affordance itself is gated so the user is told before, not after:
-   the Chat composer on `input/2` from the local daemon's hello; the Home launcher on the target
-   daemon's advertised version for a remote machine (`DaemonInfo.Version`, the one capability
-   signal the server relays) and on `input/2` for the local one. The version gate is on kcap's
-   own daemon release, not a vendor build, so the borrowed-review invariant about version gating
-   does not apply.
-7. **Text is required; attachments are additive.** Send and Start stay gated on non-blank text.
-   The daemon already refuses an empty text, and a placeholder invented by the app to carry a
-   lone image would be the app putting words in the user's mouth. The hint says what is missing.
+   failure (404, oversize, IO) is a `delivery_failed` drop naming the id on both callers, and a
+   launch whose attachments cannot be fetched fails with `attachment_unavailable`. This changes
+   the web path as well, deliberately: the drop is reported through `ReportInputDroppedAsync`,
+   which the web already renders.
+6. **Delivery to an older daemon fails closed at the byte level on the chat lane; the launch lane
+   is gated on what the app can see, and its one gap is named.** A chat send with ids uses a new
+   frame type, `SendTextWithAttachments`, which an older daemon's codec rejects before routing —
+   the fail-closed contract `FrameType` already documents. The reserved alternative (a trailing
+   `attachment_ids` on `SendTextDto`) is rejected: an older decoder ignores an unknown member,
+   delivers the text and loses the files without a word, and a capability check on the status
+   connection does not cover the one-shot socket the send opens. The affordance itself is gated
+   so the user is told before, not after: Chat on `input/2` from the local daemon's hello; Home
+   on the target daemon's advertised version for a remote machine (`DaemonInfo.Version`, the one
+   capability signal the server relays) and on `input/2` for the local one. The version gate is
+   on kcap's own daemon release, not a vendor build, so the borrowed-review invariant about
+   version gating does not apply. **The gap:** a launch is dispatched by the server after the
+   app's check, and the server enforces no daemon version; a daemon downgraded between the check
+   and the dispatch is a pre-change daemon and delivers the launch best-effort. That is an
+   operator downgrading their own machine inside a window of seconds, and this spec accepts it
+   rather than adding a server-side capability contract for it. It is the only case where a file
+   the user attached can be dropped without a message.
+7. **Chat requires text; a launch does not.** The daemon refuses an empty chat text, and a
+   placeholder invented by the app to carry a lone image would be the app putting words in the
+   user's mouth, so Send stays gated on non-blank text and the hint says so. Home's Start is not
+   gated on the goal today — an empty goal is a supported launch — and stays that way: a launch
+   with attachments and no goal is allowed, and the daemon already renders it as the trailer
+   alone.
 8. **Limits mirror the server's.** 10 MiB per file (the server's `MaxFileSize`, refused by the
    app before upload with the same wording), 10 files per prompt, any content type. The agent's
    own tools decide what it can read; a type blocklist maintained here buys nothing, and the web
    has none.
 9. **Staged bytes live in the app's memory until Send, and a launch's bytes until the launch
-   settles.** The server's temp store expires an upload after 10 minutes, so uploading on paste
-   would strand a chip the user takes their time over. A launch is only *accepted* when the hub
-   returns; its attachments are fetched later by the daemon, so the sent draft is retained until
-   the launch is confirmed or fails, and restored on failure (§2). At most 100 MiB per draft by
-   the limits above, the same shape the web's Blazor composer holds.
+   settles or the server's copy has expired.** The server's temp store expires an upload after
+   10 minutes, so uploading on paste would strand a chip the user takes their time over. A launch
+   is only *accepted* when the hub returns; its attachments are fetched later by the daemon, so
+   the sent draft is retained until the launch is confirmed or fails, and restored on failure
+   (§2). One retained draft at a time, at most 100 MiB by the limits above.
 10. **Recall restores text only.** The arrow-key prompt history is a text history; a recalled
     prompt does not re-stage files that were already delivered.
 
@@ -108,14 +122,15 @@ one intake and cleared by the next edit or intake. One line per intake: the acce
 staged and the refused ones are named — "`report.zip` is over 10 MB", "`Docs` is a folder", "only
 10 files per message — `c.png`, `d.png` not added" — joined with "; " when several. Channel
 refusals: "attachments need the daemon updated" (Chat, no `input/2`; Home, the selected machine's
-daemon is older), "attachments aren't available for an in-place session", "sign in to attach
-files". When the "+" is disabled its tooltip carries the same text. Nothing toasts.
+daemon is older), "sign in to attach files". When the "+" is disabled its tooltip carries the
+same text. Nothing toasts.
 
 While sending, the hint reads "Uploading 2 files…" then "Sending…" (Chat) or the Start button
 is disabled with "Uploading…" (Home). On success the text and the chips clear together. On any
 failure both stay, and the hint says why. A launch failure that arrives after the hub accepted
-the request restores the draft (§2, Launch). The user's own turn appears in Chat from the
-transcript as it does today, with the daemon's trailer on it — the same text the web shows.
+the request restores the draft when that is safe (§2, Launch). The user's own turn appears in
+Chat from the transcript as it does today, with the daemon's trailer on it — the same text the
+web shows.
 
 ## 2. App
 
@@ -145,12 +160,14 @@ public sealed record StagedAttachment(string FileName, string ContentType, ReadO
 public sealed record IntakeRefusal(string Name, string Reason);
 ```
 
-`AddAll` enforces the count limit from `InputWire` (§3): files past the tenth are refused with
-"only 10 files per message". Size is refused earlier, at intake, so a file over the cap is never
-read into memory. A file name is deduplicated against the tray by appending ` (2)`, ` (3)` before
-the extension, so two screenshots pasted in one second are two chips and two files. The thumbnail
-is a `StagedAttachmentViewModel` concern — decoded lazily on a worker, published on the UI
-thread, disposed with the chip.
+`AddAll` is the one boundary every source passes through, so it enforces both limits from
+`InputWire` (§3) whatever the source: a file over `MaxAttachmentBytes` is refused "is over 10 MB"
+(intake refuses it earlier when it can, so it is never read, but a pasted bitmap whose PNG
+encoding runs over the cap is caught here), and files past the tenth are refused "only 10 files
+per message". A file name is deduplicated against the tray by appending ` (2)`, ` (3)` before the
+extension, so two screenshots pasted in one second are two chips and two files. The thumbnail is
+a `StagedAttachmentViewModel` concern — decoded lazily on a worker, published on the UI thread,
+disposed with the chip.
 
 ### Intake: `AttachmentIntake`
 
@@ -161,7 +178,7 @@ unit-testable without a clipboard:
 public static class AttachmentIntake {
     public static IntakeKind Classify(IReadOnlyList<DataFormat> formats, bool hasNonBlankText);
     public static Task<IntakeResult> ReadFilesAsync(IEnumerable<IStorageItem> items, CancellationToken ct);
-    public static StagedAttachment FromBitmap(Bitmap bitmap, TimeProvider time);
+    public static IntakeResult FromBitmap(Bitmap bitmap, TimeProvider time);
     public static string ContentTypeFor(string fileName);
 }
 public enum IntakeKind { Files, Text, Bitmap, Nothing }
@@ -173,12 +190,13 @@ public sealed record IntakeResult(IReadOnlyList<StagedAttachment> Accepted, IRea
 size over `MaxAttachmentBytes` is refused ("is over 10 MB") without being opened; otherwise it is
 read through `OpenReadAsync` into a buffer capped at `MaxAttachmentBytes + 1` bytes, and refused
 with the same wording if the stream runs past the cap (a provider that reports no size). An
-`IOException` on one item refuses that item ("could not be read") and the walk continues. The
-result carries both lists; the caller stages `Accepted` through `AddAll` and shows every refusal
-— intake's and the tray's — as the one line described in §1. `FromBitmap` encodes PNG with
-`Bitmap.Save`; the caller disposes the `Bitmap` afterwards. `ContentTypeFor` is a small
-extension table (png, jpg/jpeg, gif, webp, pdf, txt, md, json, csv, log, xml, yaml/yml, common
-source extensions → `text/plain`), defaulting to `application/octet-stream`.
+`IOException` on one item refuses that item ("could not be read") and the walk continues.
+`FromBitmap` encodes PNG with `Bitmap.Save` into a capped buffer and refuses the result the same
+way when it runs over; the caller disposes the `Bitmap` afterwards. Every result carries both
+lists; the caller stages `Accepted` through `AddAll` and shows every refusal — intake's and the
+tray's — as the one line described in §1. `ContentTypeFor` is a small extension table (png,
+jpg/jpeg, gif, webp, pdf, txt, md, json, csv, log, xml, yaml/yml, common source extensions →
+`text/plain`), defaulting to `application/octet-stream`.
 
 ### View wiring: `AttachmentDropPaste`
 
@@ -232,10 +250,11 @@ public enum UploadKind { Uploaded, Unauthorized, Rejected, Unreachable }
 `Unreachable`. Nothing throws past cancellation. Timeout: the leased client's own.
 
 A 200 is `Uploaded` only if its body is an `UploadedAttachment[]` with **exactly one element per
-staged file, in order, each `Id` valid by `InputWire.IsValidAttachmentId` (§3) and distinct**.
-Anything else — fewer or more elements, a null, blank, malformed or repeated id, an unparsable
-body — is `Rejected` with "the server returned an unexpected upload response", and the draft
-stays. `Ids` is empty on every non-`Uploaded` outcome, never null.
+staged file, in order, each `Id` valid by `InputWire.IsValidAttachmentId` (§3) and distinct
+under `AttachmentIds.Canonical`**. Anything else — fewer or more elements, a null, blank,
+malformed or repeated id, an unparsable body — is `Rejected` with "the server returned an
+unexpected upload response", and the draft stays. `Ids` is empty on every non-`Uploaded`
+outcome, never null.
 
 The self-scoped route rather than `/api/agents/{agentId}/attachments`: the daemon downloads with
 its own account's token, and the store admits a download when the downloader owns the upload —
@@ -243,7 +262,7 @@ which holds for every send the desktop composer can make (a local socket is the 
 daemon is one of the signed-in user's own). The agent-scoped route adds a visibility gate that
 only matters for a non-owner writing into someone else's agent, which the desktop never does. If
 the local daemon is bound to a different server or account than the app's profile, the download
-404s and the send fails with the id named (decision 4) — visible, not silent.
+404s and the send fails with the id named (decision 5) — visible, not silent.
 
 ### Chat send
 
@@ -256,11 +275,11 @@ public abstract bool CanAttach { get; }
 public abstract string? AttachHint { get; }
 ```
 
-- `LocalFrameChatInput`: `CanAttach` iff `Availability == Ready`, the daemon advertises `input/2`,
-  and `Dto.WorkLocation` is the owned worktree; `AttachHint` names whichever fails, in that
-  order. `SendAsync` with ids is one `SendTextWithAttachments` exchange through
-  `ILocalControlOps.SendTextWithAttachmentsAsync`; without ids it is today's `SendTextAsync`. A
-  refused ack maps `attachments_refused` to its `Error` text, like `delivery_failed`.
+- `LocalFrameChatInput`: `CanAttach` iff `Availability == Ready` and the daemon advertises
+  `input/2`; `AttachHint` names whichever fails. `SendAsync` with ids is one
+  `SendTextWithAttachments` exchange through `ILocalControlOps.SendTextWithAttachmentsAsync`;
+  without ids it is today's `SendTextAsync`. A refused ack maps `attachments_refused` to its
+  `Error` text, like `delivery_failed`.
 - `TerminalChatInput` gains the same inputs (`agentId`, `IDaemonClientService`, `ILocalControlOps`,
   presence) and the same `CanAttach` rule. `SendAsync` with an empty id list is today's
   synchronous `TrySendText`. With ids it is one `SendTextWithAttachments` exchange: `_sending`
@@ -301,33 +320,43 @@ or a remote machine whose `DaemonInfo.Version` parses as SemVer and is at least
 Changing the machine while files are staged does not drop them; if the new machine is not
 capable, Start is disabled with the hint until the chips are removed or the machine changed back.
 
-`StartAsync`, after the remote ownership check and before building the request: if the tray has
-files, `Uploading = true` (Start disabled, label "Uploading…"), upload; `Unauthorized` → the
-existing `_signInRequired` signal; other failures → `StartError` with the reason, nothing
-launched.
+**The launch is built from one snapshot.** `StartAsync` first captures a `LaunchDraft` — machine,
+repo, vendor, goal, model, effort, permission mode, and the tray's `Snapshot()` — and every later
+step reads the draft, never the live properties. A selection the user changes while the upload is
+in flight changes the next launch, not this one. After the upload (if any) the remote ownership
+check and the capability gate run again **against the draft's machine**, and the request is built
+from the draft. Order: capture → gate (`CanAttach` for the draft's machine, when it has files) →
+upload (`Uploading = true`, Start disabled, label "Uploading…"; `Unauthorized` → the existing
+`_signInRequired` signal; other failures → `StartError` with the reason, nothing launched) →
+re-check ownership and gate for the draft's machine → build and send. `ReactiveCommand.Execute`
+can bypass `CanExecute`, so the in-method checks are the boundary, as they are today for
+ownership.
 
 **The draft outlives the accepted request.** `LaunchOutcome.Started` is request acceptance, not
 success — the daemon fetches the files later and a failure arrives as a `LaunchFailed`
-broadcast. So when the request carried attachments, `StartAsync` clears `Goal` and the tray as
-today but keeps `PendingLaunchDraft(goal, files)` in `_pendingDrafts[agentId]`, beside the
-`_pendingLaunches` entry and under the same lock, with the same normalised-id key and the same
-10-minute TTL. It is settled with the launch:
+broadcast. So when the draft carried attachments, `StartAsync` clears `Goal` and the tray as
+today but retains the `LaunchDraft` (goal, files **and target**) together with the upload time as
+`_retainedDraft`, keyed by the normalised agent id and settled with the launch:
 
-- a directory row confirms the launch (`ConfirmPendingRows`) → the draft is discarded;
-- a `LaunchFailed` for the pending id (`ApplyFailureIfPending`, or the buffered failure
-  `RecordPendingLaunch` finds) → the draft is **restored** — `Goal` set and `Tray.Restore` — when
-  the composer is blank and the tray empty, and `StartError` reads "the attached files could not
-  be delivered — the draft is back, try again"; when the user has started a new draft, nothing is
-  overwritten and `StartError` reads "the attached files could not be delivered — re-attach them";
-- the TTL expiring, `ForgetLaunch`, or a failure for an untracked id → discarded, as the pending
-  entry is.
+- **one at a time**: starting another attachment-bearing launch replaces the retained draft, whose
+  later failure then reads as "re-attach" below; text-only launches do not touch it;
+- **retention is 10 minutes from the upload**, the server's own TTL for the bytes, checked on the
+  app's `TimeProvider` tick as well as on every settlement, so a draft whose launch never reports
+  is released without waiting for an event;
+- a directory row confirms the launch (`ConfirmPendingRows`) → discarded;
+- a `LaunchFailed` for the retained id (`ApplyFailureIfPending`, or the buffered failure
+  `RecordPendingLaunch` finds) → `StartError` is `FriendlyLaunchFailure(reason)`, the real
+  reason, **never** rewritten as an attachment failure; then, if the composer is blank, the tray
+  empty **and the current target (machine, repo, vendor) equals the draft's**, the goal and files
+  are restored and the message gains " — your draft is back"; otherwise nothing is overwritten
+  and it gains " — re-attach the files to send them again";
+- a failure after the retention cutoff, `ForgetLaunch`, or a failure for an untracked id →
+  discarded; a fetch that 404s because the server's copy expired lands here when the launch was
+  that slow, and the user re-attaches.
 
-A text-only launch keeps today's behaviour; there is nothing to lose but the text, which the
-failure message already tells the user to retype. Navigating away from Home while a launch is
-pending keeps the draft in the view model, which outlives the view.
-
-Home never asks the daemon anything at launch time: a launch always goes through the server,
-always into an owned worktree, so decision 5 does not apply to it.
+Navigating away from Home while a launch is pending keeps the draft in the view model, which
+outlives the view. `attachment_unavailable` from the daemon renders through
+`FriendlyLaunchFailure` as "the attached files could not be delivered to the machine".
 
 ## 3. Wire
 
@@ -349,7 +378,7 @@ the app sends `SendText` for a text-only message and `SendTextWithAttachments` o
 non-empty id list. An older daemon's `FrameCodec.ReadAsync` throws on byte 24 before routing; the
 connection closes and the client reports `transport` — nothing delivered, as decision 6 requires.
 
-New constants beside `MaxTextBytes`:
+New constants and one validator beside `MaxTextBytes`, in `Capacitor.Cli.Core`:
 
 ```csharp
 public static class InputWire {
@@ -361,19 +390,25 @@ public static class InputWire {
     public static bool IsStructurallyValid(SendTextWithAttachmentsDto? dto) =>
         dto is not null && dto.AgentId is not null && dto.Text is not null && dto.AttachmentIds is not null;
 }
+public static class AttachmentIds {
+    public static string Canonical(string id) => id.ToLowerInvariant();
+    /// Null when the list is acceptable; otherwise the refusal text. Checks count, each id's
+    /// syntax, and distinctness under Canonical. Every caller that will fetch runs this first.
+    public static string? Validate(IReadOnlyList<string?>? ids);
+}
 public static class SendTextReasons {
     …
     public const string AttachmentsRefused = "attachments_refused";  // Error names why
 }
 public static class AttachmentTrailer {
     public const string Prefix = "[Attached files: ";
-    public static string For(IEnumerable<string> relativePaths);  // "[Attached files: a, b]"
+    public static string For(IEnumerable<string> paths);  // "[Attached files: a, b]"
 }
 ```
 
-`AttachmentTrailer` lives in `Capacitor.Cli.Core` so the daemon composes it and the app
-recognises it from one definition. `IsValidAttachmentId` is used by the uploader on the way in
-and by the daemon handler on the way out, so the two can never disagree about an id.
+`AttachmentIds.Validate` is the one definition of an acceptable id list: the uploader runs it
+over a 200 response, and the daemon runs it in front of every fetch (§4), whichever lane the ids
+arrived on.
 
 Capability: `"input/2"` appended to `LocalControlCapabilities.Current`, meaning "the daemon routes
 `SendTextWithAttachments`". `input/1` stays, so an older app's gate is unchanged.
@@ -397,120 +432,138 @@ design leans on.
 
 ## 4. Daemon
 
-### Routing and handler
+### Where the files go: `AttachmentStore`
+
+```csharp
+internal sealed class AttachmentStore(string stateDir) {
+    public string Root => Path.Combine(stateDir, "attachments");
+    public string DirectoryFor(string agentId) => Path.Combine(Root, AgentFileNames.For(agentId));
+    public void Remove(string agentId);          // DeleteTreeNoFollow; absent is fine
+    public void SweepOrphans(Func<string, bool> isLive);  // startup: every dir whose agent is not live
+}
+```
+
+`stateDir` is `DaemonStore.StateDirectory(config.Name)`, already 0700, so two daemons never
+collide and no agent's cwd contains it. The directory name is the same SHA-256 hex the PID record
+and the transcript journal use, for the same reason: the agent id crosses the wire unconstrained.
+Created on first fetch. Removed in `CleanupAgentAsync` beside the worktree removal (for every
+work location — the store is daemon-owned whatever the agent's cwd is), on every launch-failure
+cleanup path that removes the worktree, and by a startup sweep that deletes directories whose
+agent has no live PID record, on the same liveness predicate the journal sweep takes.
+
+The `.attached/` exclusions and the reserved-path check in `WorktreeManager` stay: an older
+daemon's worktrees may still carry that directory.
+
+### Fetching: `DownloadAttachmentsAsync`
+
+Returns a result rather than the paths it managed:
+
+```csharp
+sealed record AttachmentFetch(IReadOnlyList<string> AbsolutePaths, string? FailedId, string? Error);
+```
+
+Every caller — the local frame handler, the server-origin `HandleSendInput` and the launch path —
+runs `AttachmentIds.Validate` over the ids before this method is reached and treats a refusal as
+the lane's failure (`attachments_refused` on the local ack, `DeliveryFailed` for the server
+caller, `attachments_refused` as the launch failure), so no id that is not a Guid-N is ever
+interpolated into `/api/attachments/{id}`, and no caller can request more than ten fetches.
+
+Per id, in order: `GetAsync(url, HttpCompletionOption.ResponseHeadersRead)` so the body is never
+buffered by the client; the response is disposed with the loop iteration. A non-success status, a
+`Content-Length` over `MaxAttachmentBytes`, a body that exceeds it while streaming (the copy is
+capped at `MaxAttachmentBytes + 1` bytes and stops reading there; the partial file is deleted),
+a `Content-Disposition` name that reduces to nothing after `Path.GetFileName`, or an IO exception
+ends the fetch with that id and error. Files already written stay; they go with the directory.
+The file is created with `FileMode.CreateNew` under the unique-name helper, so a name is never
+reused within one agent's directory. The trailer is composed only when every id landed, from the
+absolute paths. The content type is read but not acted on.
+
+### Handler
 
 `LocalControlServer` routes `SendTextWithAttachments` to
 `AgentOrchestrator.HandleLocalSendTextWithAttachmentsAsync`, which shares `AnswerSendTextAsync`'s
-body through one private core taking `(agentId, text, string[]? attachmentIds)`. Checks, in
-order, after the existing text checks and before the delivery core:
+body through one private core taking `(agentId, text, string[]? attachmentIds)`. After the
+existing text checks and before the delivery core: an empty `attachment_ids` on this frame is
+`malformed` ("send_text carries no attachments" — the plain frame is for that); a `Validate`
+refusal is `attachments_refused` with its text. Then `DeliverInputAsync(agent, text, ids)`.
 
-- `attachment_ids` empty on this frame → `malformed` ("send_text carries no attachments" — the
-  plain frame is for that);
-- more than `MaxAttachmentsPerPrompt`, or any id failing `IsValidAttachmentId`, or a repeated id →
-  `attachments_refused`, Error "up to 10 attachments per message" / "malformed attachment id";
-- `agent.Work != WorkLocation.OwnedWorktree` → `attachments_refused`, Error "attachments need a
-  daemon-owned worktree".
+### `DeliverInputAsync`
 
-Then `DeliverInputAsync(agent, text, attachmentIds)`.
+Runs `Validate` first for the server caller's sake (the local handler already did). A failed
+fetch is `InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed,
+$"attachment {id} unavailable: {error}")`. Both callers already route that reason — the server
+caller through `ReportInputDroppedAsync`, the local one into the ack. The message is `text`
+alone, or `text + "\n\n" + AttachmentTrailer.For(paths)`.
+
+### Launch
+
+The launch path's fetch moves off the `OwnedWorktree` guard — the directory is the daemon's
+whatever the work location — and stops being best-effort: a `Validate` refusal or a failed fetch
+throws, the existing failure path removes the worktree and the attachment directory, and the
+server sees `LaunchFailed` with `attachments_refused: …` or `attachment_unavailable: <id>`.
+`LauncherContext` gains `string AttachmentsDirectory` (the store's `DirectoryFor(agentId)`,
+always set), and `ClaudeLauncher` passes `--add-dir <that>` on every launch, so the agent's `Read`
+of an attached file needs no permission prompt, at launch or on a later turn. No other launcher
+changes: Codex and the ACP, Pi and Antigravity runtimes read absolute paths with their own tools.
 
 ### PTY input lane
 
-`PtyHostedAgentRuntime` gains one `SemaphoreSlim(1, 1)` over its writes. `SendUserInputAsync`
-holds it across the paste **and** `SubmitAsync`, so nothing else reaches the PTY between the
-`ESC[201~` and the CR; `SendRawInputAsync` and `SendSpecialKeyAsync` take it per write.
-`SendInterrupt` does not wait — a Ctrl+C is the one key that must land regardless. So keystrokes
-from an attached terminal (the app's Terminal tab, `kcap agent attach`) queue for at most the
-paste-to-submit interval and land after the CR, in order; nothing interleaves and nothing is
-dropped. This closes the same window for the web's `SendInput` to a PTY agent, which has had it
-since it shipped.
+`PtyHostedAgentRuntime` gains one `SemaphoreSlim(1, 1)` over every write it makes to the PTY:
+`SendUserInputAsync` holds it across the paste **and** `SubmitAsync`; `RequestGracefulStopAsync`
+holds it across its `/exit` and submit; `SendRawInputAsync` and `SendSpecialKeyAsync` take it per
+call. These four are the runtime's whole write surface — the attach loop's stdin (the app's
+Terminal tab, `kcap agent attach`, including the Escape and Ctrl+C bytes those send), the server's
+special keys, the web's and the app's composer sends, and the graceful stop. Nothing bypasses the
+lane: `IPtyProcess.SendInterrupt` has no caller in the daemon and gains none here.
+
+What this buys and costs: a keystroke that arrives during a composer send is written after the
+CR, never inside the bracketed paste or between it and the CR. Within one writer, order is the
+order of its awaited calls (each writer awaits its own writes in sequence); across writers there
+is no order to promise, and `SemaphoreSlim`'s lack of FIFO is not a contract anyone relies on. The
+wait is at most the paste plus `SingleSubmitDelay` — 150 ms — for an interactive agent. Under the
+approvals-disabled spray schedule the lane is held for the whole spray, about 2.4 s; those
+agents are unattended reviewers whose attach is read-only, so nothing is waiting on the lane, and
+releasing after the first CR would instead let typed bytes be consumed by the later CRs.
 
 ### `SingleSubmitDelay`
 
 Goes from 50 ms to 150 ms. The interactive Codex TUI treats an Enter within about 120 ms of a
 paste as a newline, and the app's own terminal channel already waits 150 ms for that reason; the
-frame path now carries the app's PTY sends and must clear the same window. The
-approvals-disabled spray schedule is unchanged.
-
-### `DownloadAttachmentsAsync`
-
-Returns a result rather than the paths it managed:
-
-```csharp
-sealed record AttachmentFetch(IReadOnlyList<string> RelativePaths, string? FailedId, string? Error);
-```
-
-**Containment.** `.attached/` is a directory the agent can replace: an agent with write access
-to its worktree can turn it into a symlink or junction, and the daemon is not sandboxed. So:
-
-- before any write, `.attached` is created if absent and then required to be a real directory:
-  `File.GetAttributes` without `ReparsePoint`, and `DirectoryInfo.ResolveLinkTarget(true)` null.
-  The worktree path itself is daemon-created and not re-checked;
-- each file is opened with `FileMode.CreateNew`, so an existing entry — a planted symlink
-  included — is never followed or overwritten (the unique-name helper picks the next name);
-- after each write the directory check is repeated; if `.attached` is now a link, the file just
-  written is deleted through the path it was written to and the fetch fails with "attachment
-  directory was replaced".
-
-A directory swapped between the check and `CreateNew` is the residual window: .NET exposes no
-directory-handle-relative create to close it. The window is microseconds wide, needs an agent
-that already writes inside its worktree, and the post-write re-check turns a win into a deleted
-file and a failed send rather than a delivered one. Recorded here and in the code as the
-constraint it is.
-
-**Caps and failure.** Per id, in order: a non-success status, a `Content-Length` over
-`MaxAttachmentBytes`, a body that exceeds it while streaming (the copy is capped at
-`MaxAttachmentBytes + 1` bytes and the partial file deleted), a `Content-Disposition` name that
-reduces to nothing, a containment failure, or an IO exception ends the fetch with that id and
-error; files already written stay (they are inside `.attached/`, gitignored, and go with the
-worktree). The trailer is composed only when every id landed. The content type is read but not
-acted on.
-
-### `DeliverInputAsync`
-
-A failed fetch is `InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed,
-$"attachment {id} unavailable: {error}")`. Both callers already route that reason — the server
-caller through `ReportInputDroppedAsync`, the local one into the ack. Ids on a non-owned work
-location, which only the server caller can now present, are the same `DeliveryFailed` drop with
-"attachments need a daemon-owned worktree". The message is `text` alone, or
-`text + "\n\n" + AttachmentTrailer.For(paths)`.
-
-### Launch
-
-The launch path's fetch stays where it is, guarded by `OwnedWorktree`, and stops being
-best-effort: a failed fetch throws, the existing failure path removes the worktree, and the
-server sees `LaunchFailed` with `attachment_unavailable: <id>`. Ids on a non-owned launch (only
-possible from a server that ignored its own contract) fail the same way with
-`attachments_refused`.
+frame path now carries the app's PTY sends and must clear the same window. The spray schedule is
+unchanged.
 
 ## 5. Compatibility
 
 | App | Daemon | Server | Behaviour |
 |---|---|---|---|
-| new | new (`input/2`) | any | full: chips, paste, drop; chat sends with ids on `SendTextWithAttachments`; launch ids on V2 |
+| new | new (`input/2`) | any | full: chips, paste, drop; chat sends with ids on `SendTextWithAttachments`; launch ids on V2; files under the daemon's state dir |
 | new | old, local | any | Chat and Home "+", paste-as-file and drop refused with "attachments need the daemon updated"; text unchanged |
 | new | old, remote (version below the gate) | any | Home attachments refused with the same hint; a text launch unchanged |
-| new | restarted to an old build between hello and send | any | `SendTextWithAttachments` is undecodable there; the connection closes; the composer shows "delivery unconfirmed"; nothing delivered |
+| new | downgraded between the app's gate and the server's dispatch | any | the one accepted gap (decision 6): the old daemon launches best-effort |
+| new | restarted to an old build between hello and a chat send | any | `SendTextWithAttachments` is undecodable there; the connection closes; the composer shows "delivery unconfirmed"; nothing delivered |
 | old | new | any | old app sends `SendText` only; text-only as today |
+| web (any) | new | any | web attachments land under the state dir instead of `.attached/`, and a missing one now fails the send visibly instead of being dropped |
 | new | any | old (no V2 attachments) | V2 has carried `attachment_ids` since hosted agents shipped; not a live case |
-| new | new | temp store id expired (>10 min between upload and fetch) | fetch 404 → send refused / launch failed with the id named; the draft is restored (Home) or kept (Chat) |
-
-`work_location` null on a PTY dto (a daemon older than that field) also predates `input/2`, so it
-takes the "daemon updated" hint, never a false "in-place".
+| new | new | temp store id expired (>10 min between upload and fetch) | fetch 404 → chat send refused with the id named, draft kept; launch failed, draft restored if still within retention and the target unchanged, else "re-attach" |
 
 ## 6. Security and privacy
 
 - The app uploads with the signed-in profile's token through the same client lease every other
   app HTTP call uses; the daemon downloads with its own — no new credential path, and the daemon
   still looks for none.
-- Files land only inside `<owned worktree>/.attached/`, gitignored, excluded from borrowed
-  snapshots, removed with the worktree at cleanup. Decision 5 closes the in-place path; the
-  containment rules in §4 close the planted-link path, with the residual window named there.
-- The byte cap on the download closes an unbounded stream from a compromised or misconfigured
-  server; id validation on both ends closes a path segment smuggled as an id.
+- Files land only under the daemon's 0700 state directory, in a per-agent directory named by a
+  hash, outside every agent's cwd; removed with the agent, swept at startup. A contained agent
+  cannot reach it; an uncontained one gains nothing from it (decision 4).
+- Streaming with `ResponseHeadersRead` plus the byte cap closes an unbounded response from a
+  compromised or misconfigured server; `AttachmentIds.Validate` in front of every fetch closes a
+  path segment smuggled as an id and a fetch storm from a misbehaving server, whichever lane the
+  ids arrived on.
 - Bytes sit on the server for at most 10 minutes and are never part of the session record; an
   attached text file's contents reach a transcript only if the agent reads it, at which point the
   watcher's redaction applies as to any tool result. `SecretRedactor` is not run over attachments:
   it rewrites JSON transcript lines, and a file is neither.
+- `--add-dir` widens Claude's prompt-free surface by one daemon-owned directory holding files the
+  user chose to hand the agent; nothing else lives there.
 - The clipboard is read only on an explicit paste gesture, never polled, and released after each.
 
 ## 7. Testing
@@ -520,40 +573,51 @@ takes the "daemon updated" hint, never a false "in-place".
   value moved.
 - `InputIpc`: `SendTextWithAttachmentsDto` round-trips; `IsStructurallyValid` rejects a missing
   `attachment_ids`; `IsValidAttachmentId` accepts a Guid-N in either case and rejects 31/33
-  chars, dashes, a path segment, null, blank.
+  chars, dashes, a path segment, null, blank. `AttachmentIds.Validate`: null and empty accepted;
+  eleven refused; a malformed element refused; two ids equal under `Canonical` refused.
 - `AttachmentTrailer.For` shapes one, two and many paths; `Prefix` matches.
 - `LocalControlOps.SendTextWithAttachmentsAsync` serialises the ids as `attachment_ids`, sends
   frame 24, and maps EOF to `transport`.
 
 **Daemon** (`Capacitor.Cli.Daemon.Tests.Unit`)
-- Handler: an empty id list, over-count, a malformed id, a repeated id, and a non-owned work
-  location each refuse with the stated reason and error before the delivery core runs; a valid
-  list reaches `DeliverInputAsync`.
-- `DownloadAttachmentsAsync` against WireMock: success writes under `.attached/` with the
-  `.gitignore`; a 404, a `Content-Length` over the cap, an over-cap body without `Content-Length`,
-  and an escaping `Content-Disposition` each end the fetch naming the id, leaving no partial
-  file; earlier files stay. Containment: a pre-existing symlink at `.attached` fails before any
-  write; a pre-existing symlink at the target file name is not followed (the next unique name is
-  used); a directory swapped for a link after the write (the test swaps it from the fetch's
-  post-write hook) deletes the written file and fails with "attachment directory was replaced".
+- Handler: an empty id list, over-count, a malformed id, and a mixed-case duplicate each refuse
+  with the stated reason and error before the delivery core runs; a valid list reaches
+  `DeliverInputAsync`. The same over-count, malformed and duplicate lists through
+  `HandleSendInput` (server caller) and through the launch command are `DeliveryFailed` drops and
+  a failed launch respectively, with no HTTP call made.
+- `AttachmentStore`: `DirectoryFor` is under the state dir and hashed; `Remove` deletes the tree
+  without following a link planted inside it; `SweepOrphans` deletes only directories whose agent
+  is not live.
+- `DownloadAttachmentsAsync` against WireMock: success writes under `DirectoryFor(agentId)`;
+  the request uses `ResponseHeadersRead`; a 404, a `Content-Length` over the cap, and a chunked
+  over-cap body with no `Content-Length` each end the fetch naming the id and leave no partial
+  file, and the chunked case is shown (through a counting handler) to stop reading at
+  `MaxAttachmentBytes + 1`; a `Content-Disposition` that reduces to nothing is refused; earlier
+  files stay; a repeated file name gets the next unique name.
 - `DeliverInputAsync`: a failed fetch is a `DeliveryFailed` drop with the id in the error, and the
-  runtime receives nothing; a successful fetch delivers `text + "\n\n" + trailer`.
+  runtime receives nothing; a successful fetch delivers `text + "\n\n" + trailer` with absolute
+  paths.
 - `PtyHostedAgentRuntime`: a paste is followed by one CR no earlier than 150 ms later
-  (`FakeTimeProvider`); raw input issued before, during and after `SendUserInputAsync` lands
-  entirely before the `ESC[200~` or entirely after the CR, in issue order, with every byte
-  accounted for; `SendInterrupt` during a paste is not delayed.
-- Launch: a failed fetch fails the launch with `attachment_unavailable`, removes the worktree, and
-  starts no process.
+  (`FakeTimeProvider`); raw input and special keys issued before, during and after
+  `SendUserInputAsync` land entirely before the `ESC[200~` or entirely after the CR, with every
+  byte accounted for and each writer's own order preserved; under the spray schedule the lane is
+  held until the last CR; `RequestGracefulStopAsync` cannot interleave with a paste.
+- Launch: a failed fetch fails the launch with `attachment_unavailable`, removes the worktree and
+  the attachment directory, and starts no process; a `Validate` refusal fails it with
+  `attachments_refused`; `ClaudeLauncher` argv carries `--add-dir` with the store directory for
+  owned and borrowed launches alike; `CleanupAgentAsync` removes the directory for every work
+  location.
 - `LocalControlCapabilities.Current` contains `input/2`, and the routing switch handles frame 24
   (the existing pin, extended).
 
 **App** (`Capacitor.App.Tests.Unit`, `[NotInParallel("AvaloniaSession")]` where a VM or view is built)
-- `AttachmentTray`: `AddAll` stages up to the cap and names the rest; dedups names; `Snapshot` is
-  a copy; `ContentEquals`; `Restore` replaces; `Clear`.
+- `AttachmentTray`: `AddAll` refuses an oversize file and stages up to the cap, naming the rest;
+  dedups names; `Snapshot` is a copy; `ContentEquals`; `Restore` replaces; `Clear`.
 - `AttachmentIntake.Classify`: files beat text beats bitmap; nothing → `Nothing`.
   `ReadFilesAsync`: a folder, an oversize file (by reported size, and by stream length with no
   size), and an unreadable file are each refused with their wording while valid siblings are
-  accepted, in order; content types assigned. `FromBitmap` yields a PNG named by the fake clock.
+  accepted, in order; content types assigned. `FromBitmap` yields a PNG named by the fake clock,
+  and refuses one whose encoding runs over the cap.
 - `AttachmentDropPaste` with a fake `IAsyncDataTransfer`: disposed exactly once for `Files`,
   `Text`, `Bitmap`, `Nothing`, a thrown read, cancellation, and an unload mid-read; the bitmap is
   disposed after encoding; `Text` reaches the TextBox once (the re-entrancy guard); a second paste
@@ -567,15 +631,19 @@ takes the "daemon updated" hint, never a false "in-place".
   upload; an accepted send clears text and chips together; a chip added mid-flight survives;
   `Matches` acknowledges a transcript user turn carrying the trailer.
 - `TerminalChatInput`: no ids → `TrySendText`, synchronous, unchanged; ids → one frame-24
-  exchange with `CanAcceptText` false meanwhile, cleared on `Ok`; `CanAttach` follows `input/2`
-  and `work_location`. `LocalFrameChatInput`: `attachments_refused` maps to the hint.
+  exchange with `CanAcceptText` false meanwhile, cleared on `Ok`; `CanAttach` follows `input/2`.
+  `LocalFrameChatInput`: `attachments_refused` maps to the hint.
 - `HomeViewModel`: `CanAttach` follows sign-in, `input/2` for the local machine and the version
-  gate for a remote one (below, equal, above, unparsable, missing); files → upload →
-  `LaunchRequest.AttachmentIds`; upload failure → `StartError`, no launch; `Started` clears the
-  draft and retains it; `LaunchFailed` before registration (buffered), after the request
-  returned, and after the TTL; a row arriving before registration; the draft restored into an
-  empty composer and not into an edited one, with the two messages; `LaunchPayload.For` emits
-  `attachment_ids` only when non-empty.
+  gate for a remote one (below, equal, above, unparsable, missing); the launch is built from the
+  captured draft — a machine, repo or vendor changed during the upload does not reach the request,
+  and the post-upload gate runs against the draft's machine; an empty goal with files launches;
+  upload failure → `StartError`, no launch; `Started` clears the composer and retains the draft;
+  a second attachment launch replaces the retained draft; `LaunchFailed` before registration
+  (buffered), after the request returned, and after the retention cutoff; a row arriving before
+  registration; the retention timer releasing a draft with no event; restore into an empty
+  composer with an unchanged target, no restore into an edited composer, no restore after a
+  target change, each with its message; a non-attachment failure reason with files staged keeps
+  the real reason; `LaunchPayload.For` emits `attachment_ids` only when non-empty.
 - Headless smoke: the chip strip renders one chip per staged file and removing one updates it;
   a drop of a file on the card stages it; a `PastingFromClipboard` raise with the headless
   clipboard holding text pastes text once. Bitmap paste is verified by hand on macOS, where the
@@ -589,23 +657,22 @@ takes the "daemon updated" hint, never a false "in-place".
 - Rendering attachments as thumbnails inside Chat turns, and rendering the agent's own image output.
 - Vendor-native image inputs (decision 3).
 - A `kcap agent send --attach` verb.
-- Attachments from the web into an in-place agent (decision 5 makes the refusal visible; enabling
-  it needs a daemon-owned scratch location and is its own decision).
+- A server-side daemon capability contract for launches (decision 6 names the gap it would close).
 - Restoring a text-only launch's goal on failure.
 
 ## Risks
 
-- **A vendor that cannot read a file by path.** The trailer is the contract; Claude and Codex are
-  verified by hand in the PR against a PNG and a PDF. An ACP agent without a file tool reads
-  nothing, which is what the web already gives it.
+- **A vendor that cannot read a file outside its cwd.** Claude is covered by `--add-dir`; Codex
+  reads anywhere under both sandboxes; both are verified by hand in the PR against a PNG and a
+  PDF. An ACP agent that confines its file tool to the workspace reads nothing, which is what the
+  web already gives it for any path it cannot reach — named here so nobody is surprised.
 - **The 150 ms submit delay** is calibrated to today's Codex suppression window; a TUI that widens
   it turns a frame send into a newline. Same exposure the app's terminal channel carries, and
   now in one constant with one measurement behind it.
-- **The containment window** in §4 is real and named; closing it needs a platform primitive .NET
-  does not expose.
-- **The version gate** is only as good as the constant: a daemon released between the gate's
-  version and the fail-closed fetch does not exist, because both ship in one PR, but a hotfix
-  branch that back-ports one without the other would reopen the gap. The PR notes this.
-- **Memory.** Ten 10 MiB files staged is 100 MiB held until Send, and a launch draft holds its
-  copy for up to 10 minutes more; a user who stages and walks away holds it indefinitely.
-  Accepted for parity with the web composer; a tray is cleared when its workspace is torn down.
+- **The version gate** is only as good as the constant: both halves ship in one PR, so no released
+  daemon sits between them, but a hotfix branch that back-ports one without the other would
+  reopen the gap. The PR notes this.
+- **Memory.** Ten 10 MiB files staged is 100 MiB held until Send, and one retained launch draft
+  holds its copy for up to 10 minutes more; a user who stages and walks away holds it
+  indefinitely. Accepted for parity with the web composer; a tray is cleared when its workspace
+  is torn down.
