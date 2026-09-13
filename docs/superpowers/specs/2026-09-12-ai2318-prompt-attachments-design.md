@@ -175,16 +175,18 @@ public sealed class AttachmentTray : ReactiveObject {
     public IReadOnlyList<IntakeRefusal> AddAll(IReadOnlyList<StagedAttachment> files);
     public void Remove(StagedAttachment file);
     public IReadOnlyList<StagedAttachment> Snapshot();
-    /// Removes exactly the snapshot's entries still present (by identity); anything added since
+    /// Removes exactly the chips with these ids that are still present; anything added since
     /// stays, anything the user removed meanwhile is simply absent.
-    public void RemoveAll(IReadOnlyList<StagedAttachment> snapshot);
+    public void RemoveAll(IReadOnlyList<Guid> ids);
     public void Restore(IReadOnlyList<StagedAttachment> snapshot);   // replaces the contents
     public void Clear();
 }
 
-/// Reference identity, deliberately: two pastes of the same bytes are two chips, and a send
-/// clears the chips it sent, not every chip that looks like them.
+/// Identity is the Id, minted at staging, deliberately: two pastes of the same bytes are two
+/// chips, and a send clears the chips it sent, not every chip that looks like them. Receipts
+/// hold ids, never the object, so the bytes live only in the tray (or a retained launch draft).
 public sealed class StagedAttachment(string fileName, string contentType, ReadOnlyMemory<byte> bytes) {
+    public Guid Id { get; } = Guid.NewGuid();
     public string FileName { get; } = fileName;
     public string ContentType { get; } = contentType;
     public ReadOnlyMemory<byte> Bytes { get; } = bytes;
@@ -355,19 +357,24 @@ public abstract string? AttachHint { get; }
    uploader with the lifetime token. `Unauthorized` → hint "sign in to attach files";
    `Rejected`/`Unreachable` → hint with the reason. Any failure keeps text and chips and stops.
 4. `_input.SendAsync(text, ids, ct)`. `Accepted` clears the text (existing rule: only if the
-   snapshot is still the draft) **and removes exactly the sent chips** (`RemoveAll(snapshot)`) —
+   snapshot is still the draft) **and removes exactly the sent chips** (`RemoveAll` with the
+   snapshot's ids) —
    a file added during the round trip stays, and only it, so the next send carries only what
    was not yet sent. `Rejected` and `Unconfirmed` keep everything.
 
-`canSend` adds `!Uploading`. `QueuedChatMessage` carries the send's attachment snapshot beside
-its text and edit count, and `Matches` accepts a transcript text that equals the sent text, or
-equals it followed by the daemon's trailer (`AttachmentTrailer.Prefix` from Core, §3, preceded by
-the blank line) — otherwise a send with attachments would never be acknowledged and the queued
-banner would never clear. **Transcript confirmation clears what the ack could not**:
-`ConfirmDelivery` already clears the sent text; it now also calls `RemoveAll` with the queued
-message's snapshot, so an `Unconfirmed` send (the ack was lost) that the transcript later proves
-delivered drops exactly its chips and nothing added since — the same identity rule as the ack
-path, so a transcript that lands before the ack and an ack that lands first produce one result.
+`canSend` adds `!Uploading`. `QueuedChatMessage` carries the sent chips' **ids** beside its text
+and edit count — ids, not the chips, so a queued receipt, an `_lastSent` reference or a
+transcript that never echoes retains no bytes; the bytes live in the tray and leave with the
+chip. `Matches` is conditional on that list: a text-only send matches a transcript text equal to
+the sent text, as today; a send with attachments matches **only** the sent text followed by the
+blank line and the daemon's trailer (`AttachmentTrailer.Prefix` from Core, §3), never bare text,
+so a later turn from another client that happens to send the same words cannot confirm an
+attachment send whose files it did not deliver. **Transcript confirmation clears what the ack
+could not**: `ConfirmDelivery` already clears the sent text; it now also calls `RemoveAll` with
+the queued message's ids, so an `Unconfirmed` send (the ack was lost) that the transcript later
+proves delivered drops exactly its chips and nothing added since — the same identity rule as the
+ack path, so a transcript that lands before the ack and an ack that lands first produce one
+result.
 
 ### Launch
 
@@ -397,7 +404,8 @@ checks are the boundary, as they are today for ownership.
 
 **The composer clears only what was sent.** On `Started`, `Goal` is cleared iff its edit count
 still equals the draft's — the goal box stays editable during the upload and the hub call, and a
-newer draft is the user's — and the tray drops exactly the sent chips (`RemoveAll(draft.Files)`),
+newer draft is the user's — and the tray drops exactly the sent chips (`RemoveAll` with the
+draft's chip ids),
 keeping any added meanwhile. This is the rule Chat applies. The retained draft records what
 this step did: `ClearedGoal` (the goal's edit count still equalled the draft's, so it was cleared
 here; records the count after clearing) and `ClearedTray` (the tray's generation still equalled
@@ -809,9 +817,11 @@ unchanged.
 
 **App** (`Capacitor.App.Tests.Unit`, `[NotInParallel("AvaloniaSession")]` where a VM or view is built)
 - `AttachmentTray`: `AddAll` refuses an oversize file and stages up to the cap, naming the rest;
-  dedups names; `Snapshot` is a copy; `RemoveAll` removes exactly the snapshot's entries by
-  identity — after an add, a remove, and an add plus a remove during a send the tray holds
-  precisely the unsent chips; every mutation advances the generation and a no-op `RemoveAll`
+  dedups names; `Snapshot` is a copy; `RemoveAll` removes exactly the chips with the given ids —
+  after an add, a remove, and an add plus a remove during a send the tray holds precisely the
+  unsent chips, and a removed chip's bytes are unreferenced once the tray and any retained draft
+  have let it go (asserted with a weak reference and a forced collection, the receipt still
+  held); every mutation advances the generation and a no-op `RemoveAll`
   does not; `Restore` replaces; `Clear`.
 - `AttachmentIntake.Classify`: files beat text beats bitmap; nothing → `Nothing`.
   `ReadFilesAsync`: a folder, an oversize file (by reported size, and by stream length with no
@@ -841,7 +851,9 @@ unchanged.
   an upload failure sends nothing and keeps text and chips; `CanAttach` false refuses before the
   upload; an `Unconfirmed` send whose trailer later appears in the transcript clears exactly its
   chips — with a chip added meanwhile kept, a chip removed meanwhile staying gone, and a
-  transcript that lands before the ack producing the same tray as an ack that lands first;
+  transcript that lands before the ack producing the same tray as an ack that lands first; a
+  post-baseline bare-text turn with the same words does **not** acknowledge an
+  attachment-bearing queued message, while it does acknowledge a text-only one;
   an accepted send clears the text and exactly the sent chips — a chip added mid-flight
   survives alone, and a second send carries only it; `Matches` acknowledges a transcript user
   turn carrying the trailer.
@@ -903,5 +915,6 @@ is today's contract for those vendors, so this is a regression check, not a new 
   reopen the gap. The PR notes this.
 - **Memory.** Ten 10 MiB files staged is 100 MiB held until Send, and one retained launch draft
   holds its copy for up to 10 minutes more; a user who stages and walks away holds it
-  indefinitely. Accepted for parity with the web composer; a tray is cleared when its workspace
-  is torn down.
+  indefinitely. Nothing else holds bytes: queued receipts and the retained `_lastSent` carry
+  ids, and a chip's bytes are released when it leaves the tray. Accepted for parity with the web
+  composer; a tray is cleared when its workspace is torn down.
