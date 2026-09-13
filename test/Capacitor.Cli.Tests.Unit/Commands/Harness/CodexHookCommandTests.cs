@@ -473,19 +473,18 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
-        var spawned = new List<string>();
-        Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         using var capture = ConsoleOutput.StartCapture();
 
         try {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
             var payload = """{"hook_event_name":"Stop","session_id":"g1-stop-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
             // The watcher never spawns for an envelope-sourced session...
-            await Assert.That(spawned.Count).IsEqualTo(0);
+            await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
             // ...but only the watcher is suppressed: the idle-marker stop POST still fires.
             var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
             await Assert.That(stopRequests.Count).IsEqualTo(1);
@@ -494,7 +493,6 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
         } finally {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-            Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = null;
         }
     }
 
@@ -507,21 +505,19 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
-        var spawned = new List<string>();
-        Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         using var capture = ConsoleOutput.StartCapture();
 
         try {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", null);
             var payload = """{"hook_event_name":"Stop","session_id":"g1-stop-control","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
-            await Assert.That(spawned.Count).IsEqualTo(1);
+            await Assert.That(spawner.Spawned.Count).IsEqualTo(1);
         } finally {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-            Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = null;
         }
     }
 
@@ -532,23 +528,21 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
-        var spawned = new List<string>();
-        Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
 
         try {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
             var payload = """{"hook_event_name":"SessionStart","session_id":"g1-start-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
             // No watcher for an envelope-sourced session; the session-start POST is untouched.
-            await Assert.That(spawned.Count).IsEqualTo(0);
+            await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
             var startRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
             await Assert.That(startRequests.Count).IsEqualTo(1);
         } finally {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-            Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = null;
         }
     }
 

@@ -30,6 +30,8 @@ public static class CommandServices {
         services.AddSingleton(clock);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
+        services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
+        services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
 
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.

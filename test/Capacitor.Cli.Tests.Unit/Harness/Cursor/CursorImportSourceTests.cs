@@ -369,7 +369,7 @@ public class CursorImportSourceTests {
 
     // quarantine is always keyed on the FAMILY (parent) identity, since
     // CursorRewriteGuard is constructed from the watcher process's own sessionId argument, which
-    // for a spawned child watcher IS the parent id (WatcherManager.BuildSpawnArgs). A correlated
+    // for a spawned child watcher IS the parent id (ProcessWatcherSpawner.BuildSpawnArgs). A correlated
     // child must therefore be filtered under its PARENT's quarantine marker, not its own — an
     // import that only checked the child's own id would let the child through even though its
     // family was quarantined.

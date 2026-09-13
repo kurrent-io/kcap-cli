@@ -802,7 +802,7 @@ public sealed class CursorHookCommand(
     /// construct their guard/quarantine identity from the watcher process's own
     /// <c>sessionId</c> argument, which — for a child watcher spawned with
     /// <c>sessionIdOverride: parentSessionId</c> — resolves to the PARENT id
-    /// (<c>watchers.BuildSpawnArgs</c>: <c>sessionId = sessionIdOverride ?? key</c>). A
+    /// (<c>ProcessWatcherSpawner.BuildSpawnArgs</c>: <c>sessionId = sessionIdOverride ?? key</c>). A
     /// parent session already given up on by the guard must not keep spawning fresh child
     /// watchers either.
     /// </summary>

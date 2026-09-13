@@ -41,9 +41,13 @@ public class UnusableUrlGuardTests : IDisposable {
 
     WatcherManager  Watchers => field ??= TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient());
 
-    // A manager whose spawns the test can count: the guard's whole claim is that none is reached.
-    WatcherManager Guarded(IProcessStarter starter) =>
-        new(Config.Root, Bad, new FixedCapacitorHttpClient(), starter);
+    // Collaborators whose starts the test can count: each guard's whole claim is that none is reached.
+    ProcessWatcherSpawner GuardedSpawner(IProcessStarter starter) =>
+        new(Config.Root, Bad, WatcherPaths.FromEnvironment(Config.Root), starter);
+
+    WatcherManager GuardedManager(IProcessStarter starter) =>
+        new(Config.Root, Bad, new FixedCapacitorHttpClient(), starter,
+            WatcherPaths.FromEnvironment(Config.Root), GuardedSpawner(starter));
 
     public UnusableUrlGuardTests() {
         _tdir = _tmp.PathTo("tdir");
@@ -127,7 +131,7 @@ public class UnusableUrlGuardTests : IDisposable {
     public async Task SpawnWatcher_never_starts_a_process() {
         var starter = FakeProcessStarter.Refusing();
 
-        await Guarded(starter).SpawnWatcher(Sid, Path.Combine(_dir, "t.jsonl"), agentId: null);
+        await GuardedSpawner(starter).SpawnAsync(new WatcherSpawnRequest(Sid, Path.Combine(_dir, "t.jsonl"), AgentId: null));
 
         await Assert.That(starter.Starts).IsEqualTo(0);
     }
@@ -138,7 +142,7 @@ public class UnusableUrlGuardTests : IDisposable {
         // guard merely lets Process.Start throw or return null, leaving every effect identical.
         var starter = FakeProcessStarter.Refusing();
 
-        Guarded(starter).SpawnCopilotFinalizeDrain(Sid, Path.Combine(_dir, "t.jsonl"));
+        GuardedManager(starter).SpawnCopilotFinalizeDrain(Sid, Path.Combine(_dir, "t.jsonl"));
 
         await Assert.That(starter.Starts).IsEqualTo(0);
     }

@@ -165,32 +165,27 @@ public class CursorHookCommandTests {
         var spool = new HookSpool(Config.PathTo("spool"));
         spool.Append(sid, "session-start/cursor", $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
 
-        var spawned = new List<string>();
-        WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
 
-        try {
-            using var handler = new StubHandler(req => {
-                var path = req.RequestUri!.AbsolutePath;
-                if (path == "/hooks/session-start/cursor") {
-                    // Transient failure on retry — the entry stays queued (NOT delivered, NOT dropped).
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-                }
-                if (req.Method == HttpMethod.Get) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)); // postToolUse's own POST succeeds
-            });
-            using var client = new HttpClient(handler);
+        using var handler = new StubHandler(req => {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/hooks/session-start/cursor") {
+                // Transient failure on retry — the entry stays queued (NOT delivered, NOT dropped).
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            }
+            if (req.Method == HttpMethod.Get) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)); // postToolUse's own POST succeeds
+        });
+        using var client = new HttpClient(handler);
 
-            var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient())).HandleCore(
-                client,
-                new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash","transcript_path":"/tmp/{{sid}}.jsonl"}"""),
-                spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient(), spawner)).HandleCore(
+            client,
+            new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash","transcript_path":"/tmp/{{sid}}.jsonl"}"""),
+            spool);
 
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(spawned).IsEmpty(); // must NOT spawn while sessionStart is still stuck
-            await Assert.That(spool.HasBacklog(sid)).IsTrue(); // confirms the premise: still queued, not delivered
-        } finally {
-            WatcherManager.SpawnOverrideForTesting = null;
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(spawner.Keys).IsEmpty(); // must NOT spawn while sessionStart is still stuck
+        await Assert.That(spool.HasBacklog(sid)).IsTrue(); // confirms the premise: still queued, not delivered
     }
 
     [Test]

@@ -1,9 +1,9 @@
 namespace Capacitor.Cli.Tests.Unit;
 
-public class WatcherManagerSpawnArgsTests {
+public class WatcherSpawnArgsTests {
     [Test]
     public async Task BuildSpawnArgs_default_vendor_omits_flag() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
             cwd: null, skipTitle: false, parentPid: null, vendor: "claude"
@@ -15,7 +15,7 @@ public class WatcherManagerSpawnArgsTests {
 
     [Test]
     public async Task BuildSpawnArgs_codex_vendor_appends_flag() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
             cwd: null, skipTitle: false, parentPid: null, vendor: "codex"
@@ -27,7 +27,7 @@ public class WatcherManagerSpawnArgsTests {
 
     [Test]
     public async Task BuildSpawnArgs_vendor_with_spaces_is_quoted() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
             cwd: null, skipTitle: false, parentPid: null, vendor: "my vendor"
@@ -38,7 +38,7 @@ public class WatcherManagerSpawnArgsTests {
 
     [Test]
     public async Task BuildSpawnArgs_with_agent_uses_session_override() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "sess-agent", transcriptPath: "/tmp/t.jsonl",
             agentId: "agent1", sessionIdOverride: "sess",
             cwd: "/repo", skipTitle: true, parentPid: 4242, vendor: "claude"
