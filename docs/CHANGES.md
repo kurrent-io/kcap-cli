@@ -6,6 +6,18 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A PR opened from another checkout is linked to the session
+
+The session's PR list is fed by one probe, `gh pr view` in the launch cwd, which can only ever
+see the PR of that checkout's branch. An agent that makes its own worktree — of another
+repository or of the same one — and opens a PR there left the list empty. The Claude session
+watcher now collects the roots of every checkout the agent *mutated* outside its launch cwd,
+probes each on the 60s refresh and once more on the final drain, and posts any GitHub PR it finds
+to the session's pull-requests endpoint, which dedupes and never repoints the primary repository.
+Mutation paths only: a checkout the agent merely read must not have whatever PR its branch
+happens to carry attached. Only GitHub, because the endpoint rebuilds the remote URL from owner
+and repo on github.com, so another host would hash to the wrong repository.
+
 ## A PR is found under the name its branch was pushed as
 
 An argument-free `gh pr view` looks for the branch git would push to. Under the default

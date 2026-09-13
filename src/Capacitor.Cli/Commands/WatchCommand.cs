@@ -506,6 +506,10 @@ partial class WatchCommand(
             state.LastRepoDetection = DateTimeOffset.UtcNow;
         }
 
+        if (vendor == "claude" && agentId is null) {
+            state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
+        }
+
         // No cwd-derived repo (launched outside any checkout, or no cwd at all): fall back to
         // scanning the transcript's own tool-use paths for a git root. Session-watcher only
         // (agentId is null), matching the scope of the cwd-based detection above — a subagent
@@ -740,6 +744,13 @@ partial class WatchCommand(
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
                 }
 
+                if (state.SecondaryRoots is not null && DateTimeOffset.UtcNow - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
+                    await LinkSecondaryPullRequestsAsync(state,
+                        root => RepositoryDetection.DetectRepositoryAsync(config, root),
+                        pr => PostLinkedPullRequestAsync(sessionId, pr, cts.Token));
+                    state.LastSecondaryProbe = DateTimeOffset.UtcNow;
+                }
+
                 // gated so this can never interleave with a
                 // concurrently-running reconnect rewind (see cursorRewindGate's declaration above).
                 var drained = await DrainNewLinesGatedAsync(isFinalDrainLocal: false, cts.Token);
@@ -884,6 +895,11 @@ partial class WatchCommand(
             if (agentId is null && vendor == "antigravity") {
                 await ScanAntigravitySubagentLinks(sessionId, finalDrained, state.PostedSubagentLinks, CancellationToken.None);
             }
+
+            // A PR is usually opened in the session's last turn, after the previous 60s probe.
+            await LinkSecondaryPullRequestsAsync(state,
+                root => RepositoryDetection.DetectRepositoryAsync(config, root),
+                pr => PostLinkedPullRequestAsync(sessionId, pr, CancellationToken.None));
         }
 
         // Signal drain complete to server.
@@ -2172,6 +2188,10 @@ partial class WatchCommand(
             // path, not just the promotion) is directly unit-testable with a fake scanner.
             await ApplyEvidenceScanAsync(state, vendor, newLines, isFinalDrain);
 
+            if (state.SecondaryRoots is { } secondaryRoots) {
+                foreach (var line in newLines) secondaryRoots.OnLine(vendor, line);
+            }
+
             // Only include repository info when it has changed since last send
             var repoToSend = RepoPayloadChanged(state.Repository, state.LastSentRepository)
                 ? state.Repository
@@ -3310,6 +3330,61 @@ partial class WatchCommand(
 
         if (isFinalDrain && await scanner.PromoteReadFallbackAsync() is { } fallback) {
             ApplyEvidenceRepo(state, fallback);
+        }
+    }
+
+    /// <summary>
+    /// Probes every checkout the agent mutated outside its launch cwd and links each PR found
+    /// there to the session. A PR is posted once per (owner, repo, number); a failed post is
+    /// retried on the next pass. Only GitHub PRs are linked: the server endpoint rebuilds the
+    /// remote URL from owner and repo on github.com, so any other host would hash to the wrong
+    /// repository.
+    /// </summary>
+    internal static async Task LinkSecondaryPullRequestsAsync(
+            WatchState                              state,
+            Func<string, Task<RepositoryPayload?>>  detect,
+            Func<RepositoryPayload, Task<bool>>     post
+        ) {
+        if (state.SecondaryRoots is null) return;
+
+        foreach (var root in state.SecondaryRoots.Roots.ToArray()) {
+            RepositoryPayload? repo;
+            try { repo = await detect(root); } catch { repo = null; }
+
+            if (repo is not { Owner: { } owner, RepoName: { } name, PrNumber: { } number }) continue;
+            if (!string.Equals(repo.Host, "github.com", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var key = (owner, name, number);
+            if (state.LinkedPullRequests.Contains(key)) continue;
+            if (await post(repo)) state.LinkedPullRequests.Add(key);
+        }
+    }
+
+    async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
+        try {
+            using var client  = await http.ForBackgroundAsync(ct);
+            var       payload = new JsonObject {
+                ["owner"]       = pr.Owner,
+                ["repo_name"]   = pr.RepoName,
+                ["pr_number"]   = pr.PrNumber,
+                ["pr_title"]    = pr.PrTitle,
+                ["pr_url"]      = pr.PrUrl,
+                ["pr_head_ref"] = pr.PrHeadRef,
+                ["branch"]      = pr.Branch,
+            };
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync(
+                $"{Url}/api/sessions/{Uri.EscapeDataString(sessionId)}/pull-requests", content, ct: ct);
+
+            if (resp.IsSuccessStatusCode) Log($"Linked {pr.Owner}/{pr.RepoName}#{pr.PrNumber} from a secondary checkout");
+            else Log($"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: HTTP {(int)resp.StatusCode}");
+
+            return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            Log($"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: {ex.Message}");
+            return false;
         }
     }
 

@@ -134,6 +134,13 @@ class WatchState {
     public RepoEvidenceScanner<RepositoryPayload>? EvidenceScanner        { get; set; }
     public bool                                    RepositoryFromEvidence { get; set; }
 
+    // Claude session watcher only: checkouts the agent mutated outside its launch cwd, each
+    // probed for a PR the cwd probe cannot see. A PR joins LinkedPullRequests only once the
+    // server accepted it, so a failed post retries on the next pass.
+    public SecondaryRepoRoots?                                  SecondaryRoots     { get; set; }
+    public HashSet<(string Owner, string RepoName, int Number)> LinkedPullRequests { get; } = [];
+    public DateTimeOffset                                       LastSecondaryProbe { get; set; }
+
     public bool               InitialTitleSent   { get; set; }
     public bool               TitleGenerated     { get; set; }
     public int                TitleAttempts      { get; set; }
