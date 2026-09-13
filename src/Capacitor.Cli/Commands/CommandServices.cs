@@ -70,6 +70,9 @@ public static class CommandServices {
     /// dispatches one, and holding them would keep a command's own state alive past its verb.
     /// </summary>
     public static IServiceCollection AddCapacitorCommands(this IServiceCollection services) {
+        // Shared by every hook lane and carrying no per-run state, unlike the commands below.
+        services.AddSingleton<WatcherManager>();
+
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();

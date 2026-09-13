@@ -29,8 +29,7 @@ namespace Capacitor.Cli.Harness.Codex;
 /// subagent — or one step — never skips the rest; re-import recovers). Mirrors
 /// <see cref="GeminiSubagentTeardown"/>.
 /// </summary>
-sealed class CodexSubagentTeardown(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+sealed class CodexSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers) {
 
     /// <summary>
     /// Time budget for the teardown on a shutdown path (the parent-exit watchdog), so a slow
@@ -49,8 +48,8 @@ sealed class CodexSubagentTeardown(ConfigRoot config, ProfileContext profiles, I
 
             // Each step best-effort + independent so subagent-stop (→ SubagentCompleted) is
             // always attempted even if the kill or drain hiccups; re-import recovers the rest.
-            await SafeAsync(() => _watchers.KillWatcher($"{sessionId}-{agentId}"));
-            await SafeAsync(() => _watchers.InlineDrainAsync(sessionId, sub.FilePath, agentId, vendor: "codex"));
+            await SafeAsync(() => watchers.KillWatcher($"{sessionId}-{agentId}"));
+            await SafeAsync(() => watchers.InlineDrainAsync(sessionId, sub.FilePath, agentId, vendor: "codex"));
             await SafeAsync(() => PostStopAsync(sessionId, agentId, agentType, sub.FilePath));
         }
     }

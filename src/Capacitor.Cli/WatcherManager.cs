@@ -10,7 +10,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli;
 
-sealed partial class WatcherManager(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+public sealed partial class WatcherManager(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
     // The one URL this process resolved. No member takes one: a watcher spawned against a different
     // server than the hook that spawned it would stream a session nothing on this side can see.
     // Nullable because an offline invocation resolves none — the IsPostable guards refuse that.

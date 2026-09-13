@@ -37,9 +37,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class KiroHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -328,7 +327,7 @@ sealed class KiroHookCommand(
         // transcript (startup is idempotent and agentSpawn fires again next prompt); a killed hook
         // costs the whole session's injection. An abandoned in-flight spawn reconciles on that firing.
         try {
-            await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "kiro"
             ).WaitAsync(budget.Remaining);

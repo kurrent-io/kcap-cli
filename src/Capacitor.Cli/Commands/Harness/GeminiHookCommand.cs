@@ -65,9 +65,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class GeminiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -382,14 +381,14 @@ sealed class GeminiHookCommand(
             try {
                 var drained = await TimeBudget.RunCappedAsync(
                     async () => {
-                        await _watchers.KillWatcher(sessionId);
-                        await _watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "gemini");
+                        await watchers.KillWatcher(sessionId);
+                        await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "gemini");
                         // Gemini fires no subagent-stop hook, so the parent owns subagent
                         // teardown: kill each live child watcher, drain its tail, and finalize
                         // it (subagent-stop). Restart-safe — driven off the on-disk files,
                         // not an in-memory set. Shared with the watcher's parent-exit fallback
                         // so a crash that bypasses this hook still finalizes subagents.
-                        await new GeminiSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath);
+                        await new GeminiSubagentTeardown(profiles, http, watchers).DrainAsync(sessionId, transcriptPath);
                     },
                     PreHookDrainCap
                 );
@@ -474,7 +473,7 @@ sealed class GeminiHookCommand(
         // Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
         // caller instead of being silently dropped, and the host process doesn't exit before the
         // spawn completes.
-        await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+        await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: skipTitle, vendor: "gemini"
         );

@@ -13,8 +13,6 @@ using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
 
-using Capacitor.Cli.Core.Http;
-
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
@@ -34,7 +32,7 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
@@ -128,7 +126,7 @@ public sealed class UninstallCommand(
                 .HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
 
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
-        if (await new CleanupCommand(config, profiles, http).HandleCleanup() != 0) hadFailures = true;
+        if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
         var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses);
         var pluginCommand = new PluginCommand(env);

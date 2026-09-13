@@ -25,8 +25,7 @@ public class PermissionRequestPolicySeamTests : IDisposable {
     public void Dispose() => _server.Stop();
 
     PermissionRequestCommand Command(bool rendered = false) =>
-        new(Config.Root, Resolutions.At(_server.Urls[0], Config.Root),
-            new HostedAgent(null, rendered, DaemonBridge.None), new RecordingCapacitorHttpClient());
+        new(Config.Root, Resolutions.At(_server.Urls[0], Config.Root), new HostedAgent(null, rendered, DaemonBridge.None), new RecordingCapacitorHttpClient(), new WatcherManager(Config.Root, Resolutions.At(_server.Urls[0], Config.Root), new RecordingCapacitorHttpClient()));
 
     // No transcript_path: the watcher self-heal is a no-op, so selfHealWatcher carries only the
     // governance meaning this class is about.
