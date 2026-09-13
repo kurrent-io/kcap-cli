@@ -9,10 +9,9 @@ and delivered to the agent as files it can read.
 
 The daemon already knows how to deliver an attachment. A server-origin `SendInput` and a
 server-origin launch both carry `attachment_ids`; the daemon fetches each id from the server's
-temp store to disk and appends `[Attached files: …]` to the prompt. The web composer uses exactly
-this. What is missing is everything above it in the app, one new local input frame, and a few
-daemon rules the local lane and the fail-closed contract need — plus one change to where the
-daemon puts the files, which the security review forced.
+temp store into `<worktree>/.attached/` and appends `[Attached files: …]` to the prompt. The web
+composer uses exactly this. What is missing is everything above it in the app, one new local
+input frame, and a few daemon rules the local lane and the fail-closed contract need.
 
 ## Decisions
 
@@ -21,11 +20,12 @@ daemon puts the files, which the security review forced.
    on `RequestLaunchAgentV2.attachment_ids` for a launch (the payload already declares it), and
    on a new local frame for a chat send. The daemon's existing `DownloadAttachmentsAsync` does the
    rest. This is the one mechanism that already ships bytes to a daemon on another machine, it is
-   what the web uses, its 10 MB cap is enforced server-side, and it leaves nothing new to sweep.
-   Rejected: bytes over the local socket (a new chunked frame family, a second store with its own
-   lifetime, no remote story, and an 8 MB frame ceiling under the server's 10 MB file cap); the
-   app writing straight into the worktree (it knows `worktree_path` only for local agents, and a
-   second writer in a daemon-owned tree is a race with cleanup).
+   what the web uses, its 10 MB cap is enforced server-side, and the bytes' lifetime on the server
+   is already someone else's problem. Rejected: bytes over the local socket (a new chunked frame
+   family, a second store with its own lifetime, no remote story, and an 8 MB frame ceiling under
+   the server's 10 MB file cap); the app writing straight into the worktree (it knows
+   `worktree_path` only for local agents, and a second writer in a daemon-owned tree is a race
+   with cleanup).
 2. **A send that carries attachments rides a frame for every vendor, PTY included.** Text-only
    PTY sends stay on the attach `Stdin` path unchanged. The daemon has to download and name the
    files, so the daemon has to compose the message; `PtyHostedAgentRuntime.SendUserInputAsync` is
@@ -33,32 +33,40 @@ daemon puts the files, which the security review forced.
    AI-2197's scope for a reason — the terminal send gate's semantics are tied to the attach
    lifecycle and nothing here needs them changed).
 3. **The agent learns about a file by path, the same way on every vendor.** The daemon's
-   `[Attached files: …]` trailer names each file by absolute path. Claude Code reads an image or
-   a PDF through its `Read` tool, inside a directory the launcher adds with `--add-dir` so no
-   permission prompt stands in the way; Codex through `view_image` and its shell (its sandboxes
-   restrict writes, not reads); ACP, Pi and Antigravity agents through their own file tools.
+   `[Attached files: …]` trailer names each file: relative to the cwd when the file is in the
+   worktree, absolute otherwise (decision 4). Claude Code reads an image or a PDF through its
+   `Read` tool; Codex through `view_image` and its shell (its sandboxes restrict writes, not
+   reads); ACP, Pi and Antigravity agents through their own file tools, some of which confine
+   themselves to the workspace — which is why those vendors keep the file in the workspace.
    Rejected: vendor-native image inputs (`codex --image` at launch, ACP `image` content blocks) —
    a per-vendor capability matrix for a result the path already gives, and a second delivery shape
    to keep in step with the first.
-4. **Attachments land in a daemon-owned directory outside every agent's cwd, never inside the
-   worktree.** Today they go to `<worktree>/.attached/`. A directory inside the agent's own tree is
-   one the agent can replace with a link before the daemon writes, and the daemon is not
-   sandboxed: a write-contained agent (a Codex sandbox) could steer the user's file to a path of
-   its choosing, and no check-then-create sequence over a pathname closes that — only a
-   directory-handle-relative create does, which .NET does not expose. So the files go to
-   `<daemon state dir>/attachments/<AgentFileNames.For(agentId)>/`, which no contained agent can
-   write to and an uncontained one gains nothing by touching (it can already write anywhere the
-   daemon can). The directory lives exactly as long as the agent's worktree and is removed with
-   it. This applies to every caller, the web's included. Rejected: keeping `.attached/` with
-   no-follow checks (racy by construction); a native `openat`/`NtCreateFile` shim (correct, and a
-   platform-specific surface to maintain for a problem the relocation removes).
-5. **An attachment that cannot be delivered fails the send; it is never silently dropped.** Today
-   both daemon paths are best-effort: a missing id logs a warning and the text goes out without
-   it. A user who attached a file meant the file, and text without it changes meaning. A fetch
-   failure (404, oversize, IO) is a `delivery_failed` drop naming the id on both callers, and a
-   launch whose attachments cannot be fetched fails with `attachment_unavailable`. This changes
-   the web path as well, deliberately: the drop is reported through `ReportInputDroppedAsync`,
-   which the web already renders.
+4. **Where the file lands follows the agent's containment.** Today every attachment goes to
+   `<worktree>/.attached/`. A directory inside the agent's own tree is one the agent can replace
+   with a link before the daemon writes, and the daemon is not sandboxed. For an agent that can
+   already write anywhere the daemon can — Claude, the ACP vendors, Pi and Antigravity in a
+   default-kind launch, none of which runs under an OS write sandbox — that is no escalation, and
+   the worktree is the one place their file tools are sure to read. For a **write-contained**
+   runtime — Codex under its seatbelt or landlock sandbox — it is an escalation: the sandbox stops
+   the agent writing outside its cwd, and a steered daemon write would do it for the agent. So
+   each runtime factory declares an `AttachmentPlacement`: `Worktree` (the default, today's
+   behaviour, relative path in the trailer) or `DaemonStore` (Codex: a per-agent directory under
+   the daemon's state dir, outside any cwd, absolute path in the trailer, readable under both
+   Codex sandboxes). Protected kinds (reviewers, flow participants) are refused input before any
+   of this. Rejected: the daemon store for every vendor (regresses the web path for a
+   workspace-confined file tool, which today reads `.attached/` and would read nothing); no-follow
+   check-then-create over a pathname (racy by construction, and unnecessary once the contained
+   runtime is elsewhere); a native `openat`/`NtCreateFile` shim (correct, and a platform surface
+   to maintain for a problem the placement rule removes).
+5. **An attachment that cannot be delivered fails the send, leaves nothing behind, and is never
+   silently dropped.** Today both daemon paths are best-effort: a missing id logs a warning and
+   the text goes out without it, and files already fetched stay. A user who attached a file meant
+   the file, and text without it changes meaning. A fetch failure (404, oversize, IO) is a
+   `delivery_failed` drop naming the id on both callers, a launch whose attachments cannot be
+   fetched fails with `attachment_unavailable`, and a batch is published only whole: the files
+   are fetched into a staging directory and moved into place after the last one lands, or the
+   staging directory is removed. This changes the web path as well, deliberately: the drop is
+   reported through `ReportInputDroppedAsync`, which the web already renders.
 6. **Delivery to an older daemon fails closed at the byte level on the chat lane; the launch lane
    is gated on what the app can see, and its one gap is named.** A chat send with ids uses a new
    frame type, `SendTextWithAttachments`, which an older daemon's codec rejects before routing —
@@ -91,9 +99,16 @@ daemon puts the files, which the security review forced.
    10 minutes, so uploading on paste would strand a chip the user takes their time over. A launch
    is only *accepted* when the hub returns; its attachments are fetched later by the daemon, so
    the sent draft is retained until the launch is confirmed or fails, and restored on failure
-   (§2). One retained draft at a time, at most 100 MiB by the limits above.
+   when that is safe (§2). One retained draft at a time, at most 100 MiB by the limits above.
 10. **Recall restores text only.** The arrow-key prompt history is a text history; a recalled
     prompt does not re-stage files that were already delivered.
+11. **Confidentiality between agents of one user is not a boundary here, as it is not anywhere
+    in the daemon.** Every hosted agent runs as the daemon's OS user and can read every other
+    agent's worktree under `<repo>/.capacitor/worktrees/` today, `.attached/` included; the
+    daemon-store directory is no more and no less readable. What this design protects is the
+    *integrity* of where a file lands (decision 4), not who else on the same account can read
+    it. The hashed directory names are for path safety — an agent id crosses the wire
+    unconstrained — not secrecy, and the state directory's mode is not relied on.
 
 ## 1. What the user sees
 
@@ -126,11 +141,11 @@ daemon is older), "sign in to attach files". When the "+" is disabled its toolti
 same text. Nothing toasts.
 
 While sending, the hint reads "Uploading 2 files…" then "Sending…" (Chat) or the Start button
-is disabled with "Uploading…" (Home). On success the text and the chips clear together. On any
-failure both stay, and the hint says why. A launch failure that arrives after the hub accepted
-the request restores the draft when that is safe (§2, Launch). The user's own turn appears in
-Chat from the transcript as it does today, with the daemon's trailer on it — the same text the
-web shows.
+is disabled with "Uploading…" (Home). On success the sent text and the sent chips clear; anything
+typed or added meanwhile stays. On any failure both stay, and the hint says why. A launch
+failure that arrives after the hub accepted the request restores the draft when that is safe
+(§2, Launch). The user's own turn appears in Chat from the transcript as it does today, with the
+daemon's trailer on it — the same text the web shows.
 
 ## 2. App
 
@@ -321,35 +336,47 @@ Changing the machine while files are staged does not drop them; if the new machi
 capable, Start is disabled with the hint until the chips are removed or the machine changed back.
 
 **The launch is built from one snapshot.** `StartAsync` first captures a `LaunchDraft` — machine,
-repo, vendor, goal, model, effort, permission mode, and the tray's `Snapshot()` — and every later
-step reads the draft, never the live properties. A selection the user changes while the upload is
-in flight changes the next launch, not this one. After the upload (if any) the remote ownership
-check and the capability gate run again **against the draft's machine**, and the request is built
-from the draft. Order: capture → gate (`CanAttach` for the draft's machine, when it has files) →
-upload (`Uploading = true`, Start disabled, label "Uploading…"; `Unauthorized` → the existing
-`_signInRequired` signal; other failures → `StartError` with the reason, nothing launched) →
-re-check ownership and gate for the draft's machine → build and send. `ReactiveCommand.Execute`
-can bypass `CanExecute`, so the in-method checks are the boundary, as they are today for
-ownership.
+repo, vendor, goal, model, effort, permission mode, the goal's edit count, and the tray's
+`Snapshot()` — and every later step reads the draft, never the live properties. A selection the
+user changes while the upload is in flight changes the next launch, not this one. After the
+upload (if any) the remote ownership check and the capability gate run again **against the
+draft's machine**, and the request is built from the draft. Order: capture → gate (`CanAttach` for
+the draft's machine, when it has files) → upload (`Uploading = true`, Start disabled, label
+"Uploading…"; `Unauthorized` → the existing `_signInRequired` signal; other failures →
+`StartError` with the reason, nothing launched) → re-check ownership and gate for the draft's
+machine → build and send. `ReactiveCommand.Execute` can bypass `CanExecute`, so the in-method
+checks are the boundary, as they are today for ownership.
+
+**The composer clears only what was sent.** On `Started`, `Goal` is cleared iff its edit count
+still equals the draft's — the goal box stays editable during the upload and the hub call, and a
+newer draft is the user's — and the tray is cleared iff `ContentEquals(draft.Files)`; otherwise
+each keeps its newer contents. This is the rule Chat already applies. An accepted launch whose
+returned id does not normalise (`UnusableIdMessage` today) cannot be correlated, so its draft is
+not retained; the message gains " — re-attach the files if it did not start".
 
 **The draft outlives the accepted request.** `LaunchOutcome.Started` is request acceptance, not
 success — the daemon fetches the files later and a failure arrives as a `LaunchFailed`
-broadcast. So when the draft carried attachments, `StartAsync` clears `Goal` and the tray as
-today but retains the `LaunchDraft` (goal, files **and target**) together with the upload time as
-`_retainedDraft`, keyed by the normalised agent id and settled with the launch:
+broadcast. So every pending launch's entry records `HadAttachments` and the upload time beside
+the timestamp it keeps today, and the most recent attachment-bearing launch additionally retains
+its whole `LaunchDraft` (goal, files **and target**) as `_retainedDraft`, keyed by the normalised
+agent id:
 
-- **one at a time**: starting another attachment-bearing launch replaces the retained draft, whose
-  later failure then reads as "re-attach" below; text-only launches do not touch it;
+- **bytes for one launch at a time**: when a second attachment-bearing launch is *accepted*, its
+  draft replaces the retained one; the first launch's entry keeps `HadAttachments`, so its later
+  failure still reads as "re-attach" below rather than as a plain text failure. A launch that is
+  refused before acceptance leaves the retained draft alone. Text-only launches never touch it;
 - **retention is 10 minutes from the upload**, the server's own TTL for the bytes, checked on the
   app's `TimeProvider` tick as well as on every settlement, so a draft whose launch never reports
   is released without waiting for an event;
-- a directory row confirms the launch (`ConfirmPendingRows`) → discarded;
-- a `LaunchFailed` for the retained id (`ApplyFailureIfPending`, or the buffered failure
+- a directory row confirms the launch (`ConfirmPendingRows`) → its entry and, if it is the
+  retained one, the draft are discarded;
+- a `LaunchFailed` for a pending id (`ApplyFailureIfPending`, or the buffered failure
   `RecordPendingLaunch` finds) → `StartError` is `FriendlyLaunchFailure(reason)`, the real
-  reason, **never** rewritten as an attachment failure; then, if the composer is blank, the tray
-  empty **and the current target (machine, repo, vendor) equals the draft's**, the goal and files
-  are restored and the message gains " — your draft is back"; otherwise nothing is overwritten
-  and it gains " — re-attach the files to send them again";
+  reason, **never** rewritten as an attachment failure. Then, when that entry `HadAttachments`:
+  if it is the retained draft, the composer is blank, the tray empty **and the current target
+  (machine, repo, vendor) equals the draft's**, the goal and files are restored and the message
+  gains " — your draft is back"; in every other attachment case it gains " — re-attach the files
+  to send them again";
 - a failure after the retention cutoff, `ForgetLaunch`, or a failure for an untracked id →
   discarded; a fetch that 404s because the server's copy expired lands here when the launch was
   that slow, and the user re-attaches.
@@ -432,34 +459,35 @@ design leans on.
 
 ## 4. Daemon
 
-### Where the files go: `AttachmentStore`
+### Placement
 
 ```csharp
-internal sealed class AttachmentStore(string stateDir) {
-    public string Root => Path.Combine(stateDir, "attachments");
-    public string DirectoryFor(string agentId) => Path.Combine(Root, AgentFileNames.For(agentId));
-    public void Remove(string agentId);          // DeleteTreeNoFollow; absent is fine
-    public void SweepOrphans(Func<string, bool> isLive);  // startup: every dir whose agent is not live
-}
+internal enum AttachmentPlacement { Worktree, DaemonStore }
 ```
 
-`stateDir` is `DaemonStore.StateDirectory(config.Name)`, already 0700, so two daemons never
-collide and no agent's cwd contains it. The directory name is the same SHA-256 hex the PID record
-and the transcript journal use, for the same reason: the agent id crosses the wire unconstrained.
-Created on first fetch. Removed in `CleanupAgentAsync` beside the worktree removal (for every
-work location — the store is daemon-owned whatever the agent's cwd is), on every launch-failure
-cleanup path that removes the worktree, and by a startup sweep that deletes directories whose
-agent has no live PID record, on the same liveness predicate the journal sweep takes.
+`IHostedAgentRuntimeFactory.AttachmentPlacement` — `Worktree` for every factory except Codex,
+which declares `DaemonStore` because its runtime is write-contained by an OS sandbox (decision
+4). The value is copied onto `AgentInstance` at launch so `DeliverInputAsync` reads it from the
+agent, and the launch path reads it from the factory it is about to use. A runtime that ever
+gains an OS write sandbox changes its one declaration and nothing else.
 
-The `.attached/` exclusions and the reserved-path check in `WorktreeManager` stay: an older
-daemon's worktrees may still carry that directory.
+- `Worktree`: `<agent cwd>/.attached/` — created if absent with the `.gitignore` it has today;
+  trailer paths relative (`.attached/x.png`). This is today's location and today's contract for
+  every file tool that confines itself to the workspace.
+- `DaemonStore`: `<DaemonStore.StateDirectory(config.Name)>/attachments/<AgentFileNames.For(agentId)>/`
+  — created on first fetch; trailer paths absolute. Two daemons never collide, and no agent's
+  cwd contains it. Removed in `CleanupAgentAsync` beside the worktree removal and on every
+  launch-failure path that removes the worktree, through one `AttachmentStore.Remove(agentId)`
+  (`DeleteTreeNoFollow`, absent is fine); a startup sweep removes directories whose agent has no
+  live PID record, on the liveness predicate the journal sweep uses.
+
+The `.attached/` exclusions and the reserved-path check in `WorktreeManager` are unchanged and
+still load-bearing for the `Worktree` placement.
 
 ### Fetching: `DownloadAttachmentsAsync`
 
-Returns a result rather than the paths it managed:
-
 ```csharp
-sealed record AttachmentFetch(IReadOnlyList<string> AbsolutePaths, string? FailedId, string? Error);
+sealed record AttachmentFetch(IReadOnlyList<string> Paths, string? FailedId, string? Error);
 ```
 
 Every caller — the local frame handler, the server-origin `HandleSendInput` and the launch path —
@@ -468,15 +496,24 @@ the lane's failure (`attachments_refused` on the local ack, `DeliveryFailed` for
 caller, `attachments_refused` as the launch failure), so no id that is not a Guid-N is ever
 interpolated into `/api/attachments/{id}`, and no caller can request more than ten fetches.
 
+**A batch is published whole or not at all.** The files are fetched into a staging directory
+beside the destination — `<destination>/.pending-<Guid:N>/` — and moved into the destination one
+by one only after the last id has landed, each under the unique-name helper with
+`FileMode.CreateNew` semantics (a move never replaces an existing file); the staging directory is
+then removed. On any failure the staging directory is removed with everything in it, so a failed
+send leaves no new file where the agent looks for attachments. A same-user process that lists the
+staging directory during the fetch can see files arriving — nothing hides bytes from a process
+running as the same user (decision 11) — but nothing remains once the send has been refused.
+Staging directories left by a crash are removed by the next fetch into the same destination and,
+for `DaemonStore`, by the startup sweep.
+
 Per id, in order: `GetAsync(url, HttpCompletionOption.ResponseHeadersRead)` so the body is never
 buffered by the client; the response is disposed with the loop iteration. A non-success status, a
 `Content-Length` over `MaxAttachmentBytes`, a body that exceeds it while streaming (the copy is
-capped at `MaxAttachmentBytes + 1` bytes and stops reading there; the partial file is deleted),
-a `Content-Disposition` name that reduces to nothing after `Path.GetFileName`, or an IO exception
-ends the fetch with that id and error. Files already written stay; they go with the directory.
-The file is created with `FileMode.CreateNew` under the unique-name helper, so a name is never
-reused within one agent's directory. The trailer is composed only when every id landed, from the
-absolute paths. The content type is read but not acted on.
+capped at `MaxAttachmentBytes + 1` bytes and stops reading there), a `Content-Disposition` name
+that reduces to nothing after `Path.GetFileName`, or an IO exception ends the fetch with that id
+and error. The trailer is composed only when every id landed, from the published paths in the
+placement's form. The content type is read but not acted on.
 
 ### Handler
 
@@ -497,14 +534,12 @@ alone, or `text + "\n\n" + AttachmentTrailer.For(paths)`.
 
 ### Launch
 
-The launch path's fetch moves off the `OwnedWorktree` guard — the directory is the daemon's
-whatever the work location — and stops being best-effort: a `Validate` refusal or a failed fetch
-throws, the existing failure path removes the worktree and the attachment directory, and the
-server sees `LaunchFailed` with `attachments_refused: …` or `attachment_unavailable: <id>`.
-`LauncherContext` gains `string AttachmentsDirectory` (the store's `DirectoryFor(agentId)`,
-always set), and `ClaudeLauncher` passes `--add-dir <that>` on every launch, so the agent's `Read`
-of an attached file needs no permission prompt, at launch or on a later turn. No other launcher
-changes: Codex and the ACP, Pi and Antigravity runtimes read absolute paths with their own tools.
+The launch path's fetch keeps its place and its `OwnedWorktree` guard for the `Worktree`
+placement (a borrowed cwd is never written to; `DaemonStore` needs no guard, and hub launches are
+owned anyway) and stops being best-effort: a `Validate` refusal or a failed fetch throws, the
+existing failure path removes the worktree (and the store directory, when the placement made
+one), and the server sees `LaunchFailed` with `attachments_refused: …` or
+`attachment_unavailable: <id>`. No launcher argv changes.
 
 ### PTY input lane
 
@@ -520,10 +555,14 @@ What this buys and costs: a keystroke that arrives during a composer send is wri
 CR, never inside the bracketed paste or between it and the CR. Within one writer, order is the
 order of its awaited calls (each writer awaits its own writes in sequence); across writers there
 is no order to promise, and `SemaphoreSlim`'s lack of FIFO is not a contract anyone relies on. The
-wait is at most the paste plus `SingleSubmitDelay` — 150 ms — for an interactive agent. Under the
-approvals-disabled spray schedule the lane is held for the whole spray, about 2.4 s; those
-agents are unattended reviewers whose attach is read-only, so nothing is waiting on the lane, and
-releasing after the first CR would instead let typed bytes be consumed by the later CRs.
+wait is at most the paste plus `SingleSubmitDelay` — 150 ms — for an interactive agent whose
+submit is a single CR. Under the approvals-disabled spray schedule the lane is held for the whole
+spray, about 2.4 s. That schedule applies to review-flow launches, whose attach is read-only so
+nothing waits, **and to a default-kind Codex session launched with the `never` approval posture,
+whose terminal is writable**: a keystroke typed there during an attachment send lands up to
+2.4 s late. Accepted and stated here: it is the same interval that session's composer sends
+already take to submit, and releasing after the first CR would instead let the typed bytes be
+swallowed by the later CRs.
 
 ### `SingleSubmitDelay`
 
@@ -536,13 +575,13 @@ unchanged.
 
 | App | Daemon | Server | Behaviour |
 |---|---|---|---|
-| new | new (`input/2`) | any | full: chips, paste, drop; chat sends with ids on `SendTextWithAttachments`; launch ids on V2; files under the daemon's state dir |
+| new | new (`input/2`) | any | full: chips, paste, drop; chat sends with ids on `SendTextWithAttachments`; launch ids on V2 |
 | new | old, local | any | Chat and Home "+", paste-as-file and drop refused with "attachments need the daemon updated"; text unchanged |
 | new | old, remote (version below the gate) | any | Home attachments refused with the same hint; a text launch unchanged |
 | new | downgraded between the app's gate and the server's dispatch | any | the one accepted gap (decision 6): the old daemon launches best-effort |
 | new | restarted to an old build between hello and a chat send | any | `SendTextWithAttachments` is undecodable there; the connection closes; the composer shows "delivery unconfirmed"; nothing delivered |
 | old | new | any | old app sends `SendText` only; text-only as today |
-| web (any) | new | any | web attachments land under the state dir instead of `.attached/`, and a missing one now fails the send visibly instead of being dropped |
+| web (any) | new | any | same locations as today except Codex, whose files move to the daemon store; a missing attachment now fails the send visibly and leaves no partial batch |
 | new | any | old (no V2 attachments) | V2 has carried `attachment_ids` since hosted agents shipped; not a live case |
 | new | new | temp store id expired (>10 min between upload and fetch) | fetch 404 → chat send refused with the id named, draft kept; launch failed, draft restored if still within retention and the target unchanged, else "re-attach" |
 
@@ -551,9 +590,15 @@ unchanged.
 - The app uploads with the signed-in profile's token through the same client lease every other
   app HTTP call uses; the daemon downloads with its own — no new credential path, and the daemon
   still looks for none.
-- Files land only under the daemon's 0700 state directory, in a per-agent directory named by a
-  hash, outside every agent's cwd; removed with the agent, swept at startup. A contained agent
-  cannot reach it; an uncontained one gains nothing from it (decision 4).
+- **Integrity of placement** (decision 4): a write-contained runtime's files land outside every
+  cwd, where the sandbox that contains it also stops it steering the daemon's write. An
+  uncontained runtime keeps the in-worktree directory, where a steered write would give it
+  nothing it lacks. Files never land in a borrowed cwd (the existing guard).
+- **No confidentiality between same-user agents** (decision 11), the same as for worktrees
+  today. The trailer's absolute path under `DaemonStore` names the daemon's state directory in
+  the prompt and so in the transcript; transcripts already carry absolute worktree paths in every
+  tool call, so this discloses nothing new.
+- **Nothing left behind on failure** (decision 5): staging plus whole-batch publication.
 - Streaming with `ResponseHeadersRead` plus the byte cap closes an unbounded response from a
   compromised or misconfigured server; `AttachmentIds.Validate` in front of every fetch closes a
   path segment smuggled as an id and a fetch storm from a misbehaving server, whichever lane the
@@ -562,8 +607,6 @@ unchanged.
   attached text file's contents reach a transcript only if the agent reads it, at which point the
   watcher's redaction applies as to any tool result. `SecretRedactor` is not run over attachments:
   it rewrites JSON transcript lines, and a file is neither.
-- `--add-dir` widens Claude's prompt-free surface by one daemon-owned directory holding files the
-  user chose to hand the agent; nothing else lives there.
 - The clipboard is read only on an explicit paste gesture, never polled, and released after each.
 
 ## 7. Testing
@@ -585,28 +628,33 @@ unchanged.
   `DeliverInputAsync`. The same over-count, malformed and duplicate lists through
   `HandleSendInput` (server caller) and through the launch command are `DeliveryFailed` drops and
   a failed launch respectively, with no HTTP call made.
-- `AttachmentStore`: `DirectoryFor` is under the state dir and hashed; `Remove` deletes the tree
-  without following a link planted inside it; `SweepOrphans` deletes only directories whose agent
-  is not live.
-- `DownloadAttachmentsAsync` against WireMock: success writes under `DirectoryFor(agentId)`;
-  the request uses `ResponseHeadersRead`; a 404, a `Content-Length` over the cap, and a chunked
-  over-cap body with no `Content-Length` each end the fetch naming the id and leave no partial
-  file, and the chunked case is shown (through a counting handler) to stop reading at
-  `MaxAttachmentBytes + 1`; a `Content-Disposition` that reduces to nothing is refused; earlier
-  files stay; a repeated file name gets the next unique name.
+- Placement: the Codex factory declares `DaemonStore`, every other factory `Worktree`; the
+  agent instance carries the factory's value; a `Worktree` fetch writes under `<cwd>/.attached/`
+  with the `.gitignore` and relative trailer paths; a `DaemonStore` fetch writes under the hashed
+  state-dir directory with absolute trailer paths. `AttachmentStore.Remove` deletes the tree
+  without following a link planted inside it; the startup sweep deletes only directories whose
+  agent is not live, and stale `.pending-*` directories.
+- `DownloadAttachmentsAsync` against WireMock: success stages, then publishes every file and
+  removes the staging directory; the request uses `ResponseHeadersRead`; a 404, a
+  `Content-Length` over the cap, and a chunked over-cap body with no `Content-Length` each end
+  the fetch naming the id, and the destination holds **no new file** afterwards (the earlier
+  successes of that batch included) while files from an earlier successful batch are untouched;
+  the chunked case is shown (through a counting handler) to stop reading at
+  `MaxAttachmentBytes + 1`; a `Content-Disposition` that reduces to nothing is refused; a
+  repeated file name gets the next unique name; a stale `.pending-*` directory from a crash is
+  removed by the next fetch.
 - `DeliverInputAsync`: a failed fetch is a `DeliveryFailed` drop with the id in the error, and the
-  runtime receives nothing; a successful fetch delivers `text + "\n\n" + trailer` with absolute
-  paths.
+  runtime receives nothing; a successful fetch delivers `text + "\n\n" + trailer`.
 - `PtyHostedAgentRuntime`: a paste is followed by one CR no earlier than 150 ms later
   (`FakeTimeProvider`); raw input and special keys issued before, during and after
   `SendUserInputAsync` land entirely before the `ESC[200~` or entirely after the CR, with every
-  byte accounted for and each writer's own order preserved; under the spray schedule the lane is
-  held until the last CR; `RequestGracefulStopAsync` cannot interleave with a paste.
+  byte accounted for and each writer's own order preserved; under the spray schedule (a Codex
+  runtime built with `approvalsDisabled`, as a default-kind `never` posture yields) the lane is
+  held until the last CR and concurrent raw input lands after it; `RequestGracefulStopAsync`
+  cannot interleave with a paste.
 - Launch: a failed fetch fails the launch with `attachment_unavailable`, removes the worktree and
-  the attachment directory, and starts no process; a `Validate` refusal fails it with
-  `attachments_refused`; `ClaudeLauncher` argv carries `--add-dir` with the store directory for
-  owned and borrowed launches alike; `CleanupAgentAsync` removes the directory for every work
-  location.
+  the store directory, and starts no process; a `Validate` refusal fails it with
+  `attachments_refused`; `CleanupAgentAsync` removes the store directory when one exists.
 - `LocalControlCapabilities.Current` contains `input/2`, and the routing switch handles frame 24
   (the existing pin, extended).
 
@@ -637,9 +685,12 @@ unchanged.
   gate for a remote one (below, equal, above, unparsable, missing); the launch is built from the
   captured draft — a machine, repo or vendor changed during the upload does not reach the request,
   and the post-upload gate runs against the draft's machine; an empty goal with files launches;
-  upload failure → `StartError`, no launch; `Started` clears the composer and retains the draft;
-  a second attachment launch replaces the retained draft; `LaunchFailed` before registration
-  (buffered), after the request returned, and after the retention cutoff; a row arriving before
+  upload failure → `StartError`, no launch; on `Started` a goal edited during the upload or the
+  hub call is kept and only an unedited one clears, a file added meanwhile is kept and only an
+  unchanged tray clears; an unusable returned id retains no draft and says so; `Started` retains
+  the draft; launch A with files then launch B with files accepted, then A fails → A's real
+  reason plus "re-attach", B's draft untouched; `LaunchFailed` before registration (buffered),
+  after the request returned, and after the retention cutoff; a row arriving before
   registration; the retention timer releasing a draft with no event; restore into an empty
   composer with an unchanged target, no restore into an edited composer, no restore after a
   target change, each with its message; a non-attachment failure reason with files staged keeps
@@ -648,6 +699,11 @@ unchanged.
   a drop of a file on the card stages it; a `PastingFromClipboard` raise with the headless
   clipboard holding text pastes text once. Bitmap paste is verified by hand on macOS, where the
   clipboard carries TIFF and PNG, and noted in the PR.
+
+**By hand, recorded in the PR:** one image and one PDF attached from the desktop to each of
+Claude and Codex (both placements), and one text file to one ACP vendor, one to Pi and one to
+Antigravity, each confirmed read by the agent from the trailer's path. The `Worktree` placement
+is today's contract for those vendors, so this is a regression check, not a new proof.
 
 ## 8. Out of scope
 
@@ -659,13 +715,13 @@ unchanged.
 - A `kcap agent send --attach` verb.
 - A server-side daemon capability contract for launches (decision 6 names the gap it would close).
 - Restoring a text-only launch's goal on failure.
+- Read isolation between agents of one user (decision 11).
 
 ## Risks
 
-- **A vendor that cannot read a file outside its cwd.** Claude is covered by `--add-dir`; Codex
-  reads anywhere under both sandboxes; both are verified by hand in the PR against a PNG and a
-  PDF. An ACP agent that confines its file tool to the workspace reads nothing, which is what the
-  web already gives it for any path it cannot reach — named here so nobody is surprised.
+- **A vendor that confines its file tool to the workspace** reads attachments today because they
+  are in the workspace, and keeps doing so under the `Worktree` placement. The by-hand check
+  above guards the regression. Only Codex moves, and Codex reads anywhere under both sandboxes.
 - **The 150 ms submit delay** is calibrated to today's Codex suppression window; a TUI that widens
   it turns a frame send into a newline. Same exposure the app's terminal channel carries, and
   now in one constant with one measurement behind it.
