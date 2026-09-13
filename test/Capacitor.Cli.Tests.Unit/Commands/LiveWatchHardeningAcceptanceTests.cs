@@ -47,7 +47,7 @@ public class LiveWatchHardeningAcceptanceTests {
     // the drain below needs an unreachable server rather than an unusable URL.
     const string Unreachable = "http://127.0.0.1:1";
 
-    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient(), new WatcherManager(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient()));
+    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Unreachable, Config.Root), new FixedCapacitorHttpClient()));
 
     CursorMarkers Markers => new(Config.Root);
 

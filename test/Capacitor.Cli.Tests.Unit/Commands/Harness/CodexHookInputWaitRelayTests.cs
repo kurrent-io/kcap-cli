@@ -27,7 +27,7 @@ public class CodexHookInputWaitRelayTests {
         using var capture = ConsoleOutput.StartCapture();
         var hosted = new HostedAgent("agent-1", IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), new WatcherManager(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()))
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()))
             .Handle(new StringReader($$"""{"hook_event_name":"{{eventName}}","session_id":"019e0322-05fc-7570-be65-75719c3ea861","cwd":"/tmp"}"""));
 
         await Assert.That(exit).IsEqualTo(0);

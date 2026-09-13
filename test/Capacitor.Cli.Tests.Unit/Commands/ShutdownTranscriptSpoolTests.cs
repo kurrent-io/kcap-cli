@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class ShutdownTranscriptSpoolTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), new WatcherManager(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()));
+    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()));
 
     CursorMarkers Markers => new(Config.Root);
 

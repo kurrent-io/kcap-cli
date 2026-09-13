@@ -9,10 +9,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Claude;
 /// work to a detached continuation and return. These cover the hand-off decision and the shape
 /// of the spawned process; the end-to-end timing lives in the integration suite.
 /// </summary>
-// Bare: WatcherManager.ProcessStarterForTesting is a mutable production static that every
-// spawn path reads, and Dispose resets it.
-[NotInParallel]
-public class ClaudeSessionEndHandoffTests : IDisposable {
+public class ClaudeSessionEndHandoffTests {
     static readonly string[] HookArgs = ["hook", "--claude", "--no-update-check"];
 
     // Per test, so the stamp asserted below is the hook handing its own root down and not the
@@ -21,8 +18,6 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
 
     const string SessionEndBody =
         """{"hook_event_name":"SessionEnd","session_id":"9dc27753-7645-4e46-91ec-c2d69973c152","reason":"exit"}""";
-
-    public void Dispose() => WatcherManager.ProcessStarterForTesting = null;
 
     [Test]
     [Arguments("SessionEnd")]
@@ -55,10 +50,11 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
 
     [Test]
     public async Task Spawn_reinvokes_this_binary_with_the_hook_args_plus_the_detached_flag() {
-        ProcessStartInfo? seen = null;
-        WatcherManager.ProcessStarterForTesting = psi => { seen = psi; return null; };
+        var starter = FakeProcessStarter.Refusing();
 
-        var spawned = ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root);
+        var spawned = ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root, starter);
+
+        var seen = starter.Seen;
 
         // A null start is a failed spawn: the caller falls back to the inline path.
         await Assert.That(spawned).IsFalse();
@@ -88,7 +84,7 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
 
         // Stand in for the kcap continuation with a shell that copies stdin to a file, keeping the
         // redirects the hand-off asked for so the write path under test is the real one.
-        WatcherManager.ProcessStarterForTesting = psi => {
+        var starter = FakeProcessStarter.Running(psi => {
             var stub = new ProcessStartInfo("/bin/sh") {
                 RedirectStandardInput  = psi.RedirectStandardInput,
                 RedirectStandardOutput = psi.RedirectStandardOutput,
@@ -98,9 +94,9 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
             stub.ArgumentList.Add("-c");
             stub.ArgumentList.Add($"cat > '{sink}'");
             return Process.Start(stub);
-        };
+        });
 
-        var spawned = ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root);
+        var spawned = ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root, starter);
 
         await Assert.That(spawned).IsTrue();
 
@@ -113,9 +109,9 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
 
     [Test]
     public async Task Spawn_failure_is_reported_not_thrown() {
-        WatcherManager.ProcessStarterForTesting = _ => throw new InvalidOperationException("no exec");
+        var starter = FakeProcessStarter.Throwing(new InvalidOperationException("no exec"));
 
-        await Assert.That(ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root)).IsFalse();
+        await Assert.That(ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root, starter)).IsFalse();
     }
 
     [Test]
@@ -126,7 +122,7 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
         // process exists, the shape of any post-start failure.
         var pid = 0;
         var identity = "";
-        WatcherManager.ProcessStarterForTesting = _ => {
+        var starter = FakeProcessStarter.Running(_ => {
             var stub = new ProcessStartInfo("/bin/sh") { UseShellExecute = false };
             stub.ArgumentList.Add("-c");
             stub.ArgumentList.Add("sleep 30");
@@ -135,9 +131,9 @@ public class ClaudeSessionEndHandoffTests : IDisposable {
             pid      = child.Id;
             identity = PidIdentity.Capture(pid);
             return child;
-        };
+        });
 
-        var spawned = ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root);
+        var spawned = ClaudeSessionEndHandoff.TrySpawn(HookArgs, SessionEndBody, Config.Root, starter);
 
         await Assert.That(spawned).IsFalse();
         await Assert.That(pid).IsNotEqualTo(0);

@@ -29,6 +29,7 @@ public static class CommandServices {
         services.AddSingleton(endpoints);
         services.AddSingleton(clock);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
+        services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
 
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.

@@ -81,7 +81,7 @@ public class PermissionRequestRecoveryTests : IDisposable {
         _containers.Add(sp);
 
         // The rendered agent's route: its prompt is answered through the daemon, not the seam.
-        return new(Config.Root, profiles, new HostedAgent(null, IsRendered: true, DaemonBridge.None), sp.GetRequiredService<ICapacitorHttpClient>(), new WatcherManager(Config.Root, profiles, sp.GetRequiredService<ICapacitorHttpClient>()));
+        return new(Config.Root, profiles, new HostedAgent(null, IsRendered: true, DaemonBridge.None), sp.GetRequiredService<ICapacitorHttpClient>(), TestWatchers.For(Config.Root, profiles, sp.GetRequiredService<ICapacitorHttpClient>()));
     }
 
     readonly List<ServiceProvider> _containers = [];

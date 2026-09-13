@@ -60,7 +60,7 @@ public class InlineDrainTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     WatcherManager? _watchers;
-    WatcherManager  Watchers => _watchers ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
+    WatcherManager  Watchers => _watchers ??= TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
 
     readonly WireMockServer _server = WireMockServer.Start();
 

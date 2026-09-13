@@ -10,7 +10,8 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli;
 
-public sealed partial class WatcherManager(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+public sealed partial class WatcherManager(
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, IProcessStarter starter) {
     // The one URL this process resolved. No member takes one: a watcher spawned against a different
     // server than the hook that spawned it would stream a session nothing on this side can see.
     // Nullable because an offline invocation resolves none — the IsPostable guards refuse that.
@@ -56,23 +57,6 @@ public sealed partial class WatcherManager(ConfigRoot config, ProfileContext pro
     /// anything. Always null in production.
     /// </summary>
     internal static Func<string, Task>? SpawnOverrideForTesting;
-
-    /// <summary>
-    /// Test seam for the ACTUAL <c>Process.Start</c> call inside <see cref="SpawnWatcher"/>,
-    /// <see cref="SpawnCopilotFinalizeDrain"/> and <c>ClaudeSessionEndHandoff.TrySpawn</c>. Distinct from <see cref="SpawnOverrideForTesting"/>,
-    /// which only <c>SpawnForKeyAsync</c> consults and so cannot observe those methods at all.
-    ///
-    /// <para>Needed because both call static <c>Process.Start</c> inside a catch-all, and the finalize
-    /// drain writes no marker — so "no child was left behind" is unfalsifiable: delete the URL guard
-    /// and the start merely throws or returns null in a test environment, leaving every observable
-    /// effect identical. Asserting zero invocations here is the only proof the guard ran.</para>
-    ///
-    /// <para>Always null in production.</para>
-    /// </summary>
-    internal static Func<ProcessStartInfo, Process?>? ProcessStarterForTesting;
-
-    internal static Process? StartProcess(ProcessStartInfo psi) =>
-        ProcessStarterForTesting is { } fake ? fake(psi) : Process.Start(psi);
 
     internal static string BuildSpawnArgs(
             string  key,
@@ -161,7 +145,7 @@ public sealed partial class WatcherManager(ConfigRoot config, ProfileContext pro
             // subagent hooks and orphaning the watcher.
             ProcessHelpers.PreventInheritedHandles();
 
-            var process = StartProcess(psi);
+            var process = starter.Start(psi);
 
             if (process is null) {
                 await Console.Error.WriteLineAsync($"Failed to spawn watcher for {key}");
@@ -517,7 +501,7 @@ public sealed partial class WatcherManager(ConfigRoot config, ProfileContext pro
             // same pipe-leak hazard as the watcher spawn above.
             ProcessHelpers.PreventInheritedHandles();
 
-            var process = StartProcess(psi);
+            var process = starter.Start(psi);
 
             if (process is null) {
                 Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}");
@@ -578,7 +562,7 @@ public sealed partial class WatcherManager(ConfigRoot config, ProfileContext pro
             // same pipe-leak hazard as the spawns above.
             ProcessHelpers.PreventInheritedHandles();
 
-            var process = StartProcess(psi);
+            var process = starter.Start(psi);
 
             if (process is null) {
                 Console.Error.WriteLine($"Failed to spawn copilot finalize drain for {sessionId}");
