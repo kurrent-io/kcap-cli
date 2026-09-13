@@ -49,11 +49,19 @@ input frame, and a few daemon rules the local lane and the fail-closed contract 
    the worktree is the one place their file tools are sure to read. For a **write-contained**
    runtime — Codex under its seatbelt or landlock sandbox — it is an escalation: the sandbox stops
    the agent writing outside its cwd, and a steered daemon write would do it for the agent. So
-   each runtime factory declares an `AttachmentPlacement`: `Worktree` (the default, today's
-   behaviour, relative path in the trailer) or `DaemonStore` (Codex: a per-agent directory under
-   the daemon's state dir, outside any cwd, absolute path in the trailer, readable under both
-   Codex sandboxes). Protected kinds (reviewers, flow participants) are refused input before any
-   of this. Rejected: the daemon store for every vendor (regresses the web path for a
+   each runtime factory resolves an `AttachmentPlacement` **per launch, from the launch
+   context**: `Worktree` (the default, today's behaviour, relative path in the trailer) or
+   `DaemonStore` (a per-agent directory under the daemon's state dir, outside any cwd, absolute
+   path in the trailer). The question the factory answers is "can this process be running,
+   write-contained, while a fetch for it happens?" — because a steered write needs a running
+   agent. Today that is true of exactly one case, a default-kind Codex launch, so Codex resolves
+   `DaemonStore` (readable under both Codex sandboxes) and every other factory resolves
+   `Worktree`. The sandbox-exec Copilot review context is write-contained too, but a protected
+   kind refuses every follow-up, so its only fetch is the launch fetch, which precedes the
+   process: `Worktree` is safe there and stays inside its read allowlist. A `Worktree` placement
+   on a **borrowed cwd** — a local in-place launch — is refused for follow-ups and skipped at
+   launch, as the launch path already does: the user's own checkout is never written to.
+   Rejected: the daemon store for every vendor (regresses the web path for a
    workspace-confined file tool, which today reads `.attached/` and would read nothing); no-follow
    check-then-create over a pathname (racy by construction, and unnecessary once the contained
    runtime is elsewhere); a native `openat`/`NtCreateFile` shim (correct, and a platform surface
@@ -62,11 +70,13 @@ input frame, and a few daemon rules the local lane and the fail-closed contract 
    silently dropped.** Today both daemon paths are best-effort: a missing id logs a warning and
    the text goes out without it, and files already fetched stay. A user who attached a file meant
    the file, and text without it changes meaning. A fetch failure (404, oversize, IO) is a
-   `delivery_failed` drop naming the id on both callers, a launch whose attachments cannot be
-   fetched fails with `attachment_unavailable`, and a batch is published only whole: the files
-   are fetched into a staging directory and moved into place after the last one lands, or the
-   staging directory is removed. This changes the web path as well, deliberately: the drop is
-   reported through `ReportInputDroppedAsync`, which the web already renders.
+   `delivery_failed` drop on both callers — the local ack carries the id and the error, the
+   server lane carries the reason alone, because its hub method has no detail field and this
+   spec changes no server wire, so the web sees the generic rejection it renders today and the
+   daemon log names the id — and a launch whose attachments cannot be fetched fails with
+   `attachment_unavailable: <id>`. A batch is one directory, published by one rename after the
+   last file lands and deleted on every refusal between the fetch and the runtime's write, so a
+   refused send leaves no file behind. This changes the web path as well, deliberately.
 6. **Delivery to an older daemon fails closed at the byte level on the chat lane; the launch lane
    is gated on what the app can see, and its one gap is named.** A chat send with ids uses a new
    frame type, `SendTextWithAttachments`, which an older daemon's codec rejects before routing —
@@ -137,8 +147,9 @@ one intake and cleared by the next edit or intake. One line per intake: the acce
 staged and the refused ones are named — "`report.zip` is over 10 MB", "`Docs` is a folder", "only
 10 files per message — `c.png`, `d.png` not added" — joined with "; " when several. Channel
 refusals: "attachments need the daemon updated" (Chat, no `input/2`; Home, the selected machine's
-daemon is older), "sign in to attach files". When the "+" is disabled its tooltip carries the
-same text. Nothing toasts.
+daemon is older), "attachments aren't available for an in-place session" (Chat, the agent runs in
+a borrowed cwd), "sign in to attach files". When the "+" is disabled its tooltip carries the same
+text. Nothing toasts.
 
 While sending, the hint reads "Uploading 2 files…" then "Sending…" (Chat) or the Start button
 is disabled with "Uploading…" (Home). On success the sent text and the sent chips clear; anything
@@ -162,12 +173,19 @@ public sealed class AttachmentTray : ReactiveObject {
     public IReadOnlyList<IntakeRefusal> AddAll(IReadOnlyList<StagedAttachment> files);
     public void Remove(StagedAttachment file);
     public IReadOnlyList<StagedAttachment> Snapshot();
-    public bool ContentEquals(IReadOnlyList<StagedAttachment> snapshot);
+    /// Removes exactly the snapshot's entries still present (by identity); anything added since
+    /// stays, anything the user removed meanwhile is simply absent.
+    public void RemoveAll(IReadOnlyList<StagedAttachment> snapshot);
     public void Restore(IReadOnlyList<StagedAttachment> snapshot);   // replaces the contents
     public void Clear();
 }
 
-public sealed record StagedAttachment(string FileName, string ContentType, ReadOnlyMemory<byte> Bytes) {
+/// Reference identity, deliberately: two pastes of the same bytes are two chips, and a send
+/// clears the chips it sent, not every chip that looks like them.
+public sealed class StagedAttachment(string fileName, string contentType, ReadOnlyMemory<byte> bytes) {
+    public string FileName { get; } = fileName;
+    public string ContentType { get; } = contentType;
+    public ReadOnlyMemory<byte> Bytes { get; } = bytes;
     public string SizeLabel { get; }
     public bool IsImage { get; }   // ContentType starts with "image/"
 }
@@ -290,8 +308,9 @@ public abstract bool CanAttach { get; }
 public abstract string? AttachHint { get; }
 ```
 
-- `LocalFrameChatInput`: `CanAttach` iff `Availability == Ready` and the daemon advertises
-  `input/2`; `AttachHint` names whichever fails. `SendAsync` with ids is one
+- `LocalFrameChatInput`: `CanAttach` iff `Availability == Ready`, the daemon advertises
+  `input/2`, and `Dto.WorkLocation` is the owned worktree (§4, Placement); `AttachHint` names
+  whichever fails, in that order. `SendAsync` with ids is one
   `SendTextWithAttachments` exchange through `ILocalControlOps.SendTextWithAttachmentsAsync`;
   without ids it is today's `SendTextAsync`. A refused ack maps `attachments_refused` to its
   `Error` text, like `delivery_failed`.
@@ -314,8 +333,9 @@ public abstract string? AttachHint { get; }
    uploader with the lifetime token. `Unauthorized` → hint "sign in to attach files";
    `Rejected`/`Unreachable` → hint with the reason. Any failure keeps text and chips and stops.
 4. `_input.SendAsync(text, ids, ct)`. `Accepted` clears the text (existing rule: only if the
-   snapshot is still the draft) **and clears the tray iff `ContentEquals(snapshot)`** — a file
-   added during the round trip stays. `Rejected` and `Unconfirmed` keep both.
+   snapshot is still the draft) **and removes exactly the sent chips** (`RemoveAll(snapshot)`) —
+   a file added during the round trip stays, and only it, so the next send carries only what
+   was not yet sent. `Rejected` and `Unconfirmed` keep everything.
 
 `canSend` adds `!Uploading`. `QueuedChatMessage.Matches` accepts a transcript text that equals the
 sent text, or equals it followed by the daemon's trailer (`AttachmentTrailer.Prefix` from Core,
@@ -349,8 +369,8 @@ checks are the boundary, as they are today for ownership.
 
 **The composer clears only what was sent.** On `Started`, `Goal` is cleared iff its edit count
 still equals the draft's — the goal box stays editable during the upload and the hub call, and a
-newer draft is the user's — and the tray is cleared iff `ContentEquals(draft.Files)`; otherwise
-each keeps its newer contents. This is the rule Chat already applies. An accepted launch whose
+newer draft is the user's — and the tray drops exactly the sent chips (`RemoveAll(draft.Files)`),
+keeping any added meanwhile. This is the rule Chat applies. An accepted launch whose
 returned id does not normalise (`UnusableIdMessage` today) cannot be correlated, so its draft is
 not retained; the message gains " — re-attach the files if it did not start".
 
@@ -465,21 +485,35 @@ design leans on.
 internal enum AttachmentPlacement { Worktree, DaemonStore }
 ```
 
-`IHostedAgentRuntimeFactory.AttachmentPlacement` — `Worktree` for every factory except Codex,
-which declares `DaemonStore` because its runtime is write-contained by an OS sandbox (decision
-4). The value is copied onto `AgentInstance` at launch so `DeliverInputAsync` reads it from the
-agent, and the launch path reads it from the factory it is about to use. A runtime that ever
-gains an OS write sandbox changes its one declaration and nothing else.
+`IHostedAgentRuntimeFactory.ResolveAttachmentPlacement(RuntimeStartContext ctx)` — the factory
+answers for the launch it is about to make (decision 4). Today's answers: Codex → `DaemonStore`
+for a default-kind launch, `Worktree` for a review-flow one (a protected kind; its only fetch
+precedes the process); every other factory → `Worktree`, the sandbox-exec Copilot review context
+included, for the same reason. The resolved value is recorded on `AgentInstance` at launch so
+`DeliverInputAsync` reads it from the agent, and the launch path uses the value it just resolved.
+A runtime that gains an OS write sandbox for a kind that accepts follow-ups changes its one
+answer and nothing else.
 
 - `Worktree`: `<agent cwd>/.attached/` — created if absent with the `.gitignore` it has today;
-  trailer paths relative (`.attached/x.png`). This is today's location and today's contract for
-  every file tool that confines itself to the workspace.
+  trailer paths relative (`.attached/<batch>/x.png`). This is today's location and today's
+  contract for every file tool that confines itself to the workspace. **Refused on a borrowed
+  cwd**: `DeliverInputAsync` drops with `DeliveryFailed` "attachments need a daemon-owned
+  worktree" before any fetch when `agent.Work == BorrowedCwd` (the local handler surfaces it as
+  `attachments_refused`), and the launch path keeps its `OwnedWorktree` guard. A local in-place
+  session (`kcap agent start` without a worktree) is exactly this case.
 - `DaemonStore`: `<DaemonStore.StateDirectory(config.Name)>/attachments/<AgentFileNames.For(agentId)>/`
-  — created on first fetch; trailer paths absolute. Two daemons never collide, and no agent's
-  cwd contains it. Removed in `CleanupAgentAsync` beside the worktree removal and on every
-  launch-failure path that removes the worktree, through one `AttachmentStore.Remove(agentId)`
-  (`DeleteTreeNoFollow`, absent is fine); a startup sweep removes directories whose agent has no
-  live PID record, on the liveness predicate the journal sweep uses.
+  — created on first fetch; trailer paths absolute; allowed on any work location, since nothing is
+  written under the cwd. Two daemons never collide, and no agent's cwd contains it. Removed in
+  `CleanupAgentAsync` beside the worktree removal and on every launch-failure path that removes
+  the worktree, through one `AttachmentStore.Remove(agentId)` (`DeleteTreeNoFollow`, absent is
+  fine); a startup sweep removes directories whose agent has no live PID record, on the liveness
+  predicate the journal sweep uses.
+
+The app mirrors the borrowed-cwd rule conservatively: `CanAttach` in Chat also requires the status
+dto's `work_location` to be the owned worktree, whatever the vendor, hinted "attachments aren't
+available for an in-place session" — the app does not know a vendor's placement, and an in-place
+Codex session losing the affordance costs less than the app having to learn the daemon's table.
+The daemon's rule is the precise one and the one that is enforced.
 
 The `.attached/` exclusions and the reserved-path check in `WorktreeManager` are unchanged and
 still load-bearing for the `Worktree` placement.
@@ -487,7 +521,14 @@ still load-bearing for the `Worktree` placement.
 ### Fetching: `DownloadAttachmentsAsync`
 
 ```csharp
-sealed record AttachmentFetch(IReadOnlyList<string> Paths, string? FailedId, string? Error);
+/// A published batch: the paths for the trailer, and Rollback() to delete the whole batch
+/// directory if the delivery is refused after the fetch. Disposing an unpublished batch deletes
+/// its staging directory.
+sealed class AttachmentBatch : IDisposable {
+    public IReadOnlyList<string> Paths { get; }   // in the placement's form
+    public void Rollback();
+}
+sealed record AttachmentFetch(AttachmentBatch? Batch, string? FailedId, string? Error);
 ```
 
 Every caller — the local frame handler, the server-origin `HandleSendInput` and the launch path —
@@ -496,16 +537,22 @@ the lane's failure (`attachments_refused` on the local ack, `DeliveryFailed` for
 caller, `attachments_refused` as the launch failure), so no id that is not a Guid-N is ever
 interpolated into `/api/attachments/{id}`, and no caller can request more than ten fetches.
 
-**A batch is published whole or not at all.** The files are fetched into a staging directory
-beside the destination — `<destination>/.pending-<Guid:N>/` — and moved into the destination one
-by one only after the last id has landed, each under the unique-name helper with
-`FileMode.CreateNew` semantics (a move never replaces an existing file); the staging directory is
-then removed. On any failure the staging directory is removed with everything in it, so a failed
-send leaves no new file where the agent looks for attachments. A same-user process that lists the
-staging directory during the fetch can see files arriving — nothing hides bytes from a process
-running as the same user (decision 11) — but nothing remains once the send has been refused.
-Staging directories left by a crash are removed by the next fetch into the same destination and,
-for `DaemonStore`, by the startup sweep.
+**A batch is one directory, published by one rename.** Each fetch mints a batch id (`Guid:N`),
+writes every file into `<destination>/.pending-<batch>/` (file names deduplicated within the batch
+by the unique-name helper, each created with `FileMode.CreateNew`), and after the last id has
+landed renames that directory to `<destination>/<batch>/` — a single same-filesystem rename, so
+the agent sees the whole batch or none of it, and two batches can never collide or leave a
+duplicate behind on retry. Trailer paths are `<destination>/<batch>/<file>`. On a fetch failure
+the staging directory is deleted with everything in it. **The batch stays revocable until the
+runtime's write commits**: `DeliverInputAsync` holds the published `AttachmentBatch` and calls
+`Rollback()` — which deletes the batch directory — on every exit between the fetch and a
+completed `SendUserInputAsync`: the late reap-claim check, `InputNotAdmittedException`, a thrown
+write, or any other refusal. Only a completed write keeps the batch. So a refused send leaves no
+new file where the agent looks for attachments, and a retry fetches a fresh batch. A same-user
+process that lists the staging directory during the fetch can see files arriving — nothing hides
+bytes from a process running as the same user (decision 11) — but nothing remains once the send
+has been refused. `.pending-*` directories left by a crash are removed by the next fetch into the
+same destination and, for `DaemonStore`, by the startup sweep.
 
 Per id, in order: `GetAsync(url, HttpCompletionOption.ResponseHeadersRead)` so the body is never
 buffered by the client; the response is disposed with the loop iteration. A non-success status, a
@@ -526,17 +573,22 @@ refusal is `attachments_refused` with its text. Then `DeliverInputAsync(agent, t
 
 ### `DeliverInputAsync`
 
-Runs `Validate` first for the server caller's sake (the local handler already did). A failed
-fetch is `InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed,
-$"attachment {id} unavailable: {error}")`. Both callers already route that reason — the server
-caller through `ReportInputDroppedAsync`, the local one into the ack. The message is `text`
-alone, or `text + "\n\n" + AttachmentTrailer.For(paths)`.
+Runs `Validate` first for the server caller's sake (the local handler already did), then the
+placement rule (a `Worktree` placement on a borrowed cwd is `DeliveryFailed` "attachments need a
+daemon-owned worktree", no fetch). A failed fetch is `InputDeliveryOutcome.Drop(
+SendInputDropReason.DeliveryFailed, $"attachment {id} unavailable: {error}")`. Both callers route
+the reason: the local ack carries `Error` verbatim; the server caller's `ReportInputDroppedAsync`
+carries only the reason token, its hub method has no detail argument, and this spec adds none —
+the web renders its generic `delivery_failed` and the daemon logs the id and error at Warning.
+The message is `text` alone, or `text + "\n\n" + AttachmentTrailer.For(batch.Paths)`; the batch
+is rolled back on every refusal after the fetch (above).
 
 ### Launch
 
 The launch path's fetch keeps its place and its `OwnedWorktree` guard for the `Worktree`
 placement (a borrowed cwd is never written to; `DaemonStore` needs no guard, and hub launches are
-owned anyway) and stops being best-effort: a `Validate` refusal or a failed fetch throws, the
+owned anyway); the batch needs no rollback there because a failed launch removes the worktree or
+the store directory whole. It stops being best-effort: a `Validate` refusal or a failed fetch throws, the
 existing failure path removes the worktree (and the store directory, when the placement made
 one), and the server sees `LaunchFailed` with `attachments_refused: …` or
 `attachment_unavailable: <id>`. No launcher argv changes.
@@ -581,7 +633,7 @@ unchanged.
 | new | downgraded between the app's gate and the server's dispatch | any | the one accepted gap (decision 6): the old daemon launches best-effort |
 | new | restarted to an old build between hello and a chat send | any | `SendTextWithAttachments` is undecodable there; the connection closes; the composer shows "delivery unconfirmed"; nothing delivered |
 | old | new | any | old app sends `SendText` only; text-only as today |
-| web (any) | new | any | same locations as today except Codex, whose files move to the daemon store; a missing attachment now fails the send visibly and leaves no partial batch |
+| web (any) | new | any | same locations as today except default-kind Codex, whose files move to the daemon store, and one directory per batch; a missing attachment now fails the send with the generic `delivery_failed` the web already renders (the id is in the daemon log) and leaves no partial batch; an in-place non-Codex agent is refused instead of getting `.attached/` in the user's checkout |
 | new | any | old (no V2 attachments) | V2 has carried `attachment_ids` since hosted agents shipped; not a live case |
 | new | new | temp store id expired (>10 min between upload and fetch) | fetch 404 → chat send refused with the id named, draft kept; launch failed, draft restored if still within retention and the target unchanged, else "re-attach" |
 
@@ -593,7 +645,8 @@ unchanged.
 - **Integrity of placement** (decision 4): a write-contained runtime's files land outside every
   cwd, where the sandbox that contains it also stops it steering the daemon's write. An
   uncontained runtime keeps the in-worktree directory, where a steered write would give it
-  nothing it lacks. Files never land in a borrowed cwd (the existing guard).
+  nothing it lacks. A `Worktree` placement never writes into a borrowed cwd: refused for
+  follow-ups, skipped at launch.
 - **No confidentiality between same-user agents** (decision 11), the same as for worktrees
   today. The trailer's absolute path under `DaemonStore` names the daemon's state directory in
   the prompt and so in the transcript; transcripts already carry absolute worktree paths in every
@@ -628,23 +681,31 @@ unchanged.
   `DeliverInputAsync`. The same over-count, malformed and duplicate lists through
   `HandleSendInput` (server caller) and through the launch command are `DeliveryFailed` drops and
   a failed launch respectively, with no HTTP call made.
-- Placement: the Codex factory declares `DaemonStore`, every other factory `Worktree`; the
-  agent instance carries the factory's value; a `Worktree` fetch writes under `<cwd>/.attached/`
-  with the `.gitignore` and relative trailer paths; a `DaemonStore` fetch writes under the hashed
-  state-dir directory with absolute trailer paths. `AttachmentStore.Remove` deletes the tree
+- Placement: the Codex factory resolves `DaemonStore` for a default-kind context and `Worktree`
+  for a review-flow one; every other factory resolves `Worktree`, the sandbox-exec Copilot review
+  context included; the agent instance carries the resolved value; a `Worktree` fetch writes
+  under `<cwd>/.attached/<batch>/` with the `.gitignore` and relative trailer paths; a
+  `DaemonStore` fetch writes under the hashed state-dir directory with absolute trailer paths.
+  Borrowed cwd: a `Worktree`-placement agent on `BorrowedCwd` is refused before any HTTP call —
+  `attachments_refused` on the local frame, `DeliveryFailed` for the server caller — while a
+  `DaemonStore` agent on `BorrowedCwd` is served. `AttachmentStore.Remove` deletes the tree
   without following a link planted inside it; the startup sweep deletes only directories whose
   agent is not live, and stale `.pending-*` directories.
-- `DownloadAttachmentsAsync` against WireMock: success stages, then publishes every file and
-  removes the staging directory; the request uses `ResponseHeadersRead`; a 404, a
-  `Content-Length` over the cap, and a chunked over-cap body with no `Content-Length` each end
-  the fetch naming the id, and the destination holds **no new file** afterwards (the earlier
-  successes of that batch included) while files from an earlier successful batch are untouched;
-  the chunked case is shown (through a counting handler) to stop reading at
-  `MaxAttachmentBytes + 1`; a `Content-Disposition` that reduces to nothing is refused; a
-  repeated file name gets the next unique name; a stale `.pending-*` directory from a crash is
-  removed by the next fetch.
+- `DownloadAttachmentsAsync` against WireMock: success stages every file under `.pending-<batch>`
+  and publishes by one rename to `<batch>/`, leaving no `.pending-*`; the request uses
+  `ResponseHeadersRead`; a 404, a `Content-Length` over the cap, and a chunked over-cap body with
+  no `Content-Length` each end the fetch naming the id, and the destination holds **no new file
+  or directory** afterwards while an earlier batch is untouched; the chunked case is shown
+  (through a counting handler) to stop reading at `MaxAttachmentBytes + 1`; a
+  `Content-Disposition` that reduces to nothing is refused; two files with one name in a batch
+  get distinct names; a stale `.pending-*` directory from a crash is removed by the next fetch;
+  `AttachmentBatch.Rollback` deletes the published batch directory and nothing else.
 - `DeliverInputAsync`: a failed fetch is a `DeliveryFailed` drop with the id in the error, and the
-  runtime receives nothing; a successful fetch delivers `text + "\n\n" + trailer`.
+  runtime receives nothing; a successful fetch delivers `text + "\n\n" + trailer`; a late
+  reap-claim refusal after the fetch, an `InputNotAdmittedException` from the runtime, and a
+  thrown runtime write each leave **no batch directory** behind; a completed write leaves it in
+  place; the server caller's rejection carries the `delivery_failed` reason token and nothing
+  else, and the id appears in the log.
 - `PtyHostedAgentRuntime`: a paste is followed by one CR no earlier than 150 ms later
   (`FakeTimeProvider`); raw input and special keys issued before, during and after
   `SendUserInputAsync` land entirely before the `ESC[200~` or entirely after the CR, with every
@@ -660,7 +721,9 @@ unchanged.
 
 **App** (`Capacitor.App.Tests.Unit`, `[NotInParallel("AvaloniaSession")]` where a VM or view is built)
 - `AttachmentTray`: `AddAll` refuses an oversize file and stages up to the cap, naming the rest;
-  dedups names; `Snapshot` is a copy; `ContentEquals`; `Restore` replaces; `Clear`.
+  dedups names; `Snapshot` is a copy; `RemoveAll` removes exactly the snapshot's entries by
+  identity — after an add, a remove, and an add plus a remove during a send the tray holds
+  precisely the unsent chips; `Restore` replaces; `Clear`.
 - `AttachmentIntake.Classify`: files beat text beats bitmap; nothing → `Nothing`.
   `ReadFilesAsync`: a folder, an oversize file (by reported size, and by stream length with no
   size), and an unreadable file are each refused with their wording while valid siblings are
@@ -676,18 +739,21 @@ unchanged.
   body; 401 → `Unauthorized`; refused connection → `Unreachable`; `Ids` empty on every failure.
 - `ChatTabViewModel`: a send with attachments uploads first and passes the ids to the channel;
   an upload failure sends nothing and keeps text and chips; `CanAttach` false refuses before the
-  upload; an accepted send clears text and chips together; a chip added mid-flight survives;
-  `Matches` acknowledges a transcript user turn carrying the trailer.
+  upload; an accepted send clears the text and exactly the sent chips — a chip added mid-flight
+  survives alone, and a second send carries only it; `Matches` acknowledges a transcript user
+  turn carrying the trailer.
 - `TerminalChatInput`: no ids → `TrySendText`, synchronous, unchanged; ids → one frame-24
-  exchange with `CanAcceptText` false meanwhile, cleared on `Ok`; `CanAttach` follows `input/2`.
-  `LocalFrameChatInput`: `attachments_refused` maps to the hint.
+  exchange with `CanAcceptText` false meanwhile, cleared on `Ok`; `CanAttach` follows `input/2`
+  and `work_location` (owned → yes; borrowed or null → no, with its hint). `LocalFrameChatInput`:
+  the same `CanAttach` rule; `attachments_refused` maps to the hint.
 - `HomeViewModel`: `CanAttach` follows sign-in, `input/2` for the local machine and the version
   gate for a remote one (below, equal, above, unparsable, missing); the launch is built from the
   captured draft — a machine, repo or vendor changed during the upload does not reach the request,
   and the post-upload gate runs against the draft's machine; an empty goal with files launches;
   upload failure → `StartError`, no launch; on `Started` a goal edited during the upload or the
-  hub call is kept and only an unedited one clears, a file added meanwhile is kept and only an
-  unchanged tray clears; an unusable returned id retains no draft and says so; `Started` retains
+  hub call is kept and only an unedited one clears, a file added meanwhile is the only chip left
+  and a file removed meanwhile stays gone; an unusable returned id retains no draft and says so;
+  `Started` retains
   the draft; launch A with files then launch B with files accepted, then A fails → A's real
   reason plus "re-attach", B's draft untouched; `LaunchFailed` before registration (buffered),
   after the request returned, and after the retention cutoff; a row arriving before
