@@ -280,7 +280,12 @@ public interface IAttachmentSink {
   refusing to enumerate — is logged once and reaches the sink as one refusal, "the dropped files
   could not be read" / "the file picker could not be opened"; nothing escapes an event handler
   or a command. Per-item read failures never reach this wrapper: `ReadFilesAsync` has already
-  turned them into named refusals with the siblings intact.
+  turned them into named refusals with the siblings intact. **The OS picker cannot be
+  cancelled** — `OpenFilePickerAsync` takes no token — so Pick awaits it through
+  `WaitAsync(lifetimeToken)`: on cancellation the behaviour stops waiting and returns, and the
+  picker's own task is handed a continuation that observes its eventual result or fault, logs a
+  fault once, and discards a result, so a dialog the user closes after the card has unloaded
+  neither stages anything nor leaves an unobserved exception.
 
 ### Upload: `IAttachmentUploader`
 
@@ -354,10 +359,15 @@ public abstract string? AttachHint { get; }
    a file added during the round trip stays, and only it, so the next send carries only what
    was not yet sent. `Rejected` and `Unconfirmed` keep everything.
 
-`canSend` adds `!Uploading`. `QueuedChatMessage.Matches` accepts a transcript text that equals the
-sent text, or equals it followed by the daemon's trailer (`AttachmentTrailer.Prefix` from Core,
-§3, preceded by the blank line) — otherwise a send with attachments would never be acknowledged
-and the queued banner would never clear.
+`canSend` adds `!Uploading`. `QueuedChatMessage` carries the send's attachment snapshot beside
+its text and edit count, and `Matches` accepts a transcript text that equals the sent text, or
+equals it followed by the daemon's trailer (`AttachmentTrailer.Prefix` from Core, §3, preceded by
+the blank line) — otherwise a send with attachments would never be acknowledged and the queued
+banner would never clear. **Transcript confirmation clears what the ack could not**:
+`ConfirmDelivery` already clears the sent text; it now also calls `RemoveAll` with the queued
+message's snapshot, so an `Unconfirmed` send (the ack was lost) that the transcript later proves
+delivered drops exactly its chips and nothing added since — the same identity rule as the ack
+path, so a transcript that lands before the ack and an ack that lands first produce one result.
 
 ### Launch
 
@@ -606,16 +616,26 @@ body through one private core taking `(agentId, text, string[]? attachmentIds)`.
 existing text checks and before the delivery core: an empty `attachment_ids` on this frame is
 `malformed` ("send_text carries no attachments" — the plain frame is for that); a `Validate`
 refusal is `attachments_refused` with its text; a `Worktree` placement on a borrowed cwd is
-`attachments_refused` "attachments need a daemon-owned worktree". Then
+`attachments_refused` "attachments need a daemon-owned worktree"; a text the core would read as
+a quit command for this runtime is `attachments_refused` "a quit command takes no attachments".
+(The protected-kind refusal the plain handler already makes covers this frame too.) Then
 `DeliverInputAsync(agent, text, ids)`. The core's own reasons pass through unchanged, as today,
-which is why these two are decided here: the core has no `attachments_refused` to return.
+which is why these are decided here: the core has no `attachments_refused` to return.
 
 ### `DeliverInputAsync`
 
-Runs `Validate` first for the server caller's sake (the local handler already did), then the
-placement rule (a `Worktree` placement on a borrowed cwd is `DeliveryFailed` "attachments need a
-daemon-owned worktree", no fetch — the same check the local handler made, reached only by the
-server caller). A failed fetch is `InputDeliveryOutcome.Drop(
+When ids are present, four checks run before anything else, in this order, each a
+`DeliveryFailed` drop with its text and **no fetch, no stop, no write**: `Validate`; a
+**protected kind** — `agent.Kind != LaunchKind.Default` — "attachments are not accepted by a
+review participant", because the local lane refuses all input to a protected kind but the server
+lane delivers flow rounds to reviewers as `SendInput`, and a fetch into a running write-contained
+review process is exactly what the `Worktree` placement for protected kinds assumes can never
+happen; a `Worktree` placement on a borrowed cwd, "attachments need a daemon-owned worktree";
+and a text the core would treat as a quit command for a non-PTY runtime, "a quit command takes
+no attachments" — a `/quit` with files is a contradiction the user has to resolve, not a stop
+that silently discards them (a PTY runtime receives the text verbatim, as today, files
+included). All four are reached by the server caller; the local handler has already made the
+same refusals in its own vocabulary. A failed fetch is `InputDeliveryOutcome.Drop(
 SendInputDropReason.DeliveryFailed, $"attachment {id} unavailable: {error}")`. Both callers route
 the reason: the local ack carries `Error` verbatim; the server caller's `ReportInputDroppedAsync`
 carries only the reason token, its hub method has no detail argument, and this spec adds none —
@@ -632,11 +652,20 @@ attachments need a daemon-owned worktree` rather than skipping the fetch and sta
 on the text alone. A borrowed request that the runtime materialises into an independent snapshot
 (`cmd.Borrowed` with a factory that requires one — the sandbox-exec Copilot review) resolves to
 `OwnedWorktree`, so its launch attachments are fetched into the snapshot, pre-process, inside its
-read allowlist, exactly as decision 4 intends. `DaemonStore` needs no guard. The batch needs no rollback there because a failed launch
-removes the worktree or the store directory whole. It stops being best-effort: a `Validate`
-refusal or a failed fetch throws, the existing failure path removes the worktree (and the store
-directory, when the placement made one), no process starts, and the server sees `LaunchFailed`
-with `attachments_refused: …` or `attachment_unavailable: <id>`. No launcher argv changes.
+read allowlist, exactly as decision 4 intends. `DaemonStore` needs no guard. It stops being
+best-effort: a `Validate` refusal or a failed fetch throws, the existing failure path removes the
+worktree (and the store directory, when the placement made one), no process starts, and the
+server sees `LaunchFailed` with `attachments_refused: …` or `attachment_unavailable: <id>`. No
+launcher argv changes.
+
+**One owner for the store directory across the launch.** A `DaemonStore` fetch that succeeds
+and a launch that then fails — the factory's `StartAsync` throwing, a registration or PID-record
+failure, any exit before the `AgentInstance` is in `_agents` — must not strand up to 100 MiB
+under the state dir until the next daemon restart. So the launch path holds the fetched batch in
+a scoped guard (`AttachmentStore.Lease(agentId)`, disposable) taken before the fetch and released
+only once the agent is registered; every earlier exit, thrown or returned, disposes it and
+removes the directory. The `Worktree` placement needs none: its files live in the worktree the
+failure path already removes.
 
 ### PTY input lane
 
@@ -766,8 +795,15 @@ unchanged.
   `attachments_refused`; a direct borrowed-cwd launch carrying ids with a `Worktree` placement
   fails with `attachments_refused`, starts no process and delivers no text-only prompt, while
   the same launch with an empty id list proceeds as today, and a borrowed request materialised
-  into an independent snapshot fetches into the snapshot and proceeds;
+  into an independent snapshot fetches into the snapshot and proceeds; a published
+  `DaemonStore` batch followed by a factory `StartAsync` failure, and one followed by a
+  registration failure after the process started, each leave no store directory behind;
   `CleanupAgentAsync` removes the store directory when one exists.
+- Server-origin input to a protected kind (`Review`, `ReviewFlow`) carrying ids is a
+  `DeliveryFailed` drop with no HTTP call and no filesystem write, while the same input without
+  ids is delivered as today; a quit-command text with ids to a non-PTY runtime is refused on
+  both lanes with no stop and no fetch, and the same text to a PTY runtime is delivered
+  verbatim with its trailer.
 - `LocalControlCapabilities.Current` contains `input/2`, and the routing switch handles frame 24
   (the existing pin, extended).
 
@@ -785,8 +821,10 @@ unchanged.
   cancelled token propagates; content types assigned. Drop and Pick through the behaviour: a
   drag source whose enumeration throws and a picker that throws each surface one refusal at the
   sink with nothing unobserved; an unload during either reaches the sink with nothing and
-  throws nothing. `FromBitmap` yields a
-  PNG named by the fake clock, and refuses one whose encoding runs over the cap.
+  throws nothing; a fake picker task that ignores the lifetime cancellation and completes with
+  files, or faults, after the unload stages nothing and raises no unobserved exception.
+  `FromBitmap` yields a PNG named by the fake clock, and refuses one whose encoding runs over
+  the cap.
 - `AttachmentDropPaste` with a fake `IAsyncDataTransfer`: disposed exactly once for `Files`,
   `Text`, `Bitmap`, `Nothing`, a thrown read, cancellation, and an unload mid-read; the bitmap is
   disposed after encoding; `Text` reaches the TextBox once (the re-entrancy guard); a second paste
@@ -801,7 +839,10 @@ unchanged.
   body; 401 → `Unauthorized`; refused connection → `Unreachable`; `Ids` empty on every failure.
 - `ChatTabViewModel`: a send with attachments uploads first and passes the ids to the channel;
   an upload failure sends nothing and keeps text and chips; `CanAttach` false refuses before the
-  upload; an accepted send clears the text and exactly the sent chips — a chip added mid-flight
+  upload; an `Unconfirmed` send whose trailer later appears in the transcript clears exactly its
+  chips — with a chip added meanwhile kept, a chip removed meanwhile staying gone, and a
+  transcript that lands before the ack producing the same tray as an ack that lands first;
+  an accepted send clears the text and exactly the sent chips — a chip added mid-flight
   survives alone, and a second send carries only it; `Matches` acknowledges a transcript user
   turn carrying the trailer.
 - `TerminalChatInput`: no ids → `TrySendText`, synchronous, unchanged; ids → one frame-24
