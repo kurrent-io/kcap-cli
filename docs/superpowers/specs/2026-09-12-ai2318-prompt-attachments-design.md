@@ -49,14 +49,15 @@ input frame, and a few daemon rules the local lane and the fail-closed contract 
    the worktree is the one place their file tools are sure to read. For a **write-contained**
    runtime — Codex under its seatbelt or landlock sandbox — it is an escalation: the sandbox stops
    the agent writing outside its cwd, and a steered daemon write would do it for the agent. So
-   each runtime factory resolves an `AttachmentPlacement` **per launch, from the launch
-   context**: `Worktree` (the default, today's behaviour, relative path in the trailer) or
-   `DaemonStore` (a per-agent directory under the daemon's state dir, outside any cwd, absolute
-   path in the trailer). The question the factory answers is "can this process be running,
-   write-contained, while a fetch for it happens?" — because a steered write needs a running
-   agent. Today that is true of exactly one case, a default-kind Codex launch, so Codex resolves
-   `DaemonStore` (readable under both Codex sandboxes) and every other factory resolves
-   `Worktree`. The sandbox-exec Copilot review context is write-contained too, but a protected
+   each vendor's runtime factory answers `AttachmentPlacementFor(LaunchKind)` — vendor policy
+   under `Harness/<Vendor>/`, as the layout requires — with `Worktree` (the default, today's
+   behaviour, relative path in the trailer) or `DaemonStore` (a per-agent directory under the
+   daemon's state dir, outside any cwd, absolute path in the trailer). The question the factory
+   answers is "can this process be running, write-contained, while a fetch for it happens?" —
+   because a steered write needs a running agent. Today that is true of exactly one case, a
+   default-kind Codex launch, so the Codex factory answers `DaemonStore` for `LaunchKind.Default`
+   (readable under both Codex sandboxes) and `Worktree` otherwise, and every other factory keeps
+   the interface's default, `Worktree`. The sandbox-exec Copilot review context is write-contained too, but a protected
    kind refuses every follow-up, so its only fetch is the launch fetch, which precedes the
    process: `Worktree` is safe there and stays inside its read allowlist. A `Worktree` placement
    on a **borrowed cwd** — an in-place launch, local or a borrowed server launch — is refused:
@@ -225,8 +226,10 @@ size over `MaxAttachmentBytes` is refused ("is over 10 MB") without being opened
 read through `OpenReadAsync` into a buffer capped at `MaxAttachmentBytes + 1` bytes, and refused
 with the same wording if the stream runs past the cap (a provider that reports no size). Any
 exception from one item's property read or open — `IOException`, `UnauthorizedAccessException`,
-whatever a storage provider throws — refuses that item ("could not be read") and the walk
-continues; only `OperationCanceledException` for the caller's token propagates.
+whatever a storage provider throws, from the property lookup, the open, **or any read of the
+opened stream** — refuses that item ("could not be read") and the walk continues with the next
+item; only `OperationCanceledException` for the caller's token propagates. The per-item boundary
+is the whole of that item's work, so a stream that fails halfway never costs a sibling.
 `FromBitmap` encodes PNG with `Bitmap.Save` into a capped buffer and refuses the result the same
 way when it runs over; the caller disposes the `Bitmap` afterwards. Every result carries both
 lists; the caller stages `Accepted` through `AddAll` and shows every refusal — intake's and the
@@ -271,6 +274,13 @@ public interface IAttachmentSink {
 - **Pick**: the "+" button → `OpenFilePickerAsync(new FilePickerOpenOptions { AllowMultiple = true })`
   → `ReadFilesAsync` → sink. The button's `IsEnabled` follows `CanAttach`, its tooltip
   `AttachHint`.
+- **The same containment on all three entry points.** Drop and Pick run their async work under
+  the same wrapper as Paste: the behaviour's lifetime token (the card unloading) cancels it and
+  the cancellation is swallowed; any other exception — the picker failing to open, the drag data
+  refusing to enumerate — is logged once and reaches the sink as one refusal, "the dropped files
+  could not be read" / "the file picker could not be opened"; nothing escapes an event handler
+  or a command. Per-item read failures never reach this wrapper: `ReadFilesAsync` has already
+  turned them into named refusals with the siblings intact.
 
 ### Upload: `IAttachmentUploader`
 
@@ -363,8 +373,9 @@ Changing the machine while files are staged does not drop them; if the new machi
 capable, Start is disabled with the hint until the chips are removed or the machine changed back.
 
 **The launch is built from one snapshot.** `StartAsync` first captures a `LaunchDraft` — machine,
-repo, vendor, goal, model, effort, permission mode, the goal's edit count, and the tray's
-`Snapshot()` — and every later step reads the draft, never the live properties. A selection the
+repo, vendor, goal, model, effort, permission mode, the goal's edit count, the tray's
+`Snapshot()` and the tray's generation at that moment — and every later step reads the draft,
+never the live properties. A selection the
 user changes while the upload is in flight changes the next launch, not this one. After the
 upload (if any) the remote ownership check and the capability gate run again **against the
 draft's machine**, and the request is built from the draft. Order: capture → gate (`CanAttach` for
@@ -378,11 +389,13 @@ checks are the boundary, as they are today for ownership.
 still equals the draft's — the goal box stays editable during the upload and the hub call, and a
 newer draft is the user's — and the tray drops exactly the sent chips (`RemoveAll(draft.Files)`),
 keeping any added meanwhile. This is the rule Chat applies. The retained draft records what
-this step did: `ClearedGoal` (the goal was cleared here, and the goal's edit count after
-clearing) and `ClearedTray` (every sent chip was still present and was removed here, and the
-tray's mutation generation after removing) — the tray gains a generation counter that every
-`AddAll`, `Remove`, `RemoveAll`, `Restore` and `Clear` advances, the goal already has its edit
-count. An accepted launch whose returned id does not normalise (`UnusableIdMessage` today)
+this step did: `ClearedGoal` (the goal's edit count still equalled the draft's, so it was cleared
+here; records the count after clearing) and `ClearedTray` (the tray's generation still equalled
+the draft's — no add, remove, or add-then-remove since capture — and `RemoveAll` left it empty;
+records the generation after removing). The tray gains a generation counter that every
+`AddAll`, `Remove`, `RemoveAll`, `Restore` and `Clear` advances (a `RemoveAll` that removes
+nothing does not); the goal already has its edit count. A tray touched between capture and
+acceptance, even one that ends up holding exactly the sent chips again, is not `ClearedTray`. An accepted launch whose returned id does not normalise (`UnusableIdMessage` today)
 cannot be correlated, so its draft is not retained; the message gains " — re-attach the files if
 it did not start".
 
@@ -501,19 +514,18 @@ design leans on.
 internal enum AttachmentPlacement { Worktree, DaemonStore }
 ```
 
-`AttachmentPlacements.For(string vendor, LaunchKind kind)` — one static table in the daemon,
-called by **both** launch paths: the server-origin `HandleLaunchAgentCore` before it fetches, and
-`HandleLocalSpawnAsync`, which builds its `PtyHostedAgentRuntime` and `AgentInstance` directly and
-never sees a `RuntimeStartContext`, so a factory method would leave the desktop's own local PTY
-sessions on the enum's default. The question the table answers is decision 4's: can this process
-be running, write-contained, while a fetch for it happens? Today's rows: `codex` with
-`LaunchKind.Default` → `DaemonStore`; every other `(vendor, kind)` → `Worktree` — Codex PR review
-and review-flow launches included (protected kinds refuse every follow-up, so their only fetch
-precedes the process), and the sandbox-exec Copilot review context included, for the same reason.
-The resolved value is recorded on `AgentInstance` at construction on both paths, so
-`DeliverInputAsync` reads it from the agent, and the server launch path uses the value it just
-resolved. A runtime that gains an OS write sandbox for a kind that accepts follow-ups changes its
-one row and nothing else.
+`IHostedAgentRuntimeFactory.AttachmentPlacementFor(LaunchKind kind)` — a default interface
+member returning `Worktree`, overridden only by `CodexHostedAgentRuntimeFactory`, which returns
+`DaemonStore` for `LaunchKind.Default` and `Worktree` for every other kind (PR review and
+review-flow: protected kinds refuse every follow-up, so their only fetch precedes the process).
+The sandbox-exec Copilot review context stays on the default for the same reason. It takes the
+kind alone, not a `RuntimeStartContext`, so that **both** launch paths can ask it: the
+server-origin `HandleLaunchAgentCore` asks the factory it is about to start with; the local
+`HandleLocalSpawnAsync`, which builds its `PtyHostedAgentRuntime` and `AgentInstance` directly,
+looks the vendor's factory up in the registry the orchestrator already holds and asks the same
+question with `LaunchKind.Default`. The answer is recorded on `AgentInstance` at construction on
+both paths, so `DeliverInputAsync` reads it from the agent. A vendor that gains an OS write
+sandbox for a kind that accepts follow-ups overrides its one member and touches nothing shared.
 
 - `Worktree`: `<agent cwd>/.attached/` — created if absent with the `.gitignore` it has today;
   trailer paths relative (`.attached/<batch>/x.png`). This is today's location and today's
@@ -613,11 +625,14 @@ is rolled back on every refusal after the fetch (above).
 
 ### Launch
 
-The launch path's fetch keeps its place, and its `OwnedWorktree` guard becomes a refusal: a
-non-empty id list with a `Worktree` placement on a borrowed launch (`cmd.Borrowed`, which the hub
-does send for borrowed-review launches) fails the launch with `attachments_refused: attachments
-need a daemon-owned worktree` rather than skipping the fetch and starting the agent on the text
-alone. `DaemonStore` needs no guard. The batch needs no rollback there because a failed launch
+The launch path's fetch keeps its place, and its `OwnedWorktree` guard becomes a refusal keyed
+to the **resolved work location**, not the request flag: a non-empty id list with a `Worktree`
+placement and `work == WorkLocation.BorrowedCwd` fails the launch with `attachments_refused:
+attachments need a daemon-owned worktree` rather than skipping the fetch and starting the agent
+on the text alone. A borrowed request that the runtime materialises into an independent snapshot
+(`cmd.Borrowed` with a factory that requires one — the sandbox-exec Copilot review) resolves to
+`OwnedWorktree`, so its launch attachments are fetched into the snapshot, pre-process, inside its
+read allowlist, exactly as decision 4 intends. `DaemonStore` needs no guard. The batch needs no rollback there because a failed launch
 removes the worktree or the store directory whole. It stops being best-effort: a `Validate`
 refusal or a failed fetch throws, the existing failure path removes the worktree (and the store
 directory, when the placement made one), no process starts, and the server sees `LaunchFailed`
@@ -711,9 +726,9 @@ unchanged.
   `DeliverInputAsync`. The same over-count, malformed and duplicate lists through
   `HandleSendInput` (server caller) and through the launch command are `DeliveryFailed` drops and
   a failed launch respectively, with no HTTP call made.
-- Placement: the Codex factory resolves `DaemonStore` for a default-kind context and `Worktree`
-  for a review-flow one; every other factory resolves `Worktree`, the sandbox-exec Copilot review
-  context included; the agent instance carries the resolved value; a `Worktree` fetch writes
+- Placement: the Codex factory answers `DaemonStore` for `LaunchKind.Default` and `Worktree` for
+  the review and review-flow kinds; every other factory answers the interface default,
+  `Worktree`; the agent instance carries the answer on both launch paths; a `Worktree` fetch writes
   under `<cwd>/.attached/<batch>/` with the `.gitignore` and relative trailer paths; a
   `DaemonStore` fetch writes under the hashed state-dir directory with absolute trailer paths.
   Borrowed cwd: a `Worktree`-placement agent on `BorrowedCwd` is refused before any HTTP call —
@@ -748,9 +763,10 @@ unchanged.
   cannot interleave with a paste.
 - Launch: a failed fetch fails the launch with `attachment_unavailable`, removes the worktree and
   the store directory, and starts no process; a `Validate` refusal fails it with
-  `attachments_refused`; a borrowed launch (`cmd.Borrowed`) carrying ids with a `Worktree`
-  placement fails with `attachments_refused`, starts no process and delivers no text-only
-  prompt, while the same launch with an empty id list proceeds as today;
+  `attachments_refused`; a direct borrowed-cwd launch carrying ids with a `Worktree` placement
+  fails with `attachments_refused`, starts no process and delivers no text-only prompt, while
+  the same launch with an empty id list proceeds as today, and a borrowed request materialised
+  into an independent snapshot fetches into the snapshot and proceeds;
   `CleanupAgentAsync` removes the store directory when one exists.
 - `LocalControlCapabilities.Current` contains `input/2`, and the routing switch handles frame 24
   (the existing pin, extended).
@@ -763,9 +779,13 @@ unchanged.
   does not; `Restore` replaces; `Clear`.
 - `AttachmentIntake.Classify`: files beat text beats bitmap; nothing → `Nothing`.
   `ReadFilesAsync`: a folder, an oversize file (by reported size, and by stream length with no
-  size), a file whose open throws `IOException`, and one whose properties throw
-  `UnauthorizedAccessException` are each refused with their wording while valid siblings are
-  accepted, in order; a cancelled token propagates; content types assigned. `FromBitmap` yields a
+  size), a file whose open throws `IOException`, one whose properties throw
+  `UnauthorizedAccessException`, and one whose stream throws after the first read are each
+  refused with their wording while the valid sibling that follows each is accepted, in order; a
+  cancelled token propagates; content types assigned. Drop and Pick through the behaviour: a
+  drag source whose enumeration throws and a picker that throws each surface one refusal at the
+  sink with nothing unobserved; an unload during either reaches the sink with nothing and
+  throws nothing. `FromBitmap` yields a
   PNG named by the fake clock, and refuses one whose encoding runs over the cap.
 - `AttachmentDropPaste` with a fake `IAsyncDataTransfer`: disposed exactly once for `Files`,
   `Text`, `Bitmap`, `Nothing`, a thrown read, cancellation, and an unload mid-read; the bitmap is
@@ -802,7 +822,9 @@ unchanged.
   registration; the retention timer releasing a draft with no event; restore into a composer
   this launch emptied with an unchanged target; no restore into an edited composer; no restore
   when the user blanked the goal, removed every sent chip, or added and then removed a chip
-  during the request so the fields are empty but not by the launch's hand; no restore after a
+  during the request so the fields are empty but not by the launch's hand — each asserted on
+  the **delayed** `LaunchFailed`, after acceptance, not on the `Started` state alone; no restore
+  when a chip added during the request is still in the tray at failure; no restore after a
   target change — each with its message; a non-attachment failure reason with files staged keeps
   the real reason; `LaunchPayload.For` emits `attachment_ids` only when non-empty.
 - Headless smoke: the chip strip renders one chip per staged file and removing one updates it;
