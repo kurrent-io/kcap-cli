@@ -280,7 +280,10 @@ internal partial class AgentOrchestrator {
                 Work           = work,
                 McpConfigPath  = built.McpConfigPath,
                 CurrentCols    = cols,
-                CurrentRows    = rows
+                CurrentRows    = rows,
+                Placement      = _runtimeFactories.TryGetValue(vendor, out var factory)
+                    ? factory.AttachmentPlacementFor(LaunchKind.Default)
+                    : AttachmentPlacement.Worktree
             };
             PublishAgent(agent);
         } catch (Exception ex) {

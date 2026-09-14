@@ -72,11 +72,14 @@ internal static class AgentOrchestratorHarness {
         // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
         // SpawnCalls/LastCommand assertions stay valid through the runtime-selection seam.
         // extraRuntimeFactories lets a test inject a non-PTY factory (e.g. a fake "cursor" ACP
-        // factory) without disturbing every other call site of this helper.
-        IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories = launchers.Values
-            .Select(l => (IHostedAgentRuntimeFactory) new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance))
-            .Concat(extraRuntimeFactories ?? [])
-            .ToDictionary(f => f.Vendor);
+        // factory) without disturbing every other call site of this helper, and — keyed last —
+        // override a vendor's auto-derived PTY factory (e.g. Codex's own composite factory) for a
+        // test that still needs that vendor's launcher registered for the local-spawn path.
+        var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
+        foreach (var l in launchers.Values)
+            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance);
+        foreach (var f in extraRuntimeFactories ?? [])
+            runtimeFactories[f.Vendor] = f;
 
         consentGate ??= new LaunchConsentGate(
             new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance),

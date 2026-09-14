@@ -76,6 +76,10 @@ internal record AgentInstance(
     /// Null for a PTY runtime, which writes its own transcript and needs none.
     public TranscriptJournal? Journal { get; init; }
 
+    /// Where a fetched attachment lands for this agent — the runtime factory's answer for this
+    /// launch's <see cref="LaunchKind"/>, recorded once at construction.
+    public AttachmentPlacement Placement { get; init; } = AttachmentPlacement.Worktree;
+
     bool _titleComputed;
     string? _title;
     /// <summary>The status payload's display title, computed ONCE from the immutable Prompt
@@ -2437,6 +2441,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 PolicySnapshot      = policySnapshot,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,
+                Placement           = runtimeFactory.AttachmentPlacementFor(cmd.Kind),
                 Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
                 FlowRunId           = cmd.FlowRunId,
                 FlowRole            = cmd.FlowRole,
