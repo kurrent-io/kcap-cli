@@ -463,6 +463,30 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_later_transcript_row_unpacks_the_group_the_card_left() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(group.PacksWithCard).IsTrue();
+
+            File.AppendAllText(path, AssistantLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(
+                new[] { nameof(ToolGroupItem), nameof(AssistantTextItem), nameof(PendingCardItem) }, CollectionOrdering.Matching);
+            await Assert.That(group.PacksWithCard).IsFalse();
+            await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_card_after_prose_does_not_pack() {
         await RunOnUiAsync(async () => {
             var h = Claude();
