@@ -161,16 +161,21 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,12,4">
-                                    <CheckBox x:Name="AgentCheckBox" Content="{Binding Label}" IsChecked="{Binding IsSelected, Mode=TwoWay}" />
-                                    <TextBlock x:Name="AgentGlyphText" Text="{Binding Glyph}" FontWeight="Bold"
-                                               VerticalAlignment="Center" Foreground="{StaticResource KcapMutedBrush}" />
-                                    <TextBlock x:Name="AgentRowMessageText" Classes="kcapHint" Text="{Binding Message}"
-                                               TextWrapping="Wrap" VerticalAlignment="Center"
+                                <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" ColumnSpacing="8"
+                                      RowSpacing="4" Margin="0,0,12,4">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <CheckBox x:Name="AgentCheckBox" Content="{Binding Label}"
+                                                  IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                        <TextBlock x:Name="AgentGlyphText" Text="{Binding Glyph}" FontWeight="Bold"
+                                                   VerticalAlignment="Center" Foreground="{StaticResource KcapMutedBrush}" />
+                                    </StackPanel>
+                                    <Button x:Name="AgentRetryButton" Grid.Column="1" Classes="kcapChip" Content="Retry"
+                                            Command="{Binding RetryCommand}" IsVisible="{Binding Failed}"
+                                            VerticalAlignment="Center" />
+                                    <TextBlock x:Name="AgentRowMessageText" Grid.Row="1" Grid.ColumnSpan="2"
+                                               Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
                                                IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    <Button x:Name="AgentRetryButton" Classes="kcapChip" Content="Retry" Command="{Binding RetryCommand}"
-                                            IsVisible="{Binding Failed}" />
-                                </StackPanel>
+                                </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>

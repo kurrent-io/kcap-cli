@@ -664,4 +664,42 @@ public class AgentsImportTemplateTests {
         await Assert.That(result.orgHidden).IsFalse();
         await Assert.That(result.orgShown).IsTrue();
     }
+
+    /// Plugin stderr on a failed row can be arbitrarily long. Retry must stay inside the
+    /// 220-DIP wrap-panel slot rather than being pushed past it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_agent_failure_keeps_retry_inside_the_item() {
+        var (retryVisible, retryRight, itemWidth) = await AvaloniaSession.DispatchAsync(async () => {
+            var cli = new FakeKcapCli {
+                PluginInstallBehavior = (_, _) => Task.FromResult(
+                    new ProcessResult(1, "", new string('x', 400), false)),
+            };
+            var detect = new Func<CancellationToken, Task<IReadOnlySet<HarnessId>>>(
+                _ => Task.FromResult(VendorDetection.Build()));
+            var agents = new AgentsStepViewModel(cli, detect);
+            agents.Rows.First(r => r.Label == "Codex").IsSelected = true;
+            await agents.InstallCommand.Execute().ToTask();
+
+            var vm = new OnboardingViewModel([agents, new DoneStepViewModel(() => [])]);
+            await vm.PendingEnterForTesting;
+
+            var window = new OnboardingWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var retry = window.GetVisualDescendants().OfType<Button>()
+                .First(b => b.Name == "AgentRetryButton" && b.IsVisible);
+            var item = (Grid)retry.Parent!;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return (retry.IsVisible, retry.Bounds.Right, item.Bounds.Width);
+        });
+
+        await Assert.That(retryVisible).IsTrue();
+        await Assert.That(itemWidth).IsLessThanOrEqualTo(220);
+        await Assert.That(retryRight).IsLessThanOrEqualTo(itemWidth);
+    }
 }
