@@ -96,11 +96,13 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
             string                                             endpoint,
             string                                             body,
             string                                             agentTag,
-            TimeSpan?                                          authCap = null
+            TimeSpan?                                          authCap         = null,
+            Action?                                            onAuthAbandoned = null
         ) {
         // Past the cap the payload is dropped the way a lapse drops it: this path has no spool, and
         // a hook killed by its host while waiting on the refresh lock would lose it just the same.
-        var created = await BoundedAuth.CreateClientWithinAsync(clientFactory, authCap ?? AuthCap);
+        var created = await BoundedAuth.CreateClientWithinAsync(
+            clientFactory, authCap ?? AuthCap, onAuthAbandoned ?? HandOffRefresh);
 
         if (created is null) {
             return HookPostOutcome.AuthLapsed;
@@ -316,12 +318,17 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
     // refresh lock or WorkOS is faltering, and the event belongs in the spool for the drain to replay.
     internal static readonly TimeSpan AuthCap = TimeSpan.FromSeconds(3);
 
+    // A hook process ends with this invocation, so a rotation its client creation started must be
+    // finished by a process that will still be alive to persist it.
+    void HandOffRefresh() => RefreshTokenHandoff.Spawn(config);
+
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,
             string endpoint, string body, string agentTag,
             HookSpool spool, string sessionId, string route,
-            TimeSpan? authCap = null) {
-        var created = await BoundedAuth.CreateClientWithinAsync(clientFactory, authCap ?? AuthCap);
+            TimeSpan? authCap = null, Action? onAuthAbandoned = null) {
+        var created = await BoundedAuth.CreateClientWithinAsync(
+            clientFactory, authCap ?? AuthCap, onAuthAbandoned ?? HandOffRefresh);
 
         if (created is null) {
             return SpoolOrSkip(spool, sessionId, route, body, agentTag);

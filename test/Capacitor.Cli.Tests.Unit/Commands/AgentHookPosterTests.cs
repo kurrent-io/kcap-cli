@@ -158,13 +158,16 @@ public class AgentHookPosterTests : IDisposable {
     public async Task Post_reports_AuthLapsed_when_auth_outlives_its_cap() {
         _server.Given(Request.Create().WithPath("/hooks/session-end/pi").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
-        var never = new TaskCompletionSource<AuthAttempt>();
-        var sw    = System.Diagnostics.Stopwatch.StartNew();
+        var never     = new TaskCompletionSource<AuthAttempt>();
+        var sw        = System.Diagnostics.Stopwatch.StartNew();
+        var handedOff = false;
 
         var outcome = await Poster.PostAsync(
-            () => never.Task, "session-end/pi", "{}", "pi-hook", authCap: TimeSpan.FromMilliseconds(100));
+            () => never.Task, "session-end/pi", "{}", "pi-hook",
+            authCap: TimeSpan.FromMilliseconds(100), onAuthAbandoned: () => handedOff = true);
 
         await Assert.That(outcome).IsEqualTo(HookPostOutcome.AuthLapsed);
+        await Assert.That(handedOff).IsTrue();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
         await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/pi").UsingPost()).Count).IsEqualTo(0);
     }
@@ -176,15 +179,17 @@ public class AgentHookPosterTests : IDisposable {
     public async Task PostOrSpool_spools_when_auth_outlives_its_cap() {
         using var tmp = new TempDir();
         var spool = new HookSpool(tmp.Path);
-        var never = new TaskCompletionSource<AuthAttempt>();
-        var sw    = System.Diagnostics.Stopwatch.StartNew();
+        var never     = new TaskCompletionSource<AuthAttempt>();
+        var sw        = System.Diagnostics.Stopwatch.StartNew();
+        var handedOff = false;
 
         var outcome = await Poster.PostOrSpoolAsync(
             () => never.Task, "session-start/kiro", """{"session_id":"x"}""",
             "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro",
-            authCap: TimeSpan.FromMilliseconds(100));
+            authCap: TimeSpan.FromMilliseconds(100), onAuthAbandoned: () => handedOff = true);
 
         await Assert.That(outcome).IsEqualTo(HookPostOutcome.Spooled);
+        await Assert.That(handedOff).IsTrue();
         await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsTrue();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }

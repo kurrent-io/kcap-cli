@@ -926,6 +926,25 @@ public class ClaudeHookCommandTests {
         result.Value.Client.Dispose();
     }
 
+    /// <summary>The hand-off fires only when creation is abandoned: an in-flight rotation then needs
+    /// a longer-lived owner, whereas a creation that completed in time already owns its result.</summary>
+    [Test]
+    public async Task create_client_within_budget_hands_off_only_when_abandoned() {
+        var abandoned = 0;
+        var never     = new TaskCompletionSource<AuthAttempt>();
+
+        var slow = await BoundedAuth.CreateClientWithinAsync(() => never.Task, TimeSpan.FromMilliseconds(50), () => abandoned++);
+        await Assert.That(slow).IsNull();
+        await Assert.That(abandoned).IsEqualTo(1);
+
+        var made = new HttpClient();
+        var fast = await BoundedAuth.CreateClientWithinAsync(
+            () => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2), () => abandoned++);
+        await Assert.That(fast).IsNotNull();
+        await Assert.That(abandoned).IsEqualTo(1);
+        made.Dispose();
+    }
+
     const string AgentId = "a1b2c3d4";
 
     [Test]

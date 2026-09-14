@@ -120,7 +120,7 @@ public sealed class ClaudeHookCommand(
         // into the same degraded arm a client-creation timeout already uses — keeping capture and
         // the spool intact without inventing a second disposition for a not-usable AuthAttempt.
         var created = HookHttp.IsPostable(Url)
-            ? await BoundedAuth.CreateClientWithinAsync(clientFactory, clientCap)
+            ? await BoundedAuth.CreateClientWithinAsync(clientFactory, clientCap, () => RefreshTokenHandoff.Spawn(config))
             : null;
 
         if (created is null) {

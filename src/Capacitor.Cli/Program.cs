@@ -788,6 +788,14 @@ switch (command) {
     // ReportVersionCommand for why it never surfaces an error.
     case "report-version":
         return await Run<ReportVersionCommand>().HandleAsync();
+    // Spawned detached by a hook that gave up on its own client creation (RefreshTokenHandoff); it
+    // outlives the hook to finish the rotation. Not in PrintUsage — nobody types it by hand.
+    case RefreshTokenHandoff.Command: {
+        RefreshTokenHandoff.EnterDetached();
+        try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
+
+        return 0;
+    }
     case "hook": {
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
