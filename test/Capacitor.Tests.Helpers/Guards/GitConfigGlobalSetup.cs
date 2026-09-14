@@ -24,10 +24,10 @@ public class GitConfigGlobalSetup {
     /// its repository is gone.</summary>
     const string HermeticGlobalConfig = """
         [gc]
-        	auto = 0
-        	autoDetach = false
+            auto = 0
+            autoDetach = false
         [maintenance]
-        	auto = false
+            auto = false
         """;
 
     [BeforeEvery(Assembly)]
