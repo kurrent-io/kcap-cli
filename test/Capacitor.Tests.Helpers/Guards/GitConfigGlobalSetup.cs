@@ -14,16 +14,28 @@ public class GitConfigGlobalSetup {
 
     static readonly List<(string Key, string? Inherited)> Pinned = [];
 
-    /// <summary>An existing but empty file. Git reads a missing path as empty config too, but only a
-    /// real file makes "the global config is empty" a state a test can rely on.</summary>
-    public static string EmptyGlobalConfig => Path.Combine(Dir.Path, "gitconfig");
+    /// <summary>A real file rather than a missing path, so "the global config is this and nothing
+    /// else" is a state a test can rely on. It carries only the settings that must be OFF.</summary>
+    public static string PinnedGlobalConfig => Path.Combine(Dir.Path, "gitconfig");
+
+    /// <summary>Git runs auto maintenance and auto gc by its own defaults, which an empty global
+    /// config leaves in force. Inside a fixture repo that writes <c>.git/objects/maintenance.lock</c>
+    /// under a tree a test is comparing, and a detached gc keeps running after the TempDir holding
+    /// its repository is gone.</summary>
+    const string HermeticGlobalConfig = """
+        [gc]
+        	auto = 0
+        	autoDetach = false
+        [maintenance]
+        	auto = false
+        """;
 
     [BeforeEvery(Assembly)]
     public static void PinGitConfig() {
-        Dir.CreateFile("gitconfig");
+        Dir.CreateFile("gitconfig", HermeticGlobalConfig);
         Pinned.Clear();
 
-        Pin("GIT_CONFIG_GLOBAL", EmptyGlobalConfig);
+        Pin("GIT_CONFIG_GLOBAL", PinnedGlobalConfig);
         Pin("GIT_CONFIG_NOSYSTEM", "1");
         Pin("GIT_TERMINAL_PROMPT", "0");
 
