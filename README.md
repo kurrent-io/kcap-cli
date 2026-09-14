@@ -1873,11 +1873,9 @@ why this is a command and not only a dialog.
 
 ```bash
 kcap entities                              # what's registered, and what's waiting for an answer
-kcap entities add acme-prod tenant         # declare a name
+kcap entities add acme-prod                # declare a name
 kcap entities remove acme-prod             # withdraw it
 ```
-
-Kinds are `tenant`, `service`, `environment`, `resource`, `config` and `team`.
 
 Declaring a name also groups the sessions that already mentioned it, not just future ones — so
 answering late costs nothing. Some names are registered for you: the repo's own owner and name, its

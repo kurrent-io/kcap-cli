@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Core.Http;
 public interface IEntitiesApi {
     Task<EntityRegistryResult> GetAsync(string repoHash, CancellationToken ct = default);
 
-    Task<EntityRegistryResult> RegisterAsync(string repoHash, string value, string kind, CancellationToken ct = default);
+    Task<EntityRegistryResult> RegisterAsync(string repoHash, string value, CancellationToken ct = default);
 
     Task<EntityRegistryResult> WithdrawAsync(string repoHash, string value, CancellationToken ct = default);
 }

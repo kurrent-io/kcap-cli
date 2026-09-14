@@ -15,8 +15,8 @@ public class EntityRegistryDtoTests {
             {
               "curated": true,
               "registered": [
-                { "value": "acme-prod", "kind": "tenant",   "source": "declared" },
-                { "value": "kcap-server", "kind": "resource", "source": "repository" }
+                { "value": "acme-prod",   "source": "declared" },
+                { "value": "kcap-server", "source": "repository" }
               ],
               "candidates": [
                 { "value": "globex", "sessions": 6 }
@@ -28,18 +28,18 @@ public class EntityRegistryDtoTests {
 
         await Assert.That(registry).IsNotNull();
         await Assert.That(registry!.Curated).IsTrue();
-        await Assert.That(registry.Registered.Select(r => (r.Value, r.Kind, r.Source)))
-            .IsEquivalentTo([("acme-prod", "tenant", "declared"), ("kcap-server", "resource", "repository")]);
+        await Assert.That(registry.Registered.Select(r => (r.Value, r.Source)))
+            .IsEquivalentTo([("acme-prod", "declared"), ("kcap-server", "repository")]);
         await Assert.That(registry.Candidates.Single().Sessions).IsEqualTo(6);
     }
 
     [Test]
     public async Task Requests_serialize_to_the_server_shape() {
         var register = JsonSerializer.Serialize(
-            new CliRegisterEntityRequest { RepoHash = "abc", Value = "acme-prod", Kind = "tenant" },
+            new CliRegisterEntityRequest { RepoHash = "abc", Value = "acme-prod" },
             CapacitorJsonContext.Default.CliRegisterEntityRequest);
 
-        await Assert.That(register).IsEqualTo("""{"repo_hash":"abc","value":"acme-prod","kind":"tenant"}""");
+        await Assert.That(register).IsEqualTo("""{"repo_hash":"abc","value":"acme-prod"}""");
 
         var withdraw = JsonSerializer.Serialize(
             new CliWithdrawEntityRequest { RepoHash = "abc", Value = "acme-prod" },

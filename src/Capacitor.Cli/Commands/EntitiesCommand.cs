@@ -17,8 +17,8 @@ class EntitiesCommand(ConfigRoot config, IEntitiesApi entities) {
 
         return verb switch {
             "list"                     => await RunAsync(hash => entities.GetAsync(hash)),
-            "add" or "register" when rest.Length == 2
-                                       => await RunAsync(hash => entities.RegisterAsync(hash, rest[0], rest[1])),
+            "add" or "register" when rest.Length == 1
+                                       => await RunAsync(hash => entities.RegisterAsync(hash, rest[0])),
             "remove" or "withdraw" when rest.Length == 1
                                        => await RunAsync(hash => entities.WithdrawAsync(hash, rest[0])),
             _                          => Usage(),
@@ -76,11 +76,10 @@ class EntitiesCommand(ConfigRoot config, IEntitiesApi entities) {
         } else {
             var table = new Table().Border(TableBorder.Rounded).Title("Registered");
             table.AddColumn("Name");
-            table.AddColumn("Kind");
             table.AddColumn("Source");
 
             foreach (var row in registry.Registered)
-                table.AddRow(Markup.Escape(row.Value), Markup.Escape(row.Kind), Markup.Escape(row.Source));
+                table.AddRow(Markup.Escape(row.Value), Markup.Escape(row.Source));
 
             AnsiConsole.Write(table);
         }
@@ -107,7 +106,7 @@ class EntitiesCommand(ConfigRoot config, IEntitiesApi entities) {
 
     static int Usage() {
         Console.Error.WriteLine("Usage: kcap entities [list]");
-        Console.Error.WriteLine("       kcap entities add <name> <tenant|service|environment|resource|config|team>");
+        Console.Error.WriteLine("       kcap entities add <name>");
         Console.Error.WriteLine("       kcap entities remove <name>");
 
         return 1;

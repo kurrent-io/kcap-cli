@@ -9,10 +9,10 @@ internal sealed class EntitiesApi(ICapacitorHttpClient http, CapacitorServer ser
         ReadAsync((c, token) => c.GetWithRetryAsync(
             $"{server.Url}/api/work-items/entities?repo={Uri.EscapeDataString(repoHash)}", ct: token), ct);
 
-    public Task<EntityRegistryResult> RegisterAsync(string repoHash, string value, string kind, CancellationToken ct = default) =>
+    public Task<EntityRegistryResult> RegisterAsync(string repoHash, string value, CancellationToken ct = default) =>
         ReadAsync((c, token) => c.PostAsJsonAsync(
             $"{server.Url}/api/work-items/entities",
-            new CliRegisterEntityRequest { RepoHash = repoHash, Value = value, Kind = kind },
+            new CliRegisterEntityRequest { RepoHash = repoHash, Value = value },
             CapacitorJsonContext.Default.CliRegisterEntityRequest, token), ct);
 
     public Task<EntityRegistryResult> WithdrawAsync(string repoHash, string value, CancellationToken ct = default) =>
@@ -42,8 +42,8 @@ internal sealed class EntitiesApi(ICapacitorHttpClient http, CapacitorServer ser
         throw await CapacitorApiRequests.FailureAsync(response);
     }
 
-    /// <summary>A problem document's <c>detail</c>, falling back to the raw body: the server names
-    /// the accepted kinds there, and echoing that beats restating the list here where it would drift.</summary>
+    /// <summary>A problem document's <c>detail</c>, falling back to the raw body: the server says
+    /// what it refused, and echoing that beats restating its rules here where they would drift.</summary>
     static async Task<string> DetailAsync(HttpResponseMessage response, CancellationToken ct) {
         var body = await response.Content.ReadAsStringAsync(ct);
 

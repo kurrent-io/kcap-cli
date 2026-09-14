@@ -805,9 +805,6 @@ public sealed record CliRegisteredEntity {
     [JsonPropertyName("value")]
     public required string Value { get; init; }
 
-    [JsonPropertyName("kind")]
-    public required string Kind { get; init; }
-
     [JsonPropertyName("source")]
     public required string Source { get; init; }
 }
@@ -828,9 +825,6 @@ public sealed record CliRegisterEntityRequest {
 
     [JsonPropertyName("value")]
     public required string Value { get; init; }
-
-    [JsonPropertyName("kind")]
-    public required string Kind { get; init; }
 }
 
 public sealed record CliWithdrawEntityRequest {

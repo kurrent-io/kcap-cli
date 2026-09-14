@@ -2,8 +2,8 @@ namespace Capacitor.Cli.Core.Http;
 
 /// <summary>What reading or writing the registry can mean. <see cref="NotFound"/> covers a repo this
 /// profile cannot see and a withdrawal with no declared row to withdraw, indistinguishably — whether
-/// a repo has a registry is itself a disclosure. <see cref="Rejected"/> is a name or kind the server
-/// will not store; a registry row IS the admission decision, so an unreadable one would admit
+/// a repo has a registry is itself a disclosure. <see cref="Rejected"/> is a name the server will
+/// not store; a registry row IS the admission decision, so an unreadable one would admit
 /// nothing while looking like an answer.</summary>
 public abstract record EntityRegistryResult {
     public sealed record Found(CliEntityRegistry Registry) : EntityRegistryResult;
