@@ -22,7 +22,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        IProcessStarter starter) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -584,7 +585,7 @@ public sealed class ClaudeHookCommand(
             // Opt-in background skills refresh: detached and never awaited (the hook's latency
             // budget must not pay for a sync); the child throttles itself off the manifest.
             if (activeProfile?.Skills?.AutoSync == true && sessionCwd is not null)
-                SkillsAutoSync.SpawnDetached(sessionCwd);
+                SkillsAutoSync.SpawnDetached(sessionCwd, starter);
 
             // Now that the watcher is running, await the deferred repo enrichment (a slow git/gh
             // probe could not have delayed capture start) and then inject default_visibility +
