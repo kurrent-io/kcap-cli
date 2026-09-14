@@ -8,6 +8,8 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
 
     public string Describe() => "Windows Scheduled Task";
 
+    public string UnitDirectory => config.Directory;
+
     public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) {
         var wrapperPath = WindowsTaskUnit.WrapperPath(config, spec.ServiceId);
         return [

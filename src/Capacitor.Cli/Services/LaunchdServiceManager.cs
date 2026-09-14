@@ -37,6 +37,8 @@ sealed partial class LaunchdServiceManager(
 
     public string Describe() => "launchd LaunchAgent";
 
+    public string UnitDirectory => LaunchdUnit.AgentsDir(home);
+
     public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
         [new GeneratedFile(LaunchdUnit.PlistPath(home, spec.ServiceId), LaunchdUnit.Plist(spec))];
 

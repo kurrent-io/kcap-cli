@@ -36,6 +36,7 @@ static class ServiceFiles {
         if (!string.IsNullOrEmpty(directory)) {
             CreateDirectory(directory);
             RequireNoSharedWrite(directory, tightenDirectory);
+            RequireNoWorldWritableAncestor(directory);
         }
 
         // Full GUID: the staging name must not be guessable by a local process racing to pre-create it,
@@ -156,6 +157,27 @@ static class ServiceFiles {
             throw new InvalidOperationException(
                 $"Could not establish owner-only permissions on {path} (mode is {mode}). A service unit may "
               + "carry a token-producing command, so installation fails rather than continuing.");
+    }
+
+    /// <summary>Refuses when something ABOVE the unit directory is world-writable — an account that can
+    /// write a parent can rename the unit directory away and supply its own, whatever mode the unit and its
+    /// own directory carry.
+    ///
+    /// <para>World-writable only, and group-writable deliberately not: umask 002 is the default wherever a
+    /// user's primary group is their own name, so group-write on a home directory's path is the ordinary
+    /// case rather than a finding, and refusing on it would fail the install this check is attached to. A
+    /// world-writable directory on the way to someone's home is produced by no umask and is never
+    /// deliberate. The group-write case is reported by <c>kcap daemon doctor</c>, which can advise where
+    /// this cannot safely block.</para></summary>
+    static void RequireNoWorldWritableAncestor(string directory) {
+        // The unit directory itself is included and costs nothing: RequireNoSharedWrite has already
+        // stripped its world-write bit or thrown, so it cannot be the offender found here.
+        if (DirectoryExposure.GrantingWrite(directory, UnixFileMode.OtherWrite) is not [var offender, ..]) return;
+
+        throw new InvalidOperationException(
+            $"Refusing to write a service unit below a world-writable directory: {offender}. Any local "
+          + "account can rename the unit directory out from under it and choose what the daemon runs. "
+          + $"Remove that write bit with `chmod o-w {offender}` and re-run the install.");
     }
 
     static void RequireOwnerOnlyPath(string path) {

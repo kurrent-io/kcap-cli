@@ -7,6 +7,8 @@ sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = nu
 
     public string Describe() => "systemd --user unit";
 
+    public string UnitDirectory => SystemdUnit.UserUnitDir(home);
+
     public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
         [new GeneratedFile(SystemdUnit.UnitPath(home, spec.ServiceId), SystemdUnit.Unit(spec))];
 
