@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Specialized;
 using System.Reactive.Linq;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -122,6 +123,39 @@ public class HomeViewSmokeTests {
         await Assert.That(noticeAfter).IsTrue();
         await Assert.That(noticeText).IsEqualTo(HomeViewModel.ServerLostNotice);
         await Assert.That(signInAfter).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connection_banner_overlays_without_shifting_the_composer() {
+        var (yBefore, yAfter, bannerVisible, bannerAbove) = await AvaloniaSession.DispatchAsync(() => {
+            var (_, vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var headline = Find<TextBlock>(window, "LauncherHeadline")!;
+            double Y(Visual c) => c.TranslatePoint(new Point(0, 0), window)!.Value.Y;
+            var before = Y(headline);
+
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            Dispatcher.UIThread.RunJobs();
+
+            var banner = Find<Border>(window, "ConnectionBanner")!;
+            var after = Y(headline);
+            var bannerAbove = Y(banner) < after;
+            var visible = banner.IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (before, after, visible, bannerAbove);
+        });
+
+        await Assert.That(bannerVisible).IsTrue();
+        await Assert.That(yAfter).IsEqualTo(yBefore);
+        await Assert.That(bannerAbove).IsTrue();
     }
 
     [Test]

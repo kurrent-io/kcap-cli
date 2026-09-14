@@ -22,7 +22,7 @@ public class LocalPermissionBridgeInteractiveTests {
 
         public Harness(string? attributeTo = "agent-1") {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
-            Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, Broker, Log) {
+            Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, Broker, Log) {
                 AttributeHandler = attributeTo is null ? _ => null : _ => new AttributedAgent(attributeTo),
             };
         }

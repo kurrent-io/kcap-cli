@@ -713,7 +713,9 @@ public class HomeViewModelTests {
     [Arguments("daemon down", "kcap too old", "kcap too old")]
     [Arguments(null, "kcap too old", "kcap too old")]
     [Arguments("daemon down", "", "daemon down")]
-    public async Task BannerMessage_prefers_a_start_message_over_the_connection_notice(
+    [Arguments(HomeViewModel.SignInExpiredNotice, "Reconnecting…", HomeViewModel.SignInExpiredNotice)]
+    [Arguments(HomeViewModel.SignInExpiredNotice, "kcap too old", HomeViewModel.SignInExpiredNotice)]
+    public async Task BannerMessage_prefers_a_start_message_except_when_sign_in_is_expired(
             string? notice, string? startMessage, string? expected) {
         await Assert.That(HomeViewModel.BannerMessageFor(notice, startMessage)).IsEqualTo(expected);
     }

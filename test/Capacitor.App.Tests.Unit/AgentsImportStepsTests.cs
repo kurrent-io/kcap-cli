@@ -636,19 +636,70 @@ public class AgentsImportTemplateTests {
 
             var runButton        = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "RunImportButton");
             var everythingChoice = window.GetVisualDescendants().OfType<RadioButton>().FirstOrDefault(r => r.Name == "EverythingChoice");
+            var everythingWasChecked = everythingChoice?.IsChecked;
+            var orgChoice        = window.GetVisualDescendants().OfType<RadioButton>().FirstOrDefault(r => r.Name == "OrgChoice");
+            var orgBox           = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "OrgTextBox");
             var vendorCheckBoxes = window.GetVisualDescendants().OfType<CheckBox>().Where(c => c.Name == "ImportVendorCheckBox").ToList();
+            var stepScroll       = window.FindControl<ScrollViewer>("StepScroll");
+            var orgHidden        = orgBox?.IsVisible;
+
+            if (orgChoice is not null) orgChoice.IsChecked = true;
+            Dispatcher.UIThread.RunJobs();
+            var orgShown = orgBox?.IsVisible;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (installButton, AgentRows: agentCheckBoxes.Count, runButton, everythingChoice, ImportRows: vendorCheckBoxes.Count);
+            return (installButton, AgentRows: agentCheckBoxes.Count, runButton, everythingChoice, everythingWasChecked,
+                ImportRows: vendorCheckBoxes.Count, stepScroll, orgHidden, orgShown);
         });
 
         await Assert.That(result.installButton).IsNotNull();
         await Assert.That(result.AgentRows).IsEqualTo(9);
         await Assert.That(result.runButton).IsNotNull();
         await Assert.That(result.everythingChoice).IsNotNull();
-        await Assert.That(result.everythingChoice!.IsChecked).IsTrue();
+        await Assert.That(result.everythingWasChecked).IsTrue();
         await Assert.That(result.ImportRows).IsEqualTo(9);
+        await Assert.That(result.stepScroll).IsNotNull();
+        await Assert.That(result.orgHidden).IsFalse();
+        await Assert.That(result.orgShown).IsTrue();
+    }
+
+    /// Plugin stderr on a failed row can be arbitrarily long. Retry must stay inside the
+    /// 220-DIP wrap-panel slot rather than being pushed past it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_agent_failure_keeps_retry_inside_the_item() {
+        var (retryVisible, retryRight, itemWidth) = await AvaloniaSession.DispatchAsync(async () => {
+            var cli = new FakeKcapCli {
+                PluginInstallBehavior = (_, _) => Task.FromResult(
+                    new ProcessResult(1, "", new string('x', 400), false)),
+            };
+            var detect = new Func<CancellationToken, Task<IReadOnlySet<HarnessId>>>(
+                _ => Task.FromResult(VendorDetection.Build()));
+            var agents = new AgentsStepViewModel(cli, detect);
+            agents.Rows.First(r => r.Label == "Codex").IsSelected = true;
+            await agents.InstallCommand.Execute().ToTask();
+
+            var vm = new OnboardingViewModel([agents, new DoneStepViewModel(() => [])]);
+            await vm.PendingEnterForTesting;
+
+            var window = new OnboardingWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var retry = window.GetVisualDescendants().OfType<Button>()
+                .First(b => b.Name == "AgentRetryButton" && b.IsVisible);
+            var item = (Grid)retry.Parent!;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return (retry.IsVisible, retry.Bounds.Right, item.Bounds.Width);
+        });
+
+        await Assert.That(retryVisible).IsTrue();
+        await Assert.That(itemWidth).IsLessThanOrEqualTo(220);
+        await Assert.That(retryRight).IsLessThanOrEqualTo(itemWidth);
     }
 }

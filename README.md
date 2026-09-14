@@ -828,7 +828,7 @@ kcap daemon stop --yes              # stop all running daemons unattended (other
 kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
 kcap daemon restart --name laptop --when-idle  # queue the restart for the next idle moment
 kcap daemon restart --name laptop --force      # restart now even if busy (tears down running agents)
-kcap daemon doctor                  # diagnose lock-file state for every daemon name
+kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory
 kcap daemon doctor --clean          # also remove a stale entry's pid/marker files, dropping it from the list (held entries are never touched; the inert lock file is left in place)
 ```
 
@@ -919,7 +919,9 @@ That message names the wrong cause — the same text appears for a missing proje
 |---|---|---|
 | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_GENAI_USE_GCA` | `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_GEMINI_BASE_URL`, `GOOGLE_VERTEX_BASE_URL` | `GOOGLE_API_KEY`, `GOOGLE_CREDENTIALS` |
 
-The middle column is secret-*capable* — a credential path says where your credential lives, and a base URL can carry a token in userinfo or a query string. On macOS and Linux that is bounded by a guarantee kcap enforces: unit files are written `0600`, the mode is re-checked on the open handle, and `install` refuses a group- or world-writable directory. On Windows the wrapper inherits your user profile's ACL, which kcap neither sets nor verifies, so those three are excluded there — the same reason `GH_TOKEN` is never carried. If you need Vertex-with-ADC on a Windows daemon, set it in the service's own environment yourself.
+The middle column is secret-*capable* — a credential path says where your credential lives, and a base URL can carry a token in userinfo or a query string. On macOS and Linux that is bounded by a guarantee kcap enforces: unit files are written `0600`, the mode is re-checked on the open handle, and the unit directory is created `0700`. A unit directory that already grants group or world write has those bits removed; `install` refuses only when they cannot be removed, which means the directory belongs to another account.
+
+That guarantee covers the unit and the directory holding it. It does **not** extend to the directories above them, which kcap does not own: write permission on a directory is permission to rename what is inside it, so an account that can write `~/.config` can replace the unit directory whole, whatever mode the unit carries. `install` refuses when something on that path is *world*-writable — no umask produces that and it is never deliberate — but not when it is merely group-writable, because umask 002 against a user-private group produces exactly that for a group of one, and it is the default on Debian and Ubuntu. `kcap daemon doctor` lists the group-writable directories on the path so you can judge whether that group is shared. Both walk the path with symlinks resolved, and both read **mode bits only** — a directory owned by another unprivileged account can be `0755` and still let its owner rename what it holds, so read a clean result as "no mode bit grants it", not as "no other account can". On Windows the wrapper inherits your user profile's ACL, which kcap neither sets nor verifies, so those three are excluded there — the same reason `GH_TOKEN` is never carried. If you need Vertex-with-ADC on a Windows daemon, set it in the service's own environment yourself.
 
 ⚠️ **Capture happens at install time.** Exporting the project *after* `kcap daemon service install` leaves a unit without it. Set it first, or re-run `install` afterwards — and restart the daemon.
 

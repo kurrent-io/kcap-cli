@@ -25,7 +25,7 @@ public class AgentHookPosterTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // The poster targets the resolution's URL, so the stub server's is what the resolution names.
-    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
+    AgentHookPoster  Poster => field ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()));
 
     public void Dispose() => _server.Stop();
 

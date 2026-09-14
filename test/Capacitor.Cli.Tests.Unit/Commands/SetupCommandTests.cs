@@ -27,6 +27,19 @@ public class SetupCommandTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    /// <summary>The command under test, with the import runner each test is pinning.</summary>
+    SetupCommand Command(ISetupImportRunner imports) =>
+        new(Config.Root, Resolutions.None(Config.Root),
+            AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
+            new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
+            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None));
+
+    /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
+    IOnboardingFacadeFactory RealFacades() =>
+        new SetupFacadeFactory(Config.Root, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy,
+            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults);
+
     // --- The browser leg's one outcome line ---
 
     [Test]
@@ -854,34 +867,22 @@ public class SetupCommandTests {
             PiAgentsMdPath:       Path.Combine(root, "pi-AGENTS.md"));
 
     // --- Step 6 (RunImportStepAsync) wiring ---
-    //
-    // SetupCommand.ImportRunnerOverride is process-global static state (mutated by
-    // RunImportStepAsync's caller — HandleAsync — only via this seam), so every test that sets it
-    // must run serialized against the others and reset it to null in a finally block.
-    const string ImportRunnerOverrideMutation = nameof(ImportRunnerOverrideMutation);
 
     [Test]
-    [NotInParallel(ImportRunnerOverrideMutation)]
     public async Task RunImportStepAsync_RunDecision_InvokesRunnerWithPinnedArgs() {
-        SetupCommand.ImportInvocation? captured = null;
-        SetupCommand.ImportRunnerOverride = inv => {
-            captured = inv;
-            return Task.FromResult(0);
-        };
+        var runner = FakeImportRunner.Succeeding();
         var passed = Resolutions.At("https://example.test", Config.Root);
 
-        try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).RunImportStepAsync(
-                currentRepo:       ("acme", "widgets"),
-                authSatisfied:     true,
-                skipImport:        false,
-                noPrompt:          true,
-                promptYesNo:       () => throw new InvalidOperationException("must not prompt under --no-prompt"),
-                profiles:          passed,
-                defaultVisibility: "org_public");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Command(runner).RunImportStepAsync(
+            currentRepo:       ("acme", "widgets"),
+            authSatisfied:     true,
+            skipImport:        false,
+            noPrompt:          true,
+            promptYesNo:       () => throw new InvalidOperationException("must not prompt under --no-prompt"),
+            profiles:          passed,
+            defaultVisibility: "org_public");
+
+        var captured = runner.Captured;
 
         await Assert.That(captured).IsNotNull();
         await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo("https://example.test");
@@ -893,113 +894,92 @@ public class SetupCommandTests {
     }
 
     [Test]
-    [NotInParallel(ImportRunnerOverrideMutation)]
     public async Task RunImportStepAsync_InteractiveAccept_InvokesRunner() {
-        var invoked = false;
-        SetupCommand.ImportRunnerOverride = _ => {
-            invoked = true;
-            return Task.FromResult(0);
-        };
+        var runner = FakeImportRunner.Succeeding();
 
-        try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).RunImportStepAsync(
-                currentRepo:       ("acme", "widgets"),
-                authSatisfied:     true,
-                skipImport:        false,
-                noPrompt:          false,
-                promptYesNo:       () => true,
-                profiles:          Resolutions.At("https://example.test", Config.Root),
-                defaultVisibility: "org_public");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Command(runner).RunImportStepAsync(
+            currentRepo:       ("acme", "widgets"),
+            authSatisfied:     true,
+            skipImport:        false,
+            noPrompt:          false,
+            promptYesNo:       () => true,
+            profiles:          Resolutions.At("https://example.test", Config.Root),
+            defaultVisibility: "org_public");
 
-        await Assert.That(invoked).IsTrue();
+        await Assert.That(runner.Calls).IsEqualTo(1);
     }
 
     [Test]
-    [NotInParallel(ImportRunnerOverrideMutation)]
     public async Task RunImportStepAsync_RunnerReturnsNonZero_DoesNotThrowAndCompletes() {
-        SetupCommand.ImportRunnerOverride = _ => Task.FromResult(1);
+        var runner = FakeImportRunner.Returning(1);
 
-        try {
-            // Completing without an unhandled exception is the assertion: a non-zero exit
-            // code must be swallowed (warned about, not propagated) so setup still finishes.
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).RunImportStepAsync(
-                currentRepo:       ("acme", "widgets"),
-                authSatisfied:     true,
-                skipImport:        false,
-                noPrompt:          true,
-                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-                profiles:          Resolutions.At("https://example.test", Config.Root),
-                defaultVisibility: "org_public");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        // Completing without an unhandled exception is the assertion: a non-zero exit
+        // code must be swallowed (warned about, not propagated) so setup still finishes.
+        await Command(runner).RunImportStepAsync(
+            currentRepo:       ("acme", "widgets"),
+            authSatisfied:     true,
+            skipImport:        false,
+            noPrompt:          true,
+            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+            profiles:          Resolutions.At("https://example.test", Config.Root),
+            defaultVisibility: "org_public");
+
+        await Assert.That(runner.Calls).IsEqualTo(1);
     }
 
     [Test]
-    [NotInParallel(ImportRunnerOverrideMutation)]
     public async Task RunImportStepAsync_RunnerThrows_DoesNotPropagateAndCompletes() {
-        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("boom");
+        var runner = FakeImportRunner.Throwing(new InvalidOperationException("boom"));
 
-        try {
-            // Completing without the InvalidOperationException escaping is the assertion —
-            // import is best-effort and must never fail setup.
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).RunImportStepAsync(
-                currentRepo:       ("acme", "widgets"),
-                authSatisfied:     true,
-                skipImport:        false,
-                noPrompt:          true,
-                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-                profiles:          Resolutions.At("https://example.test", Config.Root),
-                defaultVisibility: "org_public");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        // Completing without the InvalidOperationException escaping is the assertion —
+        // import is best-effort and must never fail setup.
+        await Command(runner).RunImportStepAsync(
+            currentRepo:       ("acme", "widgets"),
+            authSatisfied:     true,
+            skipImport:        false,
+            noPrompt:          true,
+            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+            profiles:          Resolutions.At("https://example.test", Config.Root),
+            defaultVisibility: "org_public");
+
+        await Assert.That(runner.Calls).IsEqualTo(1);
     }
 
     [Test]
-    [NotInParallel(ImportRunnerOverrideMutation)]
     public async Task RunImportStepAsync_NoCurrentRepo_SkipsWithoutInvokingRunnerOrPrompting() {
-        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
+        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
 
-        try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).RunImportStepAsync(
-                currentRepo:       null,
-                authSatisfied:     true,
-                skipImport:        false,
-                noPrompt:          false,
-                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-                profiles:          Resolutions.At("https://example.test", Config.Root),
-                defaultVisibility: "org_public");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Command(runner).RunImportStepAsync(
+            currentRepo:       null,
+            authSatisfied:     true,
+            skipImport:        false,
+            noPrompt:          false,
+            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+            profiles:          Resolutions.At("https://example.test", Config.Root),
+            defaultVisibility: "org_public");
+
+        await Assert.That(runner.Calls).IsEqualTo(0);
     }
 
     [Test]
-    [NotInParallel(ImportRunnerOverrideMutation)]
     public async Task RunImportStepAsync_SkipImportFlag_SkipsWithoutInvokingRunner() {
-        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
+        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
 
-        try {
-            await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).RunImportStepAsync(
-                currentRepo:       ("acme", "widgets"),
-                authSatisfied:     true,
-                skipImport:        true,
-                noPrompt:          true,
-                promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-                profiles:          Resolutions.At("https://example.test", Config.Root),
-                defaultVisibility: "org_public");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Command(runner).RunImportStepAsync(
+            currentRepo:       ("acme", "widgets"),
+            authSatisfied:     true,
+            skipImport:        true,
+            noPrompt:          true,
+            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
+            profiles:          Resolutions.At("https://example.test", Config.Root),
+            defaultVisibility: "org_public");
+
+        await Assert.That(runner.Calls).IsEqualTo(0);
     }
 
     // HandleAsync-level acceptance coverage for the import wiring: the whole wizard — flag parsing,
     // server normalization and probe, auth discovery, profile save, import — against a real WireMock
-    // server, with only the final import call intercepted through ImportRunnerOverride.
+    // server, with only the final import call intercepted through the injected runner.
     //
     // Every test here:
     //   • runs from a throwaway git repo (real `git init` + `remote add origin`) so repository
@@ -1040,34 +1020,28 @@ public class SetupCommandTests {
 
         await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-auto-import", "widgets", Config.Root);
 
-        SetupCommand.ImportInvocation? captured = null;
-        SetupCommand.ImportRunnerOverride = inv => {
-            captured = inv;
-            return Task.FromResult(0);
-        };
+        var runner = FakeImportRunner.Succeeding();
 
-        try {
-            var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--default-visibility", "org_public");
+        var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--default-visibility", "org_public");
 
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(args);
+        var exit = await Command(runner).HandleAsync(args);
 
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(captured).IsNotNull();
-            await Assert.That(captured!.Repo).IsEqualTo(("acme-auto-import", "widgets"));
-            await Assert.That(captured.AutoSkipExclusions).IsTrue();
-            await Assert.That(captured.ForcePrivate).IsFalse();
-            await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
-            await Assert.That(captured.Profiles.Resolution.ServerUrl).IsEqualTo(server.Url!.TrimEnd('/'));
+        var captured = runner.Captured;
 
-            // Auth provider None makes Step 6 eligible WITHOUT any token: Step 2 short-circuits
-            // to "no login required" (no OAuth flow ran), so nothing was ever stored — yet
-            // import still ran (asserted above). Confirm no token exists for the profile the
-            // import actually saw.
-            await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadAsync(
-                captured.Profiles.Name)).IsNull();
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(captured).IsNotNull();
+        await Assert.That(captured!.Repo).IsEqualTo(("acme-auto-import", "widgets"));
+        await Assert.That(captured.AutoSkipExclusions).IsTrue();
+        await Assert.That(captured.ForcePrivate).IsFalse();
+        await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(captured.Profiles.Resolution.ServerUrl).IsEqualTo(server.Url!.TrimEnd('/'));
+
+        // Auth provider None makes Step 6 eligible WITHOUT any token: Step 2 short-circuits
+        // to "no login required" (no OAuth flow ran), so nothing was ever stored — yet
+        // import still ran (asserted above). Confirm no token exists for the profile the
+        // import actually saw.
+        await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadAsync(
+            captured.Profiles.Name)).IsNull();
     }
 
     [Test]
@@ -1078,19 +1052,14 @@ public class SetupCommandTests {
 
         await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-skip-import", "widgets", Config.Root);
 
-        SetupCommand.ImportRunnerOverride = _ => throw new InvalidOperationException("must not run import");
+        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
 
-        try {
-            var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--skip-import");
+        var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--skip-import");
 
-            // Completing with exit 0 without the override's exception escaping is the
-            // assertion — --skip-import must suppress the Step 6 call entirely.
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(args);
+        var exit = await Command(runner).HandleAsync(args);
 
-            await Assert.That(exit).IsEqualTo(0);
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Calls).IsEqualTo(0);
     }
 
     [Test]
@@ -1104,25 +1073,17 @@ public class SetupCommandTests {
 
         await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-schemeless", "widgets", Config.Root);
 
-        SetupCommand.ImportInvocation? captured = null;
-        SetupCommand.ImportRunnerOverride = inv => {
-            captured = inv;
-            return Task.FromResult(0);
-        };
+        var runner = FakeImportRunner.Succeeding();
 
-        try {
-            var args = BuildArgs("--server-url", schemeLessServerUrl, "--no-prompt");
+        var args = BuildArgs("--server-url", schemeLessServerUrl, "--no-prompt");
 
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(args);
+        var exit = await Command(runner).HandleAsync(args);
 
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(captured).IsNotNull();
-            // Step-1 normalization: the scheme-less --server-url must reach the import runner
-            // already normalized (http:// for a loopback host), not the raw scheme-less string.
-            await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo($"http://localhost:{port}");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Captured).IsNotNull();
+        // Step-1 normalization: the scheme-less --server-url must reach the import runner
+        // already normalized (http:// for a loopback host), not the raw scheme-less string.
+        await Assert.That(runner.Captured!.Profiles.Resolution.ServerUrl).IsEqualTo($"http://localhost:{port}");
     }
 
     [Test]
@@ -1139,26 +1100,20 @@ public class SetupCommandTests {
         using var kcapUrl     = EnvScope.Exclusive("KCAP_URL", "http://conflicting-env.invalid");
         using var kcapProfile = EnvScope.Exclusive("KCAP_PROFILE", "conflicting-profile");
 
-        SetupCommand.ImportInvocation? captured = null;
-        SetupCommand.ImportRunnerOverride = inv => {
-            captured = inv;
-            return Task.FromResult(0);
-        };
+        var runner = FakeImportRunner.Succeeding();
 
-        try {
-            var args = BuildArgs("--server-url", server.Url!, "--no-prompt");
+        var args = BuildArgs("--server-url", server.Url!, "--no-prompt");
 
-            var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(args);
+        var exit = await Command(runner).HandleAsync(args);
 
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(captured).IsNotNull();
-            await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo(server.Url!.TrimEnd('/'));
-            // Setup hands the import the resolution it just persisted, not a re-resolution — so a
-            // conflicting KCAP_PROFILE in the environment cannot redirect it.
-            await Assert.That(captured.Profiles.Resolution.ProfileName).IsEqualTo("default");
-        } finally {
-            SetupCommand.ImportRunnerOverride = null;
-        }
+        var captured = runner.Captured;
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(captured).IsNotNull();
+        await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo(server.Url!.TrimEnd('/'));
+        // Setup hands the import the resolution it just persisted, not a re-resolution — so a
+        // conflicting KCAP_PROFILE in the environment cannot redirect it.
+        await Assert.That(captured.Profiles.Resolution.ProfileName).IsEqualTo("default");
     }
 
     /// <summary>
@@ -1335,7 +1290,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(["setup", "--org", "Acme"]);
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(["setup", "--org", "Acme"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
@@ -1346,7 +1301,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_creating_and_pointing_at_a_server_at_once() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -1358,7 +1313,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_a_provider_that_cannot_create() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
@@ -1369,7 +1324,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_still_requires_a_server_url_with_no_prompt_and_no_answers() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await new SetupCommand(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy, Workos, Github, new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery, NoTelemetry.Facade, AuthEndpoints.Defaults).HandleAsync(["setup", "--no-prompt"]);
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(["setup", "--no-prompt"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");

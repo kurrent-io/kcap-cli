@@ -23,8 +23,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
     readonly CursorMarkers  _markers  = new(config);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -803,7 +802,7 @@ public sealed class CursorHookCommand(
     /// construct their guard/quarantine identity from the watcher process's own
     /// <c>sessionId</c> argument, which — for a child watcher spawned with
     /// <c>sessionIdOverride: parentSessionId</c> — resolves to the PARENT id
-    /// (<c>_watchers.BuildSpawnArgs</c>: <c>sessionId = sessionIdOverride ?? key</c>). A
+    /// (<c>ProcessWatcherSpawner.BuildSpawnArgs</c>: <c>sessionId = sessionIdOverride ?? key</c>). A
     /// parent session already given up on by the guard must not keep spawning fresh child
     /// watchers either.
     /// </summary>
@@ -815,7 +814,7 @@ public sealed class CursorHookCommand(
         if (_markers.IsQuarantined(parentSessionId)) return Task.CompletedTask;
         if (string.IsNullOrEmpty(transcriptPath)) return Task.CompletedTask;
 
-        return _watchers.EnsureWatcherRunning(key: $"{parentSessionId}-{childSessionId}", transcriptPath,
+        return watchers.EnsureWatcherRunning(key: $"{parentSessionId}-{childSessionId}", transcriptPath,
             agentId: childSessionId, sessionIdOverride: parentSessionId, vendor: "cursor");
     }
 
@@ -884,7 +883,7 @@ public sealed class CursorHookCommand(
         if (!ShouldSpawnWatcher(eventName, isSubagentChild)) return Task.CompletedTask;
         if (string.IsNullOrEmpty(transcriptPath)) return Task.CompletedTask;
 
-        return _watchers.EnsureWatcherRunning(key: sessionId, transcriptPath,
+        return watchers.EnsureWatcherRunning(key: sessionId, transcriptPath,
             agentId: null, cwd: cwd, vendor: "cursor");
     }
 

@@ -16,7 +16,7 @@ public class LocalPermissionBridgeInputWaitTests {
         public List<(string AgentId, bool Waiting)> Seen { get; } = [];
 
         public Harness(string? attributeTo = "agent-1") {
-            Bridge = new LocalPermissionBridge(new FakeServerConnection(respond: null), NullLogger<LocalPermissionBridge>.Instance) {
+            Bridge = new LocalPermissionBridge(new FakeServerConnection(respond: null), NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance) {
                 AttributeHandler = attributeTo is null ? _ => null : _ => new AttributedAgent(attributeTo),
                 InputWaitHandler = (id, waiting) => Seen.Add((id, waiting)),
             };

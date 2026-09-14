@@ -39,6 +39,10 @@ delegate void UnitFileWriter(string path, string content, Encoding? encoding = n
 
 interface IServiceManager {
     string Describe();
+    /// <summary>The directory this manager's units live in, so the location has one owner: the manager
+    /// that writes them. <c>daemon doctor</c> audits the path to it for directories other accounts can
+    /// write, which is what a unit's own <c>0600</c> cannot speak for.</summary>
+    string UnitDirectory { get; }
     IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec);
     IReadOnlyList<string>        ListInstalled();
     ServiceStatus                Status(string serviceId);

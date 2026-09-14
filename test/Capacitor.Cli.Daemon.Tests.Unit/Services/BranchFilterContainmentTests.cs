@@ -206,7 +206,7 @@ public class BranchFilterContainmentTests {
 
         File.Delete(marker);
 
-        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance)
+        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance)
             .CreateAsync(repo);
 
         await Assert.That(File.Exists(marker)).IsFalse();
@@ -247,7 +247,7 @@ public class BranchFilterContainmentTests {
 
         File.Delete(marker);
 
-        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance)
+        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance)
             .CreateAsync(repo);
 
         await Assert.That(File.Exists(marker)).IsFalse();

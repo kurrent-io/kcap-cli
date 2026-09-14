@@ -394,6 +394,7 @@ public static partial class DaemonRunner {
         // singleton so AgentOrchestrator can read its bound URL at agent-spawn time, AND
         // as a hosted service so its IHostedService lifecycle starts the listener before
         // any agent is spawned.
+        builder.Services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         builder.Services.AddSingleton<LocalPermissionBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalPermissionBridge>());
 
@@ -415,6 +416,7 @@ public static partial class DaemonRunner {
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 
+        builder.Services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         builder.Services.AddSingleton<WorktreeManager>();
         builder.Services.AddSingleton<RepoMatcher>();
 

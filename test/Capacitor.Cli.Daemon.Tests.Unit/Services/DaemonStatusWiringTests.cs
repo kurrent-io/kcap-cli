@@ -100,11 +100,13 @@ public class DaemonStatusWiringTests {
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));
         services.AddSingleton<ServerConnection>();
+        services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         services.AddSingleton<WorktreeManager>();
         services.AddSingleton<RepoMatcher>();
         services.AddSingleton<IPtyProcessFactory>(new NoopPtyProcessFactory());
         services.AddSingleton<IHttpClientFactory>(new NoopHttpClientFactory());
         services.AddSingleton<ICapacitorHttpClient>(new FixedCapacitorHttpClient());
+        services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         services.AddSingleton<LocalPermissionBridge>();
         services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentLauncher>>(
             new Dictionary<string, IHostedAgentLauncher>());

@@ -36,9 +36,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class PiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -182,7 +181,7 @@ sealed class PiHookCommand(
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
-        await _watchers.EnsureWatcherRunning(sessionId, file,
+        await watchers.EnsureWatcherRunning(sessionId, file,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: false, vendor: "pi"
         );
@@ -196,8 +195,8 @@ sealed class PiHookCommand(
         try {
             var drained = await TimeBudget.RunCappedAsync(
                 async () => {
-                    await _watchers.KillWatcher(sessionId);
-                    await _watchers.InlineDrainAsync(sessionId, file, agentId: null, vendor: "pi");
+                    await watchers.KillWatcher(sessionId);
+                    await watchers.InlineDrainAsync(sessionId, file, agentId: null, vendor: "pi");
                 },
                 PreHookDrainCap
             );

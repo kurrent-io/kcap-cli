@@ -43,4 +43,72 @@ public class GitHubPrDetectorTests {
         CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>("""{"number":"oops","title":"t"}""");
         await Assert.That(await GitHubPrDetector.DetectAsync("/cwd", TimeSpan.FromSeconds(2), fake)).IsNull();
     }
+
+    static Task<PrInfo?> DetectForBranch(CommandRunner run, string host = "github.com", string owner = "acme",
+                                         string repo = "widget", string branch = "remote-name") =>
+        GitHubPrDetector.DetectForBranchAsync(host, owner, repo, branch, "/cwd", TimeSpan.FromSeconds(2), run);
+
+    [Test]
+    public async Task Branch_lookup_pins_the_repository_and_the_head() {
+        string? capturedArgs = null;
+
+        CommandRunner fake = (_, args, _, _) => {
+            capturedArgs = args;
+            return Task.FromResult<string?>(
+                """{"number":7,"title":"t","url":"u","headRefName":"remote-name","isCrossRepository":false}""");
+        };
+
+        var pr = await DetectForBranch(fake);
+
+        await Assert.That(capturedArgs).IsEqualTo(
+            "pr view remote-name --repo github.com/acme/widget --json number,title,url,headRefName,isCrossRepository");
+        await Assert.That(pr!.Number).IsEqualTo(7);
+        await Assert.That(pr.HeadRef).IsEqualTo("remote-name");
+    }
+
+    [Test]
+    [Arguments("""{"number":7,"headRefName":"remote-name","isCrossRepository":true}""")]
+    [Arguments("""{"number":7,"headRefName":"other","isCrossRepository":false}""")]
+    [Arguments("""{"number":7,"headRefName":"remote-name"}""")]
+    public async Task Branch_lookup_rejects_a_head_that_is_not_the_repositorys_own_branch(string json) {
+        CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>(json);
+        await Assert.That(await DetectForBranch(fake)).IsNull();
+    }
+
+    /// <summary>An organisation's <c>.github</c> repository is a legal name, and one argument is all
+    /// a leading dot makes — so the lookup runs.</summary>
+    [Test]
+    public async Task Branch_lookup_runs_for_a_dot_prefixed_repository() {
+        string? capturedArgs = null;
+
+        CommandRunner fake = (_, args, _, _) => {
+            capturedArgs = args;
+            return Task.FromResult<string?>(
+                """{"number":7,"headRefName":"remote-name","isCrossRepository":false}""");
+        };
+
+        var pr = await DetectForBranch(fake, repo: ".github");
+
+        await Assert.That(capturedArgs).Contains("--repo github.com/acme/.github");
+        await Assert.That(pr!.Number).IsEqualTo(7);
+    }
+
+    [Test]
+    [Arguments("git hub.com", "acme", "widget", "remote-name")]
+    [Arguments("github.com", "-acme", "widget", "remote-name")]
+    [Arguments("github.com", "acme", "wid\"get", "remote-name")]
+    [Arguments("github.com", "acme", "widget", "--web")]
+    [Arguments("github.com", "acme", "widget", "123")] // gh would read this as PR #123
+    public async Task Branch_lookup_never_spawns_gh_with_an_unsafe_argument(
+            string host, string owner, string repo, string branch) {
+        var spawned = false;
+
+        CommandRunner fake = (_, _, _, _) => {
+            spawned = true;
+            return Task.FromResult<string?>(null);
+        };
+
+        await Assert.That(await DetectForBranch(fake, host, owner, repo, branch)).IsNull();
+        await Assert.That(spawned).IsFalse();
+    }
 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -17,8 +18,17 @@ public class WatcherLifecycleTests {
     static readonly ConfigRoot Root = new(Tmp.Path);
 
     // One manager over that root and a resolution naming the URL these spawns target — the same two
-    // values production hands it, so nothing here can point a watcher at a second server.
-    static readonly WatcherManager Watchers = new(Root, Resolutions.At("http://localhost:0", Root), new FixedCapacitorHttpClient());
+    // values production hands it, so nothing here can point a watcher at a second server. The
+    // directory is named rather than read back off the environment, which this class's own static
+    // initialiser would race.
+    static readonly ProfileContext Profiles = Resolutions.At("http://localhost:0", Root);
+    static readonly WatcherPaths   Paths    = new(TempDir);
+
+    static readonly WatcherManager Watchers =
+        TestWatchers.In(Paths, Root, Profiles, new FixedCapacitorHttpClient());
+
+    static readonly IWatcherSpawner Spawner =
+        new ProcessWatcherSpawner(Root, Profiles, Paths, SystemProcessStarter.Instance);
 
     [Before(Class)]
     public static void SetUp() {
@@ -50,7 +60,7 @@ public class WatcherLifecycleTests {
     public async Task SpawnAndKill_ManagesPidFile() {
         var (key, transcriptPath, pidFile) = SetUpWatcher();
 
-        await Watchers.SpawnWatcher(key, transcriptPath, agentId: null);
+        await Spawner.SpawnAsync(new WatcherSpawnRequest(key, transcriptPath, AgentId: null));
         await AssertPidFileValid(pidFile);
 
         await Watchers.KillWatcher(key);
@@ -71,10 +81,10 @@ public class WatcherLifecycleTests {
     // never be killable through a stale file. Line 2 carries the spawn-time ProcessStartToken,
     // mirroring the daemon pid file.
     [Test]
-    public async Task SpawnWatcher_records_the_process_start_token_beside_the_pid() {
+    public async Task Spawning_records_the_process_start_token_beside_the_pid() {
         var (key, transcriptPath, pidFile) = SetUpWatcher();
 
-        await Watchers.SpawnWatcher(key, transcriptPath, agentId: null);
+        await Spawner.SpawnAsync(new WatcherSpawnRequest(key, transcriptPath, AgentId: null));
 
         var lines = await File.ReadAllLinesAsync(pidFile);
         await Assert.That(lines.Length).IsGreaterThanOrEqualTo(2);
@@ -168,7 +178,7 @@ public class WatcherLifecycleTests {
         var (liveKey, liveTranscript, livePidFile) = SetUpWatcher();
         var (deadKey, _, deadPidFile) = SetUpWatcher();
 
-        await Watchers.SpawnWatcher(liveKey, liveTranscript, agentId: null);
+        await Spawner.SpawnAsync(new WatcherSpawnRequest(liveKey, liveTranscript, AgentId: null));
         await AssertPidFileValid(livePidFile);
 
         // A pid that cannot belong to a live process — exercises the already-exited sweep arm.

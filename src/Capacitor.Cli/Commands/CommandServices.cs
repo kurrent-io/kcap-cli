@@ -29,6 +29,9 @@ public static class CommandServices {
         services.AddSingleton(endpoints);
         services.AddSingleton(clock);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
+        services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
+        services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
+        services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
 
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.
@@ -70,6 +73,9 @@ public static class CommandServices {
     /// dispatches one, and holding them would keep a command's own state alive past its verb.
     /// </summary>
     public static IServiceCollection AddCapacitorCommands(this IServiceCollection services) {
+        // Shared by every hook lane and carrying no per-run state, unlike the commands below.
+        services.AddSingleton<WatcherManager>();
+
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
@@ -93,6 +99,9 @@ public static class CommandServices {
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddSingleton<ChosenServerHttp>();
+        services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
+        services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();

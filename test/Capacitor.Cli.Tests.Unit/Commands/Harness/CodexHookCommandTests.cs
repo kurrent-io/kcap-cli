@@ -46,7 +46,7 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -93,7 +93,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
         await Assert.That(exit).IsEqualTo(0);
 
         // Stop now POSTs /hooks/stop exactly once, carrying the full payload.
@@ -137,7 +137,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
         var sw           = System.Diagnostics.Stopwatch.StartNew();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
@@ -170,7 +170,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
         var sw           = System.Diagnostics.Stopwatch.StartNew();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
@@ -198,7 +198,7 @@ public class CodexHookCommandTests : IDisposable {
 
         // Scheme-less URL → IsAcceptableUrl is false → PostBestEffortAsync returns
         // before any client is built, spending no budget or lease.
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("localhost:5108", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("localhost:5108", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("localhost:5108", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
         await Assert.That(exit).IsEqualTo(0);
 
         var doc = JsonDocument.Parse(capture.GetCapturedOutput());
@@ -234,7 +234,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -279,7 +279,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
         var sw           = System.Diagnostics.Stopwatch.StartNew();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
@@ -320,7 +320,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
         var sw           = System.Diagnostics.Stopwatch.StartNew();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
@@ -341,7 +341,7 @@ public class CodexHookCommandTests : IDisposable {
                             }
                             """;
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
         }
 
@@ -353,7 +353,7 @@ public class CodexHookCommandTests : IDisposable {
     public async Task Unknown_event_returns_zero_and_no_request() {
         var payload = """{"hook_event_name": "BogusEvent", "session_id": "abc"}""";
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
@@ -363,7 +363,7 @@ public class CodexHookCommandTests : IDisposable {
     public async Task Missing_hook_event_name_returns_zero_silently() {
         var payload = """{"session_id": "abc"}""";
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
@@ -373,7 +373,7 @@ public class CodexHookCommandTests : IDisposable {
     public async Task Malformed_json_returns_zero_silently() {
         var payload = "{not json";
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
     }
@@ -383,7 +383,7 @@ public class CodexHookCommandTests : IDisposable {
     public async Task Hook_event_name_as_number_returns_zero_without_crash() {
         var payload = """{"hook_event_name": 99, "session_id": "abc", "transcript_path": "/tmp/r.jsonl"}""";
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
@@ -402,7 +402,7 @@ public class CodexHookCommandTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -447,7 +447,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
 
             await Assert.That(exit).IsEqualTo(0);
 
@@ -473,19 +473,18 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
-        var spawned = new List<string>();
-        Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         using var capture = ConsoleOutput.StartCapture();
 
         try {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
             var payload = """{"hook_event_name":"Stop","session_id":"g1-stop-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
             // The watcher never spawns for an envelope-sourced session...
-            await Assert.That(spawned.Count).IsEqualTo(0);
+            await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
             // ...but only the watcher is suppressed: the idle-marker stop POST still fires.
             var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
             await Assert.That(stopRequests.Count).IsEqualTo(1);
@@ -494,7 +493,6 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
         } finally {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-            Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = null;
         }
     }
 
@@ -507,21 +505,19 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
-        var spawned = new List<string>();
-        Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
         using var capture = ConsoleOutput.StartCapture();
 
         try {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", null);
             var payload = """{"hook_event_name":"Stop","session_id":"g1-stop-control","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
-            await Assert.That(spawned.Count).IsEqualTo(1);
+            await Assert.That(spawner.Spawned.Count).IsEqualTo(1);
         } finally {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-            Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = null;
         }
     }
 
@@ -532,23 +528,21 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
-        var spawned = new List<string>();
-        Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
 
         try {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
             var payload = """{"hook_event_name":"SessionStart","session_id":"g1-start-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).Handle(new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
             // No watcher for an envelope-sourced session; the session-start POST is untouched.
-            await Assert.That(spawned.Count).IsEqualTo(0);
+            await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
             var startRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
             await Assert.That(startRequests.Count).IsEqualTo(1);
         } finally {
             Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-            Capacitor.Cli.WatcherManager.SpawnOverrideForTesting = null;
         }
     }
 
@@ -576,7 +570,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
         );
 
         await Assert.That(exit).IsEqualTo(0);
@@ -598,7 +592,7 @@ public class CodexHookCommandTests : IDisposable {
         using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", "1");
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()))
             .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
 
         await Assert.That(exit).IsEqualTo(0);
@@ -618,7 +612,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
         );
 
         await Assert.That(exit).IsEqualTo(1);
@@ -632,7 +626,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
         );
 
         await Assert.That(exit).IsEqualTo(1);
@@ -646,7 +640,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
         );
 
         await Assert.That(exit).IsEqualTo(1);
@@ -668,7 +662,7 @@ public class CodexHookCommandTests : IDisposable {
         var       hosted  = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse(""));
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient())
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()))
             .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
 
         await Assert.That(exit).IsEqualTo(0);
@@ -682,7 +676,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
         );
 
         await Assert.That(exit).IsEqualTo(1);
@@ -710,7 +704,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        await new CodexHookCommand(Config.Root, Resolutions.At($"http://127.0.0.1:{server.Ports[0]}", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+        await new CodexHookCommand(Config.Root, Resolutions.At($"http://127.0.0.1:{server.Ports[0]}", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At($"http://127.0.0.1:{server.Ports[0]}", Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
         );
 
         await Assert.That(server.LogEntries.Count).IsEqualTo(0); // server NOT touched
@@ -731,7 +725,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"SessionStart","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"SessionStart","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
 
             await Assert.That(exit).IsEqualTo(0);
 
@@ -752,7 +746,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"Stop","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"Stop","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
 
             await Assert.That(exit).IsEqualTo(0);
 
@@ -776,7 +770,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"abc","tool_name":"shell"}"""));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"abc","tool_name":"shell"}"""));
 
             await Assert.That(exit).IsEqualTo(0);
 
@@ -799,7 +793,7 @@ public class CodexHookCommandTests : IDisposable {
         using var capture = ConsoleOutput.StartCapture();
 
         try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).Handle(new StringReader("""{"hook_event_name":"PreToolUse","session_id":"abc","tool_name":"shell"}"""));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader("""{"hook_event_name":"PreToolUse","session_id":"abc","tool_name":"shell"}"""));
 
             await Assert.That(exit).IsEqualTo(0);
             await Assert.That(capture.GetCapturedOutput()).IsEqualTo(string.Empty);
@@ -848,9 +842,7 @@ public class CodexHookCommandTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(
-            Config.Root, Resolutions.At(_server.Url!, Config.Root),
-            new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, http).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, http, TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), http)).Handle(new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(http.Lanes).IsEquivalentTo(new[] { "Loopback" });

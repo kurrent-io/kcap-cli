@@ -22,21 +22,21 @@ public enum DaemonAffordance { None, Install, Start, Takeover, Repair }
 public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     internal const string ConsentV3Capability = "consent/3";
 
-    internal const string CliMissingMessage    = "kcap CLI not found";
-    internal const string RequiresSignInMessage = "Enabling the daemon requires sign-in — sign in first, or skip this step.";
-    internal const string NoServerMessage       = "Server not configured — complete the Sign in step first.";
-    internal const string BinaryUnresolvedMessage = "kcap can't resolve its own daemon binary — reinstall kcap.";
-    internal const string StatusUnknownMessage = "Could not read the daemon service status — no changes made.";
-    internal const string UnrecognizedStateMessage = "The daemon service reported an unrecognized state — no changes made.";
-    internal const string TxnWaitingMessage    = "Waiting for a daemon service operation to finish…";
-    internal const string TxnActiveMessage     = "A daemon service operation is still in progress — try again in a moment.";
-    internal const string AlreadyEnabledMessage = "The daemon service is already enabled.";
+    internal const string CliMissingMessage    = "kcap isn't available on this machine. Install it, then check again.";
+    internal const string RequiresSignInMessage = "Go Back to sign in, or continue and enable the daemon later in Settings.";
+    internal const string NoServerMessage       = "No workspace is configured. Go Back to Sign in.";
+    internal const string BinaryUnresolvedMessage = "kcap can't find its daemon binary. Reinstall kcap, then check again.";
+    internal const string StatusUnknownMessage = "Couldn't read the daemon service. Check again, or continue and try later in Settings.";
+    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state. Check again, or continue and try later in Settings.";
+    internal const string TxnWaitingMessage    = "Waiting for a daemon operation to finish…";
+    internal const string TxnActiveMessage     = "A daemon operation is still running. Check again in a moment.";
+    internal const string AlreadyEnabledMessage = "The daemon is running and will start again after a reboot.";
     internal const string StaleMarkerNote      = "A previous operation left a stale marker.";
-    internal const string StaleMarkerMessage   = "A previous daemon service operation left a stale marker — repair the service.";
-    internal const string OrphanLabelMessage   = "The daemon service label is loaded but its unit file is missing — repair the service.";
-    internal const string RunningUnconfirmedMessage = "The service reports its job running, but no daemon answers it yet — try again in a moment.";
-    internal const string StoppedMessage       = "The daemon service is installed but not running.";
-    internal const string NotInstalledMessage  = "kcap will install the daemon service and start it.";
+    internal const string StaleMarkerMessage   = "A previous operation left the service incomplete.";
+    internal const string OrphanLabelMessage   = "The service is registered but its files are missing.";
+    internal const string RunningUnconfirmedMessage = "The service started, but the daemon hasn't answered yet. Check again in a moment.";
+    internal const string StoppedMessage       = "The daemon is installed but not running.";
+    internal const string NotInstalledMessage  = "Installs the background service so hosted agents keep running after a reboot.";
     internal const string TakeoverDeclinedMessage = "Left as it is — the daemon service was not replaced.";
     internal const string DetachedMessage      = "kcap is still finishing this operation in the background.";
     internal const string ClaimMissingCapabilityMessage =
@@ -115,7 +115,10 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     public DaemonRow Row {
         get => _row;
-        private set => this.RaiseAndSetIfChanged(ref _row, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _row, value);
+            this.RaisePropertyChanged(nameof(RefreshVisible));
+        }
     }
 
     public DaemonAffordance Affordance {
@@ -123,6 +126,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _affordance, value);
             this.RaisePropertyChanged(nameof(ActionLabel));
+            this.RaisePropertyChanged(nameof(RefreshVisible));
         }
     }
 
@@ -139,10 +143,18 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _busy, value);
             this.RaisePropertyChanged(nameof(Idle));
+            this.RaisePropertyChanged(nameof(RefreshVisible));
         }
     }
 
     public bool Idle => !Busy;
+
+    /// Re-check only when the row can change without a mutation — never when the user already
+    /// has an action, is already done, or has to leave the step to make progress.
+    public bool RefreshVisible =>
+        !Busy && Affordance == DaemonAffordance.None && Row is
+            DaemonRow.CliMissing or DaemonRow.BinaryUnresolved or DaemonRow.StatusUnknown
+            or DaemonRow.TransactionActive or DaemonRow.RunningUnconfirmed;
 
     /// What the current row found — the honest line, present on every row.
     public string? Message {

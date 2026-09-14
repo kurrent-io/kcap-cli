@@ -58,8 +58,8 @@ internal enum HookPostOutcome {
 /// the user before the request — and names the fix on stderr, the only channel these vendors have.
 /// A no-op for the <c>None</c> provider (posts normally, unauthenticated) and unchanged when authenticated.
 /// </summary>
-internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+internal sealed class AgentHookPoster(
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers) {
 
     // The one URL this process resolved. A hook posting to one server while its watcher streams to
     // another is not a configuration this can represent.
@@ -282,7 +282,7 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
                 // parent-exit path) must still trigger the what's-done generator, mirroring
                 // ClaudeHookCommand.ClaudePoster's own session-end replay side effect.
                 await LifecycleSpoolDrain.RunAsync(new CursorMarkers(config), client, Url!, lifecycle, transcript, sessionId, budget, cts.Token,
-                    onWhatsDoneRequested: (sid, vendor) => _watchers.SpawnWhatsDoneGenerator(sid, vendor));
+                    onWhatsDoneRequested: (sid, vendor) => watchers.SpawnWhatsDoneGenerator(sid, vendor));
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.

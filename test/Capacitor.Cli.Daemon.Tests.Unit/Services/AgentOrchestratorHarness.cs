@@ -59,14 +59,14 @@ internal static class AgentOrchestratorHarness {
             config.AllowedRepoPaths = [allowedRepoPath];
         }
 
-        configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
+        configure?.Invoke(config); // Lets a test tweak the config (e.g. reviewer TTL bounds)
 
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
         var httpFactory      = new StubHttpClientFactory();
         var http             = new FixedCapacitorHttpClient();
         var tokens           = AuthFixtures.NewTokenStore(configRoot.Root);
-        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
+        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
 
         // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
         // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
