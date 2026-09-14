@@ -747,10 +747,13 @@ public class HomeViewModelTests {
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
             await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
@@ -1097,6 +1100,9 @@ public class HomeViewModelTests {
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();

@@ -822,10 +822,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// A remote launch is Ready only with the app's OWN server lane connected AND the selected
     /// daemon's latest reported Connected — the local daemon-down notices never apply here (they
     /// stay local-only; a remote pick with the lane down still just shows ServerLostNotice).
-    /// Connecting reads as Pending (not ServerDisconnected) so the notice for a remote selection
-    /// can distinguish "still connecting" from "lost" the same way the local path already does.
+    /// Connecting and Retrying read as Pending so a remote pick can distinguish catch-up from a
+    /// lost session — Retrying is the normal redial, not a prompt for Sign in.
     internal static LaunchAvailability RemoteAvailabilityFor(ServerLaneStatus lane, MachineOption? machine) {
-        if (lane.State == ServerLaneState.Connecting) return LaunchAvailability.Pending;
+        if (lane.State is ServerLaneState.Connecting or ServerLaneState.Retrying)
+            return LaunchAvailability.Pending;
         if (lane.State != ServerLaneState.Connected) return LaunchAvailability.ServerDisconnected;
         return machine is { Connected: true } ? LaunchAvailability.Ready : LaunchAvailability.DaemonUnavailable;
     }
