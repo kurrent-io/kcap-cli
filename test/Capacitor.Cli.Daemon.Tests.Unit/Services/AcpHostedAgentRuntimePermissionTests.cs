@@ -78,7 +78,9 @@ public class AcpHostedAgentRuntimePermissionTests {
         while (fake.LastServerRequestResponse is null && DateTime.UtcNow < responseDeadline)
             await Task.Delay(10);
 
-        await Assert.That(fake.LastServerRequestResponse).IsNotNull();
+        // HasValue, not IsNotNull: the assertion maps a JsonElement? through .Value, so a genuinely
+        // absent response is reported as "Nullable object must have a value" rather than as null.
+        await Assert.That(fake.LastServerRequestResponse.HasValue).IsTrue();
         var outcome = fake.LastServerRequestResponse!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("selected");
         await Assert.That(outcome.GetProperty("optionId").GetString()).IsEqualTo("allow-once");

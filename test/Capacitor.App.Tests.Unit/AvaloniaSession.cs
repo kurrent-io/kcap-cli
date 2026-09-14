@@ -20,8 +20,12 @@ internal static class AvaloniaSession {
                 .UseHeadless(new AvaloniaHeadlessPlatformOptions());
     }
 
+    /// One application for the whole assembly, not one per test: per-test isolation releases
+    /// Dispatcher.UIThread and reclaims it on EVERY dispatch, so the window ClaimUiThread closes
+    /// below would reopen for every UI test after it. One application leaves nothing to reclaim,
+    /// which is what makes that single claim hold.
     static readonly Lazy<HeadlessUnitTestSession> Session =
-        new(static () => HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder)),
+        new(static () => HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder), AvaloniaTestIsolationLevel.PerAssembly),
             LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// Dispatcher.UIThread binds to whichever thread first touches it and owns it for the process.

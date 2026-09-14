@@ -429,7 +429,17 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 if (pending is not null) {
                     var hasResult = root.TryGetProperty("result", out var resultEl);
                     var hasError  = root.TryGetProperty("error", out var errorEl);
-                    pending.TrySetResult((hasResult ? resultEl.Clone() : null, hasError ? errorEl.Clone() : null));
+                    var result    = hasResult ? resultEl.Clone() : (JsonElement?) null;
+                    var error     = hasError ? errorEl.Clone() : (JsonElement?) null;
+
+                    // Recorded by the loop that read the frame rather than by the sender resuming:
+                    // the completion source publishes continuations asynchronously, so assigning
+                    // there leaves a test asserting on these fields waiting on two thread-pool hops
+                    // it has no way to await, with only a wall clock to say when to give up.
+                    _lastServerRequestResponse = result;
+                    _lastServerRequestError    = error;
+
+                    pending.TrySetResult((result, error));
                 }
             }
 
@@ -613,9 +623,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         await WriteRawFrameAsync(frame, ct).ConfigureAwait(false);
 
-        var (result, error) = await tcs.Task.ConfigureAwait(false);
-        _lastServerRequestResponse = result;
-        _lastServerRequestError    = error;
+        await tcs.Task.ConfigureAwait(false);
     }
 
     void Record(string method, JsonElement? @params) {

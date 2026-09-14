@@ -86,6 +86,7 @@ public class PermissionWiringTests {
         services.AddSingleton<PermissionIpc>();
         services.AddSingleton(sp => new PermissionDecisionLog(
             Tmp.Path, sp.GetRequiredService<ILogger<PermissionDecisionLog>>()));
+        services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         services.AddSingleton<LocalPermissionBridge>();
         services.AddSingleton<AgentOrchestrator>();
 

@@ -58,7 +58,7 @@ public class AgentResolvedTitleTests {
         var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
+        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
         var notifier         = new DaemonStatusNotifier();
 
         var orchestrator = new AgentOrchestrator(

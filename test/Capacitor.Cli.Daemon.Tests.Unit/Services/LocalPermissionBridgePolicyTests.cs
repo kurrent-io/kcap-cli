@@ -40,7 +40,7 @@ public class LocalPermissionBridgePolicyTests {
 
         public Harness(PolicySnapshot? snapshot) {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
-            Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, Broker, Log) {
+            Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, Broker, Log) {
                 AttributeHandler = _ => new AttributedAgent("agent-1", snapshot),
             };
         }
