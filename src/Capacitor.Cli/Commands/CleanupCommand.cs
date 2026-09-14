@@ -3,8 +3,8 @@ namespace Capacitor.Cli.Commands;
 sealed class CleanupCommand(WatcherManager watchers) {
 
     public async Task<int> HandleCleanup() {
-        // Honor the KCAP_WATCHER_DIR override (via GetWatcherDir) so cleanup targets the same
-        // directory KillWatcher/SpawnWatcher use, rather than always the config default.
+        // The directory WatcherPaths resolves, not the config default: a spawn writes its pid
+        // files wherever KCAP_WATCHER_DIR points, and cleanup has to look in that same place.
         var watcherDir = watchers.GetWatcherDir();
 
         if (!Directory.Exists(watcherDir)) {

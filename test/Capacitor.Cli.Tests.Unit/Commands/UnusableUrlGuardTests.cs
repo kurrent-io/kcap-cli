@@ -128,7 +128,7 @@ public class UnusableUrlGuardTests : IDisposable {
     }
 
     [Test]
-    public async Task SpawnWatcher_never_starts_a_process() {
+    public async Task Spawning_a_watcher_never_starts_a_process() {
         var starter = FakeProcessStarter.Refusing();
 
         await GuardedSpawner(starter).SpawnAsync(new WatcherSpawnRequest(Sid, Path.Combine(_dir, "t.jsonl"), AgentId: null));

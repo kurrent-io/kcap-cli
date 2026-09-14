@@ -81,7 +81,7 @@ public class WatcherLifecycleTests {
     // never be killable through a stale file. Line 2 carries the spawn-time ProcessStartToken,
     // mirroring the daemon pid file.
     [Test]
-    public async Task SpawnWatcher_records_the_process_start_token_beside_the_pid() {
+    public async Task Spawning_records_the_process_start_token_beside_the_pid() {
         var (key, transcriptPath, pidFile) = SetUpWatcher();
 
         await Spawner.SpawnAsync(new WatcherSpawnRequest(key, transcriptPath, AgentId: null));
