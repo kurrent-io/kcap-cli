@@ -95,9 +95,18 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
             Func<Task<AuthAttempt>> clientFactory,
             string                                             endpoint,
             string                                             body,
-            string                                             agentTag
+            string                                             agentTag,
+            TimeSpan?                                          authCap = null
         ) {
-        var (client, status) = await clientFactory();
+        // Past the cap the payload is dropped the way a lapse drops it: this path has no spool, and
+        // a hook killed by its host while waiting on the refresh lock would lose it just the same.
+        var created = await BoundedAuth.CreateClientWithinAsync(clientFactory, authCap ?? AuthCap);
+
+        if (created is null) {
+            return HookPostOutcome.AuthLapsed;
+        }
+
+        var (client, status) = created.Value;
 
         using (client) {
             // Auth lapsed: the POST would 401. Skip it and report so the caller exits cleanly
