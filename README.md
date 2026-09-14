@@ -1,5 +1,9 @@
 # Kurrent Capacitor
 
+> **Liquid glass desktop prototype:** this branch includes an interactive material study
+> for the launcher, chips and sidebar. See [build and run instructions](src/Capacitor.App/Prototypes/README.md#build-and-run-locally)
+> to try it with sample data using the .NET 10 SDK.
+
 > Full observability for your AI coding-agent sessions — record every session, watch agent activity in real time, and review code changes grounded in the transcripts that produced them.
 
 [![npm](https://img.shields.io/npm/v/@kurrent/kcap?color=cb3837&logo=npm&label=%40kurrent%2Fkcap)](https://www.npmjs.com/package/@kurrent/kcap)
