@@ -11,14 +11,12 @@ public class McpWorkItemsServerTests {
     McpWorkItemsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup);
 
-    const string CapacitorSessionIdEnvVar = "KCAP_SESSION_ID";
-    const string CodexThreadIdEnvVar      = "CODEX_THREAD_ID";
-
-    // Shares ArgParsingTests' NotInParallel key: both suites mutate the same process-global
-    // KCAP_SESSION_ID / CODEX_THREAD_ID env vars, so tests in either must not interleave.
-    const string SessionEnvVarMutation = "SessionEnvVarMutation";
-
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
+
+    // Injected rather than set on the process: the suite itself runs inside a harness session that
+    // exports these variables, so a real-environment test could pass or fail on the runner's own id.
+    static Func<string, string?> Env(Dictionary<string, string?> values) =>
+        key => values.TryGetValue(key, out var value) ? value : null;
 
     [Test]
     public async Task Resolve_session_id_prefers_explicit_argument() {
@@ -37,39 +35,39 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    [NotInParallel(SessionEnvVarMutation)]
     public async Task Resolve_session_id_falls_back_to_env_when_argument_missing() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "envsess1");
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+        var id = McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new() { ["KCAP_SESSION_ID"] = "envsess1" }));
 
-        try {
-            var id = McpWorkItemsServer.ResolveSessionId(new JsonObject());
-
-            await Assert.That(id).IsEqualTo("envsess1");
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
+        await Assert.That(id).IsEqualTo("envsess1");
     }
 
     [Test]
-    [NotInParallel(SessionEnvVarMutation)]
+    public async Task Resolve_session_id_falls_back_to_the_running_harness_session() {
+        // KCAP_SESSION_ID reaches only a Claude Code session's Bash tool calls; the MCP server process
+        // sees CLAUDE_CODE_SESSION_ID and nothing else, so this is the one ambient signal it ever gets.
+        var id = McpWorkItemsServer.ResolveSessionId(new JsonObject(),
+            Env(new() { ["CLAUDE_CODE_SESSION_ID"] = "1234abcd-56ef-78ab-90cd-1234567890ab" }));
+
+        await Assert.That(id).IsEqualTo("1234abcd56ef78ab90cd1234567890ab");
+    }
+
+    [Test]
+    public async Task Resolve_session_id_prefers_the_running_harness_session_over_an_inherited_env_var() {
+        // A session launched from another session's shell inherits the parent's KCAP_SESSION_ID;
+        // attaching to it would file the work under the wrong session without any error.
+        var id = McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new() {
+            ["KCAP_SESSION_ID"]        = "22222222222222222222222222222222",
+            ["CLAUDE_CODE_SESSION_ID"] = "11111111-1111-1111-1111-111111111111"
+        }));
+
+        await Assert.That(id).IsEqualTo("11111111111111111111111111111111");
+    }
+
+    [Test]
     public async Task Resolve_session_id_throws_when_neither_argument_nor_env_present() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, null);
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+        var ex = Assert.Throws<ArgumentException>(() => McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new())));
 
-        try {
-            var ex = Assert.Throws<ArgumentException>(() => McpWorkItemsServer.ResolveSessionId(new JsonObject()));
-
-            await Assert.That(ex!.Message).IsEqualTo(McpWorkItemsServer.NoSessionIdMessage);
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
+        await Assert.That(ex!.Message).IsEqualTo(McpWorkItemsServer.NoSessionIdMessage);
     }
 
     [Test]

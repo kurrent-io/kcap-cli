@@ -14,7 +14,7 @@ using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary> P2 task 17: MCP tools for the work-items correlation surface — attach the
+/// <summary>MCP tools for the work-items correlation surface — attach the
 /// current session (and its continuation chain) to a work item, and list what a session is
 /// already attached to. Cloned from <see cref="McpMemoryServer"/>'s stdio JSON-RPC loop; unlike
 /// memory this server has no repo/machine context to resolve — the only per-call input is the
@@ -24,7 +24,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     internal const string NoSessionIdMessage =
-        "No session id: pass session_id explicitly or run inside a kcap-hooked session (KCAP_SESSION_ID or CODEX_THREAD_ID).";
+        "No session id: pass session_id explicitly or run inside a harness session kcap can identify (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
 
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
@@ -226,16 +226,16 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
     /// <summary>
-    /// Resolves the session id to act on: an explicit <c>session_id</c> tool argument wins,
-    /// else the ambient <c>KCAP_SESSION_ID</c> (or <c>CODEX_THREAD_ID</c>) env var via
-    /// <see cref="ArgParsing.ResolveSessionIdFromEnv()"/>. Throws when neither is available, so
-    /// the caller (via <see cref="HandleToolCallAsync"/>) surfaces a clean tool error instead
-    /// of sending a request with a missing/blank session id. Either source is canonicalized the
-    /// same way — a GUID to its 32-hex form, an opaque vendor id unchanged — so a caller passing a
-    /// dashed GUID (e.g. copy-pasted from a UI) resolves to the key the server expects instead of
-    /// silently missing the intended session.
+    /// An explicit <c>session_id</c> argument wins; otherwise the session is the one the running
+    /// harness reports (<see cref="HarnessRequesterContext"/>), not a bare inherited env var: a
+    /// Claude Code MCP server never sees <c>KCAP_SESSION_ID</c>, and one launched from another
+    /// session's shell inherits the parent's. Throws rather than sending a blank id, so the tool
+    /// answers with a clean error. Both sources canonicalize alike (a GUID to its 32-hex form).
     /// </summary>
-    internal static string ResolveSessionId(JsonObject? args) {
+    internal static string ResolveSessionId(JsonObject? args) =>
+        ResolveSessionId(args, Environment.GetEnvironmentVariable);
+
+    internal static string ResolveSessionId(JsonObject? args, Func<string, string?> getEnv) {
         if (args?["session_id"] is { } node) {
             // Shape-tested like RequireString: a number or object here must answer as a field error,
             // not fall out of the dispatcher as a generic internal failure.
@@ -244,7 +244,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (explicitId.Length > 0)
                 return WorkContextIds.CanonicalSessionId(explicitId) ?? throw new ArgumentException(NoSessionIdMessage);
         }
-        if (ArgParsing.ResolveSessionIdFromEnv() is { Length: > 0 } fromEnv) return fromEnv;
+        if (HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId is { Length: > 0 } fromEnv) return fromEnv;
 
         throw new ArgumentException(NoSessionIdMessage);
     }
@@ -272,7 +272,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     /// <summary>
     /// Builds a work-item-scoped URL, reading a REQUIRED id from <paramref name="idKey"/>.
-    /// Required with no fallback, deliberately: <see cref="ResolveSessionId"/> can default to the
+    /// Required with no fallback, deliberately: <see cref="ResolveSessionId(JsonObject?)"/> can default to the
     /// ambient session because "the session I am running in" is unambiguous, whereas there is no
     /// ambient work item — a default here would silently attach the wrong edge of the graph.
     /// Escaped, so an id containing a slash or a percent cannot walk out of its path segment and hit
@@ -469,12 +469,12 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["pr_number"]    = new("integer", "Attach to the work item for this PR number, creating it if none exists yet."),
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),
-                ["session_id"]   = new("string", "Session id to attach. Defaults to the current kcap-hooked session (KCAP_SESSION_ID) when omitted.")
+                ["session_id"]   = new("string", "Session id to attach. Defaults to the session this server runs in when omitted.")
             }, [])),
         new("get_session_work_items",
             "List the work items the current session is attached to.",
             new("object", new() {
-                ["session_id"] = new("string", "Session id to look up. Defaults to the current kcap-hooked session (KCAP_SESSION_ID) when omitted.")
+                ["session_id"] = new("string", "Session id to look up. Defaults to the session this server runs in when omitted.")
             }, [])),
 
         // The declared work-breakdown / relation surface. NOTE: no tool
@@ -542,7 +542,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "attachment a user pinned in the dashboard cannot be removed by an agent.",
             new("object", new() {
                 ["work_item_id"] = new("string", "The work item to detach the session from."),
-                ["session_id"]   = new("string", "Session id to detach. Defaults to the current kcap-hooked session (KCAP_SESSION_ID) when omitted.")
+                ["session_id"]   = new("string", "Session id to detach. Defaults to the session this server runs in when omitted.")
             }, ["work_item_id"]))
     ];
 }

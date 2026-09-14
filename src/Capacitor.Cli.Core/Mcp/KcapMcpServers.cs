@@ -36,7 +36,7 @@ public static class KcapMcpServers {
 
     /// <summary>Codex receives the full set. Kept as a named per-harness seam so a future
     /// divergence has a home, but today it is the whole `All` list — `kcap-workitems` is now
-    /// registered everywhere (its session id resolves from an explicit arg / `KCAP_SESSION_ID` /
+    /// registered everywhere (its session id resolves from an explicit arg / `CLAUDE_CODE_SESSION_ID` / `KCAP_SESSION_ID` /
     /// `CODEX_THREAD_ID`, and its breakdown/relation tools need no session id at all). Flows remains
     /// non-read-only and is never auto-approved.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCodex => All;
