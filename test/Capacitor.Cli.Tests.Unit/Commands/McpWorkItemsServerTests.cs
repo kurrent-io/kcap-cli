@@ -64,6 +64,15 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
+    public async Task Resolve_session_id_rejects_an_ambient_dot_segment_like_an_explicit_one() {
+        // "." survives escaping, so a dot segment in the session URL would be normalized out of the route.
+        var ex = Assert.Throws<ArgumentException>(() =>
+            McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new() { ["CLAUDE_CODE_SESSION_ID"] = ".." })));
+
+        await Assert.That(ex!.Message).IsEqualTo(McpWorkItemsServer.NoSessionIdMessage);
+    }
+
+    [Test]
     public async Task Resolve_session_id_throws_when_neither_argument_nor_env_present() {
         var ex = Assert.Throws<ArgumentException>(() => McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new())));
 

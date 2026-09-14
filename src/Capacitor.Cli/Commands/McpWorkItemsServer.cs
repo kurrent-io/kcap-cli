@@ -244,7 +244,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (explicitId.Length > 0)
                 return WorkContextIds.CanonicalSessionId(explicitId) ?? throw new ArgumentException(NoSessionIdMessage);
         }
-        if (HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId is { Length: > 0 } fromEnv) return fromEnv;
+        var ambient = HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId;
+        if (WorkContextIds.CanonicalSessionId(ambient) is { } fromEnv) return fromEnv;
 
         throw new ArgumentException(NoSessionIdMessage);
     }
