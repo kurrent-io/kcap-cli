@@ -32,6 +32,8 @@ public enum FrameType : byte {
     SendText = 22, // Text = SendTextDto JSON
     // Daemon settings — one-shot; the ack carries the value in effect.
     DaemonSettingsPut = 23, // Text = DaemonSettingsPutDto JSON
+    // Composer input with attachments — one-shot; acked on SendTextAck when the delivery settles.
+    SendTextWithAttachments = 24, // Text = SendTextWithAttachmentsDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
