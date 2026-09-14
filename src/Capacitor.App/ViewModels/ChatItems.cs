@@ -5,7 +5,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One row of the Chat tab. Five shapes, matched by DataTemplates on the concrete type.
+/// One row of the Chat tab. Matched by DataTemplates on the concrete type.
 public abstract class ChatItemViewModel : ReactiveObject { }
 
 public sealed class UserTurnItem(string text) : ChatItemViewModel {
@@ -143,6 +143,14 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     bool _hasFailure;
     public bool HasFailure { get => _hasFailure; private set => this.RaiseAndSetIfChanged(ref _hasFailure, value); }
 
+    bool _packsWithCard;
+    /// A live card answering this group sits in the next row; the view drops the paragraph gap
+    /// so the two read as one block.
+    public bool PacksWithCard {
+        get => _packsWithCard;
+        set => this.RaiseAndSetIfChanged(ref _packsWithCard, value);
+    }
+
     public ToolGroupItem() {
         ToggleCommand = ReactiveCommand.Create(Toggle);
     }
@@ -193,4 +201,10 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         const int cap = 56;
         return text.Length <= cap ? text : text[..(cap - 1)] + "…";
     }
+}
+
+/// A live prompt card sitting in the transcript list so it virtualizes with the thread.
+public sealed class PendingCardItem(PendingCardViewModel card, bool packsWithPrevious = false) : ChatItemViewModel {
+    public PendingCardViewModel Card { get; } = card;
+    public bool PacksWithPrevious { get; } = packsWithPrevious;
 }

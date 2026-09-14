@@ -1,5 +1,6 @@
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
@@ -16,8 +17,23 @@ public class PermissionServiceTests {
     static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? serverRequestId = null) =>
         new(id, agent, "s1", "claude", "Bash", null, null, false, false, "2026-08-28T10:00:00.0000000+00:00", null, serverRequestId);
 
+    static PermissionPendingDto QuestionDto(string id = "q1", string? serverRequestId = null, string question = "Pick a lane",
+            string session = "s1", string? header = null) {
+        var body = header is null
+            ? $$"""{"questions":[{"question":{{JsonSerializer.Serialize(question)}},"options":[{"label":"A"}]}]}"""
+            : $$"""{"questions":[{"question":{{JsonSerializer.Serialize(question)}},"header":{{JsonSerializer.Serialize(header)}},"options":[{"label":"A"}]}]}""";
+        using var doc = JsonDocument.Parse(body);
+        return new(id, "a1", session, "claude", ClaudeElicitation.ToolName, doc.RootElement.Clone(), null, false, false,
+            "2026-08-28T10:00:00.0000000+00:00", null, serverRequestId);
+    }
+
     static PendingPermissionRequest ServerPermission(string id = "srv-1", string session = "s1", IReadOnlyList<AcpInteractionOption>? options = null) =>
         PendingPermissionRequest.FromServer(new ServerPermissionRequest(session, id, "Bash", null, options), "claude", DateTimeOffset.UtcNow);
+
+    static PendingPermissionRequest ServerQuestion(string id = "srv-q", string prompt = "Pick a lane", string session = "s1") =>
+        PendingPermissionRequest.FromServer(
+            new ServerElicitationRequest(session, id, prompt, [new() { OptionId = "a", Label = "A" }], false),
+            DateTimeOffset.UtcNow);
 
     sealed class FakePermissionStream {
         readonly Channel<PermissionStreamEvent?> _channel = Channel.CreateUnbounded<PermissionStreamEvent?>();
@@ -360,6 +376,81 @@ public class PermissionServiceTests {
         // A later server push for the claimed id stays shadowed.
         h.Service.UpsertServer(ServerPermission("srv-1"));
         await Assert.That(h.View.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_local_question_shadows_a_server_elicitation_with_the_same_prompt() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var local = await h.EmitAsync(QuestionDto());
+        h.Service.UpsertServer(ServerQuestion());
+        await Assert.That(h.View.Count).IsEqualTo(1);
+        await Assert.That(ReferenceEquals(h.View.Lookup("local:q1").Value, local)).IsTrue();
+        await Assert.That(local.ServerRequestId).IsEqualTo("srv-q");
+        await Assert.That(h.View.Lookup("server:srv-q").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_server_elicitation_is_shadowed_by_a_later_local_question_with_the_same_prompt() {
+        using var h = new Harness();
+        await h.StartAsync();
+        h.Service.UpsertServer(ServerQuestion());
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        var local = await h.EmitAsync(QuestionDto());
+        await WaitUntilAsync(() => h.View.Count == 1, what: "twin shadowed");
+        await Assert.That(ReferenceEquals(h.View.Lookup("local:q1").Value, local)).IsTrue();
+        await Assert.That(local.ServerRequestId).IsEqualTo("srv-q");
+    }
+
+    [Test]
+    public async Task A_bash_permission_and_a_server_elicitation_stay_two_cards() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(Dto("l1"));
+        h.Service.UpsertServer(ServerQuestion());
+        await Assert.That(h.View.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Different_question_texts_stay_two_cards() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(QuestionDto(question: "Pick a lane"));
+        h.Service.UpsertServer(ServerQuestion(prompt: "Pick a different lane"));
+        await Assert.That(h.View.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Same_prompt_on_different_sessions_stay_two_cards() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(QuestionDto(session: "s1"));
+        h.Service.UpsertServer(ServerQuestion(session: "s2"));
+        await Assert.That(h.View.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Header_plus_question_matches_an_acp_prompt_that_includes_the_header() {
+        using var h = new Harness();
+        await h.StartAsync();
+        var local = await h.EmitAsync(QuestionDto(question: "declare this", header: "Missing tools"));
+        h.Service.UpsertServer(ServerQuestion(prompt: "Missing tools\n\ndeclare this"));
+        await Assert.That(h.View.Count).IsEqualTo(1);
+        await Assert.That(local.ServerRequestId).IsEqualTo("srv-q");
+    }
+
+    [Test]
+    public async Task A_disconnect_resurfaces_the_prompt_shadowed_elicitation() {
+        using var h = new Harness();
+        await h.StartAsync();
+        await h.EmitAsync(QuestionDto());
+        h.Service.UpsertServer(ServerQuestion());
+        await Assert.That(h.View.Count).IsEqualTo(1);
+
+        h.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await WaitUntilAsync(() => h.View.Lookup("server:srv-q").HasValue, what: "twin resurfaced");
+        await Assert.That(h.View.Lookup("local:q1").HasValue).IsFalse();
     }
 
     [Test]

@@ -58,13 +58,19 @@
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
             <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
-        <!-- A TextBox inside one of our cards: the card is its boundary, so the theme's focused
-             ring and fill would read as a second box. Fluent's default placeholder follows the
+        <!-- A TextBox inside one of our cards: the card is its boundary, so Fluent's resting fill
+             and focused ring would read as a second box. The default placeholder follows the
              system theme and goes near-black on our dark surfaces — pin a readable muted tone. -->
         <Style Selector="TextBox.kcapEmbedded">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CaretBrush" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="PlaceholderForeground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
-        <Style Selector="TextBox.kcapEmbedded:focus /template/ Border#PART_BorderElement, TextBox.kcapEmbedded:pointerover /template/ Border#PART_BorderElement">
+        <Style Selector="TextBox.kcapEmbedded /template/ Border#PART_BorderElement,
+                         TextBox.kcapEmbedded:focus /template/ Border#PART_BorderElement,
+                         TextBox.kcapEmbedded:pointerover /template/ Border#PART_BorderElement">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
         </Style>
@@ -299,6 +305,11 @@
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.toolKindChip">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
         <!-- Live tool-call status: a soft pulse so an in-flight row is never a blank gap. -->
         <Style Selector="Border.toolRunning">

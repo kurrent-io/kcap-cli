@@ -4,7 +4,7 @@
     <!-- The three NEEDS YOU card kinds. Every pane that answers a prompt renders them from here,
          so a card looks and behaves the same whether the agent runs on this machine or another. -->
     <DataTemplate x:Key="PermissionCardTemplate" x:DataType="vm:PermissionCardViewModel">
-        <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapSuccessBrush}"
+        <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,10" Margin="0,0,0,6">
             <StackPanel Spacing="6">
                 <TextBlock Text="{Binding ToolName}" FontWeight="SemiBold" FontSize="13" Foreground="{StaticResource KcapTextBrush}" />
@@ -33,9 +33,17 @@
         </Border>
     </DataTemplate>
     <DataTemplate x:Key="QuestionCardTemplate" x:DataType="vm:QuestionCardViewModel">
-        <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapSuccessBrush}"
+        <Border x:Name="QuestionCard"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
             <Border.Styles>
+                <Style Selector="TextBlock.prompt">
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="FontSize" Value="15" />
+                    <Setter Property="LineHeight" Value="21" />
+                    <Setter Property="TextWrapping" Value="Wrap" />
+                    <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+                </Style>
                 <!-- Option chrome lives in class styles only: a local Background/BorderBrush on
                      the Button would outrank the selected style and leave it inert, and the
                      theme's hover fill on PART_ContentPresenter is overridden for the same reason. -->
@@ -131,13 +139,8 @@
                     <ContentControl.ContentTemplate>
                         <DataTemplate x:DataType="vm:QuestionGroupViewModel">
                             <StackPanel Spacing="8">
-                                <Border Background="{StaticResource KcapSurfaceBrush}" CornerRadius="4" Padding="6,2" HorizontalAlignment="Left"
-                                        IsVisible="{Binding ShowsHeader}">
-                                    <TextBlock Text="{Binding Header}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource KcapMutedBrush}"
-                                               TextTrimming="CharacterEllipsis" MaxLines="1" />
-                                </Border>
-                                <TextBlock Text="{Binding Text}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
-                                           Foreground="{StaticResource KcapTextBrush}" />
+                                <TextBlock Classes="toolKindChip" Text="{Binding Header}" IsVisible="{Binding ShowsHeader}" />
+                                <TextBlock Classes="prompt" Text="{Binding Text}" />
                                 <ItemsControl ItemsSource="{Binding Options}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -169,8 +172,8 @@
                                             IsVisible="{Binding ShowsOtherAnswer}" Margin="6,0,0,0"
                                             Padding="12,5" FontSize="13" CornerRadius="7"
                                             Classes="kcapPrimary" Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
-                                    <TextBox Text="{Binding OtherText}" PlaceholderText="Other…" MaxLength="{Binding MaxOtherLength}"
-                                             AcceptsReturn="False" FontSize="13" MinHeight="34">
+                                    <TextBox Classes="kcapField" Text="{Binding OtherText}" PlaceholderText="Other…"
+                                             MaxLength="{Binding MaxOtherLength}" AcceptsReturn="False" FontSize="13" MinHeight="34">
                                         <TextBox.KeyBindings>
                                             <KeyBinding Gesture="Enter" Command="{Binding EnterCommand}" />
                                         </TextBox.KeyBindings>
@@ -224,7 +227,7 @@
     </DataTemplate>
     <DataTemplate x:Key="AcpQuestionCardTemplate" x:DataType="vm:AcpQuestionCardViewModel">
         <Border x:Name="AcpQuestionCard"
-                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapSuccessBrush}"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,0,0,6">
             <Border.Styles>
                 <Style Selector="Button.acpOption, ToggleButton.acpOption">
@@ -263,8 +266,8 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
-                <TextBox Text="{Binding FreeText}" PlaceholderText="Type your answer…" IsVisible="{Binding !HasOptions}"
-                         AcceptsReturn="False" FontSize="13" MinHeight="34" />
+                <TextBox Classes="kcapField" Text="{Binding FreeText}" PlaceholderText="Type your answer…"
+                         IsVisible="{Binding !HasOptions}" AcceptsReturn="False" FontSize="13" MinHeight="34" />
                 <TextBlock Text="{Binding ErrorText}" FontSize="12" Foreground="{StaticResource KcapDangerBrush}"
                            IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" IsVisible="{Binding ShowsSubmit}">
