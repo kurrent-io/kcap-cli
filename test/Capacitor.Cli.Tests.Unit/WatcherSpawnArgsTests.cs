@@ -1,8 +1,10 @@
 namespace Capacitor.Cli.Tests.Unit;
 
 public class WatcherSpawnArgsTests {
+    /// <summary>Every spawn names its vendor, including the one `kcap watch` would have defaulted
+    /// to: a reader of the command line never has to know what that default is.</summary>
     [Test]
-    public async Task BuildSpawnArgs_default_vendor_omits_flag() {
+    public async Task BuildSpawnArgs_names_the_default_vendor() {
         var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
@@ -10,7 +12,7 @@ public class WatcherSpawnArgsTests {
         );
 
         await Assert.That(args).Contains("watch abc \"/tmp/t.jsonl\"");
-        await Assert.That(args).DoesNotContain("--vendor");
+        await Assert.That(args).Contains("--vendor \"claude\"");
     }
 
     [Test]
@@ -21,7 +23,6 @@ public class WatcherSpawnArgsTests {
             cwd: null, skipTitle: false, parentPid: null, vendor: "codex"
         );
 
-        // Fix #4: vendor must be quoted the same way transcriptPath/cwd are.
         await Assert.That(args).Contains("--vendor \"codex\"");
     }
 

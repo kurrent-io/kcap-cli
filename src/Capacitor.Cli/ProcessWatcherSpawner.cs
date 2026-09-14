@@ -117,9 +117,7 @@ public sealed class ProcessWatcherSpawner(
             arguments += $" --parent-pid {ppid}";
         }
 
-        if (vendor != "claude") {
-            arguments += $" --vendor \"{vendor}\"";
-        }
+        arguments += $" --vendor \"{vendor}\"";
 
         return arguments;
     }
