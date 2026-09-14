@@ -36,19 +36,28 @@ public sealed class WorkOSClient(
     readonly TimeSpan _replayBackoff = replayBackoff ?? TimeSpan.FromSeconds(1);
 
     /// <summary>
+    /// The longest <see cref="RefreshAsync"/> runs: no attempt starts unless it can finish inside this
+    /// budget. A peer waiting on the token lock must wait at least this long, or it gives up on a
+    /// holder that is about to persist a fresh token.
+    /// </summary>
+    public TimeSpan RefreshBudget => _replayBudget;
+
+    /// <summary>
     /// Exchanges a rotating refresh token for a fresh access token, classifying the outcome so a caller
     /// can tell a token WorkOS refused apart from a request that never landed.
     ///
-    /// <para>A reply that is lost, a 5xx/408/429, or an unreadable success body is replayed with the
-    /// same token inside WorkOS's replay window, where a replay is idempotent: it returns the rotated
-    /// pair the first exchange minted. Without the replay a timed-out exchange that WorkOS had in fact
-    /// processed left its successor unrecoverable, and the next refresh — a minute later, outside the
-    /// window — was refused as <c>invalid_grant</c>, signing every process out. A 4xx is never replayed:
-    /// WorkOS understood the token and refused it. Reports rather than throws, cancellation aside.</para>
+    /// <para>A lost reply, a 5xx/408/429, or an unreadable success body is replayed with the same token
+    /// while the next attempt can still complete inside <see cref="RefreshBudget"/>. Inside WorkOS's
+    /// replay window a replay is idempotent — it returns the rotated pair the first exchange minted —
+    /// and a replay that lands outside it is refused as <c>invalid_grant</c>, so the budget is
+    /// re-checked after every backoff, never only before it. A 4xx is never replayed: WorkOS
+    /// understood the token and refused it. Reports rather than throws, cancellation aside.</para>
     /// </summary>
     public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
         var started = Stopwatch.GetTimestamp();
+
+        bool AnotherAttemptFits() => Stopwatch.GetElapsedTime(started) + _refreshTimeout <= _replayBudget;
 
         while (true) {
             var (outcome, body) = await RefreshOnceAsync(clientId, refreshToken, ct);
@@ -58,17 +67,18 @@ public sealed class WorkOSClient(
                 case Attempt.Refused: return new(WorkOSRefreshOutcome.Rejected, null);
             }
 
-            var nextStart = Stopwatch.GetElapsedTime(started) + _replayBackoff;
+            if (AnotherAttemptFits()) {
+                await Task.Delay(_replayBackoff, ct);
+            }
 
-            if (nextStart + _refreshTimeout > _replayBudget) {
-                // Out of window. A success WorkOS sent but we could not read has consumed the token, so
-                // that is Rejected; a reply that never arrived leaves the token possibly live.
+            // A suspended machine or a starved scheduler can stretch the delay past the window.
+            if (!AnotherAttemptFits()) {
+                // A success WorkOS sent but we could not read has consumed the token, so that is
+                // Rejected; a reply that never arrived leaves the token possibly live.
                 return new(outcome == Attempt.Unreadable
                     ? WorkOSRefreshOutcome.Rejected
                     : WorkOSRefreshOutcome.TransportFailed, null);
             }
-
-            await Task.Delay(_replayBackoff, ct);
         }
     }
 

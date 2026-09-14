@@ -100,10 +100,9 @@ public class WorkOSClientTests : IDisposable {
     }
 
     /// <summary>
-    /// A refresh whose reply never arrives is replayed with the same token inside WorkOS's replay
-    /// window, and the replay hands back the rotated tokens. This is the outage that logged every
-    /// client out: the first exchange had landed, its reply timed out, and the next refresh a minute
-    /// later was outside the window — <c>invalid_grant</c>, session dead.
+    /// A refresh whose reply never arrives is replayed with the same token, and the replay's rotated
+    /// pair is the result. WorkOS may already have processed the first exchange, so only a replay
+    /// inside its window can recover the successor; a later fresh refresh cannot.
     /// </summary>
     [Test]
     public async Task A_timed_out_refresh_is_replayed_inside_the_grace_window() {

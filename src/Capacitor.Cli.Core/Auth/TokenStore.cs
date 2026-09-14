@@ -513,6 +513,13 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
             : ProactiveRefreshOutcome.Failed;
     }
 
+    // How long a waiter holds out for the lock: the holder's whole WorkOS replay budget plus room to
+    // persist. A shorter wait gives up on a holder that is one replay away from saving a fresh token
+    // and falls back to the stale one instead.
+    static readonly TimeSpan LockWaitMargin = TimeSpan.FromSeconds(10);
+
+    internal TimeSpan LockWait => workos.RefreshBudget + LockWaitMargin;
+
     // Profile-scoped cross-process lock. Acquire it, re-read the token under it (a peer
     // may have just rotated it), refresh only if it is still due per `needsRefresh`, persist,
     // release. If the lock can't be acquired within the deadline, fall back to whatever a peer
@@ -539,7 +546,7 @@ public sealed class TokenStore(ConfigRoot config, ProfileOverrides env, IHttpCli
         var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
 
         FileStream? lockStream = null;
-        var         deadline   = DateTime.UtcNow.AddSeconds(15);
+        var         deadline   = DateTime.UtcNow + LockWait;
 
         while (lockStream is null) {
             cancellationToken.ThrowIfCancellationRequested();
