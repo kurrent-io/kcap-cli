@@ -6,7 +6,7 @@
                      x:Class="Capacitor.App.Views.Onboarding.OnboardingWindow"
                      x:TypeArguments="vm:OnboardingViewModel"
                      x:DataType="vm:OnboardingViewModel"
-                     Title="Kurrent Capacitor Setup"
+                     Title="Kurrent Capacitor — Setup"
                      Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
                      Width="640" Height="580"
                      MinWidth="560" MinHeight="480"

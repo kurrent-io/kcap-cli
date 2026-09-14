@@ -71,6 +71,7 @@ public class SettingsWindowSmokeTests {
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
             Dispatcher.UIThread.RunJobs();
             await Assert.That(rename.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(window.Title).IsEqualTo("Kurrent Capacitor — Settings");
             await Assert.That(window.Bounds.Width).IsEqualTo(540d);
             await Assert.That(window.Bounds.Height).IsEqualTo(580d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);

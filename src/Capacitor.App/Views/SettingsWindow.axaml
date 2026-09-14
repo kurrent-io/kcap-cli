@@ -3,7 +3,7 @@
         xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
-        Title="Settings"
+        Title="Kurrent Capacitor — Settings"
         Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
         Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
