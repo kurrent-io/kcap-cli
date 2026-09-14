@@ -241,6 +241,7 @@ public class WizardSimpleStepsTests {
 
             // Run the install and observe the button/success-text react — a broken Idle/Satisfied binding would leave Avalonia's own base defaults instead of tracking the VM.
             var installButton = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "InstallShimButton");
+            var shimCtaGap = installButton?.Parent is StackPanel shimHost ? shimHost.Spacing : -1;
             var successBefore = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "ShimSuccessText")?.IsVisible;
 
             h.Runner.Enqueue(new ProcessResult(0, "", "", false));
@@ -269,12 +270,13 @@ public class WizardSimpleStepsTests {
             Dispatcher.UIThread.RunJobs();
 
             return (
-                installButton, successBefore, successAfter, installEnabledAfter,
+                installButton, shimCtaGap, successBefore, successAfter, installEnabledAfter,
                 visibilityCombo, selectedVisibility, daemonNameText,
                 summaryList, summaryTitle, summaryNote, summaryGlyph);
         });
 
         await Assert.That(result.installButton).IsNotNull();
+        await Assert.That(result.shimCtaGap).IsEqualTo(14);
         await Assert.That(result.successBefore).IsFalse(); // Satisfied starts false — a broken binding would leave Avalonia's IsVisible default (true)
         await Assert.That(result.successAfter).IsTrue();   // Satisfied flips true once Installed lands
         await Assert.That(result.installEnabledAfter).IsTrue();
@@ -314,9 +316,11 @@ public class DefaultsStepViewModelTests {
         var vm = new DefaultsStepViewModel(Config.Root);
 
         await Assert.That(vm.Visibility).IsEqualTo("org_public");
+        await Assert.That(vm.Title).IsEqualTo("This machine");
         await Assert.That(vm.DaemonName).IsEqualTo(Environment.UserName.ToLowerInvariant());
         await Assert.That(vm.Applicable).IsTrue();
         await Assert.That(vm.Satisfied).IsFalse();
+        await Assert.That(vm.PublicSelected).IsFalse();
     }
 
     [Test]
@@ -333,6 +337,40 @@ public class DefaultsStepViewModelTests {
         await Assert.That(options.First(o => o.Value == "public").Label)
             .IsEqualTo("All public — others can see all your sessions");
     }
+
+    [Test]
+    public async Task Public_visibility_is_the_only_choice_that_raises_the_privacy_notice() {
+        var vm = new DefaultsStepViewModel(Config.Root);
+        await Assert.That(vm.PublicSelected).IsFalse();
+
+        foreach (var option in DefaultsStepViewModel.VisibilityOptions) {
+            vm.Visibility = option.Value;
+            await Assert.That(vm.PublicSelected).IsEqualTo(option.Value == "public");
+        }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task The_privacy_notice_is_hidden_until_all_public_is_selected() => AvaloniaSession.RunOnUiAsync(async () => {
+        var defaults = new DefaultsStepViewModel(Config.Root);
+        var vm = new OnboardingViewModel([defaults, new DoneStepViewModel(() => [])]);
+        await vm.PendingEnterForTesting;
+        var window = new OnboardingWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var banner = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "PublicNoticeBanner");
+            await Assert.That(banner.IsVisible).IsFalse();
+            defaults.Visibility = "public";
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(banner.IsVisible).IsTrue();
+            await Assert.That(window.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "PublicNoticeText").Text)
+                .IsEqualTo(DefaultsStepViewModel.PublicNotice);
+            defaults.Visibility = "org_public";
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(banner.IsVisible).IsFalse();
+        } finally { window.Close(); }
+    });
 
     [Test]
     public async Task Next_persists_both_fields_and_preserves_unrelated_config() {
@@ -495,7 +533,9 @@ public class DoneStepViewModelTests {
         await Assert.That(vm.Summary.Select(e => (e.Title, e.Satisfied, e.Note)))
             .IsEquivalentTo(current, CollectionOrdering.Matching);
         await Assert.That(vm.Summary[0].Glyph).IsEqualTo("—");
+        await Assert.That(vm.Summary[0].Detail).IsEqualTo("kcap CLI not found");
         await Assert.That(vm.Summary[1].Glyph).IsEqualTo("✓");
+        await Assert.That(vm.Summary[1].Detail).IsNull();
     }
 
     [Test]

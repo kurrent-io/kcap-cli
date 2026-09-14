@@ -72,8 +72,8 @@ internal sealed record WizardGraphOptions(
 /// The wizard half of the composition root (spec decision 2), split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
-    internal const string CliMissingNote     = "kcap CLI not found";
-    internal const string RequiresSignInNote = "requires sign-in";
+    internal const string CliMissingNote     = "kcap isn't on this machine";
+    internal const string RequiresSignInNote = "Sign in from Settings to enable this";
 
     /// Production bridges: one marshalling boundary (Avalonia's dispatcher in the app) and a
     /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.

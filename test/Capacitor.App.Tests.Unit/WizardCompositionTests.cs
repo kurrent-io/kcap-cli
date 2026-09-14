@@ -127,8 +127,8 @@ public class WizardCompositionHappyPathTests {
         await Assert.That(byTitle["Connect to Capacitor"].Note).IsNull();
         await Assert.That(byTitle["Sign in"].Satisfied).IsTrue();
         await Assert.That(byTitle["Sign in"].Note).IsNull();
-        await Assert.That(byTitle["Defaults"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Defaults"].Note).IsNull();
+        await Assert.That(byTitle["This machine"].Satisfied).IsTrue();
+        await Assert.That(byTitle["This machine"].Note).IsNull();
         await Assert.That(byTitle["Coding agents"].Satisfied).IsFalse();
         await Assert.That(byTitle["Coding agents"].Note).IsEqualTo(WizardComposition.CliMissingNote);
         await Assert.That(byTitle["Import past sessions"].Satisfied).IsFalse();

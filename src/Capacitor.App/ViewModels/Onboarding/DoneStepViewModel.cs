@@ -7,11 +7,13 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// compiler-only element-name aliases.
 public sealed record DoneSummaryEntry(string Title, bool Satisfied, string? Note) {
     public string Glyph => Satisfied ? "✓" : "—";
+    public bool Incomplete => !Satisfied;
+    public string? Detail => Satisfied ? null : string.IsNullOrEmpty(Note) ? "Skipped" : Note;
 }
 
 /// spec §3 step 8: a summary of what the earlier steps set up and what was skipped, and why.
 /// Dumb by design — the composition root aggregates every other step's Satisfied/skip state and
-/// supplies the why-skipped notes ("kcap CLI not found", "requires sign-in", ...).
+/// supplies the why-skipped notes.
 public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<IReadOnlyList<(string Title, bool Satisfied, string? Note)>> _summaryProvider;
 

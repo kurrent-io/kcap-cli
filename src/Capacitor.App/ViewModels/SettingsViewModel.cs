@@ -114,13 +114,25 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         : _status.State == AttachState.Connected && _snapshot?.Daemon.ActiveAgents > 0
             ? $"Wait for the {_snapshot.Daemon.ActiveAgents} active agents to finish before renaming."
             : !Idle ? "Waiting for the daemon’s current agent count…" : "Renaming restarts the daemon and relaunches this app.";
-    public string StatusLine => _status.State switch {
+
+    public string StatusLabel => _status.State switch {
+        AttachState.Connected when _snapshot is { Daemon.MaxAgents: 0 } snap =>
+            $"{snap.Daemon.ActiveAgents} · unlimited",
+        AttachState.Connected when _snapshot is { } snap =>
+            $"{snap.Daemon.ActiveAgents} / {snap.Daemon.MaxAgents}",
+        AttachState.Unreachable => "Not running",
+        _ => "Connecting",
+    };
+
+    public bool StatusShowsAgents => _status.State == AttachState.Connected && _snapshot is not null;
+
+    public string StatusTip => _status.State switch {
         AttachState.Connected when _snapshot is { } snap =>
             snap.Daemon.MaxAgents == 0
-                ? $"Running as {snap.Daemon.Name}, {snap.Daemon.ActiveAgents} agents (unlimited)"
-                : $"Running as {snap.Daemon.Name}, {snap.Daemon.ActiveAgents} of {snap.Daemon.MaxAgents} agents",
-        AttachState.Unreachable => "Daemon not running. Changes apply when it starts.",
-        _ => "Connecting to daemon…",
+                ? $"Running as {snap.Daemon.Name}. No capacity limit."
+                : $"Running as {snap.Daemon.Name}.",
+        AttachState.Unreachable => "Changes apply when the daemon starts.",
+        _ => "Connecting to the daemon…",
     };
 
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
@@ -212,7 +224,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(NameError));
         this.RaisePropertyChanged(nameof(CapacityError));
         this.RaisePropertyChanged(nameof(RenameHint));
-        this.RaisePropertyChanged(nameof(StatusLine));
+        this.RaisePropertyChanged(nameof(StatusLabel));
+        this.RaisePropertyChanged(nameof(StatusShowsAgents));
+        this.RaisePropertyChanged(nameof(StatusTip));
     }
 
     public void Dispose() {

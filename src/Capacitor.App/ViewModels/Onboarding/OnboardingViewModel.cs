@@ -22,8 +22,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
     IWizardStep _current;
     public IWizardStep Current {
         get => _current;
-        private set => this.RaiseAndSetIfChanged(ref _current, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _current, value);
+            this.RaisePropertyChanged(nameof(NextLabel));
+            this.RaisePropertyChanged(nameof(SkipVisible));
+        }
     }
+
+    public string NextLabel => _index == Steps.Count - 1 ? "Get started" : "Next";
+    public bool SkipVisible => _index < Steps.Count - 1;
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     bool Navigating {

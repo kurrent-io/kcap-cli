@@ -173,7 +173,7 @@ public class OnboardingViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Back_is_disabled_on_the_first_step_and_skip_is_disabled_on_the_last_step() {
-        var (backOnFirst, skipOnFirst, backOnLast, skipOnLast) = await AvaloniaSession.DispatchAsync(async () => {
+        var (backOnFirst, skipOnFirst, nextOnFirst, skipVisibleOnFirst, backOnLast, skipOnLast, nextOnLast, skipVisibleOnLast) = await AvaloniaSession.DispatchAsync(async () => {
             var connect = new FakeWizardStep(WizardStepId.Connect);
             var done = new FakeWizardStep(WizardStepId.Done);
             var vm = new OnboardingViewModel([connect, done]);
@@ -181,19 +181,25 @@ public class OnboardingViewModelTests {
 
             var backOnFirst = CanExecute(vm.BackCommand);
             var skipOnFirst = CanExecute(vm.SkipCommand);
+            var nextOnFirst = vm.NextLabel;
+            var skipVisibleOnFirst = vm.SkipVisible;
 
             await vm.NextCommand.Execute().ToTask(); // -> Done
 
             var backOnLast = CanExecute(vm.BackCommand);
             var skipOnLast = CanExecute(vm.SkipCommand);
 
-            return (backOnFirst, skipOnFirst, backOnLast, skipOnLast);
+            return (backOnFirst, skipOnFirst, nextOnFirst, skipVisibleOnFirst, backOnLast, skipOnLast, vm.NextLabel, vm.SkipVisible);
         });
 
         await Assert.That(backOnFirst).IsFalse();
         await Assert.That(skipOnFirst).IsTrue();
+        await Assert.That(nextOnFirst).IsEqualTo("Next");
+        await Assert.That(skipVisibleOnFirst).IsTrue();
         await Assert.That(backOnLast).IsTrue();
         await Assert.That(skipOnLast).IsFalse();
+        await Assert.That(nextOnLast).IsEqualTo("Get started");
+        await Assert.That(skipVisibleOnLast).IsFalse();
     }
 
     [Test]

@@ -8,23 +8,39 @@
     <!-- Shared between the onboarding wizard's Sign-in step and the steady-state re-auth dialog
          (SignInWindow) — one rendering of SignInStepViewModel, so the two can never drift. -->
     <DockPanel>
-        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,20">
+        <StackPanel DockPanel.Dock="Top" Spacing="14">
             <!-- No page title here: the wizard step chrome and SignInWindow title already name
                  the surface. Status is the first thing the user needs. -->
-            <TextBlock x:Name="SignInStatusText" Text="{Binding Status}" TextWrapping="Wrap"
-                       FontSize="18" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.3"
-                       Foreground="{StaticResource KcapTextBrush}"
-                       Classes.failed="{Binding StatusIsError}">
-                <TextBlock.Styles>
-                    <!-- Only a failure is coloured: a cancelled sign-in is not an error. -->
-                    <Style Selector="TextBlock.failed">
-                        <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
-                    </Style>
-                </TextBlock.Styles>
-            </TextBlock>
-            <TextBlock x:Name="SignInDetailText" Text="{Binding StatusDetail}" TextWrapping="Wrap"
-                       FontSize="13.5" LineHeight="21" LetterSpacing="0.2" Foreground="{StaticResource KcapMutedBrush}"
-                       IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <StackPanel Spacing="8">
+                <TextBlock x:Name="SignInStatusText" Text="{Binding Status}" TextWrapping="Wrap"
+                           FontSize="18" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.3"
+                           Foreground="{StaticResource KcapTextBrush}"
+                           Classes.failed="{Binding StatusIsError}">
+                    <TextBlock.Styles>
+                        <!-- Only a failure is coloured: a cancelled sign-in is not an error. -->
+                        <Style Selector="TextBlock.failed">
+                            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+                        </Style>
+                    </TextBlock.Styles>
+                </TextBlock>
+                <TextBlock x:Name="SignInDetailText" Text="{Binding StatusDetail}" TextWrapping="Wrap"
+                           FontSize="13.5" LineHeight="21" LetterSpacing="0.2" Foreground="{StaticResource KcapMutedBrush}"
+                           IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="SignInButton" Classes="kcapPrimary" Content="{Binding PrimaryActionLabel}"
+                        Command="{Binding SignInCommand}" IsEnabled="{Binding Idle}"
+                        IsVisible="{Binding ShowPrimaryAction}"
+                        Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
+                        FontWeight="SemiBold" CornerRadius="8" Padding="18,9"
+                        FontSize="13.5" />
+                <Button x:Name="CancelSignInButton" Classes="kcapChip" Content="Cancel"
+                        Command="{Binding CancelCommand}" IsVisible="{Binding Busy}"
+                        Background="{StaticResource KcapSurfaceRaisedBrush}"
+                        BorderBrush="{StaticResource KcapBorderBrush}"
+                        Foreground="{StaticResource KcapTextBrush}"
+                        CornerRadius="8" Padding="16,9" FontSize="13.5" />
+            </StackPanel>
         </StackPanel>
 
         <!-- Browser fallback lives at the foot: open + selectable URL, not buried in the log. -->
@@ -82,21 +98,6 @@
 
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Spacing="16">
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <Button x:Name="SignInButton" Classes="kcapPrimary" Content="{Binding PrimaryActionLabel}"
-                            Command="{Binding SignInCommand}" IsEnabled="{Binding Idle}"
-                            IsVisible="{Binding ShowPrimaryAction}"
-                            Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
-                            FontWeight="SemiBold" CornerRadius="8" Padding="18,9"
-                            FontSize="13.5" />
-                    <Button x:Name="CancelSignInButton" Classes="kcapChip" Content="Cancel"
-                            Command="{Binding CancelCommand}" IsVisible="{Binding Busy}"
-                            Background="{StaticResource KcapSurfaceRaisedBrush}"
-                            BorderBrush="{StaticResource KcapBorderBrush}"
-                            Foreground="{StaticResource KcapTextBrush}"
-                            CornerRadius="8" Padding="16,9" FontSize="13.5" />
-                </StackPanel>
-
                 <StackPanel Spacing="10">
                     <Border Background="{StaticResource KcapSurfaceBrush}"
                             BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"

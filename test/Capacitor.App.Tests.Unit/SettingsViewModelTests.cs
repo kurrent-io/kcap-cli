@@ -231,6 +231,25 @@ public class SettingsViewModelTests {
     });
 
     [Test]
+    public Task Occupancy_is_a_status_not_a_sentence() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = Connected(active: 2);
+        using var vm = Make(Seed(), service);
+        await Assert.That(vm.StatusLabel).IsEqualTo("2 / 5");
+        await Assert.That(vm.StatusShowsAgents).IsTrue();
+        await Assert.That(vm.StatusTip).IsEqualTo("Running as daemon-a.");
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(active: 3, max: 0));
+        await Assert.That(vm.StatusLabel).IsEqualTo("3 · unlimited");
+        await Assert.That(vm.StatusShowsAgents).IsTrue();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+        await Assert.That(vm.StatusLabel).IsEqualTo("Not running");
+        await Assert.That(vm.StatusShowsAgents).IsFalse();
+        await Assert.That(vm.StatusTip).Contains("when the daemon starts");
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
+        await Assert.That(vm.StatusLabel).IsEqualTo("Connecting");
+        await Assert.That(vm.StatusShowsAgents).IsFalse();
+    });
+
+    [Test]
     public Task Rename_is_unavailable_off_macOS() => AvaloniaSession.RunOnUiAsync(async () => {
         using var vm = Make(Seed(), Connected(), mac: false);
         vm.Name = "renamed";
