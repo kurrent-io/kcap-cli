@@ -350,11 +350,21 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             // transition, see its own comment) means a real value is always already there by then.
             var daemonConnection = snapshots.Select(s => s.Daemon.Connection).StartWith("");
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, ConnectionDisplayFor)
+            // Expired sign-in is a separate diagnosis from the daemon hub word: auto-reconnect
+            // will not restore a session, so the footer must not say Reconnecting. The lane
+            // covers ParkSignedOut; Home's stream also covers a 401 launch that has not parked.
+            var fromLane = (laneStatus ?? Observable.Return(new ServerLaneStatus(ServerLaneState.Dormant)))
+                .Select(s => s.State == ServerLaneState.SignedOut);
+            var fromHome = Home?.SignInExpired ?? Observable.Return(false);
+            var signInExpired = fromLane.CombineLatest(fromHome, (lane, notice) => lane || notice)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            _connectionDisplay = status.CombineLatest(daemonConnection, signInExpired, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusDotBrush = status.CombineLatest(daemonConnection, StatusDotFor)
+            _statusDotBrush = status.CombineLatest(daemonConnection, signInExpired, StatusDotFor)
                 .ToProperty(this, x => x.StatusDotBrush, DotBrush(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -526,11 +536,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             ? ""
             : profileName;
 
-    // Single word for the merged status line. Local attach State is checked FIRST — the daemon's
+    internal const string SignedOutDisplay = "Signed out";
+
+    // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub
+    // will not restore a session. Otherwise local attach State is checked FIRST — the daemon's
     // own upstream Connection word is only meaningful once State is Connected (see the
     // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
     // regardless of whatever Connection word a stale retained snapshot might carry.
-    internal static string ConnectionDisplayFor(AttachStatus status, string daemonConnection) {
+    internal static string ConnectionDisplayFor(
+            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+        if (signInExpired) return SignedOutDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? "Incompatible" : "Unreachable";
@@ -541,7 +556,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
     // so a future wording tweak there can never silently detune the dot's color.
-    internal static IBrush StatusDotFor(AttachStatus status, string daemonConnection) {
+    internal static IBrush StatusDotFor(
+            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+        if (signInExpired) return DotBrush(StatusColors.Disrupted);
         if (status.State == AttachState.Connecting) return DotBrush(StatusColors.InProgress);
         if (status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? DotBrush(StatusColors.Disrupted) : DotBrush(StatusColors.Unavailable);

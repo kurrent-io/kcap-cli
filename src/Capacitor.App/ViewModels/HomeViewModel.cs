@@ -167,6 +167,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<string?> _bannerMessage;
     /// Single banner body: a start/lifecycle message wins over the generic connection notice so
     /// Unreachable + "kcap too old" does not stack two lines that both say press Start daemon.
+    /// Expired sign-in still wins over those start messages — reconnecting will not restore a session.
     public string? BannerMessage => _bannerMessage.Value;
 
     readonly ObservableAsPropertyHelper<bool> _connectionBannerVisible;
@@ -175,6 +176,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
 
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
+
+    /// Lane SignedOut or a 401 launch — the same flag NoticeFor uses for SignInExpiredNotice.
+    /// An observable (not WhenAnyValue) so MainWindow can fold it into the rail footer without
+    /// ReactiveUI's property-change mixins, which a headless test run does not reliably prime.
+    public IObservable<bool> SignInExpired { get; }
 
     ObservableAsPropertyHelper<bool>? _daemonStartVisible;
     public bool DaemonStartVisible => _daemonStartVisible?.Value ?? false;
@@ -425,6 +431,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             .Select(s => s.State == ServerLaneState.SignedOut)
             .DistinctUntilChanged();
         var signInRequired = _signInRequired.CombineLatest(laneSignedOut, (expired, lane) => expired || lane);
+        SignInExpired = signInRequired;
 
         var signInState = selectedAvailability
             .CombineLatest(
@@ -530,8 +537,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     }
 
     /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
+    /// Expired sign-in is the exception: a reconnecting/start line must not hide it.
     internal static string? BannerMessageFor(string? connectionNotice, string? startMessage) =>
-        !string.IsNullOrEmpty(startMessage) ? startMessage : connectionNotice;
+        connectionNotice == SignInExpiredNotice ? connectionNotice
+        : !string.IsNullOrEmpty(startMessage) ? startMessage : connectionNotice;
 
     /// The re-auth dialog's success lands here (App wires it): clears the expired flag and holds a
     /// finishing notice until the daemon reports the server is connected again.
