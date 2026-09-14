@@ -282,27 +282,37 @@ public class WorktreeManagerTests {
         var snapshot = await manager.CreateBorrowedSnapshotAsync(
             repo.Clone, sourceCwd, "review-subdir", CancellationToken.None);
         try {
+            var isWindows = OperatingSystem.IsWindows();
             var psi = new ProcessStartInfo {
-                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                // Launch the long-lived process directly so the tracked Process IS the one holding
+                // snapshot.Path as its cwd. After a tree kill, WaitForExit reflects only the tracked
+                // process; a wrapper (cmd.exe) whose child (ping.exe) is the real cwd owner could exit
+                // first and leave that child still holding the directory on Windows — the very lock the
+                // teardown's wait exists to clear. On Unix `exec` replaces the shell with sleep, so the
+                // tracked pid stays the cwd owner there too.
+                FileName = isWindows ? "ping.exe" : "/bin/sh",
                 WorkingDirectory = snapshot.Path,
                 UseShellExecute = false,
-                CreateNoWindow = true
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
             };
-            psi.RedirectStandardOutput = true;
-            if (OperatingSystem.IsWindows()) {
-                psi.ArgumentList.Add("/d");
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add("echo ready& ping -n 30 127.0.0.1 >nul");
+            if (isWindows) {
+                psi.ArgumentList.Add("-n");
+                psi.ArgumentList.Add("30");
+                psi.ArgumentList.Add("127.0.0.1");
             } else {
                 psi.ArgumentList.Add("-c");
-                psi.ArgumentList.Add("echo ready; sleep 30");
+                psi.ArgumentList.Add("echo ready; exec sleep 30");
             }
             holder = Process.Start(psi);
-            // Wait for the child to say it is up rather than for a fixed 200ms: the assertions
-            // below only mean anything once a live process is holding snapshot.Path as its cwd,
-            // and on a loaded runner process start can take longer than any guess.
+            // The first non-empty stdout line proves a live process now holds snapshot.Path as its cwd:
+            // wait for it rather than a fixed delay, since a loaded runner can start slowly. (ping emits
+            // a leading blank line before its banner, so skip empties.)
             using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await Assert.That((await holder!.StandardOutput.ReadLineAsync(ready.Token))?.Trim()).IsEqualTo("ready");
+            string? firstLine;
+            do { firstLine = await holder!.StandardOutput.ReadLineAsync(ready.Token); }
+            while (firstLine is { Length: 0 });
+            await Assert.That(firstLine).IsNotNull();
 
             File.WriteAllText(Path.Combine(sourceCwd, "round.txt"), "two");
             File.WriteAllText(Path.Combine(snapshot.Path, "reviewer-created.txt"), "remove");
@@ -314,7 +324,12 @@ public class WorktreeManagerTests {
             await Assert.That(File.ReadAllText(Path.Combine(snapshot.Path, "round.txt"))).IsEqualTo("two");
             await Assert.That(File.Exists(Path.Combine(snapshot.Path, "reviewer-created.txt"))).IsFalse();
         } finally {
-            if (holder is { HasExited: false }) holder.Kill(entireProcessTree: true);
+            if (holder is { HasExited: false }) {
+                holder.Kill(entireProcessTree: true);
+                // Kill returns before the process releases its working-directory handle; on Windows the
+                // snapshot it is standing in cannot be deleted until it has actually exited.
+                await holder.WaitForExitAsync();
+            }
             holder?.Dispose();
             await WorktreeManager.RemoveAsync(snapshot);
         }
