@@ -415,6 +415,7 @@ public static partial class DaemonRunner {
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 
+        builder.Services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         builder.Services.AddSingleton<WorktreeManager>();
         builder.Services.AddSingleton<RepoMatcher>();
 

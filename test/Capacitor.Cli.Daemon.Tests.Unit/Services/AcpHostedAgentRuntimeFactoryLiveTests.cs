@@ -194,7 +194,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             Home = Home,
             DebugFrames = true
         };
-        var manager = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+        var manager = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(
             source.Path, "live-review", CancellationToken.None);
         var factory = new AcpHostedAgentRuntimeFactory(

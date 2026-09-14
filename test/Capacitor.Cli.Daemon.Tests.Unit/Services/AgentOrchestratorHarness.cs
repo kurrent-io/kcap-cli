@@ -61,7 +61,7 @@ internal static class AgentOrchestratorHarness {
 
         configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
 
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
         var httpFactory      = new StubHttpClientFactory();
         var http             = new FixedCapacitorHttpClient();
