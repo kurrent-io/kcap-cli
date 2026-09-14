@@ -7,15 +7,16 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// them: whether a group-write bit matters depends on who else is in the group, which the bit does not say.
 /// Install refuses only the world-writable form.</summary>
 public class DaemonDoctorUnitDirectoryTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     [Test]
     [UnsupportedOSPlatform("windows")]
     public async Task Names_each_group_writable_directory_on_the_path() {
         Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
 
-        using var tmp = new TempDir();
-        var parent    = tmp.CreateDir("parent").Path;
-        var unitDir   = tmp.CreateDir("parent", "user").Path;
-        var output    = new StringWriter();
+        var parent  = Tmp.CreateDir("parent").Path;
+        var unitDir = Tmp.CreateDir("parent", "user").Path;
+        var output  = new StringWriter();
         try {
             File.SetUnixFileMode(parent,
                 UnixFileMode.UserRead  | UnixFileMode.UserWrite  | UnixFileMode.UserExecute |
@@ -44,9 +45,8 @@ public class DaemonDoctorUnitDirectoryTests {
     public async Task Says_nothing_when_the_path_is_clean() {
         Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
 
-        using var tmp = new TempDir();
-        var unitDir   = tmp.CreateDir("user").Path;
-        var output    = new StringWriter();
+        var unitDir = Tmp.CreateDir("user").Path;
+        var output  = new StringWriter();
 
         await DaemonCommands.ReportUnitDirectoryExposure(output, unitDir);
 

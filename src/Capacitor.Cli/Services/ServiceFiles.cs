@@ -170,11 +170,9 @@ static class ServiceFiles {
     /// deliberate. The group-write case is reported by <c>kcap daemon doctor</c>, which can advise where
     /// this cannot safely block.</para></summary>
     static void RequireNoWorldWritableAncestor(string directory) {
-        var parent = Path.GetDirectoryName(Path.GetFullPath(directory));
-
-        if (string.IsNullOrEmpty(parent)) return;
-
-        if (DirectoryExposure.GrantingWrite(parent, UnixFileMode.OtherWrite) is not [var offender, ..]) return;
+        // The unit directory itself is included and costs nothing: RequireNoSharedWrite has already
+        // stripped its world-write bit or thrown, so it cannot be the offender found here.
+        if (DirectoryExposure.GrantingWrite(directory, UnixFileMode.OtherWrite) is not [var offender, ..]) return;
 
         throw new InvalidOperationException(
             $"Refusing to write a service unit below a world-writable directory: {offender}. Any local "
