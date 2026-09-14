@@ -111,6 +111,8 @@ public class DaemonCommandsServiceInstallTests {
     sealed class CountingManager : IServiceManager {
         public int InstallCalls;
         public string Describe() => "counting";
+        // Never read: ListInstalled is empty, so doctor's directory audit is not reached.
+        public string UnitDirectory => "(fake)";
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => [];
         public ServiceStatus Status(string serviceId) => new(ServiceState.NotInstalled, null);

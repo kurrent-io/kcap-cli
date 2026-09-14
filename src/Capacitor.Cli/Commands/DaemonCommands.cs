@@ -1006,6 +1006,27 @@ public sealed class DaemonCommands(
             var note = bad ? "  ⚠ binary missing — re-run `kcap daemon service install`" : "";
             await Console.Out.WriteLineAsync($"  {sid,-20}  {st.State}{note}");
         }
+
+        await ReportUnitDirectoryExposure(Console.Out, manager.UnitDirectory);
+    }
+
+    /// <summary>Reports directories on the path to the unit directory that their group can write.
+    ///
+    /// <para>Advisory, not a failure: whether this matters depends on who else is in that group, which the
+    /// bits do not say — umask 002 against a user-private group produces it for a group of one, and that is
+    /// the common case on Debian and Ubuntu. Install refuses only the world-writable form, which no umask
+    /// produces. Reporting is what is left for the case a program cannot judge but an operator can.</para></summary>
+    internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
+        if (DirectoryExposure.GrantingWrite(unitDirectory, UnixFileMode.GroupWrite) is not { Count: > 0 } shared)
+            return;
+
+        await output.WriteLineAsync("\n  ⚠ group-writable on the path to the unit directory:");
+
+        foreach (var d in shared) await output.WriteLineAsync($"      {d}");
+
+        await output.WriteLineAsync(
+            "    A member of those directories' group can replace the unit the daemon loads. Harmless when\n"
+          + "    the group is yours alone — `chmod g-w` them if it is shared with other accounts.");
     }
 
     internal static string DaemonNotFoundMessage() =>

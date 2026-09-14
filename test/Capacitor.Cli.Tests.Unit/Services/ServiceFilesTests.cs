@@ -213,6 +213,55 @@ public partial class ServiceFilesTests {
         }
     }
 
+    /// <summary>A world-writable directory anywhere above the unit directory is refused, and nothing is
+    /// written: an account that can write a parent can rename the unit directory away and supply its own,
+    /// so the unit's own mode buys nothing.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task WriteOwnerOnly_refuses_a_world_writable_ancestor() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
+
+        using var tmp = new TempDir();
+        var parent    = tmp.CreateDir("parent").Path;
+        var path      = tmp.PathTo("parent", "user", "unit.plist");
+        try {
+            File.SetUnixFileMode(parent,
+                UnixFileMode.UserRead  | UnixFileMode.UserWrite  | UnixFileMode.UserExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+
+            var ex = Assert.Throws<InvalidOperationException>(() => ServiceFiles.WriteOwnerOnly(path, "x"));
+
+            await Assert.That(ex!.Message).Contains("world-writable");
+            await Assert.That(ex.Message).Contains(parent);
+            await Assert.That(File.Exists(path)).IsFalse();
+        } finally {
+            try {
+                File.SetUnixFileMode(parent,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            } catch { /* best-effort */ }
+        }
+    }
+
+    /// <summary>A group-writable ancestor is NOT refused. umask 002 is the default wherever a user's
+    /// primary group is their own name, so group-write on the path to a home directory is the ordinary
+    /// case — refusing on it would fail the install this whole check exists to let through.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task WriteOwnerOnly_allows_a_group_writable_ancestor() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
+
+        using var tmp = new TempDir();
+        var parent    = tmp.CreateDir("parent").Path;
+        var path      = tmp.PathTo("parent", "user", "unit.plist");
+        File.SetUnixFileMode(parent,
+            UnixFileMode.UserRead  | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute);
+
+        ServiceFiles.WriteOwnerOnly(path, "SECRET-COMMAND");
+
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("SECRET-COMMAND");
+    }
+
     const UnixFileMode SharedWrite  = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
     const UnixFileMode OwnerOnlyDir = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
