@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -59,7 +60,7 @@ public class CursorSessionStartVisibilityTests : IDisposable {
         using var client = new HttpClient();
         var spool = new HookSpool(tmp.CreateDir("spool").Path);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(client, new StringReader(body), spool);
         await Assert.That(exit).IsEqualTo(0);
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/cursor").UsingPost());

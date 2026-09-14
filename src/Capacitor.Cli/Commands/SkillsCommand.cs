@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Skills;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -17,7 +18,8 @@ namespace Capacitor.Cli.Commands;
 /// are untouchable. Nothing is ever written into a repo.
 /// </summary>
 class SkillsCommand(
-        ConfigRoot config, HarnessRegistry harnesses, AgentsPaths agents, IRepositoriesApi repositories) {
+        ConfigRoot config, HarnessRegistry harnesses, AgentsPaths agents, IRepositoriesApi repositories,
+        GitProviderRouter router) {
     // The background refresh keys off each manifest's synced_at, so a burst of session starts
     // costs one network round-trip per interval per target, not one per session.
     static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
@@ -40,7 +42,7 @@ class SkillsCommand(
             await Console.Error.WriteLineAsync("Not inside a git repository — run `kcap skills sync` from a repo.");
             return 1;
         }
-        var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
         if (repo?.Owner is null || repo.RepoName is null) {
             await Console.Error.WriteLineAsync("Could not determine the repo's owner/name from its git remote.");
             return 1;

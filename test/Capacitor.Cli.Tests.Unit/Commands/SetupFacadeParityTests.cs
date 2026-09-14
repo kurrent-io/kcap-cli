@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Telemetry;
 using Spectre.Console;
 using TUnit.Assertions.Enums;
 using Profile = Capacitor.Cli.Core.Config.Profile;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -83,7 +84,7 @@ public class SetupFacadeParityTests {
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
             Provisioning, Discovery, telemetry, AuthEndpoints.Defaults, facades,
             FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")),
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None));
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter());
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 

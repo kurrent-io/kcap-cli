@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
 using WatchCommand = Capacitor.Cli.Commands.WatchCommand;
+using Capacitor.Cli.PrDetection;
 
 if (args.Length < 1) {
     await PrintUsage();
@@ -650,7 +651,8 @@ switch (command) {
         // Build sources
         var explicitVendorSelection = vsel.Vendors.Count > 0;
         var sources = SetupCommand.BuildImportSources(
-            config, sp.GetRequiredService<HarnessRegistry>(), explicitVendorSelection ? vsel.Vendors : null);
+            config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(),
+            explicitVendorSelection ? vsel.Vendors : null);
 
         // --- Scope resolution ---
         var profileConfig = profiles.Snapshot;
@@ -659,7 +661,7 @@ switch (command) {
         var activeProfile = profiles.Name;
         var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
 
-        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(config, Environment.CurrentDirectory);
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(sp.GetRequiredService<GitProviderRouter>(), config, Environment.CurrentDirectory);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;

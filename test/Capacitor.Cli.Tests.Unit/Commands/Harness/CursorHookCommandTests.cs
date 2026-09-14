@@ -12,6 +12,7 @@ using Capacitor.Cli.Harness.Cursor;
 using Microsoft.Extensions.Time.Testing;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
@@ -126,7 +127,7 @@ public class CursorHookCommandTests {
         await rejecting.HandleAsync($$"""{"hook_event_name":"postToolUse","session_id":"{{Sid}}","tool_name":"Glob"}""");
         await Assert.That(rejecting.Spool.HasBacklog(Sid)).IsTrue();
 
-        await new CursorHookCommand(Config.Root, accepting.Profiles, new HookClock(accepting.Clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, accepting.Profiles, new FixedCapacitorHttpClient())).HandleCore(
+        await new CursorHookCommand(Config.Root, accepting.Profiles, new HookClock(accepting.Clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, accepting.Profiles, new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
             accepting.Client,
             stdin: new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{Sid}}","tool_name":"Glob"}"""),
             spool: rejecting.Spool);
@@ -178,7 +179,7 @@ public class CursorHookCommandTests {
         });
         using var client = new HttpClient(handler);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient(), spawner)).HandleCore(
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter()).HandleCore(
             client,
             new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash","transcript_path":"/tmp/{{sid}}.jsonl"}"""),
             spool);
@@ -347,7 +348,7 @@ public class CursorHookCommandTests {
         var clock = new HookClock(spent);          // anchors on construction — advance AFTER it
         spent.Advance(CursorHookCommand.Ceiling - HookBudget.Safety);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()))
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter())
             .HandleWithDeps(
                 new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
                 _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
@@ -369,7 +370,7 @@ public class CursorHookCommandTests {
         var clock = new HookClock(spent);
         spent.Advance(CursorHookCommand.Ceiling);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient())).HandleCore(
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
             fx.Client,
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
             fx.Spool
@@ -530,7 +531,7 @@ public class CursorHookCommandTests {
         // noticing. clientFactory/spoolFactory stand in for real auth/spool setup so the
         // test stays hermetic while still exercising the REAL entry point's cap+emit logic.
         var clock = new FakeTimeProvider();
-        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()))
+        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter())
             .HandleWithDeps(new NeverCompletingReader(),
                 _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
                 () => fx.Spool);
@@ -557,7 +558,7 @@ public class CursorHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var reader = new CancelObservingReader();
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient())).HandleCore(fx.Client, reader, fx.Spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(fx.Client, reader, fx.Spool);
 
         await Assert.That(exit).IsEqualTo(0);
         // The read never resolved (no hook_event_name was ever parsed), so there is
@@ -581,7 +582,7 @@ public class CursorHookCommandTests {
         fx.HoldOnPost = TimeSpan.FromMilliseconds(300);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient())).HandleWithDeps(
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleWithDeps(
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
             _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
             () => fx.Spool);
@@ -608,7 +609,7 @@ public class CursorHookCommandTests {
 
         var sw    = System.Diagnostics.Stopwatch.StartNew();
         var clock = new FakeTimeProvider();
-        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()))
+        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter())
             .HandleWithDeps(
                 new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
                 _ => neverAuths.Task,
@@ -862,7 +863,7 @@ public class CursorHookCommandTests {
         // The real scope resolver runs: its git spawn is bounded by a Stopwatch, so its wall-clock
         // cost cannot eat a budget that only moves when this test says so.
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient())).HandleCore(
+        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
             hangingClient, new StringReader(payload), fx.Spool);
 
         // Wait (bounded, real-time) for the request to ENTER the handler, then fire the budget clock.
@@ -888,7 +889,7 @@ public class CursorHookCommandTests {
         clock.Advance(TimeSpan.FromSeconds(31));
         fx.MemoryIndexBody = "[]";
 
-        var exit2 = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient())).HandleCore(
+        var exit2 = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
             fx.Client, new StringReader(payload), fx.Spool);
         await Assert.That(exit2).IsEqualTo(0);
         // The index GET fires again on fx.Client — proving the first, cancelled attempt's
@@ -1060,7 +1061,7 @@ public class CursorHookCommandTests {
         public HostedAgent Hosted { get; init; } = HostedAgent.Terminal;
 
         public Task<int> HandleAsync(string stdin) =>
-            new CursorHookCommand(Config, Profiles, new HookClock(Clock), _home, TestHarnesses.Under(_home), Hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient())).HandleCore(
+            new CursorHookCommand(Config, Profiles, new HookClock(Clock), _home, TestHarnesses.Under(_home), Hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
                 Client,
                 stdin: new StringReader(stdin),
                 spool: Spool);

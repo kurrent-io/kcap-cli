@@ -3,6 +3,7 @@ using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -22,7 +23,7 @@ public class StatusWaitArgumentTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient(), NoTelemetry.Startup);
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter());
 
     static readonly TimeSpan PollInterval       = TimeSpan.FromSeconds(3);
     static readonly TimeSpan PollCap            = TimeSpan.FromMinutes(8);

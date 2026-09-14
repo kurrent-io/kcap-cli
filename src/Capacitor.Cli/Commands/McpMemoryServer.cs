@@ -10,17 +10,18 @@ using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
 sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup) {
+        TelemetryStartup startup, GitProviderRouter router) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        var repository = new CwdRepository(config, Directory.GetCurrentDirectory());
+        var repository = new CwdRepository(config, Directory.GetCurrentDirectory(), router);
         var machineId  = await ResolveMachineIdAsync();
         var tools      = BuildToolsList();
 

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -9,7 +10,7 @@ public class McpAnalyticsServerTests {
 
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpAnalyticsServer Server() =>
-        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup);
+        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter());
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 

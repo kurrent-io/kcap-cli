@@ -8,6 +8,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -33,7 +34,7 @@ public class SetupCommandTests {
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None));
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter());
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>

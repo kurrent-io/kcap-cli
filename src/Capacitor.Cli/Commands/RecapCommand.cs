@@ -2,15 +2,18 @@ using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 // ReSharper disable MethodHasAsyncOverload
 
 namespace Capacitor.Cli.Commands;
 
-class RecapCommand(ConfigRoot config, ISessionsApi sessionsApi, IRepositoriesApi repositoriesApi) {
+class RecapCommand(
+        ConfigRoot config, ISessionsApi sessionsApi, IRepositoriesApi repositoriesApi,
+        GitProviderRouter router) {
     public async Task<int> HandleRepoRecap(int limit = 10) {
         var cwd  = Directory.GetCurrentDirectory();
-        var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
 
         if (repo?.Owner is null || repo.RepoName is null) {
             Console.Error.WriteLine("Not in a git repository with a remote origin.");

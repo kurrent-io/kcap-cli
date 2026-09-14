@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -32,6 +33,9 @@ public static class CommandServices {
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
         services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
         services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
+
+        // Singleton deliberately: per-resolution routers would each start with an empty memo.
+        services.AddSingleton<GitProviderRouter>();
 
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.

@@ -33,6 +33,7 @@ using Profile = Capacitor.Cli.Core.Config.Profile;
 
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -238,6 +239,7 @@ sealed class SetupImportLane(
         UserHome home,
         ICapacitorHttpClient http,
         HarnessRegistry harnesses,
+        GitProviderRouter router,
         Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null) : IFirstRunImportLane {
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
@@ -253,9 +255,9 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router).HandleImport(
             filterCwd:    null,
-            sources:      SetupCommand.BuildImportSources(config, harnesses, vendors),
+            sources:      SetupCommand.BuildImportSources(config, harnesses, router, vendors),
             discoverOnly: true,
             discoverJson: true,
             windowsAsOf:  asOf,
@@ -306,9 +308,9 @@ sealed class SetupImportLane(
     async Task<ImportCommand.ImportRunOutcome?> Run(Pass pass) {
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        await new ImportCommand(config, profiles, home, harnesses, http).HandleImport(
+        await new ImportCommand(config, profiles, home, harnesses, http, router).HandleImport(
             filterCwd:          null,
-            sources:            SetupCommand.BuildImportSources(config, harnesses, pass.Vendors),
+            sources:            SetupCommand.BuildImportSources(config, harnesses, router, pass.Vendors),
             since:              pass.Since,
             scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
             skipConfirmation:   true,
@@ -419,7 +421,7 @@ public sealed class SetupCommand(
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
-        ChosenServerHttp chosenHttp) {
+        ChosenServerHttp chosenHttp, GitProviderRouter router) {
 
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -973,6 +975,7 @@ public sealed class SetupCommand(
         // detectPullRequest:false — Step 6 only needs (owner, name) to scope the repo import;
         // PR/MR detection would run extra provider probes/subprocesses for nothing here.
         var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
+            router,
             config, Environment.CurrentDirectory, detectPullRequest: false);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
@@ -1249,18 +1252,19 @@ public sealed class SetupCommand(
     /// nothing. Filtering the sources rather than the counts afterwards is what makes a reported figure
     /// already scoped to what the user kept.</param>
     internal static IReadOnlyList<IImportSource> BuildImportSources(
-            ConfigRoot config, HarnessRegistry harnesses, IReadOnlyCollection<HarnessId>? vendors = null) {
+            ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router,
+            IReadOnlyCollection<HarnessId>? vendors = null) {
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
 
         IReadOnlyList<IImportSource> all = [
-            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects),
-            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions),
-            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir),
-            new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths),
+            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router),
+            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router),
+            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router),
+            new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir),
-            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir),
-            new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir),
+            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, router),
+            new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir, router),
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),
                     opencode.ImportLedgerJson),
@@ -1488,7 +1492,7 @@ public sealed class SetupCommand(
                     config, harnesses,
                     Environment.MachineName, await LoginShellFindsCliAsync());
 
-                importing = new SetupImportLane(config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses);
+                importing = new SetupImportLane(config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router);
 
                 using var progress = new SpectreFirstRunFlowProgress();
 

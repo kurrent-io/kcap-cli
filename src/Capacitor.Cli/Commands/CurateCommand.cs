@@ -1,10 +1,11 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Curation;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
-class CurateCommand(ConfigRoot config, IRepositoriesApi repositories) {
+class CurateCommand(ConfigRoot config, IRepositoriesApi repositories, GitProviderRouter router) {
     /// <summary>One page is all this command reads; hitting it exactly is what the warning below
     /// reports, so the request and the check must name the same number.</summary>
     const int PageLimit = 100;
@@ -20,7 +21,7 @@ class CurateCommand(ConfigRoot config, IRepositoriesApi repositories) {
         }
 
         // 2. Identify the repo for the server key.
-        var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
         if (repo?.Owner is null || repo.RepoName is null) {
             await Console.Error.WriteLineAsync("Could not determine the repo's owner/name from its git remote.");
             return 1;
