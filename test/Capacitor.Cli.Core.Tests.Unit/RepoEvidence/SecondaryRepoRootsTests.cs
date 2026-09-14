@@ -93,4 +93,25 @@ public class SecondaryRepoRootsTests {
 
         await Assert.That(roots.Roots).IsEquivalentTo([Primary]);
     }
+
+    [Test]
+    public async Task Seeding_replays_the_whole_transcript_prefix() {
+        using var tmp   = new TempDir();
+        var       path  = tmp.CreateFile("t.jsonl", [Line("Edit", "file_path", "/h/dev/cli-wt/a.cs"), "{not json", Line("Read", "file_path", "/h/dev/other/b.cs")]);
+        var       roots = New();
+
+        roots.SeedFromTranscript("claude", path);
+
+        await Assert.That(roots.Roots).IsEquivalentTo(["/h/dev/cli-wt"]);
+    }
+
+    [Test]
+    public async Task Seeding_from_a_missing_transcript_fails_open() {
+        using var tmp   = new TempDir();
+        var       roots = New();
+
+        roots.SeedFromTranscript("claude", tmp.PathTo("missing.jsonl"));
+
+        await Assert.That(roots.Roots).IsEmpty();
+    }
 }

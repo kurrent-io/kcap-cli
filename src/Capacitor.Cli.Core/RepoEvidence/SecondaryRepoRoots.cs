@@ -11,6 +11,22 @@ public sealed class SecondaryRepoRoots(Func<string, string?> findRoot, string? p
 
     public IReadOnlyCollection<string> Roots => _roots;
 
+    /// <summary>
+    /// Replays the transcript written so far. A watcher resumed mid-session only drains lines
+    /// past the server's frontier, so a checkout mutated before the restart would otherwise
+    /// never be probed.
+    /// </summary>
+    public void SeedFromTranscript(string vendor, string transcriptPath) {
+        try {
+            foreach (var line in File.ReadLinesShared(transcriptPath)) {
+                OnLine(vendor, line);
+                if (_roots.Count >= capacity) return;
+            }
+        } catch {
+            // fail-open: seeding is best-effort and must never block startup
+        }
+    }
+
     public void OnLine(string vendor, string jsonlLine) {
         if (vendor != "claude" || _roots.Count >= capacity) return;
 

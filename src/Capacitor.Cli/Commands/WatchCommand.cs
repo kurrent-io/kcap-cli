@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -508,6 +509,7 @@ partial class WatchCommand(
 
         if (vendor == "claude" && agentId is null) {
             state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
+            state.SecondaryRoots.SeedFromTranscript(vendor, transcriptPath);
         }
 
         // No cwd-derived repo (launched outside any checkout, or no cwd at all): fall back to
@@ -745,9 +747,7 @@ partial class WatchCommand(
                 }
 
                 if (state.SecondaryRoots is not null && DateTimeOffset.UtcNow - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
-                    await LinkSecondaryPullRequestsAsync(state,
-                        root => RepositoryDetection.DetectRepositoryAsync(config, root),
-                        pr => PostLinkedPullRequestAsync(sessionId, pr, cts.Token));
+                    await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token);
                     state.LastSecondaryProbe = DateTimeOffset.UtcNow;
                 }
 
@@ -897,9 +897,7 @@ partial class WatchCommand(
             }
 
             // A PR is usually opened in the session's last turn, after the previous 60s probe.
-            await LinkSecondaryPullRequestsAsync(state,
-                root => RepositoryDetection.DetectRepositoryAsync(config, root),
-                pr => PostLinkedPullRequestAsync(sessionId, pr, CancellationToken.None));
+            await LinkSecondaryPullRequestsAsync(state, sessionId, FinalSecondaryProbeBudget, CancellationToken.None);
         }
 
         // Signal drain complete to server.
@@ -3341,24 +3339,49 @@ partial class WatchCommand(
     /// repository.
     /// </summary>
     internal static async Task LinkSecondaryPullRequestsAsync(
-            WatchState                              state,
-            Func<string, Task<RepositoryPayload?>>  detect,
-            Func<RepositoryPayload, Task<bool>>     post
+            WatchState                                          state,
+            Func<string, TimeSpan, Task<RepositoryPayload?>>    detect,
+            Func<RepositoryPayload, CancellationToken, Task<bool>> post,
+            TimeSpan                                            budget,
+            CancellationToken                                   ct
         ) {
         if (state.SecondaryRoots is null) return;
 
+        var started = Stopwatch.GetTimestamp();
+        using var deadline = new CancellationTokenSource(budget);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
         foreach (var root in state.SecondaryRoots.Roots.ToArray()) {
+            var remaining = budget - Stopwatch.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero || linked.IsCancellationRequested) return;
+
             RepositoryPayload? repo;
-            try { repo = await detect(root); } catch { repo = null; }
+            try { repo = await detect(root, remaining); } catch { repo = null; }
 
             if (repo is not { Owner: { } owner, RepoName: { } name, PrNumber: { } number }) continue;
             if (!string.Equals(repo.Host, "github.com", StringComparison.OrdinalIgnoreCase)) continue;
 
             var key = (owner, name, number);
             if (state.LinkedPullRequests.Contains(key)) continue;
-            if (await post(repo)) state.LinkedPullRequests.Add(key);
+
+            bool accepted;
+            try { accepted = await post(repo, linked.Token); } catch (OperationCanceledException) { return; }
+            if (accepted) state.LinkedPullRequests.Add(key);
         }
     }
+
+    Task LinkSecondaryPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct) =>
+        LinkSecondaryPullRequestsAsync(state,
+            (root, remaining) => RepositoryDetection.DetectRepositoryAsync(config, root, remaining),
+            (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, token),
+            budget, ct);
+
+    // The pass is retried every minute, so a lost post costs a minute, not the PR.
+    static readonly TimeSpan SecondaryProbeBudget = TimeSpan.FromSeconds(20);
+
+    // Fits inside the 5s the watcher is given to exit before it is killed, with the drain-complete
+    // signal still to send.
+    static readonly TimeSpan FinalSecondaryProbeBudget = TimeSpan.FromSeconds(3);
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {
@@ -3373,8 +3396,9 @@ partial class WatchCommand(
                 ["branch"]      = pr.Branch,
             };
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            // The server dedupes by (owner, repo, number), so retrying a throttled or 5xx status is safe.
             using var resp    = await client.PostWithRetryAsync(
-                $"{Url}/api/sessions/{Uri.EscapeDataString(sessionId)}/pull-requests", content, ct: ct);
+                $"{Url}/api/sessions/{Uri.EscapeDataString(sessionId)}/pull-requests", content, ct: ct, retryStatuses: true);
 
             if (resp.IsSuccessStatusCode) Log($"Linked {pr.Owner}/{pr.RepoName}#{pr.PrNumber} from a secondary checkout");
             else Log($"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: HTTP {(int)resp.StatusCode}");
