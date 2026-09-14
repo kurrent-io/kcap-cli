@@ -488,6 +488,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // Retained so the next-boot handoff can be exercised over the same root a restarted daemon would use.
     readonly string _pidRecordRoot;
 
+    readonly AttachmentStore _attachmentStore;
+
     // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
     // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
     // DaemonConnect payload; a Linux/macOS value is inert (the server consumes it only on Windows).
@@ -714,6 +716,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // survivors from the current incarnation's live children.
         var recordRoot = config.Store.StateDirectory(config.Name);
         _pidRecordRoot = recordRoot;
+        _attachmentStore = new AttachmentStore(recordRoot);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
         _failedLaunchLog = new FailedLaunchLog(recordRoot);
         _quarantine  = new AgentKillQuarantine(logger);
@@ -890,6 +893,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// stem is live when some agent still in <see cref="_agents"/> hashes to it — true between an
     /// Antigravity turn's child exiting and the next one starting, when no PID record exists.
     internal bool IsLiveJournalStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
+
+    /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem.
+    internal bool IsLiveAttachmentStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
 
     /// Mutation FIRST, Pulse() second — always (a pulse published before its mutation lets a
     /// subscriber read the new version, snapshot the OLD state, and wait forever). These
@@ -1427,6 +1433,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only: the per-daemon record root, so a test can build the store a NEXT BOOT would
     /// build over the same state dir (§3.3's shutdown-orphan handoff).</summary>
     internal string PidRecordRootForTest                            => _pidRecordRoot;
+    internal AttachmentStore AttachmentStore                        => _attachmentStore;
     internal string DaemonIdForTest                                 => _daemonId;
     internal string DaemonEpochForTest                             => _daemonEpoch;
     internal bool   RecordlessSurvivorsImpossibleForTest           => _recordlessSurvivorsImpossible;
@@ -5067,6 +5074,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.Work == WorkLocation.OwnedWorktree) {
             try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
+
+        try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
 
         // Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
         // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
