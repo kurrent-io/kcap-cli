@@ -587,8 +587,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
         while (start > 0 && _items[start - 1] is PendingCardItem) start--;
         if (TrailingCardsMatch(start, cards)) return;
 
-        if (start > 0 && _items[start - 1] is ToolGroupItem previous)
-            previous.PacksWithCard = false;
+        foreach (var item in _items)
+            if (item is ToolGroupItem { PacksWithCard: true } packed)
+                packed.PacksWithCard = false;
 
         var wasEmpty = _items.Count == 0;
         for (var i = _items.Count - 1; i >= 0; i--)
