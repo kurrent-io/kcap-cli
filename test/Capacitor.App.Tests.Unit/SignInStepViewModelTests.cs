@@ -14,9 +14,9 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The spec §3/§10 transition table for the step that runs ONE façade operation. The service is
-/// driven by a scripted operation (the façade itself is covered in Core), but the picker, the
-/// provisioner and the progress sink are the REAL bridges — they are what this task builds.
+/// Sign-in runs one façade operation. The picker, provisioner and progress sink are the real
+/// bridges — they are what this task builds. The service is driven by a scripted operation
+/// (the façade itself is covered in Core).
 public class SignInStepViewModelTests {
     static readonly TimeSpan Bounded = TimeSpan.FromSeconds(10);
 
@@ -741,7 +741,7 @@ public class SignInStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_window_selects_a_template_per_step_view_model() {
-        var (connectBox, signInButton, signInStatus) = await AvaloniaSession.DispatchAsync(async () => {
+        var (connectBox, signInButton, signInStatus, ctaGap) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             var vm = new OnboardingViewModel([h.Connect, h.Vm]);
             await vm.PendingEnterForTesting;
@@ -758,16 +758,21 @@ public class SignInStepViewModelTests {
             var button = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "SignInButton");
             var status = window.GetVisualDescendants().OfType<TextBlock>()
                 .FirstOrDefault(t => t.Name == "SignInStatusText")?.Text;
+            var ctaGap = button?.Parent is StackPanel { Parent: StackPanel host }
+                ? host.Spacing
+                : -1;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (box, button, status);
+            return (box, button, status, ctaGap);
         });
 
         await Assert.That(connectBox).IsNotNull();
+        await Assert.That(connectBox!.Classes.Contains("kcapField")).IsTrue();
         await Assert.That(signInButton).IsNotNull();
         await Assert.That(signInStatus).IsEqualTo("Find your workspaces with GitHub");
+        await Assert.That(ctaGap).IsEqualTo(14);
     }
 
     [Test]
