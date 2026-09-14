@@ -7,31 +7,12 @@
              x:DataType="vm:SignInStepViewModel">
     <!-- Shared between the onboarding wizard's Sign-in step and the steady-state re-auth dialog
          (SignInWindow) — one rendering of SignInStepViewModel, so the two can never drift. -->
-    <UserControl.Styles>
-        <Style Selector="TextBox.kcapField">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
-            <Setter Property="Padding" Value="12,9" />
-            <Setter Property="PlaceholderForeground" Value="{StaticResource KcapMutedBrush}" />
-        </Style>
-        <Style Selector="ListBox.kcapList">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        </Style>
-    </UserControl.Styles>
-
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,20">
             <!-- No page title here: the wizard step chrome and SignInWindow title already name
                  the surface. Status is the first thing the user needs. -->
             <TextBlock x:Name="SignInStatusText" Text="{Binding Status}" TextWrapping="Wrap"
-                       FontSize="18" FontWeight="SemiBold" LineHeight="26"
+                       FontSize="18" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.3"
                        Foreground="{StaticResource KcapTextBrush}"
                        Classes.failed="{Binding StatusIsError}">
                 <TextBlock.Styles>
@@ -42,7 +23,7 @@
                 </TextBlock.Styles>
             </TextBlock>
             <TextBlock x:Name="SignInDetailText" Text="{Binding StatusDetail}" TextWrapping="Wrap"
-                       FontSize="13.5" LineHeight="21" Foreground="{StaticResource KcapMutedBrush}"
+                       FontSize="13.5" LineHeight="21" LetterSpacing="0.2" Foreground="{StaticResource KcapMutedBrush}"
                        IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </StackPanel>
 

@@ -636,19 +636,32 @@ public class AgentsImportTemplateTests {
 
             var runButton        = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "RunImportButton");
             var everythingChoice = window.GetVisualDescendants().OfType<RadioButton>().FirstOrDefault(r => r.Name == "EverythingChoice");
+            var everythingWasChecked = everythingChoice?.IsChecked;
+            var orgChoice        = window.GetVisualDescendants().OfType<RadioButton>().FirstOrDefault(r => r.Name == "OrgChoice");
+            var orgBox           = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "OrgTextBox");
             var vendorCheckBoxes = window.GetVisualDescendants().OfType<CheckBox>().Where(c => c.Name == "ImportVendorCheckBox").ToList();
+            var stepScroll       = window.FindControl<ScrollViewer>("StepScroll");
+            var orgHidden        = orgBox?.IsVisible;
+
+            if (orgChoice is not null) orgChoice.IsChecked = true;
+            Dispatcher.UIThread.RunJobs();
+            var orgShown = orgBox?.IsVisible;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (installButton, AgentRows: agentCheckBoxes.Count, runButton, everythingChoice, ImportRows: vendorCheckBoxes.Count);
+            return (installButton, AgentRows: agentCheckBoxes.Count, runButton, everythingChoice, everythingWasChecked,
+                ImportRows: vendorCheckBoxes.Count, stepScroll, orgHidden, orgShown);
         });
 
         await Assert.That(result.installButton).IsNotNull();
         await Assert.That(result.AgentRows).IsEqualTo(9);
         await Assert.That(result.runButton).IsNotNull();
         await Assert.That(result.everythingChoice).IsNotNull();
-        await Assert.That(result.everythingChoice!.IsChecked).IsTrue();
+        await Assert.That(result.everythingWasChecked).IsTrue();
         await Assert.That(result.ImportRows).IsEqualTo(9);
+        await Assert.That(result.stepScroll).IsNotNull();
+        await Assert.That(result.orgHidden).IsFalse();
+        await Assert.That(result.orgShown).IsTrue();
     }
 }

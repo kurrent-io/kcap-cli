@@ -255,15 +255,17 @@ public class OnboardingViewModelTests {
             Dispatcher.UIThread.RunJobs();
 
             var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
+                .FirstOrDefault(t => t.Name == "StepTitleText");
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return text;
+            return (text?.Text, text?.LetterSpacing, text?.Classes.Contains("kcapTitle"));
         });
 
-        await Assert.That(rendered).IsEqualTo("Connect to Capacitor");
+        await Assert.That(rendered.Item1).IsEqualTo("Connect to Capacitor");
+        await Assert.That(rendered.Item2).IsEqualTo(-0.3);
+        await Assert.That(rendered.Item3).IsTrue();
     }
 
     // ── Busy gate and veto handling ──────────────────────────

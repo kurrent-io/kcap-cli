@@ -766,6 +766,7 @@ public class SignInStepViewModelTests {
         });
 
         await Assert.That(connectBox).IsNotNull();
+        await Assert.That(connectBox!.Classes.Contains("kcapField")).IsTrue();
         await Assert.That(signInButton).IsNotNull();
         await Assert.That(signInStatus).IsEqualTo("Find your workspaces with GitHub");
     }

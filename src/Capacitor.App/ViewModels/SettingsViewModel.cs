@@ -110,7 +110,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
         : !_startupSettled.IsCompletedSuccessfully ? "Waiting for daemon startup to finish…"
-        : Name == DaemonStore.Sanitize(_runningName) ? "This is already the daemon’s service id."
+        : Name == DaemonStore.Sanitize(_runningName) ? "The running daemon already uses this service ID. Change the name to rename it."
         : _status.State == AttachState.Connected && _snapshot?.Daemon.ActiveAgents > 0
             ? $"Wait for the {_snapshot.Daemon.ActiveAgents} active agents to finish before renaming."
             : !Idle ? "Waiting for the daemon’s current agent count…" : "Renaming restarts the daemon and relaunches this app.";

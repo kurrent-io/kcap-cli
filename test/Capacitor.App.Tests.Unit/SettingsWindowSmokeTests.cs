@@ -33,7 +33,13 @@ public class SettingsWindowSmokeTests {
             var save = window.FindControl<Button>("SaveButton")!;
             var rename = window.FindControl<Button>("RenameButton")!;
             await Assert.That(name.Text).IsEqualTo("daemon-a");
+            await Assert.That(name.Classes.Contains("kcapField")).IsTrue();
             await Assert.That(capacity.Value).IsEqualTo(5m);
+            await Assert.That(capacity.Classes.Contains("kcapField")).IsTrue();
+            await Assert.That(capacity.ShowButtonSpinner).IsFalse();
+            await Assert.That(window.FindControl<TextBlock>("DaemonTitleText")!.LetterSpacing).IsEqualTo(-0.3);
+            await Assert.That(save.Classes.Contains("kcapPrimary")).IsTrue();
+            await Assert.That(rename.Classes.Contains("kcapChip")).IsTrue();
             await Assert.That(save.IsEffectivelyEnabled).IsFalse();
             await Assert.That(window.FindControl<TextBlock>("StatusText")!.Text!).Contains("2 of 5 agents");
             name.Text = "new-name";

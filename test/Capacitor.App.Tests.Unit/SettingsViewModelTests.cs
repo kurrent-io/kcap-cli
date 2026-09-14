@@ -77,7 +77,7 @@ public class SettingsViewModelTests {
         vm.Name = "work-laptop";
         await Assert.That(vm.NameError).IsNull();
         await Assert.That(vm.CanRename).IsFalse();
-        await Assert.That(vm.RenameHint!).Contains("already the daemon’s service id");
+        await Assert.That(vm.RenameHint!).Contains("already uses this service ID");
     });
 
     [Test]
