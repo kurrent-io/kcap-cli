@@ -50,7 +50,6 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
     internal IReadOnlyList<GeneratedFile> WriteUnitFiles(ServiceSpec spec) {
         var files = GenerateFiles(spec);
         foreach (var f in files) {
-            Directory.CreateDirectory(Path.GetDirectoryName(f.Path)!);
             // schtasks /XML wants UTF-16; the .cmd wrapper is fine as UTF-8.
             var encoding = f.Path.EndsWith(".task.xml", StringComparison.Ordinal) ? Encoding.Unicode : Encoding.UTF8;
             _writeUnit(f.Path, f.Content, encoding);
