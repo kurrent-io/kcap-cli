@@ -18,11 +18,11 @@ internal static class RefreshTokenHandoff {
     public static bool IsDetached(string command, string[] args) => command == Command && args.Contains(DetachedFlag);
 
     /// <summary>Best effort and silent: a failure to spawn leaves things exactly as they were.</summary>
-    public static void Spawn(ConfigRoot config, string profile) {
+    public static void Spawn(ConfigRoot config, string profile, IProcessStarter starter) {
         try {
             ProcessHelpers.PreventInheritedHandles();
 
-            using var process = WatcherManager.StartProcess(BuildStartInfo(config, profile));
+            using var process = starter.Start(BuildStartInfo(config, profile));
 
             // The child must not hold the host's hook pipes, or a host waiting for EOF waits on the
             // child too — the very lifetime this hand-off exists to escape.

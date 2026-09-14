@@ -320,7 +320,9 @@ internal sealed class AgentHookPoster(
 
     // A hook process ends with this invocation, so a rotation its client creation started must be
     // finished by a process that will still be alive to persist it.
-    void HandOffRefresh() => RefreshTokenHandoff.Spawn(config, profiles.Name);
+    // The real starter, not an injected one: this default runs only in a hook process, and a test
+    // that reaches the abandon path passes its own onAuthAbandoned instead.
+    void HandOffRefresh() => RefreshTokenHandoff.Spawn(config, profiles.Name, SystemProcessStarter.Instance);
 
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,
