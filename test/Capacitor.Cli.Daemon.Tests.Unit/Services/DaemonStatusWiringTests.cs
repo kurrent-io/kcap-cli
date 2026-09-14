@@ -106,6 +106,7 @@ public class DaemonStatusWiringTests {
         services.AddSingleton<IPtyProcessFactory>(new NoopPtyProcessFactory());
         services.AddSingleton<IHttpClientFactory>(new NoopHttpClientFactory());
         services.AddSingleton<ICapacitorHttpClient>(new FixedCapacitorHttpClient());
+        services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         services.AddSingleton<LocalPermissionBridge>();
         services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentLauncher>>(
             new Dictionary<string, IHostedAgentLauncher>());

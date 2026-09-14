@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +31,7 @@ internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? 
 internal sealed partial class LocalPermissionBridge(
         ServerConnection               server,
         ILogger<LocalPermissionBridge> logger,
+        ILoopbackPortSource            ports,
         PermissionPromptBroker?        broker      = null,
         PermissionDecisionLog?         decisionLog = null
     ) : IHostedService, IAsyncDisposable {
@@ -136,7 +136,7 @@ internal sealed partial class LocalPermissionBridge(
         for (var attempt = 1; attempt <= MaxBindAttempts; attempt++) {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var port = ReserveFreeLoopbackPort();
+            var port = ports.Reserve();
             if (!TryClaimPort(port)) {
                 if (attempt < MaxBindAttempts)
                     await Task.Delay(Random.Shared.Next(10, 60), cancellationToken);
@@ -354,21 +354,6 @@ internal sealed partial class LocalPermissionBridge(
         return Uri.TryCreate(urlOrToken, UriKind.Absolute, out var uri)
             ? uri.AbsolutePath.Trim('/')
             : urlOrToken.Trim('/');
-    }
-
-    /// <summary>Instance-scoped test seam for deterministic port-collision coverage.</summary>
-    internal Func<int>? ReserveLoopbackPortOverrideForTest;
-
-    int ReserveFreeLoopbackPort() {
-        if (ReserveLoopbackPortOverrideForTest is { } overridePort) return overridePort();
-
-        // HttpListener doesn't accept port 0 in its prefix; reserve a free ephemeral
-        // port via TcpListener and immediately release. There's a TOCTOU window before
-        // HttpListener.Start binds the same port, but on a single-user developer machine
-        // the race is benign — port collisions are vanishingly rare.
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
     }
 
     async Task AcceptLoopAsync(CancellationToken ct) {

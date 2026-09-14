@@ -114,7 +114,7 @@ public class DaemonStatusIpcTests {
         var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, notifier);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
+        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
 
         var orchestrator = new AgentOrchestrator(
             config, Config.Root, TestHarnesses.Under(Home), connection, worktreeManager, repoMatcher,
@@ -168,7 +168,7 @@ public class DaemonStatusIpcTests {
             config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, notifier);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
+        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
 
         var orchestrator = new AgentOrchestrator(
             config, Config.Root, TestHarnesses.Under(Home), connection, worktreeManager, repoMatcher,

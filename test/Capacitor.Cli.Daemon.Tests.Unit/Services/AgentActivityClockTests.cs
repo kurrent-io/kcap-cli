@@ -397,7 +397,7 @@ public class LocalPermissionBridgeActivityWiringTests {
     [Test]
     public async Task Reviewer_tool_call_advances_the_bound_activity_clock() {
         var server = new FakeServerConnection((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
-        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
+        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
         var clock  = new AgentActivityClock(TimeProvider.System);
 
         try {
