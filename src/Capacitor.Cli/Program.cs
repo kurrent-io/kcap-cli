@@ -86,7 +86,7 @@ if (isHook && args.Contains("--claude")) {
 
     if (ClaudeSessionEndHandoff.IsDetached(args)) {
         ClaudeSessionEndHandoff.EnterDetached(claudeHookBody, config);
-    } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config)) {
+    } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance)) {
         return 0;
     }
 }
@@ -520,7 +520,7 @@ switch (command) {
         }
 
         // 1. Kill the watcher (and any subagent watchers)
-        var watchers = new WatcherManager(config, profiles, sp.GetRequiredService<ICapacitorHttpClient>());
+        var watchers = sp.GetRequiredService<WatcherManager>();
         await watchers.KillWatcher(sessionId);
 
         // Also kill subagent watchers — scan PID files matching "{sessionId}-*"
@@ -801,7 +801,11 @@ switch (command) {
         // spools BEFORE returning. Gating the call would mean a config broken for weeks never reaps
         // anything, and the per-session cap does not bound the number of stale files.
         if (!args.Contains("--codex") && baseUrl is not null) {
-            await new AgentHookPoster(config, profiles, sp.GetRequiredService<ICapacitorHttpClient>()).DrainSpoolsAsync(
+            var poster = new AgentHookPoster(
+                config, profiles,
+                sp.GetRequiredService<ICapacitorHttpClient>(), sp.GetRequiredService<WatcherManager>());
+
+            await poster.DrainSpoolsAsync(
                 new HookSpool(config),
                 new TranscriptSpool(config),
                 sessionId: null); // current session unknown here — reading stdin now would consume it

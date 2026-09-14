@@ -325,7 +325,7 @@ internal sealed class CursorImportSource : IImportSource {
             // source D0's quarantine exists to shut off. Quarantine is always keyed on the FAMILY
             // identity — the top-level (parent) session id — since CursorRewriteGuard is
             // constructed from the watcher process's own `sessionId` argument, which for a
-            // spawned CHILD watcher is the parent id (WatcherManager.BuildSpawnArgs:
+            // spawned CHILD watcher is the parent id (ProcessWatcherSpawner.BuildSpawnArgs:
             // sessionIdOverride ?? key). ResolveQuarantineIdentity resolves that mapping — see its
             // doc for round-2 review fix #7's fallback when `--session <child>` (or an
             // inaccessible/omitted parent transcript) filters the parent out of `subagentLinks`

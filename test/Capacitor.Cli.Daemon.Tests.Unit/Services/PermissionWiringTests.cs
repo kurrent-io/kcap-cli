@@ -63,6 +63,7 @@ public class PermissionWiringTests {
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));
         services.AddSingleton<ServerConnection>();
+        services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         services.AddSingleton<WorktreeManager>();
         services.AddSingleton<RepoMatcher>();
         services.AddSingleton<IPtyProcessFactory>(new NoopPtyProcessFactory());

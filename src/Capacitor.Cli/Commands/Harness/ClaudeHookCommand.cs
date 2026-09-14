@@ -22,8 +22,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        IProcessStarter starter) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -136,7 +136,7 @@ public sealed class ClaudeHookCommand(
                     (source.Equals("resume", StringComparison.OrdinalIgnoreCase) ||
                      source.Equals("compact", StringComparison.OrdinalIgnoreCase));
                 try {
-                    await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+                    await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                         agentId: null, cwd: cwd, skipTitle: isResumeOrCompact);
                 } catch { }
             }
@@ -394,7 +394,7 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
-            return await new PermissionRequestCommand(config, profiles, hosted, http)
+            return await new PermissionRequestCommand(config, profiles, hosted, http, watchers)
                 .Handle(body, selfHeal, stdout);
         }
 
@@ -492,10 +492,10 @@ public sealed class ClaudeHookCommand(
 
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
-                                await _watchers.KillWatcher(sessionId);
+                                await watchers.KillWatcher(sessionId);
 
                                 if (transcriptPath is not null) {
-                                    await _watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null);
+                                    await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null);
                                 }
                             },
                             effectiveCap
@@ -535,12 +535,12 @@ public sealed class ClaudeHookCommand(
 
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
-                                await _watchers.KillWatcher($"{sessionId}-{agentId}");
+                                await watchers.KillWatcher($"{sessionId}-{agentId}");
 
                                 if (transcriptPath is not null) {
                                     var sessionDir          = Path.ChangeExtension(transcriptPath, null);
                                     var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-                                    await _watchers.InlineDrainAsync(sessionId, agentTranscriptPath, agentId);
+                                    await watchers.InlineDrainAsync(sessionId, agentTranscriptPath, agentId);
                                 }
                             },
                             effectiveCap
@@ -578,14 +578,14 @@ public sealed class ClaudeHookCommand(
             // 1. Capture never lost: spawn the watcher before any slow git/gh/POST.
             //    Idempotent — safe to call even if the POST subsequently fails.
             if (sessionId is not null && transcriptPath is not null) {
-                await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+                await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                     agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
             }
 
             // Opt-in background skills refresh: detached and never awaited (the hook's latency
             // budget must not pay for a sync); the child throttles itself off the manifest.
             if (activeProfile?.Skills?.AutoSync == true && sessionCwd is not null)
-                SkillsAutoSync.SpawnDetached(sessionCwd);
+                SkillsAutoSync.SpawnDetached(sessionCwd, starter);
 
             // Now that the watcher is running, await the deferred repo enrichment (a slow git/gh
             // probe could not have delayed capture start) and then inject default_visibility +
@@ -867,7 +867,7 @@ public sealed class ClaudeHookCommand(
             try {
                 var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
                 if (node?["generate_whats_done"]?.GetValue<bool>() == true && sessionId is not null)
-                    _watchers.SpawnWhatsDoneGenerator(sessionId);
+                    watchers.SpawnWhatsDoneGenerator(sessionId);
             } catch { }
             resp.Dispose();
             return 0;
@@ -969,7 +969,7 @@ public sealed class ClaudeHookCommand(
                 if (sessionId is not null && agentId is not null && transcriptPath is not null) {
                     var sessionDir          = Path.ChangeExtension(transcriptPath, null);
                     var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-                    await _watchers.EnsureWatcherRunning($"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
+                    await watchers.EnsureWatcherRunning($"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
                 }
 
                 break;
@@ -981,7 +981,7 @@ public sealed class ClaudeHookCommand(
                 var sessionCwd     = node?["cwd"]?.GetValue<string>();
 
                 if (sessionId is not null && transcriptPath is not null) {
-                    await _watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: sessionCwd);
+                    await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: sessionCwd);
                 }
 
                 break;
@@ -1186,7 +1186,7 @@ public sealed class ClaudeHookCommand(
                         var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
                         var sid  = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
                         if (node?["generate_whats_done"]?.GetValue<bool>() == true && sid is not null)
-                            _watchers.SpawnWhatsDoneGenerator(sid);
+                            watchers.SpawnWhatsDoneGenerator(sid);
                     } catch { }
                 }
                 return DrainOutcome.Delivered;

@@ -112,7 +112,7 @@ public class DaemonStatusIpcTests {
         var notifier         = new DaemonStatusNotifier();
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
         var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, notifier);
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
         var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
 
@@ -166,7 +166,7 @@ public class DaemonStatusIpcTests {
         var tokens     = AuthFixtures.NewTokenStore(Config.Root);
         var connection = new ServerConnection(
             config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, notifier);
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
         var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance);
 

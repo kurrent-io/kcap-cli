@@ -39,9 +39,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -445,7 +444,7 @@ sealed class CodexHookCommand(
         var cwd        = TryGetString(enrichedNode, "cwd");
 
         return sessionId is not null && transcript is not null && !IsEnvelopeSourcedHostedSession()
-            ? _watchers.EnsureWatcherRunning(sessionId, transcript,
+            ? watchers.EnsureWatcherRunning(sessionId, transcript,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "codex")
             : Task.CompletedTask;
@@ -472,7 +471,7 @@ sealed class CodexHookCommand(
             // Guard-1: skip the watcher restart for an envelope-sourced hosted session (the daemon owns
             // its transcript); the idle-marker stop POST still fires so the "working" indicator clears.
             if (!IsEnvelopeSourcedHostedSession()) {
-                await _watchers.EnsureWatcherRunning(sessionId, transcript,
+                await watchers.EnsureWatcherRunning(sessionId, transcript,
                     agentId: null, sessionIdOverride: null, cwd: cwd,
                     skipTitle: false, vendor: "codex"
                 );

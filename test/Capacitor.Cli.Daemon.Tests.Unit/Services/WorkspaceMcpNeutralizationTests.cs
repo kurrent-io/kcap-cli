@@ -25,7 +25,7 @@ public class WorkspaceMcpNeutralizationTests {
         File.WriteAllText(full, content);
     }
 
-    static WorktreeManager Manager() => new(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
+    static WorktreeManager Manager() => new(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
     // ── the core behaviour ──
 

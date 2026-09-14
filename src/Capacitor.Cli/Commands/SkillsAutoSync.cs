@@ -9,9 +9,7 @@ namespace Capacitor.Cli.Commands;
 /// session start, nothing more.
 /// </summary>
 static class SkillsAutoSync {
-    internal static Func<ProcessStartInfo, Process?>? ProcessStarterForTesting;
-
-    public static void SpawnDetached(string cwd) {
+    public static void SpawnDetached(string cwd, IProcessStarter starter) {
         try {
             var psi = new ProcessStartInfo(Environment.ProcessPath ?? "kcap") {
                 WorkingDirectory       = cwd,
@@ -29,7 +27,7 @@ static class SkillsAutoSync {
             // The child must not inherit the hook's ambient coding-agent pipe descriptors —
             // an inherited data-channel fd would hold the agent open until the sync exits.
             ProcessHelpers.PreventInheritedHandles();
-            var child = ProcessStarterForTesting is { } fake ? fake(psi) : Process.Start(psi);
+            var child = starter.Start(psi);
             if (child is not null) {
                 // Redirected pipes must not wedge the child once their buffers fill: drain both
                 // to null while this process lives (the child itself also silences its streams
