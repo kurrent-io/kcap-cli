@@ -310,7 +310,7 @@ public partial class WorktreeManager(
         // A rendezvous in the window where BOTH callers still see the destination absent. Without it a
         // concurrency test can pass by running them sequentially, where the second is refused by the
         // occupied-destination check and the claim's atomicity is never exercised.
-        barrier.ReachedAsync(SnapshotPoint.PreClaim).GetAwaiter().GetResult();
+        await barrier.ReachedAsync(SnapshotPoint.PreClaim);
 
         try {
             using (new FileStream(claimPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
@@ -329,7 +329,7 @@ public partial class WorktreeManager(
             // Holds the winner after the claim FILE exists but before the destination does, so a second
             // caller's acquisition is decided purely by the claim's existence. Without this the handle's
             // own FileShare.None can do the excluding instead, and a weakened FileMode goes undetected.
-            barrier.ReachedAsync(SnapshotPoint.PostClaim).GetAwaiter().GetResult();
+            await barrier.ReachedAsync(SnapshotPoint.PostClaim);
 
             // Absent, not merely "not a link". An existing ordinary directory would be silently adopted:
             // the snapshot would overlay a tree we never created, the rollback would then delete it
@@ -347,7 +347,7 @@ public partial class WorktreeManager(
                 try { DeleteTreeNoFollow(worktreePath); } catch { /* keep the original failure */ }
                 // INSIDE the claim's protected region and after the delete: the exact window in which a
                 // same-name caller must still be excluded.
-                barrier.ReachedAsync(SnapshotPoint.Rollback).GetAwaiter().GetResult();
+                await barrier.ReachedAsync(SnapshotPoint.Rollback);
                 throw;
             }
         } finally {

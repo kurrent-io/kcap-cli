@@ -12,6 +12,10 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// assertion passes for the wrong reason. Everything here uses <see cref="EntryNames"/> or
 /// <see cref="IsPresent"/>, which read the parent directory and the entry's own attributes.</para></summary>
 [ParallelLimiter<SubprocessLimit>]
+// Keyed, not bare: nothing here is process-global, but a claim test holds two real snapshots
+// open at once, and four of those running together starve the suite's port and journal tests.
+// The key keeps this class's own tests apart without taking the assembly.
+[NotInParallel(nameof(StandaloneSnapshotTests))]
 public class StandaloneSnapshotTests {
     // ---- fixtures -----------------------------------------------------------------------------------
 
