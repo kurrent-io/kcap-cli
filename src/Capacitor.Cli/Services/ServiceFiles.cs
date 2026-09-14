@@ -4,7 +4,9 @@ using Microsoft.Win32.SafeHandles;
 namespace Capacitor.Cli.Services;
 
 static class ServiceFiles {
-    const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    const UnixFileMode OwnerOnly    = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    const UnixFileMode OwnerOnlyDir = OwnerOnly | UnixFileMode.UserExecute;
+    const UnixFileMode SharedWrite  = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
 
     /// <summary>Writes a service unit readable only by its owner, or fails without leaving one behind.
     ///
@@ -23,13 +25,17 @@ static class ServiceFiles {
     /// <param name="verifyFinal">Test seam. Production passes null and gets the real post-rename check;
     /// a test supplies a failing one to prove the rollback, which is otherwise only reachable on a
     /// filesystem that does not preserve mode across a rename.</param>
+    /// <param name="tightenDirectory">Test seam. Production passes null and gets the real chmod; a test
+    /// supplies a no-op one to prove the refusal, which is otherwise only reachable through a directory
+    /// the current user does not own.</param>
     public static void WriteOwnerOnly(
-            string path, string content, Encoding? encoding = null, Action<string>? verifyFinal = null) {
+            string path, string content, Encoding? encoding = null, Action<string>? verifyFinal = null,
+            Action<string>? tightenDirectory = null) {
         var directory = Path.GetDirectoryName(path);
 
         if (!string.IsNullOrEmpty(directory)) {
-            Directory.CreateDirectory(directory);
-            RequireNotWorldWritable(directory);
+            CreateDirectory(directory);
+            RequireNoSharedWrite(directory, tightenDirectory);
         }
 
         // Full GUID: the staging name must not be guessable by a local process racing to pre-create it,
@@ -73,18 +79,52 @@ static class ServiceFiles {
         writer.Write(content);
     }
 
-    /// <summary>Refuses to write a unit into a directory other local accounts can write — owner-only mode
-    /// on the unit is no protection when someone else can replace the unit and choose what the daemon
-    /// runs.</summary>
-    static void RequireNotWorldWritable(string directory) {
+    /// <summary>Creates the unit directory, and every ancestor it has to create, owner-only — so the umask
+    /// cannot decide who may replace a unit.
+    ///
+    /// <para>The plain overload applies <c>0777 &amp; ~umask</c>, and umask 002 is the default wherever a
+    /// user's primary group is their own name — the <c>pam_umask</c> usergroups behaviour Debian and Ubuntu
+    /// enable. That yields a group-writable directory, which <see cref="RequireNoSharedWrite"/> then has to
+    /// repair; asking for the mode at creation leaves no window in which it is wrong.</para>
+    ///
+    /// <para>One level at a time because the mode-taking overload applies it to the LEAF only: every
+    /// ancestor it creates on the way still lands <c>0777 &amp; ~umask</c>, and a writable parent is a
+    /// rename away from replacing the unit directory whole. Ancestors that already exist are left as the
+    /// operator has them — <c>~/.config</c> is not this code's to tighten.</para></summary>
+    static void CreateDirectory(string directory) {
+        if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(directory); return; }
+
+        var missing = new Stack<string>();
+
+        for (var d = directory; !string.IsNullOrEmpty(d) && !Directory.Exists(d); d = Path.GetDirectoryName(d)!)
+            missing.Push(d);
+
+        while (missing.Count > 0) Directory.CreateDirectory(missing.Pop(), OwnerOnlyDir);
+    }
+
+    /// <summary>Strips group and world write from the unit directory, and refuses the install if they
+    /// survive — owner-only mode on the unit is no protection when someone else can replace the unit and
+    /// choose what the daemon runs.
+    ///
+    /// <para>Repaired rather than refused outright, because the bits alone do not say another account is
+    /// involved: a user-private group has exactly one member, and a directory we can chmod is one no other
+    /// account controls. A chmod that fails is the case worth refusing, and the re-read is what decides —
+    /// not the attempt.</para></summary>
+    static void RequireNoSharedWrite(string directory, Action<string>? tighten) {
         if (OperatingSystem.IsWindows()) return;   // ACL-governed, inherited from the user profile
 
-        var mode = File.GetUnixFileMode(directory);
+        if ((File.GetUnixFileMode(directory) & SharedWrite) == 0) return;
 
-        if (mode.HasFlag(UnixFileMode.OtherWrite) || mode.HasFlag(UnixFileMode.GroupWrite))
+        try {
+            if (tighten is not null) tighten(directory);
+            else File.SetUnixFileMode(directory, File.GetUnixFileMode(directory) & ~SharedWrite);
+        } catch (Exception) { /* the re-read decides, not the attempt */ }
+
+        if ((File.GetUnixFileMode(directory) & SharedWrite) != 0)
             throw new InvalidOperationException(
                 $"Refusing to write a service unit into a group- or world-writable directory: {directory}. "
-              + "Another local account could replace the unit and choose what the daemon runs.");
+              + "Another local account could replace the unit and choose what the daemon runs. Remove those "
+              + "write bits with `chmod g-w,o-w` and re-run the install.");
     }
 
     /// <summary>Requires EXACTLY owner read+write on the open handle, repairing once.

@@ -121,11 +121,69 @@ public partial class ServiceFilesTests {
             .Because("the staging file must not survive either");
     }
 
-    /// <summary>Installing into a directory other local accounts can write is refused: owner-only mode on
-    /// the unit is no protection if someone else can replace the unit and choose what the daemon runs.</summary>
+    /// <summary>A directory the writer creates itself is usable, whatever the umask.
+    ///
+    /// <para>umask 002 is the default for a user whose primary group matches their own name — the
+    /// <c>pam_umask</c> usergroups behaviour Debian and Ubuntu enable — so a directory created under it
+    /// lands 0775. The writer creates the unit directory, so a check that rejects group-write outright
+    /// rejects the writer's own work and no install can succeed on those distributions.</para></summary>
+    [Test]
+    [NotInParallel]
+    [Arguments(0x2u)]    // umask 002 — group-writable
+    [Arguments(0u)]      // umask 000 — group- and world-writable
+    [UnsupportedOSPlatform("windows")]
+    public async Task WriteOwnerOnly_creates_a_usable_unit_directory_under_any_umask(uint mask) {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
+
+        using var tmp = new TempDir();
+        var dir      = tmp.PathTo("systemd", "user");
+        var path     = Path.Combine(dir, "kcap-daemon-test.service");
+        var previous = umask(mask);
+        try {
+            ServiceFiles.WriteOwnerOnly(path, "SECRET-COMMAND");
+        } finally {
+            _ = umask(previous);
+        }
+
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("SECRET-COMMAND");
+        await Assert.That(File.GetUnixFileMode(dir) & SharedWrite).IsEqualTo(default(UnixFileMode))
+            .Because("no other account may be able to replace the unit");
+        await Assert.That(File.GetUnixFileMode(tmp.PathTo("systemd")) & SharedWrite).IsEqualTo(default(UnixFileMode))
+            .Because("a writable parent is a rename away from replacing the whole unit directory");
+    }
+
+    /// <summary>A directory that arrives group- or world-writable is tightened rather than refused — the
+    /// write bits for other accounts are what the check is about, and on a directory we own they can simply
+    /// be removed. The unit still lands, and the directory no longer grants anyone else write.</summary>
     [Test]
     [UnsupportedOSPlatform("windows")]
-    public async Task WriteOwnerOnly_refuses_a_world_writable_directory() {
+    public async Task WriteOwnerOnly_tightens_a_shared_writable_directory_it_can_repair() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
+
+        using var tmp = new TempDir();
+        File.SetUnixFileMode(tmp.Path,
+            UnixFileMode.UserRead   | UnixFileMode.UserWrite   | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead  | UnixFileMode.GroupWrite  | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead  | UnixFileMode.OtherWrite  | UnixFileMode.OtherExecute);
+
+        ServiceFiles.WriteOwnerOnly(tmp.PathTo("unit.plist"), "SECRET-COMMAND");
+
+        await Assert.That(await File.ReadAllTextAsync(tmp.PathTo("unit.plist"))).IsEqualTo("SECRET-COMMAND");
+        await Assert.That(File.GetUnixFileMode(tmp.Path) & SharedWrite).IsEqualTo(default(UnixFileMode));
+        await Assert.That(File.GetUnixFileMode(tmp.Path).HasFlag(UnixFileMode.OtherRead)).IsTrue()
+            .Because("only the write bits are the hazard; read and traverse are left as the operator set them");
+    }
+
+    /// <summary>When the write bits cannot be removed, the install is refused and no unit is left behind:
+    /// owner-only mode on the unit is no protection if someone else can replace the unit and choose what
+    /// the daemon runs.
+    ///
+    /// <para>The repair is suppressed rather than provoked. Reaching this for real needs a directory the
+    /// current user does not own, and the only ones a test could rely on finding are shared system
+    /// directories that a run as root would then really chmod.</para></summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task WriteOwnerOnly_refuses_a_shared_writable_directory_it_cannot_repair() {
         Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
 
         using var tmp = new TempDir();
@@ -135,7 +193,8 @@ public partial class ServiceFilesTests {
                 UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
 
             var ex = Assert.Throws<InvalidOperationException>(
-                () => ServiceFiles.WriteOwnerOnly(tmp.PathTo("unit.plist"), "x"));
+                () => ServiceFiles.WriteOwnerOnly(tmp.PathTo("unit.plist"), "x", null,
+                    tightenDirectory: _ => { }));
 
             await Assert.That(ex!.Message).Contains("writable");
             await Assert.That(File.Exists(tmp.PathTo("unit.plist"))).IsFalse();
@@ -147,6 +206,8 @@ public partial class ServiceFilesTests {
             } catch { /* best-effort */ }
         }
     }
+
+    const UnixFileMode SharedWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
 
     /// <summary>A pre-existing entry at the staging path is not followed or truncated — the staging inode
     /// is created exclusively. The name carries a full GUID, so this asserts the mechanism rather than a

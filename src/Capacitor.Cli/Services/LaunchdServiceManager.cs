@@ -27,10 +27,8 @@ sealed partial class LaunchdServiceManager(
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking launchctl.</summary>
-    internal void WriteUnitFiles(ServiceSpec spec) {
-        Directory.CreateDirectory(LaunchdUnit.AgentsDir(home));
+    internal void WriteUnitFiles(ServiceSpec spec) =>
         _writeUnit(LaunchdUnit.PlistPath(home, spec.ServiceId), LaunchdUnit.Plist(spec), null);
-    }
 
     [LibraryImport("libc", EntryPoint = "getuid")]
     private static partial uint getuid();
