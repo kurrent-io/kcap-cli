@@ -35,9 +35,9 @@ public record WorktreeInfo(
 public partial class WorktreeManager(
         DaemonConfig config, ILogger<WorktreeManager> logger, ISnapshotBarrier barrier) {
     /// <summary>Excluded from a borrowed snapshot. The vendor MCP config paths are folded in from the one
-    /// list, rather than restated: this used to name <c>.mcp.json</c> and <c>.cursor/mcp.json</c> only, so
-    /// <c>.kiro/settings/mcp.json</c> — the file measured to get a command executed at session setup —
-    /// survived into a launched borrowed snapshot. Two lists of the same thing is how that happened.
+    /// list, rather than restated. A second list drifts from the first: one naming only <c>.mcp.json</c>
+    /// and <c>.cursor/mcp.json</c> lets <c>.kiro/settings/mcp.json</c> — which gets a command executed at
+    /// session setup — survive into a launched borrowed snapshot.
     ///
     /// <para><b>Known cost, and it cuts the wrong way.</b> An excluded file is not in the snapshot, so a
     /// borrowed reviewer cannot SEE it — including when the change under review is the file itself. A pull

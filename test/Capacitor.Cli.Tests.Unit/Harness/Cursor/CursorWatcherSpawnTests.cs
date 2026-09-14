@@ -89,7 +89,7 @@ public class CursorWatcherSpawnTests {
         await Assert.That(spawner.Keys).IsEquivalentTo([sid]);
     }
 
-    // Task 12's invariant — no child watcher before the diverted subagent-start is acked, and
+    // The acked-start invariant — no child watcher before the diverted subagent-start is acked, and
     // once acked the key is {parent}-{child} — is covered by
     // Deferred_spool_drain_delivering_a_spooled_subagent_start_spawns_the_child_watcher below,
     // which drives BOTH halves through real drain attempts: a first HandleCore whose drain retries
@@ -97,11 +97,6 @@ public class CursorWatcherSpawnTests {
     // watcher spawned), then a second whose drain succeeds and must spawn {parent}-{child}. The
     // divert's own nonterminal no-ack gate is separately covered by
     // Later_nonterminal_child_hook_does_not_spawn_when_never_acked.
-    //
-    // Two tests that asserted the same thing by invoking the divert's start arm with a child
-    // `sessionStart` were removed: a real Cursor subagent child never fires that event, so they
-    // encoded a trigger that cannot occur. See
-    // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
     [Test]
     public async Task Child_watcher_not_spawned_when_the_parent_session_is_quarantined() {
         using var tmp = new TempDir();
@@ -118,8 +113,6 @@ public class CursorWatcherSpawnTests {
         // Seed the ack so the no-ack gate cannot be what suppresses the spawn — otherwise
         // this test would pass for the wrong reason and prove nothing about quarantine. Then
         // drive a NON-lifecycle hook: the self-heal spawn path a real child actually reaches.
-        // (This previously used a child `sessionStart`, an event a real Cursor subagent child
-        // never fires.)
         Markers.MarkSubagentStartAcked(child);
 
         var spool = new HookSpool(tmp.PathTo("spool"));
@@ -130,8 +123,8 @@ public class CursorWatcherSpawnTests {
         await Assert.That(spawner.Keys).IsEmpty();
     }
 
-    // Task 12 — the deferred half of the acked-start gate: a subagent-start that failed
-    // its first live POST (spooled by HandleSubagentChildEventAsync) must still spawn the child
+    // The deferred half of the acked-start gate: a subagent-start that failed its first live
+    // POST (spooled by HandleSubagentChildEventAsync) must still spawn the child
     // watcher once a LATER hook invocation's generic spool drain (HandleCore, top of method —
     // runs before the isSubagentChild divert) finally delivers it. Exercises the real dispatcher
     // end to end rather than calling HandleSubagentChildEventAsync directly.
@@ -167,8 +160,7 @@ public class CursorWatcherSpawnTests {
         // Seed the undelivered subagent-start DIRECTLY (as a prior transient POST failure
         // would have left it), rather than producing one by driving the child's own
         // sessionStart. A real Cursor subagent child never fires sessionStart, so using it
-        // as the vehicle would bake in a trigger that cannot occur — see
-        // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+        // as the vehicle would bake in a trigger that cannot occur.
         spool.Append(child, "subagent-start",
             $$"""{"hook_event_name":"subagent_start","session_id":"{{parent}}","agent_id":"{{child}}","transcript_path":"{{childFile.Replace(@"\", @"\\")}}"}""");
 
@@ -200,10 +192,9 @@ public class CursorWatcherSpawnTests {
     // a subagent-start that hits a non-transient 4xx on retry (via
     // HandleCore's generic top-of-method spool drain) is permanently DROPPED — HookSpool removes
     // the entry, so HasBacklog goes false even though no AgentSubsession stream was ever opened
-    // server-side. Before the fix, that emptied backlog let the child's own content-less hooks
-    // (and its own subagent-stop) run the agent-routed transcript backfill unconditionally. The
-    // fix gates on the durable ack marker instead of "no backlog", so a dropped start must
-    // permanently block ALL child transcript delivery — not just the watcher spawn.
+    // server-side. Delivery gates on the durable ack marker rather than on an empty backlog,
+    // so a dropped start permanently blocks ALL child transcript delivery for that child — its
+    // content-less hooks and its own subagent-stop included, not just the watcher spawn.
     [Test]
     public async Task Permanently_dropped_subagent_start_gates_all_child_transcript_delivery_forever() {
         using var tmp = new TempDir();
@@ -240,8 +231,7 @@ public class CursorWatcherSpawnTests {
 
         // Seed the undelivered subagent-start DIRECTLY, as a prior transient POST failure
         // would have left it. Driving the child's own sessionStart to produce it would bake
-        // in a trigger a real Cursor child never fires — see
-        // docs/superpowers/specs/2026-07-30-ai1505-cursor-subagent-classification-design.md
+        // in a trigger a real Cursor child never fires.
         spool.Append(child, "subagent-start",
             $$"""{"hook_event_name":"subagent_start","session_id":"{{parent}}","agent_id":"{{child}}","transcript_path":"{{childFileEscaped}}"}""");
 
@@ -255,9 +245,8 @@ public class CursorWatcherSpawnTests {
             new StringReader($$"""{"hook_event_name":"afterAgentThought","session_id":"{{child}}","generation_id":"g","text":"t","transcript_path":"{{childFileEscaped}}"}"""),
             spool);
 
-        // 3rd invocation: another content-less hook. Before the fix, the dropped start left
-        // HasBacklog false and this would run the agent-routed transcript backfill despite
-        // SubagentStarted never having been appended.
+        // 3rd invocation: another content-less hook. An emptied backlog is not an
+        // acknowledgement, so no agent-routed backfill may run while the marker is absent.
         await new CursorHookCommand(Config.Root, Resolutions.At("http://s", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://s", Config.Root), new FixedCapacitorHttpClient(), spawner)).HandleCore(
             client,
             new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{child}}","tool_name":"Bash","transcript_path":"{{childFileEscaped}}"}"""),
@@ -269,11 +258,10 @@ public class CursorWatcherSpawnTests {
     }
 
     // Once subagent-start is acked, every LATER NONTERMINAL hook for the same child must attempt
-    // to (re)spawn its watcher. Before the fix the spawn was attempted only on the start arm —
-    // which a real Cursor subagent child never reaches, since it fires no sessionStart — so a
-    // child watcher that later exited (the newly-enabled idle ceiling), crashed, or never started
-    // (the acking invocation carried no transcript path) was never restarted. The nonterminal
-    // hooks exercised here are the ones a real child actually fires.
+    // to (re)spawn its watcher. The divert's start arm is unreachable for a real child, which
+    // fires no sessionStart, so a watcher that exited on the idle ceiling, crashed, or never
+    // started (the acking invocation carried no transcript path) is restarted only here. The
+    // nonterminal hooks exercised below are the ones a real child actually fires.
     [Test]
     public async Task Later_nonterminal_child_hook_self_heals_a_dead_or_never_started_child_watcher_via_the_ack_marker() {
         using var tmp = new TempDir();

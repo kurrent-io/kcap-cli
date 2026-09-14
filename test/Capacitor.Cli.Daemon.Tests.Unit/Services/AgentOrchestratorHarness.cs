@@ -59,7 +59,7 @@ internal static class AgentOrchestratorHarness {
             config.AllowedRepoPaths = [allowedRepoPath];
         }
 
-        configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
+        configure?.Invoke(config); // Lets a test tweak the config (e.g. reviewer TTL bounds)
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);

@@ -470,9 +470,8 @@ sealed class GeminiHookCommand(
         // one and resume appends to the same transcript.
         var skipTitle = source is "resume" or "clear";
 
-        // Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
-        // caller instead of being silently dropped, and the host process doesn't exit before the
-        // spawn completes.
+        // Awaited, not fire-and-forget: a dropped task hides a spawn failure from the caller, and
+        // lets the host process exit before the spawn completes.
         await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: skipTitle, vendor: "gemini"
