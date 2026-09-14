@@ -91,6 +91,11 @@ if (isHook && args.Contains("--claude")) {
     }
 }
 
+// The refresh continuation was spawned inside a hook's process group and must leave it before the
+// repository probe below, or the host kills it with the hook at the ceiling.
+var isRefreshHandoff = RefreshTokenHandoff.IsDetached(command, args);
+if (isRefreshHandoff) RefreshTokenHandoff.EnterDetached();
+
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
@@ -98,7 +103,7 @@ var serverEnv = ProfileOverrides.FromEnvironment();
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
+var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
 
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
@@ -791,7 +796,6 @@ switch (command) {
     // Spawned detached by a hook that gave up on its own client creation (RefreshTokenHandoff); it
     // outlives the hook to finish the rotation. Not in PrintUsage — nobody types it by hand.
     case RefreshTokenHandoff.Command: {
-        RefreshTokenHandoff.EnterDetached();
         try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
 
         return 0;

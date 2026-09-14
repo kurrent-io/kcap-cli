@@ -320,7 +320,7 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
 
     // A hook process ends with this invocation, so a rotation its client creation started must be
     // finished by a process that will still be alive to persist it.
-    void HandOffRefresh() => RefreshTokenHandoff.Spawn(config);
+    void HandOffRefresh() => RefreshTokenHandoff.Spawn(config, profiles.Name);
 
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,

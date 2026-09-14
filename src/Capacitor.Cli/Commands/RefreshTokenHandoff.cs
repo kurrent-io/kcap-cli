@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Commands;
 
@@ -14,21 +15,30 @@ internal static class RefreshTokenHandoff {
     public const string Command      = "refresh-token";
     public const string DetachedFlag = "--detached";
 
+    public static bool IsDetached(string command, string[] args) => command == Command && args.Contains(DetachedFlag);
+
     /// <summary>Best effort and silent: a failure to spawn leaves things exactly as they were.</summary>
-    public static void Spawn(ConfigRoot config) {
+    public static void Spawn(ConfigRoot config, string profile) {
         try {
             ProcessHelpers.PreventInheritedHandles();
-            WatcherManager.StartProcess(BuildStartInfo(config))?.Dispose();
+
+            using var process = WatcherManager.StartProcess(BuildStartInfo(config, profile));
+
+            // The child must not hold the host's hook pipes, or a host waiting for EOF waits on the
+            // child too — the very lifetime this hand-off exists to escape.
+            process?.StandardInput.Close();
+            process?.StandardOutput.Close();
+            process?.StandardError.Close();
         } catch {
             // The abandoned refresh may still complete on its own; nothing here can improve on that.
         }
     }
 
-    internal static ProcessStartInfo BuildStartInfo(ConfigRoot config) {
+    internal static ProcessStartInfo BuildStartInfo(ConfigRoot config, string profile) {
         var psi = new ProcessStartInfo(Environment.ProcessPath ?? "kcap") {
-            RedirectStandardInput  = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError  = false,
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
             UseShellExecute        = false,
             CreateNoWindow         = true,
         };
@@ -36,14 +46,18 @@ internal static class RefreshTokenHandoff {
         psi.ArgumentList.Add(Command);
         psi.ArgumentList.Add(DetachedFlag);
 
-        // The child must read the token the hook read, whatever else it resolves for itself.
-        psi.Environment[ConfigRoot.ConfigDirEnvVar] = config.Directory;
+        // The child must refresh the very token the hook read: same root, same profile. A URL override
+        // outranks the profile pin and resolves to no profile at all, so it does not travel.
+        psi.Environment[ConfigRoot.ConfigDirEnvVar]  = config.Directory;
+        psi.Environment[ProfileOverrides.ProfileVar] = profile;
+        psi.Environment.Remove(ProfileOverrides.UrlVar);
 
         return psi;
     }
 
-    /// <summary>The detached process's own setup: nothing on the console, and out of the terminal's
-    /// session so a closing window cannot SIGHUP it mid-replay.</summary>
+    /// <summary>The detached process's own setup, run before any startup work that could block:
+    /// nothing on the console, and out of the terminal's session so a closing window cannot SIGHUP it
+    /// mid-replay.</summary>
     public static void EnterDetached() {
         Console.SetOut(TextWriter.Null);
         Console.SetError(TextWriter.Null);
