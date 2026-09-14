@@ -1,9 +1,12 @@
+using System.Diagnostics;
+using System.Net;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using static Capacitor.Tests.Helpers.SequencedHttpScript;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
@@ -12,6 +15,8 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// so nothing short of resolving the registered one proves what the registration contributes.
 /// </summary>
 public class WorkOSClientTests : IDisposable {
+    const string Rotation = """{"user":{"id":"user_x"},"access_token":"acc","refresh_token":"rt2"}""";
+
     readonly WireMockServer  _server = WireMockServer.Start();
     readonly ServiceProvider _sp     = new ServiceCollection().AddCapacitorForeignClients().BuildServiceProvider();
 
@@ -67,85 +72,127 @@ public class WorkOSClientTests : IDisposable {
     /// <summary>A refresh that WorkOS honours rotates and carries the parsed tokens back to the caller.</summary>
     [Test]
     public async Task A_honoured_refresh_rotates_and_carries_the_response() {
-        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
-                """{"user":{"id":"user_x"},"access_token":"acc","refresh_token":"rt2"}"""));
+        var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, Rotation));
 
-        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+        var result = await new WorkOSClient(new PlainHttpClientFactory(workos))
             .RefreshAsync("client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
         await Assert.That(result.Response!.AccessToken).IsEqualTo("acc");
         await Assert.That(result.Response!.RefreshToken).IsEqualTo("rt2");
+        await Assert.That(workos.Count).IsEqualTo(1);
     }
 
     /// <summary>
     /// A refused refresh reads as Rejected with no response — the token WorkOS declined must not be
-    /// mistaken for a live one — and the refresh is sent once, never retried onto a consumed token.
+    /// mistaken for a live one — and a 4xx is never replayed: WorkOS understood the token and said no.
     /// </summary>
     [Test]
     public async Task A_refused_refresh_is_rejected_and_sent_exactly_once() {
-        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(400).WithBody(
-                """{"error":"invalid_grant"}"""));
+        var workos = new SequencedHttpScript(Reply(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}"""));
 
-        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
+        var result = await new WorkOSClient(new PlainHttpClientFactory(workos))
             .RefreshAsync("client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
         await Assert.That(result.Response).IsNull();
-
-        var posts = _server.FindLogEntries(
-            Request.Create().WithPath("/user_management/authenticate").UsingPost());
-        await Assert.That(posts.Count).IsEqualTo(1);
+        await Assert.That(workos.Count).IsEqualTo(1);
     }
 
-    /// <summary>A 5xx is the server faltering, not the token being refused: it must read as a
-    /// transport failure (retry with the same live token), not Rejected (which would strand the
-    /// daemon on the hour-long re-login backoff over a transient blip).</summary>
+    /// <summary>
+    /// A refresh whose reply never arrives is replayed with the same token inside WorkOS's replay
+    /// window, and the replay hands back the rotated tokens. This is the outage that logged every
+    /// client out: the first exchange had landed, its reply timed out, and the next refresh a minute
+    /// later was outside the window — <c>invalid_grant</c>, session dead.
+    /// </summary>
     [Test]
-    public async Task A_server_error_is_a_transport_failure_not_a_rejection() {
-        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(503));
+    public async Task A_timed_out_refresh_is_replayed_inside_the_grace_window() {
+        var workos = new SequencedHttpScript(Stall(), Reply(HttpStatusCode.OK, Rotation));
 
-        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
-            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
+        await Assert.That(result.Response!.RefreshToken).IsEqualTo("rt2");
+        await Assert.That(workos.Count).IsEqualTo(2);
+        await Assert.That(workos.Bodies.Distinct().Count()).IsEqualTo(1);
+    }
+
+    /// <summary>A 5xx is the server faltering, not the token being refused: the same token is replayed
+    /// and the replay rotates.</summary>
+    [Test]
+    public async Task A_server_error_is_replayed_with_the_same_token() {
+        var workos = new SequencedHttpScript(
+            Reply(HttpStatusCode.ServiceUnavailable), Reply(HttpStatusCode.OK, Rotation));
+
+        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
+        await Assert.That(workos.Count).IsEqualTo(2);
+        await Assert.That(workos.Bodies.Distinct().Count()).IsEqualTo(1);
+    }
+
+    /// <summary>Within the grace window a replay returns the same rotated tokens, so an unreadable
+    /// success body is not the end of the session — the replay recovers what the first reply lost.</summary>
+    [Test]
+    public async Task An_unreadable_success_body_is_replayed_and_the_replay_rotates() {
+        var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, "not-json"), Reply(HttpStatusCode.OK, Rotation));
+
+        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
+        await Assert.That(workos.Count).IsEqualTo(2);
+    }
+
+    /// <summary>Replays stop once the next attempt could no longer land inside the grace window; a
+    /// WorkOS that never answers reads as a transport failure, and the caller is not held past the
+    /// budget.</summary>
+    [Test]
+    public async Task Replays_stop_at_the_grace_budget_and_a_dead_endpoint_is_a_transport_failure() {
+        var workos = new SequencedHttpScript(Stall());
+
+        var started = Stopwatch.GetTimestamp();
+        var result  = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
-        await Assert.That(result.Response).IsNull();
+        await Assert.That(workos.Count).IsGreaterThan(1);
+        await Assert.That(Stopwatch.GetElapsedTime(started)).IsLessThan(TimeSpan.FromSeconds(8));
     }
 
-    /// <summary>A WorkOS that accepts the connection but stalls must not hold auth — and every peer's
-    /// refresh, since a refresh runs under the cross-process lock — for the client's 100 s default.
-    /// The single attempt has its own short deadline, and a stall reads as a transport failure (the
-    /// token was not spent), never a rejection.</summary>
+    /// <summary>A success whose body is never readable has consumed the token and lost its successor
+    /// — once the replays run out, that is Rejected, never a retryable failure.</summary>
     [Test]
-    public async Task A_stalled_refresh_times_out_as_a_transport_failure() {
-        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200)
-                .WithBody("""{"access_token":"acc","refresh_token":"rt2"}""")
-                .WithDelay(TimeSpan.FromSeconds(3)));
+    public async Task A_persistently_unreadable_success_is_rejected_once_replays_run_out() {
+        var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, "not-json"));
 
+        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
+        await Assert.That(result.Response).IsNull();
+        await Assert.That(workos.Count).IsGreaterThan(1);
+    }
+
+    /// <summary>The caller's own cancellation is never swallowed into a transport failure or a replay.</summary>
+    [Test]
+    public async Task The_callers_cancellation_propagates_instead_of_being_replayed() {
+        var workos = new SequencedHttpScript(Stall());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         var client = new WorkOSClient(
-            new PlainHttpClientFactory(new StubHost(_server.Urls[0])), refreshTimeout: TimeSpan.FromMilliseconds(200));
+            new PlainHttpClientFactory(workos),
+            refreshTimeout: TimeSpan.FromSeconds(10),
+            replayBudget:   TimeSpan.FromSeconds(60),
+            replayBackoff:  TimeSpan.FromSeconds(1));
 
-        var result = await client.RefreshAsync("client_d", "rt1", CancellationToken.None);
-
-        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
+        await Assert.That(async () => await client.RefreshAsync("client_d", "rt1", cts.Token))
+            .Throws<OperationCanceledException>();
+        await Assert.That(workos.Count).IsEqualTo(1);
     }
 
-    /// <summary>A success status means WorkOS already consumed the old token and rotated; an unreadable
-    /// body loses the new token, so the outcome is Rejected (re-login) — never a retryable failure that
-    /// would re-send the spent token and trip reuse detection.</summary>
-    [Test]
-    public async Task An_unreadable_success_body_is_rejected_not_retried() {
-        _server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody("not-json"));
-
-        var result = await new WorkOSClient(new PlainHttpClientFactory(new StubHost(_server.Urls[0])))
-            .RefreshAsync("client_d", "rt1", CancellationToken.None);
-
-        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
-        await Assert.That(result.Response).IsNull();
-    }
+    // Deadlines short enough that a stalled script runs the loop out in a few seconds, yet long
+    // enough that a cold HttpClient's first send under a fully parallel suite lands inside them.
+    static WorkOSClient Client(SequencedHttpScript workos) => new(
+        new PlainHttpClientFactory(workos),
+        refreshTimeout: TimeSpan.FromSeconds(2),
+        replayBudget:   TimeSpan.FromSeconds(5),
+        replayBackoff:  TimeSpan.FromMilliseconds(10));
 }
