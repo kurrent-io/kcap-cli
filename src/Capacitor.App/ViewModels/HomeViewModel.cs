@@ -174,6 +174,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// Same connection/sign-in/daemon banner the launcher shows above the composer.
     public bool ConnectionBannerVisible => _connectionBannerVisible.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _bannerBusy;
+    /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
+    public bool BannerBusy => _bannerBusy.Value;
+
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
 
@@ -437,7 +441,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             .CombineLatest(
                 signInRequired,
                 _awaitingServerAfterSignIn,
-                (a, expired, awaiting) => (Availability: a, Expired: expired, Awaiting: awaiting))
+                _laneStatus.Select(s => s.State),
+                (a, expired, awaiting, lane) => (Availability: a, Expired: expired, Awaiting: awaiting, Lane: lane))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Chained rather than one wide CombineLatest: local status/connection/signIn/awaiting
         // first, then folded against the selection-aware availability and the selection itself —
@@ -448,10 +453,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
                 daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""),
                 signInRequired,
                 _awaitingServerAfterSignIn,
-                (status, connection, expired, awaiting) => (status, connection, expired, awaiting));
+                _laneStatus.Select(s => s.State),
+                (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting, lane));
         var notices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
-                (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail))
+                (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
@@ -469,8 +475,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             .Select(message => message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
+        _bannerBusy = notices
+            .Select(BusyNotice)
+            .ToProperty(this, x => x.BannerBusy, initialValue: true)
+            .DisposeWith(_disposables);
         _signInVisible = signInState
-            .Select(t => !t.Awaiting && (t.Expired || t.Availability == LaunchAvailability.ServerDisconnected))
+            .Select(t => !t.Awaiting && (t.Expired || (
+                t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
 
@@ -479,11 +490,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             .Subscribe(_ => _awaitingServerAfterSignIn.OnNext(false))
             .DisposeWith(_disposables);
 
-        // Local availability alone can never settle awaiting when the local daemon points at a
-        // DIFFERENT server than this app's own lane — a terminal lane outcome (either direction)
-        // is the other half of the same "finished catching up" signal.
+        // SignedOut is the only lane outcome that means auth really failed. Connected is not
+        // "caught up" — the daemon's connection word still lags the token write.
         _laneStatus
-            .Select(s => s.State is ServerLaneState.Connected or ServerLaneState.SignedOut)
+            .Select(s => s.State == ServerLaneState.SignedOut)
             .DistinctUntilChanged()
             .Where(t => t)
             .Subscribe(_ => _awaitingServerAfterSignIn.OnNext(false))
@@ -543,7 +553,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         : !string.IsNullOrEmpty(startMessage) ? startMessage : connectionNotice;
 
     /// The re-auth dialog's success lands here (App wires it): clears the expired flag and holds a
-    /// finishing notice until the daemon reports the server is connected again.
+    /// finishing notice until the daemon reports the server is connected.
     public void NotifySignInCompleted() {
         _signInRequired.OnNext(false);
         _awaitingServerAfterSignIn.OnNext(true);
@@ -568,9 +578,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// only for a local selection's daemon-down/incompatible text — a remote pick has no local
     /// daemon affordance to name, so those never apply to it (a lost lane there is always the
     /// generic ServerLostNotice/ConnectingNotice, matching RemoteAvailabilityFor's own vocabulary).
+    /// A live app lane (`Connecting`/`Retrying`/`Connected`) with the daemon still disconnected is
+    /// catch-up, not a lost session — ServerLostNotice is only for a dormant/absent lane.
     internal static string? NoticeFor(
             AttachStatus status, string daemonConnection, bool signInExpired, bool awaitingServer,
-            bool remoteSelected, LaunchAvailability selectedAvailability) {
+            bool remoteSelected, LaunchAvailability selectedAvailability,
+            ServerLaneState lane = ServerLaneState.Dormant) {
         if (signInExpired) return SignInExpiredNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
@@ -578,6 +591,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
 
         if (awaitingServer && selectedAvailability is LaunchAvailability.ServerDisconnected or LaunchAvailability.Pending)
             return FinishingSignInNotice;
+
+        if (!remoteSelected && selectedAvailability == LaunchAvailability.ServerDisconnected && LaneIsCatchingUp(lane))
+            return ConnectingNotice;
 
         if (remoteSelected)
             return selectedAvailability switch {
@@ -593,6 +609,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             _                                    => ServerLostNotice,
         };
     }
+
+    internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
+        lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
+
+    internal static bool BusyNotice(string? notice) =>
+        notice is ConnectingNotice or FinishingSignInNotice;
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>

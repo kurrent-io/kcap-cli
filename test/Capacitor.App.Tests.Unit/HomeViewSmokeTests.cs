@@ -95,7 +95,7 @@ public class HomeViewSmokeTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_notice_and_sign_in_button_follow_the_server_connection() {
-        var (noticeBefore, signInBefore, noticeAfter, noticeText, signInAfter) = await AvaloniaSession.DispatchAsync(() => {
+        var (noticeBefore, signInBefore, noticeAfter, noticeText, signInAfter, busyAfter) = await AvaloniaSession.DispatchAsync(() => {
             var (_, vm, service, _, tmp) = Build();
             using var _tmp = tmp;
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
@@ -104,18 +104,19 @@ public class HomeViewSmokeTests {
 
             var notice = Find<TextBlock>(window, "BannerMessageText")!;
             var signIn = Find<Button>(window, "HomeSignInButton")!;
+            var busy = Find<ProgressBar>(window, "BannerBusyBar")!;
             // The banner Border owns visibility; the text/button stay in the tree.
             var banner = notice.FindAncestorOfType<Border>()!;
             var before = (banner.IsVisible, signIn.IsVisible);
 
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             Dispatcher.UIThread.RunJobs();
-            var after = (banner.IsVisible, notice.Text, signIn.IsVisible);
+            var after = (banner.IsVisible, notice.Text, signIn.IsVisible, busy.IsVisible);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
             vm.Dispose();
-            return (before.Item1, before.Item2, after.Item1, after.Item2, after.Item3);
+            return (before.Item1, before.Item2, after.Item1, after.Item2, after.Item3, after.Item4);
         });
 
         await Assert.That(noticeBefore).IsFalse();
@@ -123,6 +124,44 @@ public class HomeViewSmokeTests {
         await Assert.That(noticeAfter).IsTrue();
         await Assert.That(noticeText).IsEqualTo(HomeViewModel.ServerLostNotice);
         await Assert.That(signInAfter).IsTrue();
+        await Assert.That(busyAfter).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task After_sign_in_the_banner_shows_a_loader_until_the_daemon_reconnects() {
+        var (text, signIn, busy) = await AvaloniaSession.DispatchAsync(() => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), laneStatus: lane.Status);
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.NotifySignInCompleted();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            Dispatcher.UIThread.RunJobs();
+
+            var notice = Find<TextBlock>(window, "BannerMessageText")!;
+            var signInBtn = Find<Button>(window, "HomeSignInButton")!;
+            var bar = Find<ProgressBar>(window, "BannerBusyBar")!;
+            var result = (notice.Text, signInBtn.IsVisible, bar.IsVisible);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return result;
+        });
+
+        await Assert.That(text).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+        await Assert.That(signIn).IsFalse();
+        await Assert.That(busy).IsTrue();
     }
 
     [Test]
