@@ -129,15 +129,17 @@ public partial class ServiceFilesTests {
     /// rejects the writer's own work and no install can succeed on those distributions.</para></summary>
     [Test]
     [NotInParallel]
-    [Arguments(0x2u)]    // umask 002 — group-writable
-    [Arguments(0u)]      // umask 000 — group- and world-writable
+    [Arguments(0x2u)]      // umask 002 — group-writable
+    [Arguments(0u)]        // umask 000 — group- and world-writable
+    [Arguments(0x100u)]    // umask 400 — strips owner READ, leaving a directory nothing can enumerate
+    [Arguments(0x1FFu)]    // umask 777 — strips every bit, leaving one nothing can be written into
     [UnsupportedOSPlatform("windows")]
     public async Task WriteOwnerOnly_creates_a_usable_unit_directory_under_any_umask(uint mask) {
         Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
 
         using var tmp = new TempDir();
+        var path     = tmp.PathTo("systemd", "user", "kcap-daemon-test.service");
         var dir      = tmp.PathTo("systemd", "user");
-        var path     = Path.Combine(dir, "kcap-daemon-test.service");
         var previous = umask(mask);
         try {
             ServiceFiles.WriteOwnerOnly(path, "SECRET-COMMAND");
@@ -146,9 +148,13 @@ public partial class ServiceFilesTests {
         }
 
         await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("SECRET-COMMAND");
-        await Assert.That(File.GetUnixFileMode(dir) & SharedWrite).IsEqualTo(default(UnixFileMode))
-            .Because("no other account may be able to replace the unit");
-        await Assert.That(File.GetUnixFileMode(tmp.PathTo("systemd")) & SharedWrite).IsEqualTo(default(UnixFileMode))
+
+        // EXACTLY owner rwx, both directions. Too permissive lets another account replace the unit; too
+        // restrictive is the opposite failure — the requested mode is filtered through the umask like any
+        // other, so the owner's own read or write bit can be stripped, and a directory the owner cannot
+        // enumerate is one `service list` fails on after an install that reported success.
+        await Assert.That(File.GetUnixFileMode(dir)).IsEqualTo(OwnerOnlyDir);
+        await Assert.That(File.GetUnixFileMode(tmp.PathTo("systemd"))).IsEqualTo(OwnerOnlyDir)
             .Because("a writable parent is a rename away from replacing the whole unit directory");
     }
 
@@ -207,7 +213,8 @@ public partial class ServiceFilesTests {
         }
     }
 
-    const UnixFileMode SharedWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+    const UnixFileMode SharedWrite  = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
+    const UnixFileMode OwnerOnlyDir = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     /// <summary>A pre-existing entry at the staging path is not followed or truncated — the staging inode
     /// is created exclusively. The name carries a full GUID, so this asserts the mechanism rather than a

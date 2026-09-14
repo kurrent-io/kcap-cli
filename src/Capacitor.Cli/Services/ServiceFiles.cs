@@ -90,7 +90,13 @@ static class ServiceFiles {
     /// <para>One level at a time because the mode-taking overload applies it to the LEAF only: every
     /// ancestor it creates on the way still lands <c>0777 &amp; ~umask</c>, and a writable parent is a
     /// rename away from replacing the unit directory whole. Ancestors that already exist are left as the
-    /// operator has them — <c>~/.config</c> is not this code's to tighten.</para></summary>
+    /// operator has them — <c>~/.config</c> is not this code's to tighten.</para>
+    ///
+    /// <para>Then chmod'd, because the requested mode is filtered through the umask exactly like the
+    /// default one: it is a request, not a result. A restrictive umask strips the OWNER bits — under
+    /// umask 077 the directory lands <c>0700</c>, but under umask 400 it lands <c>0300</c>, which the unit
+    /// can still be written into and which <c>ListInstalled</c> then cannot enumerate. An explicit chmod
+    /// is not filtered.</para></summary>
     static void CreateDirectory(string directory) {
         if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(directory); return; }
 
@@ -99,7 +105,12 @@ static class ServiceFiles {
         for (var d = directory; !string.IsNullOrEmpty(d) && !Directory.Exists(d); d = Path.GetDirectoryName(d)!)
             missing.Push(d);
 
-        while (missing.Count > 0) Directory.CreateDirectory(missing.Pop(), OwnerOnlyDir);
+        while (missing.Count > 0) {
+            var d = missing.Pop();
+
+            Directory.CreateDirectory(d, OwnerOnlyDir);
+            File.SetUnixFileMode(d, OwnerOnlyDir);
+        }
     }
 
     /// <summary>Strips group and world write from the unit directory, and refuses the install if they
