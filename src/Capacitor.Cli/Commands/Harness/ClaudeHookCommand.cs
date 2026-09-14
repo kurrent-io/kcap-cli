@@ -120,7 +120,7 @@ public sealed class ClaudeHookCommand(
         // into the same degraded arm a client-creation timeout already uses — keeping capture and
         // the spool intact without inventing a second disposition for a not-usable AuthAttempt.
         var created = HookHttp.IsPostable(Url)
-            ? await CreateClientWithinBudgetAsync(clientFactory, clientCap)
+            ? await BoundedAuth.CreateClientWithinAsync(clientFactory, clientCap)
             : null;
 
         if (created is null) {
@@ -181,26 +181,6 @@ public sealed class ClaudeHookCommand(
         } finally {
             client.Dispose();
         }
-    }
-
-    // Returns (client,status) if created within `cap`; null if the cap elapsed first
-    // (abandoned creation task reaped on process exit).
-    internal static async Task<AuthAttempt?> CreateClientWithinBudgetAsync(
-            Func<Task<AuthAttempt>> factory, TimeSpan cap) {
-        if (cap <= TimeSpan.Zero) return null;
-        var task = factory();
-        var winner = await Task.WhenAny(task, Task.Delay(cap));
-        if (winner != task) {
-            // Abandoned: observe ALL terminal states so a late fault (likely during the very
-            // outage this guards) doesn't surface as an UnobservedTaskException; dispose the
-            // client only if creation actually completed after the cap elapsed.
-            _ = task.ContinueWith(static t => {
-                if (t.IsFaulted) _ = t.Exception;
-                else if (t.Status == TaskStatus.RanToCompletion) t.Result.Client.Dispose();
-            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            return null;
-        }
-        try { return await task; } catch { return null; }
     }
 
     // Minimal normalization for an auth-timeout-spooled body: dashless ids (match the server's

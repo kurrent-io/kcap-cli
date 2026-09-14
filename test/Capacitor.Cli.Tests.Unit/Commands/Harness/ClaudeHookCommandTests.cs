@@ -911,7 +911,7 @@ public class ClaudeHookCommandTests {
         Func<Task<AuthAttempt>> slow = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
         var sw     = System.Diagnostics.Stopwatch.StartNew();
-        var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(slow, TimeSpan.FromMilliseconds(50));
+        var result = await BoundedAuth.CreateClientWithinAsync(slow, TimeSpan.FromMilliseconds(50));
         sw.Stop();
         await Assert.That(result).IsNull();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
@@ -920,7 +920,7 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task create_client_within_budget_returns_client_when_factory_fast() {
         var made   = new HttpClient();
-        var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(() => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2));
+        var result = await BoundedAuth.CreateClientWithinAsync(() => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2));
         await Assert.That(result).IsNotNull();
         await Assert.That(ReferenceEquals(result!.Value.Client, made)).IsTrue();
         result.Value.Client.Dispose();

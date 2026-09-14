@@ -302,11 +302,23 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
     }
 
     /// <summary>Core with an injectable client factory (test seam).</summary>
+    // Every vendor's hook ceiling is 5 s with a 1.5 s safety reserve. A stored token resolves in
+    // milliseconds and an uncontended refresh in well under a second; longer means a peer holds the
+    // refresh lock or WorkOS is faltering, and the event belongs in the spool for the drain to replay.
+    internal static readonly TimeSpan AuthCap = TimeSpan.FromSeconds(3);
+
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,
             string endpoint, string body, string agentTag,
-            HookSpool spool, string sessionId, string route) {
-        var (client, status) = await clientFactory();
+            HookSpool spool, string sessionId, string route,
+            TimeSpan? authCap = null) {
+        var created = await BoundedAuth.CreateClientWithinAsync(clientFactory, authCap ?? AuthCap);
+
+        if (created is null) {
+            return SpoolOrSkip(spool, sessionId, route, body, agentTag);
+        }
+
+        var (client, status) = created.Value;
 
         using (client) {
             // Auth lapsed → the POST would 401. Spool for replay after `kcap login`; caller still spawns.

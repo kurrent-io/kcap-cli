@@ -170,6 +170,18 @@ public class WorkOSClientTests : IDisposable {
         await Assert.That(workos.Count).IsGreaterThan(1);
     }
 
+    /// <summary>One unreadable success proves the token is spent, however the later replays fail: the
+    /// outcome stays Rejected, so no caller re-sends the consumed token outside the window.</summary>
+    [Test]
+    public async Task An_unreadable_success_followed_by_outages_is_still_rejected() {
+        var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, "not-json"), Reply(HttpStatusCode.ServiceUnavailable));
+
+        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
+        await Assert.That(workos.Count).IsGreaterThan(2);
+    }
+
     /// <summary>The caller's own cancellation is never swallowed into a transport failure or a replay.</summary>
     [Test]
     public async Task The_callers_cancellation_propagates_instead_of_being_replayed() {

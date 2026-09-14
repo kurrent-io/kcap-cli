@@ -55,7 +55,8 @@ public sealed class WorkOSClient(
     /// </summary>
     public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
-        var started = Stopwatch.GetTimestamp();
+        var started  = Stopwatch.GetTimestamp();
+        var consumed = false;
 
         bool AnotherAttemptFits() => Stopwatch.GetElapsedTime(started) + _refreshTimeout <= _replayBudget;
 
@@ -67,17 +68,17 @@ public sealed class WorkOSClient(
                 case Attempt.Refused: return new(WorkOSRefreshOutcome.Rejected, null);
             }
 
+            // Any success WorkOS sent, readable or not, proves the token is spent — whatever the later
+            // replays do, once they run out the outcome is Rejected, never a retryable failure.
+            consumed |= outcome == Attempt.Unreadable;
+
             if (AnotherAttemptFits()) {
                 await Task.Delay(_replayBackoff, ct);
             }
 
             // A suspended machine or a starved scheduler can stretch the delay past the window.
             if (!AnotherAttemptFits()) {
-                // A success WorkOS sent but we could not read has consumed the token, so that is
-                // Rejected; a reply that never arrived leaves the token possibly live.
-                return new(outcome == Attempt.Unreadable
-                    ? WorkOSRefreshOutcome.Rejected
-                    : WorkOSRefreshOutcome.TransportFailed, null);
+                return new(consumed ? WorkOSRefreshOutcome.Rejected : WorkOSRefreshOutcome.TransportFailed, null);
             }
         }
     }

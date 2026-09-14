@@ -152,6 +152,26 @@ public class AgentHookPosterTests : IDisposable {
         await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsTrue();
     }
 
+    /// <summary>Client creation can wait on the cross-process refresh lock for longer than any host
+    /// lets a hook live. Past the cap the payload is spooled and the caller proceeds, rather than the
+    /// hook being killed on its way to that same spool.</summary>
+    [Test]
+    public async Task PostOrSpool_spools_when_auth_outlives_its_cap() {
+        using var tmp = new TempDir();
+        var spool = new HookSpool(tmp.Path);
+        var never = new TaskCompletionSource<AuthAttempt>();
+        var sw    = System.Diagnostics.Stopwatch.StartNew();
+
+        var outcome = await Poster.PostOrSpoolAsync(
+            () => never.Task, "session-start/kiro", """{"session_id":"x"}""",
+            "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro",
+            authCap: TimeSpan.FromMilliseconds(100));
+
+        await Assert.That(outcome).IsEqualTo(HookPostOutcome.Spooled);
+        await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsTrue();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
     /// <summary>A server-rejected credential is repaired by <c>kcap login</c>, so the payload is kept
     /// for the drain that follows the login instead of being lost with the turn that hit the 401.</summary>
     [Test]
