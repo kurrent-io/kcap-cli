@@ -29,7 +29,7 @@ public class SetupChosenServerTests {
             new AuthProviderDiscovery(factory), NoTelemetry.Facade, AuthEndpoints.Defaults,
             new FakeFacadeFactory(_ => throw new InvalidOperationException("no façade in these tests")),
             FakeImportRunner.Succeeding(),
-            new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter());
+            new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
     }
 
     /// A first run: nothing resolved a server before the command started, which is the case that

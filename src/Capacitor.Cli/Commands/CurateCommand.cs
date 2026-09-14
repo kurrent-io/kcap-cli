@@ -5,15 +5,17 @@ using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
-class CurateCommand(ConfigRoot config, IRepositoriesApi repositories, GitProviderRouter router) {
+class CurateCommand(
+        ConfigRoot config, IRepositoriesApi repositories, GitProviderRouter router,
+        WorkingDirectory workdir) {
     /// <summary>One page is all this command reads; hitting it exactly is what the warning below
     /// reports, so the request and the check must name the same number.</summary>
     const int PageLimit = 100;
 
     public async Task<int> HandleApply(bool dryRun, bool yes) {
-        var cwd = Environment.CurrentDirectory;
+        var cwd = workdir.Path;
 
-        // 1. Authoritative repo-root gate (never AppConfig.RepoRoot).
+        // 1. Authoritative repo-root gate: the tree itself, never the fallback RepoRootOf applies.
         var repoRoot = GitRepository.FindRoot(cwd);
         if (repoRoot is null) {
             await Console.Error.WriteLineAsync("Not inside a git repository — run `kcap curate apply` from a repo.");

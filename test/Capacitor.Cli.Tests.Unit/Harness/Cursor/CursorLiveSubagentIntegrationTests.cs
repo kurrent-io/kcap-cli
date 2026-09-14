@@ -174,7 +174,7 @@ public class CursorLiveSubagentIntegrationTests {
         }
 
         public Task<int> HandleAsync(string sessionId, string eventName, string? transcriptPath, string extraFields = "") =>
-            new CursorHookCommand(Config, Resolutions.At("http://localhost", Config), new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Resolutions.At("http://localhost", Config), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
+            new CursorHookCommand(Config, Resolutions.At("http://localhost", Config), new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Resolutions.At("http://localhost", Config), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 Client,
                 stdin: new StringReader(
                     $$"""{"hook_event_name":"{{eventName}}","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath?.Replace(@"\", @"\\")}}"{{extraFields}}}"""

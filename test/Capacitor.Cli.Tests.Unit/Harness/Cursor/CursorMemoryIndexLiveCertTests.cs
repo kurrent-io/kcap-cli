@@ -292,7 +292,7 @@ public class CursorMemoryIndexLiveCertTests {
             UseShellExecute        = false,
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
-            WorkingDirectory       = workingDirectory ?? Environment.CurrentDirectory
+            WorkingDirectory       = workingDirectory ?? Capacitor.Cli.Core.WorkingDirectory.FromProcess().Path
         };
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 

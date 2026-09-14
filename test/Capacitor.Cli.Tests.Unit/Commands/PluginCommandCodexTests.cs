@@ -374,7 +374,7 @@ public class PluginCommandCodexTests {
     public async Task Install_codex_with_if_installed_is_noop_when_no_marker_and_no_existing_entries() {
         using var fakeHome = new TempDir();
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -401,7 +401,7 @@ public class PluginCommandCodexTests {
             }
             """);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -431,7 +431,7 @@ public class PluginCommandCodexTests {
             codexDir.PathTo(CodexHooksInstaller.MarkerFileName),
             CapacitorVersion.Current());
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -500,7 +500,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var capturedOut = new StringWriter();
         var env         = TestEnv(fakeHome.GetResolvedPath(), pluginRoot.Path, stdout: capturedOut);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--codex"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--codex"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var stdout = capturedOut.ToString();
@@ -529,7 +529,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var capturedErr = new StringWriter();
         var env         = TestEnv(fakeHome.GetResolvedPath(), pluginRoot.Path, stderr: capturedErr);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--codex"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--codex"]);
         await Assert.That(exit).IsEqualTo(1);
 
         // Atomicity contract: hooks.json must NOT exist after a failed install.
@@ -553,7 +553,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         // PluginPath = null signals ResolvePluginPath returned no plugin.
         var env = TestEnv(fakeHome.GetResolvedPath(), pluginPath: null, stderr: capturedErr);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--codex"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--codex"]);
         await Assert.That(exit).IsEqualTo(1);
 
         // The atomic-install contract: NO hooks.json may exist in the
@@ -571,7 +571,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         using var pluginRoot = new TempDir();
         PlantFakePlugin(pluginRoot.Path);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath(), pluginRoot.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath(), pluginRoot.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -593,7 +593,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var hooksPath  = codexDir.CreateFile("hooks.json", """{"sentinel": "must-survive"}""");
         codexDir.CreateFile(CodexHooksInstaller.MarkerFileName, CapacitorVersion.Current());
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -620,7 +620,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         PluginCommand.InstallCodexHooks(hooksPath);
         CodexHooksInstaller.DeleteMarker(hooksPath);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -641,7 +641,7 @@ public class PluginCommandCodexInstallIntegrationTests {
             args = ["serve"]
             """);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--codex", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -655,7 +655,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         using var fakeHome = new TempDir();
         var configPath = SeedCodexConfigWithKcapServers(fakeHome.GetResolvedPath());
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "remove", "--codex"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -674,7 +674,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var configPath = SeedCodexConfigWithKcapServers(fakeHome.GetResolvedPath());
         var before     = await File.ReadAllTextAsync(configPath);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath())).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "remove", "--codex", "--project"]);
         await Assert.That(exit).IsEqualTo(0);
 

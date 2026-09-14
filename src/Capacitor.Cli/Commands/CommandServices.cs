@@ -19,12 +19,12 @@ public static class CommandServices {
     /// does not pay for it.
     /// </summary>
     public static IServiceCollection AddCapacitorCli(
-            this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
+            this IServiceCollection services, ConfigRoot config, UserHome home, WorkingDirectory workdir, DaemonStore daemons,
             ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
             AuthEndpoints endpoints, HookClock clock, string? baseUrl,
             TelemetryStartup telemetryStartup) {
         services
-            .AddCapacitorContext(config, home, daemons, profiles)
+            .AddCapacitorContext(config, home, workdir, daemons, profiles)
             .AddCapacitorCommands();
 
         services.AddSingleton(endpoints);

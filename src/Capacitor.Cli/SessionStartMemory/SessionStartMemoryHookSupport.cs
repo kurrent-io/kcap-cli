@@ -30,10 +30,11 @@ internal static class SessionStartMemoryHookSupport {
     public static ISessionStartContextProvider CompositeProvider(
             GitProviderRouter router,
             ConfigRoot config,
+            WorkingDirectory workdir,
             Func<CancellationToken, Task<HttpClient>> client,
             TimeProvider time,
             ISessionStartMemoryScopeResolver? scopeResolver = null) {
-        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(router, config, time);
+        var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(router, config, workdir, time);
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
         var guidelines = new SessionStartGuidelinesLane(client);

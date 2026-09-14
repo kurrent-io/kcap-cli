@@ -13,7 +13,7 @@ public class PluginCommandCursorTests {
         using var tmp = new TempHome();
         var hooksPath = Path.Combine(tmp.Path, "hooks.json");
 
-        var exit = await new PluginCommand(TestEnv(tmp.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(tmp.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed", "--cursor-hooks-path", hooksPath]);
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(File.Exists(hooksPath)).IsFalse();
@@ -29,7 +29,7 @@ public class PluginCommandCursorTests {
         var marker = CursorHooksInstaller.ReadMarker(hooksPath);
         await Assert.That(marker).IsEqualTo(CapacitorVersion.Current());
 
-        var exit = await new PluginCommand(TestEnv(tmp.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(tmp.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed", "--cursor-hooks-path", hooksPath]);
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(File.ReadAllText(hooksPath)).IsEqualTo("{}");
@@ -59,7 +59,7 @@ public class PluginCommandCursorTests {
             {"mcpServers":{"my-tool":{"command":"my-tool","args":["serve"]}}}
             """);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -83,7 +83,7 @@ public class PluginCommandCursorTests {
 
         // Hooks were never installed, so the refresh-only postinstall path
         // no-ops before ever touching hooks.json OR mcp.json.
-        var exit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -102,7 +102,7 @@ public class PluginCommandCursorTests {
             {"version":1,"hooks":{"sessionStart":[{"command":"kcap hook --cursor"}]}}
             """);
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed", "--skip-cursor-mcp"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -130,7 +130,7 @@ public class PluginCommandCursorTests {
         seeded["mcpServers"]!["my-tool"] = JsonNode.Parse("""{"command":"my-tool","args":["serve"]}""");
         await File.WriteAllTextAsync(mcpPath, seeded.ToJsonString());
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "remove", "--cursor"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -159,13 +159,13 @@ public class PluginCommandCursorTests {
         // The config is temporarily malformed/unreadable → Unregister fails-closed.
         await File.WriteAllTextAsync(mcpPath, "{ not valid json");
 
-        var failExit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(["plugin", "remove", "--cursor"]);
+        var failExit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--cursor"]);
         await Assert.That(failExit).IsEqualTo(1);                                          // failed MCP unregister propagates
         await Assert.That(new McpMarker("cursor", fakeHome.Home).Owned(mcpPath).ToArray()).IsNotEmpty();  // marker RETAINED for retry
 
         // User fixes the file (kcap entries intact); the retry now succeeds and cleans up.
         await File.WriteAllTextAsync(mcpPath, installed);
-        var retryExit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(["plugin", "remove", "--cursor"]);
+        var retryExit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--cursor"]);
         await Assert.That(retryExit).IsEqualTo(0);
 
         var root    = JsonNode.Parse(await File.ReadAllTextAsync(mcpPath))!.AsObject();

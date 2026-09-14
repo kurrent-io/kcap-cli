@@ -26,7 +26,7 @@ public class ClaudeHookExclusionGateTests {
         new(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home),
             HostedAgent.Terminal, new FixedCapacitorHttpClient(),
             TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()),
-            SystemProcessStarter.Instance, router: new GitProviderRouter());
+            SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
 
     // The gate reads the budget only for the repo probe, which these path-exclusion payloads never
     // reach; what they vary is the profile, not the clock. Any live ceiling will do.

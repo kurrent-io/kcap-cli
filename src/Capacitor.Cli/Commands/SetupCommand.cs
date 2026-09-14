@@ -421,7 +421,7 @@ public sealed class SetupCommand(
         UserHome home, HarnessRegistry harnesses, AgentsPaths agents, ICapacitorHttpClient http,
         TenantProvisioningClient provisioning, AuthProviderDiscovery discovery, CliTelemetry telemetry,
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
-        ChosenServerHttp chosenHttp, GitProviderRouter router) {
+        ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir) {
 
     public async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -500,11 +500,11 @@ public sealed class SetupCommand(
         // unrelated to any project, or — worse — under a subdirectory of the repo if we
         // used cwd directly, which means two devs running setup from different subdirs
         // install hooks in different places.
-        var gitRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+        var gitRoot = GitRepository.FindRoot(workdir.Path);
 
         if (legacyProjectScope && gitRoot is null) {
             await Console.Error.WriteLineAsync(
-                $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                $"--plugin-scope project requires a git working tree, but '{workdir.Path}' is not inside one.");
             await Console.Error.WriteLineAsync(
                 "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
             return 1;
@@ -976,7 +976,7 @@ public sealed class SetupCommand(
         // PR/MR detection would run extra provider probes/subprocesses for nothing here.
         var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(
             router,
-            config, Environment.CurrentDirectory, detectPullRequest: false);
+            config, workdir.Path, detectPullRequest: false);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
             ? (o, n)
             : null;
@@ -1035,7 +1035,7 @@ public sealed class SetupCommand(
         // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
         if (gitRoot is null) {
             AnsiConsole.MarkupLine(
-                $"\n  [yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/]).");
+                $"\n  [yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(workdir.Path)}[/]).");
             AnsiConsole.MarkupLine(
                 "    Hooks fire from any directory, but sessions recorded outside a repo won't include owner/repo/branch context.");
             AnsiConsole.MarkupLine(

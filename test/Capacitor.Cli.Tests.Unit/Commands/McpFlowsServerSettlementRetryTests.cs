@@ -5,6 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.PrDetection;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -30,7 +31,7 @@ public class McpFlowsServerSettlementRetryTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter());
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
 
     // Every wait in both retry lanes runs on the injected clock, so these tests are instant and
     // the requested schedule is directly assertable (VirtualFlowRetryClock.Delays).

@@ -5,7 +5,7 @@ using RepoConfigJsonContextIndented = Capacitor.Cli.Core.Config.RepoConfigJsonCo
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class UseCommand(ConfigRoot config) {
+public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await Console.Error.WriteLineAsync("Usage: kcap use <profile-name> [--global] [--save]");
@@ -15,9 +15,10 @@ public sealed class UseCommand(ConfigRoot config) {
         var name = args[1];
         var global = args.Contains("--global");
         var save = args.Contains("--save");
-        var repoPath = global ? null : AppConfig.RepoRoot;
+        var repoRoot = AppConfig.RepoRootOf(workdir);
+        var repoPath = global ? null : repoRoot;
 
-        return await SetProfile(name, repoPath, global, save, save ? AppConfig.RepoRoot : null);
+        return await SetProfile(name, repoPath, global, save, save ? repoRoot : null);
     }
 
     internal async Task<int> SetProfile(

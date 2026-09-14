@@ -125,7 +125,8 @@ public class CodexConfigTomlTests {
     public async Task EnableNetworkAccess_writes_when_config_path_has_no_directory_component() {
         // GetDirectoryName("config.toml") is empty; CreateDirectory("") would throw and
         // silently turn the write into Change.Failed without the guard.
-        using var tmp   = new TempDir();
+        using var tmp = new TempDir();
+#pragma warning disable RS0030 // a path with no directory component resolves nowhere else
         var originalCwd = Environment.CurrentDirectory;
 
         try {
@@ -137,6 +138,7 @@ public class CodexConfigTomlTests {
             await Assert.That(File.Exists(tmp.PathTo("config.toml"))).IsTrue();
         } finally {
             Environment.CurrentDirectory = originalCwd;
+#pragma warning restore RS0030
         }
     }
 

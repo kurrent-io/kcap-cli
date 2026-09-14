@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Commands;
 
 class McpFlowsServer(
         ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http,
-        TelemetryStartup startup, GitProviderRouter router) {
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir) {
     public async Task<int> RunAsync(string? driverArg = null) {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
@@ -27,7 +27,7 @@ class McpFlowsServer(
         // session id and the working directory come from the same resolution, so a flow can never be
         // attributed to one session while being reviewed in another session's checkout.
         var requester    = HarnessRequesterContext.Resolve();
-        var cwd          = requester.ProjectDir ?? Directory.GetCurrentDirectory();
+        var cwd          = requester.ProjectDir ?? workdir.Path;
         var repoRoot     = GitRepository.FindRoot(cwd);
         // Prefer the `--driver` stamp from this server's own registration (deterministic for the JSON
         // harnesses); fall back to env inference for Claude/Codex, whose registrations are unstamped.

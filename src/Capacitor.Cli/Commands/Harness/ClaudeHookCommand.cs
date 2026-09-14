@@ -24,7 +24,7 @@ namespace Capacitor.Cli.Commands.Harness;
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        IProcessStarter starter, GitProviderRouter router) {
+        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -1113,7 +1113,7 @@ public sealed class ClaudeHookCommand(
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(router, config, clock.Time), http.ForMemoryAsync, clock.Time);
+                new SessionStartMemoryScopeResolver(router, config, workdir, clock.Time), http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,

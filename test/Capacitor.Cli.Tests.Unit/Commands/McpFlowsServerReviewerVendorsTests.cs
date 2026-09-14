@@ -14,7 +14,7 @@ public class McpFlowsServerReviewerVendorsTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter());
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
 
     static JsonObject ToolCall() => new() {
         ["params"] = new JsonObject { ["name"] = "list_reviewer_vendors", ["arguments"] = new JsonObject() }

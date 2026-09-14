@@ -32,7 +32,8 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers) {
+        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers,
+        WorkingDirectory workdir) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
@@ -41,11 +42,11 @@ public sealed class UninstallCommand(
         string? projectRoot = null;
 
         if (includeProject) {
-            projectRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+            projectRoot = GitRepository.FindRoot(workdir.Path);
 
             if (projectRoot is null) {
                 await Console.Error.WriteLineAsync(
-                    $"--project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                    $"--project requires a git working tree, but '{workdir.Path}' is not inside one.");
                 await Console.Error.WriteLineAsync(
                     "Re-run from inside your repo, or drop --project to only remove user-level configuration.");
 
@@ -129,7 +130,7 @@ public sealed class UninstallCommand(
         if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
         var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses);
-        var pluginCommand = new PluginCommand(env);
+        var pluginCommand = new PluginCommand(env, workdir);
 
         // User-level agent integrations. Each remove command is idempotent and
         // no-ops if the target file doesn't exist, so it's safe to call all of

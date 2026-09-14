@@ -127,7 +127,7 @@ public class CursorHookCommandTests {
         await rejecting.HandleAsync($$"""{"hook_event_name":"postToolUse","session_id":"{{Sid}}","tool_name":"Glob"}""");
         await Assert.That(rejecting.Spool.HasBacklog(Sid)).IsTrue();
 
-        await new CursorHookCommand(Config.Root, accepting.Profiles, new HookClock(accepting.Clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, accepting.Profiles, new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
+        await new CursorHookCommand(Config.Root, accepting.Profiles, new HookClock(accepting.Clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, accepting.Profiles, new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             accepting.Client,
             stdin: new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{Sid}}","tool_name":"Glob"}"""),
             spool: rejecting.Spool);
@@ -179,7 +179,7 @@ public class CursorHookCommandTests {
         });
         using var client = new HttpClient(handler);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter()).HandleCore(
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             client,
             new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash","transcript_path":"/tmp/{{sid}}.jsonl"}"""),
             spool);
@@ -348,7 +348,7 @@ public class CursorHookCommandTests {
         var clock = new HookClock(spent);          // anchors on construction — advance AFTER it
         spent.Advance(CursorHookCommand.Ceiling - HookBudget.Safety);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter())
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(
                 new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
                 _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
@@ -370,7 +370,7 @@ public class CursorHookCommandTests {
         var clock = new HookClock(spent);
         spent.Advance(CursorHookCommand.Ceiling);
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client,
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
             fx.Spool
@@ -531,7 +531,7 @@ public class CursorHookCommandTests {
         // noticing. clientFactory/spoolFactory stand in for real auth/spool setup so the
         // test stays hermetic while still exercising the REAL entry point's cap+emit logic.
         var clock = new FakeTimeProvider();
-        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter())
+        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(new NeverCompletingReader(),
                 _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
                 () => fx.Spool);
@@ -558,7 +558,7 @@ public class CursorHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var reader = new CancelObservingReader();
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(fx.Client, reader, fx.Spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(fx.Client, reader, fx.Spool);
 
         await Assert.That(exit).IsEqualTo(0);
         // The read never resolved (no hook_event_name was ever parsed), so there is
@@ -582,7 +582,7 @@ public class CursorHookCommandTests {
         fx.HoldOnPost = TimeSpan.FromMilliseconds(300);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleWithDeps(
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
             _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
             () => fx.Spool);
@@ -609,7 +609,7 @@ public class CursorHookCommandTests {
 
         var sw    = System.Diagnostics.Stopwatch.StartNew();
         var clock = new FakeTimeProvider();
-        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter())
+        var call  = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(
                 new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
                 _ => neverAuths.Task,
@@ -789,36 +789,30 @@ public class CursorHookCommandTests {
     }
 
     [Test, NotInParallel]
-    public async Task AbsentWorkspaceRoot_skips_provider_even_when_process_cwd_is_a_repo() {
-        var originalCwd = Environment.CurrentDirectory;
-        // A real git repo WITH a remote as the process cwd: were the guard missing, the shared
-        // scope resolver's Directory.GetCurrentDirectory() fallback would derive THIS repo's scope
-        // and fetch its (unrelated) memories into the Cursor session. The guard must prevent any fetch.
+    public async Task AbsentWorkspaceRoot_skips_provider_even_when_the_working_directory_is_a_repo() {
+        // A real git repo WITH a remote as the hook's working directory: were the guard missing, the
+        // shared scope resolver's fallback would derive THIS repo's scope and fetch its (unrelated)
+        // memories into the Cursor session. The guard must prevent any fetch.
         using var repoDir = MakeTempRepoWithRemote("https://github.com/example/leak-check.git");
         using var capture = ConsoleOutput.StartCapture();
-        try {
-            Environment.CurrentDirectory = repoDir;
-            using var fx = new Fixture(Config.Root);
-            fx.MemoryIndexBody = "[]"; // decoy — never fetched because the guard short-circuits first
-            var sid = Guid.NewGuid().ToString("N");
+        using var fx      = new Fixture(Config.Root) { Workdir = repoDir };
+        fx.MemoryIndexBody = "[]"; // decoy — never fetched because the guard short-circuits first
+        var sid = Guid.NewGuid().ToString("N");
 
-            // No workspace_roots field at all. Generous budget (see Ready_fragment_emitted's note
-            // on the tight ~0.5s margin at the 2s default under full-suite CPU contention).
-            var exit = await fx.HandleAsync(
-                $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+        // No workspace_roots field at all. Generous budget (see Ready_fragment_emitted's note
+        // on the tight ~0.5s margin at the 2s default under full-suite CPU contention).
+        var exit = await fx.HandleAsync(
+            $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
 
-            await Assert.That(exit).IsEqualTo(0);
-            // The guard means the provider is NEVER called when no authoritative workspace root is
-            // supplied — so the process cwd's repo memories can never leak — and the response is {}.
-            await Assert.That(fx.MemoryIndexRequested).IsFalse();
-            await Assert.That(capture.GetCapturedOutput()).IsEqualTo("{}\n");
-        } finally {
-            Environment.CurrentDirectory = originalCwd;
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        // The guard means the provider is NEVER called when no authoritative workspace root is
+        // supplied — so that repo's memories can never leak — and the response is {}.
+        await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("{}\n");
     }
 
-    // Creates a throwaway git repo with a controlled origin remote so a test can put the process
-    // cwd inside a repository the scope resolver would otherwise detect.
+    // Creates a throwaway git repo with a controlled origin remote, so a test can hand the hook a
+    // repository the scope resolver would otherwise detect.
     static GitRepo MakeTempRepoWithRemote(string originUrl) {
         var repo = GitRepo.Create();
 
@@ -863,7 +857,7 @@ public class CursorHookCommandTests {
         // The real scope resolver runs: its git spawn is bounded by a Stopwatch, so its wall-clock
         // cost cannot eat a budget that only moves when this test says so.
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
+        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             hangingClient, new StringReader(payload), fx.Spool);
 
         // Wait (bounded, real-time) for the request to ENTER the handler, then fire the budget clock.
@@ -889,7 +883,7 @@ public class CursorHookCommandTests {
         clock.Advance(TimeSpan.FromSeconds(31));
         fx.MemoryIndexBody = "[]";
 
-        var exit2 = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
+        var exit2 = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client, new StringReader(payload), fx.Spool);
         await Assert.That(exit2).IsEqualTo(0);
         // The index GET fires again on fx.Client — proving the first, cancelled attempt's
@@ -1060,8 +1054,11 @@ public class CursorHookCommandTests {
 
         public HostedAgent Hosted { get; init; } = HostedAgent.Terminal;
 
+        /// <summary>The checkout the hook acts on when a payload carries no workspace root.</summary>
+        public string Workdir { get; init; } = AppContext.BaseDirectory;
+
         public Task<int> HandleAsync(string stdin) =>
-            new CursorHookCommand(Config, Profiles, new HookClock(Clock), _home, TestHarnesses.Under(_home), Hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), router: new GitProviderRouter()).HandleCore(
+            new CursorHookCommand(Config, Profiles, new HookClock(Clock), _home, TestHarnesses.Under(_home), Hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(Workdir)).HandleCore(
                 Client,
                 stdin: new StringReader(stdin),
                 spool: Spool);

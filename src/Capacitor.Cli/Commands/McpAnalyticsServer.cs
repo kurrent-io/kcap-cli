@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Commands;
 /// rejection reasons. Structure cloned from McpMemoryServer.
 /// </summary>
 sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup, GitProviderRouter router) {
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
     internal const string NotSupportedMessage =
@@ -38,7 +38,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        var repository = new CwdRepository(config, Directory.GetCurrentDirectory(), router);
+        var repository = new CwdRepository(config, workdir.Path, router);
         var tools      = BuildToolsList();
 
         // Best-effort, and recorded even when the read throws: a stale token on disk must never

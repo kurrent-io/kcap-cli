@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 class SkillsCommand(
         ConfigRoot config, HarnessRegistry harnesses, AgentsPaths agents, IRepositoriesApi repositories,
-        GitProviderRouter router) {
+        GitProviderRouter router, WorkingDirectory workdir) {
     // The background refresh keys off each manifest's synced_at, so a burst of session starts
     // costs one network round-trip per interval per target, not one per session.
     static readonly TimeSpan AutoSyncInterval = TimeSpan.FromHours(6);
@@ -36,7 +36,7 @@ class SkillsCommand(
     ];
 
     public async Task<int> HandleSync(bool dryRun, bool auto = false) {
-        var cwd = Environment.CurrentDirectory;
+        var cwd = workdir.Path;
 
         if (GitRepository.FindRoot(cwd) is null) {
             await Console.Error.WriteLineAsync("Not inside a git repository — run `kcap skills sync` from a repo.");

@@ -29,12 +29,12 @@ public class SetupCommandTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     /// <summary>The command under test, with the import runner each test is pinning.</summary>
-    SetupCommand Command(ISetupImportRunner imports) =>
+    SetupCommand Command(ISetupImportRunner imports, string workdir) =>
         new(Config.Root, Resolutions.None(Config.Root),
             AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter());
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir));
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>
@@ -874,7 +874,7 @@ public class SetupCommandTests {
         var runner = FakeImportRunner.Succeeding();
         var passed = Resolutions.At("https://example.test", Config.Root);
 
-        await Command(runner).RunImportStepAsync(
+        await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       ("acme", "widgets"),
             authSatisfied:     true,
             skipImport:        false,
@@ -898,7 +898,7 @@ public class SetupCommandTests {
     public async Task RunImportStepAsync_InteractiveAccept_InvokesRunner() {
         var runner = FakeImportRunner.Succeeding();
 
-        await Command(runner).RunImportStepAsync(
+        await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       ("acme", "widgets"),
             authSatisfied:     true,
             skipImport:        false,
@@ -916,7 +916,7 @@ public class SetupCommandTests {
 
         // Completing without an unhandled exception is the assertion: a non-zero exit
         // code must be swallowed (warned about, not propagated) so setup still finishes.
-        await Command(runner).RunImportStepAsync(
+        await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       ("acme", "widgets"),
             authSatisfied:     true,
             skipImport:        false,
@@ -934,7 +934,7 @@ public class SetupCommandTests {
 
         // Completing without the InvalidOperationException escaping is the assertion —
         // import is best-effort and must never fail setup.
-        await Command(runner).RunImportStepAsync(
+        await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       ("acme", "widgets"),
             authSatisfied:     true,
             skipImport:        false,
@@ -950,7 +950,7 @@ public class SetupCommandTests {
     public async Task RunImportStepAsync_NoCurrentRepo_SkipsWithoutInvokingRunnerOrPrompting() {
         var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
 
-        await Command(runner).RunImportStepAsync(
+        await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       null,
             authSatisfied:     true,
             skipImport:        false,
@@ -966,7 +966,7 @@ public class SetupCommandTests {
     public async Task RunImportStepAsync_SkipImportFlag_SkipsWithoutInvokingRunner() {
         var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
 
-        await Command(runner).RunImportStepAsync(
+        await Command(runner, Config.Directory).RunImportStepAsync(
             currentRepo:       ("acme", "widgets"),
             authSatisfied:     true,
             skipImport:        true,
@@ -983,16 +983,15 @@ public class SetupCommandTests {
     // server, with only the final import call intercepted through the injected runner.
     //
     // Every test here:
-    //   • runs from a throwaway git repo (real `git init` + `remote add origin`) so repository
-    //     detection resolves an owner/repo — HandleAsync reads Environment.CurrentDirectory itself,
-    //     so the process cwd has to move.
+    //   • names a throwaway git repo (real `git init` + `remote add origin`) as the command's
+    //     working directory, so repository detection resolves an owner/repo.
     //   • passes every --skip-*-hooks/-mcp/-instructions/-skills flag, so no coding-agent install
     //     runs against the injected home.
     //   • uses auth provider "None" (a WireMock /auth/config stub): with any other provider the
     //     --server-url path has no way to no-prompt past the login.
     //
-    // The working directory they move, the environment they probe and the /auth/config cache they
-    // stub are all process-global, so no cohort of key-holders can exclude the readers: bare.
+    // The environment they probe and the /auth/config cache they stub are both process-global, so no
+    // cohort of key-holders can exclude the readers: bare.
 
     static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
@@ -1025,7 +1024,7 @@ public class SetupCommandTests {
 
         var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--default-visibility", "org_public");
 
-        var exit = await Command(runner).HandleAsync(args);
+        var exit = await Command(runner, fixture.RepoDir).HandleAsync(args);
 
         var captured = runner.Captured;
 
@@ -1057,7 +1056,7 @@ public class SetupCommandTests {
 
         var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--skip-import");
 
-        var exit = await Command(runner).HandleAsync(args);
+        var exit = await Command(runner, fixture.RepoDir).HandleAsync(args);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(runner.Calls).IsEqualTo(0);
@@ -1078,7 +1077,7 @@ public class SetupCommandTests {
 
         var args = BuildArgs("--server-url", schemeLessServerUrl, "--no-prompt");
 
-        var exit = await Command(runner).HandleAsync(args);
+        var exit = await Command(runner, fixture.RepoDir).HandleAsync(args);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(runner.Captured).IsNotNull();
@@ -1105,7 +1104,7 @@ public class SetupCommandTests {
 
         var args = BuildArgs("--server-url", server.Url!, "--no-prompt");
 
-        var exit = await Command(runner).HandleAsync(args);
+        var exit = await Command(runner, fixture.RepoDir).HandleAsync(args);
 
         var captured = runner.Captured;
 
@@ -1123,20 +1122,14 @@ public class SetupCommandTests {
     /// </summary>
     sealed class HandleAsyncE2EFixture : IAsyncDisposable {
         readonly GitRepo _repo;
-        readonly string  _originalCwd;
 
         public string RepoDir => _repo.Path;
 
-        HandleAsyncE2EFixture(GitRepo repo, string originalCwd) {
-            _repo        = repo;
-            _originalCwd = originalCwd;
-        }
+        HandleAsyncE2EFixture(GitRepo repo) => _repo = repo;
 
         public static async Task<HandleAsyncE2EFixture> CreateAsync(string owner, string repo, ConfigRoot configRoot) {
             var repoDir = GitRepo.Create();
             repoDir.AddRemote($"https://github.com/{owner}/{repo}.git");
-
-            var originalCwd = Environment.CurrentDirectory;
 
             var configPath = AppConfig.GetConfigPath(configRoot);
             if (File.Exists(configPath)) File.Delete(configPath);
@@ -1147,14 +1140,10 @@ public class SetupCommandTests {
             var legacyTokens = configRoot.Path("tokens.json");
             if (File.Exists(legacyTokens)) File.Delete(legacyTokens);
 
-            Environment.CurrentDirectory = repoDir.Path;
-
-            return new HandleAsyncE2EFixture(repoDir, originalCwd);
+            return new HandleAsyncE2EFixture(repoDir);
         }
 
         public ValueTask DisposeAsync() {
-            Environment.CurrentDirectory = _originalCwd;
-
             _repo.Dispose();
 
             return ValueTask.CompletedTask;
@@ -1291,7 +1280,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(["setup", "--org", "Acme"]);
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
@@ -1302,7 +1291,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_creating_and_pointing_at_a_server_at_once() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -1314,7 +1303,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_a_provider_that_cannot_create() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
@@ -1325,7 +1314,7 @@ public class SetupCommandTests {
     public async Task HandleAsync_still_requires_a_server_url_with_no_prompt_and_no_answers() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import"))).HandleAsync(["setup", "--no-prompt"]);
+        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");

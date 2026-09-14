@@ -71,7 +71,7 @@ public class AntigravitySessionStartTests : IDisposable {
             }
             """;
 
-            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
+            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
             new StringWriter());
 
         await Assert.That(exit).IsEqualTo(0);
@@ -118,7 +118,7 @@ public class AntigravitySessionStartTests : IDisposable {
             }
             """;
 
-            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
+            var exit = await new AntigravityHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(["hook", "--antigravity", "PreInvocation"], new StringReader(payload),
             new StringWriter());
         await Assert.That(exit).IsEqualTo(0);
 

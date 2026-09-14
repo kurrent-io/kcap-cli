@@ -18,7 +18,7 @@ using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class PluginCommand(PluginEnvironment env) {
+public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdir) {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
     const string CodexHookCommand   = "kcap hook --codex";
@@ -98,7 +98,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook.
@@ -158,7 +158,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         if (!File.Exists(settingsPath)) {
@@ -329,7 +329,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
+            ? Path.Combine(workdir.Path, ".codex", "hooks.json")
             : codex.UserHooksJson;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook and
@@ -507,7 +507,7 @@ public sealed class PluginCommand(PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
-            ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
+            ? Path.Combine(workdir.Path, ".codex", "hooks.json")
             : codex.UserHooksJson;
 
         var hooksRemoved = false;

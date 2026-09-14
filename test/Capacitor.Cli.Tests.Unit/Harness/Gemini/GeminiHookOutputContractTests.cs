@@ -186,7 +186,7 @@ public class GeminiHookOutputContractTests {
 
         // A URL no POST can reach: these paths must all return before any network call, and a test
         // that quietly started talking to a live server would be measuring something else.
-        await new GeminiHookCommand(Config.Root, Resolutions.At("http://127.0.0.1:1", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://127.0.0.1:1", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter()).Handle(new StringReader(payload));
+        await new GeminiHookCommand(Config.Root, Resolutions.At("http://127.0.0.1:1", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://127.0.0.1:1", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
 
         return capture.GetCapturedOutput();
     }

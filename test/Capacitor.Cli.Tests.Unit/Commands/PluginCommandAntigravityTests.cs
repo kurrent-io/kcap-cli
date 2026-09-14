@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -34,7 +35,7 @@ public class PluginCommandAntigravityTests {
             {"mcpServers":{"my-tool":{"command":"my-tool","args":["serve"]}}}
             """);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--antigravity", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--antigravity", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var servers = JsonNode.Parse(await File.ReadAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.McpConfigJson))!.AsObject()["mcpServers"]!.AsObject();
@@ -59,7 +60,7 @@ public class PluginCommandAntigravityTests {
         Directory.CreateDirectory(Path.GetDirectoryName(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd)!);
         await File.WriteAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd, "# My rules\n\nAlways use tabs.\n");
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--antigravity", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--antigravity", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var content = await File.ReadAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd);
@@ -74,7 +75,7 @@ public class PluginCommandAntigravityTests {
         var env = TestEnv(home.Path);
         SeedStaleHooks(env);
 
-        var exit = await new PluginCommand(env).HandleAsync(
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--antigravity", "--if-installed", "--skip-antigravity-mcp"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -87,7 +88,7 @@ public class PluginCommandAntigravityTests {
         var env = TestEnv(home.Path);
         SeedStaleHooks(env);
 
-        var exit = await new PluginCommand(env).HandleAsync(
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--antigravity", "--if-installed", "--skip-antigravity-instructions"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -109,7 +110,7 @@ public class PluginCommandAntigravityTests {
         await File.WriteAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd, "# My rules\n\nAlways use tabs.\n");
         AgentInstructionsWriter.Write(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd, KcapAgentInstructions.Body);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "remove", "--antigravity"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--antigravity"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var servers = JsonNode.Parse(await File.ReadAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.McpConfigJson))!.AsObject()["mcpServers"]!.AsObject();
@@ -137,7 +138,7 @@ public class PluginCommandAntigravityTests {
         await File.WriteAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd, "# My rules\n\nAlways use tabs.\n");
         AgentInstructionsWriter.Write(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd, KcapAgentInstructions.Body);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "remove", "--antigravity"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--antigravity"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var content = await File.ReadAllTextAsync(env.Harnesses.Of<AntigravityHarness>().Paths.InstructionsMd);

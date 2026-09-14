@@ -17,7 +17,7 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands;
 
 sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup, GitProviderRouter router) {
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir) {
     /// <summary>
     /// Run with an explicit session-default PR (used by <c>kcap review &lt;pr&gt;</c>).
     /// Tool calls may still override the default by passing a <c>pr</c> argument.
@@ -150,7 +150,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
 
     async Task<PrIdentity?> DetectPrFromGitAsync() {
         try {
-            var cwd      = Directory.GetCurrentDirectory();
+            var cwd      = workdir.Path;
             var repoInfo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
 
             if (repoInfo?.Owner is not null && repoInfo.RepoName is not null && repoInfo.PrNumber is not null) {

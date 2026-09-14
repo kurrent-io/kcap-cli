@@ -9,7 +9,8 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands;
 
 class SessionsCommand(
-        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, GitProviderRouter router) {
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, GitProviderRouter router,
+        WorkingDirectory workdir) {
     public async Task<int> HandleAsync(string[] args) {
         var options = SessionsArgs.Parse(args, out var error);
 
@@ -26,7 +27,7 @@ class SessionsCommand(
         if (options.Repo is null) {
             var repo = await RepositoryDetection.DetectRepositoryAsync(
                 router,
-                config, Directory.GetCurrentDirectory(), detectPullRequest: false);
+                config, workdir.Path, detectPullRequest: false);
 
             if (repo?.Owner is null || repo.RepoName is null) {
                 await Console.Error.WriteLineAsync("Not in a git repository with a remote origin.");

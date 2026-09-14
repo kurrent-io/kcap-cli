@@ -10,10 +10,9 @@ namespace Capacitor.Cli.Commands;
 
 class RecapCommand(
         ConfigRoot config, ISessionsApi sessionsApi, IRepositoriesApi repositoriesApi,
-        GitProviderRouter router) {
+        GitProviderRouter router, WorkingDirectory workdir) {
     public async Task<int> HandleRepoRecap(int limit = 10) {
-        var cwd  = Directory.GetCurrentDirectory();
-        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
+        var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, workdir.Path);
 
         if (repo?.Owner is null || repo.RepoName is null) {
             Console.Error.WriteLine("Not in a git repository with a remote origin.");

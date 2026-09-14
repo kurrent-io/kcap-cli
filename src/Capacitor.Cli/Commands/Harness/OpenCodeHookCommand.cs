@@ -33,7 +33,7 @@ namespace Capacitor.Cli.Commands.Harness;
 sealed class OpenCodeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        GitProviderRouter router) {
+        GitProviderRouter router, WorkingDirectory workdir) {
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -257,7 +257,7 @@ sealed class OpenCodeHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId),
