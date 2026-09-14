@@ -121,16 +121,17 @@ public class WizardCompositionHappyPathTests {
         var byTitle = summary.ToDictionary(e => e.Title);
 
         await Assert.That(summary.Count).IsEqualTo(7); // every configured step but Done itself
-        await Assert.That(byTitle["Command-line tool"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Command-line tool"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Connect to Capacitor"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Connect to Capacitor"].Note).IsNull();
+        await Assert.That(byTitle["Use kcap in the terminal"].Satisfied).IsFalse();
+        await Assert.That(byTitle["Use kcap in the terminal"].Note).IsEqualTo(WizardComposition.CliMissingNote);
+        await Assert.That(byTitle["Choose a workspace"].Satisfied).IsTrue();
+        await Assert.That(byTitle["Choose a workspace"].Note).IsEqualTo(ServerUrl);
         await Assert.That(byTitle["Sign in"].Satisfied).IsTrue();
         await Assert.That(byTitle["Sign in"].Note).IsNull();
-        await Assert.That(byTitle["This machine"].Satisfied).IsTrue();
-        await Assert.That(byTitle["This machine"].Note).IsNull();
-        await Assert.That(byTitle["Coding agents"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Coding agents"].Note).IsEqualTo(WizardComposition.CliMissingNote);
+        await Assert.That(byTitle["Sessions from this machine"].Satisfied).IsTrue();
+        await Assert.That(byTitle["Sessions from this machine"].Note)
+            .IsEqualTo("Org-repo sessions visible in the workspace. Machine name daemon-a.");
+        await Assert.That(byTitle["Install agent hooks"].Satisfied).IsFalse();
+        await Assert.That(byTitle["Install agent hooks"].Note).IsEqualTo(WizardComposition.CliMissingNote);
         await Assert.That(byTitle["Import past sessions"].Satisfied).IsFalse();
         await Assert.That(byTitle["Import past sessions"].Note).IsEqualTo(WizardComposition.CliMissingNote);
         await Assert.That(byTitle["Enable the daemon"].Satisfied).IsFalse();

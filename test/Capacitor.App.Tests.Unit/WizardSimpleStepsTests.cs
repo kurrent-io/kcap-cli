@@ -231,7 +231,7 @@ public class WizardSimpleStepsTests {
         var result = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
             var defaults = new DefaultsStepViewModel(Config.Root);
-            var done = new DoneStepViewModel(() => [("Command-line tool", false, "kcap CLI not found")]);
+            var done = new DoneStepViewModel(() => [("Use kcap in the terminal", false, "kcap isn't on this machine")]);
             var vm = new OnboardingViewModel([h.Vm, defaults, done]);
             await vm.PendingEnterForTesting;
 
@@ -286,8 +286,8 @@ public class WizardSimpleStepsTests {
         await Assert.That(result.daemonNameText).IsEqualTo(Environment.UserName.ToLowerInvariant());
 
         await Assert.That(result.summaryList).IsNotNull();
-        await Assert.That(result.summaryTitle).IsEqualTo("Command-line tool");
-        await Assert.That(result.summaryNote).IsEqualTo("kcap CLI not found");
+        await Assert.That(result.summaryTitle).IsEqualTo("Use kcap in the terminal");
+        await Assert.That(result.summaryNote).IsEqualTo("kcap isn't on this machine");
         await Assert.That(result.summaryGlyph).IsEqualTo("—");
     }
 
@@ -508,7 +508,7 @@ public class DefaultsStepViewModelTests {
     }
 }
 
-/// spec §3 step 8. Owns no commands and no Rx subscriptions — runs without the headless session,
+/// Closing recap. Owns no commands and no Rx subscriptions — runs without the headless session,
 /// like ConnectStepViewModelTests.
 public class DoneStepViewModelTests {
     [Test]
@@ -536,6 +536,16 @@ public class DoneStepViewModelTests {
         await Assert.That(vm.Summary[0].Detail).IsEqualTo("kcap CLI not found");
         await Assert.That(vm.Summary[1].Glyph).IsEqualTo("✓");
         await Assert.That(vm.Summary[1].Detail).IsNull();
+    }
+
+    [Test]
+    public async Task A_satisfied_row_still_shows_its_outcome_note() {
+        var vm = new DoneStepViewModel(() => [
+            ("Sessions from this machine", true, "Org-repo sessions visible in the workspace. Machine name daemon-a."),
+        ]);
+
+        await Assert.That(vm.Summary[0].Detail)
+            .IsEqualTo("Org-repo sessions visible in the workspace. Machine name daemon-a.");
     }
 
     [Test]

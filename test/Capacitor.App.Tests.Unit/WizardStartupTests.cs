@@ -827,7 +827,7 @@ public class WizardStartupTests {
             var summary = graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
 
             await Assert.That(summary.Count).IsEqualTo(7); // every step but Done itself
-            foreach (var title in new[] { "Command-line tool", "Coding agents", "Import past sessions", "Enable the daemon" })
+            foreach (var title in new[] { "Use kcap in the terminal", "Install agent hooks", "Import past sessions", "Enable the daemon" })
                 await Assert.That(summary.Single(e => e.Title == title).Note).IsEqualTo(WizardComposition.CliMissingNote);
 
             return true;
@@ -853,7 +853,7 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task A_satisfied_step_carries_no_note() {
+    public async Task A_chosen_workspace_names_how_sign_in_will_run() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
@@ -863,9 +863,10 @@ public class WizardStartupTests {
 
             connect.Choice = ConnectChoice.Create; // Satisfied without any input
 
-            var entry = done.Summary.Single(e => e.Title == "Connect to Capacitor");
+            var entry = done.Summary.Single(e => e.Title == "Choose a workspace");
             await Assert.That(entry.Satisfied).IsTrue();
-            await Assert.That(entry.Note).IsNull();
+            await Assert.That(entry.Note).IsEqualTo("Create a new workspace");
+            await Assert.That(entry.Detail).IsEqualTo("Create a new workspace");
 
             return true;
         });

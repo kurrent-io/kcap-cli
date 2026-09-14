@@ -2,18 +2,16 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// One line of the Done step's summary (spec §3 step 8). A dedicated record rather than a
-/// ValueTuple — Avalonia's reflection-based bindings need real CLR properties, not a tuple's
-/// compiler-only element-name aliases.
+/// One line of the Done step's summary. A dedicated record rather than a ValueTuple — Avalonia's
+/// reflection-based bindings need real CLR properties, not a tuple's compiler-only element-name aliases.
 public sealed record DoneSummaryEntry(string Title, bool Satisfied, string? Note) {
     public string Glyph => Satisfied ? "✓" : "—";
     public bool Incomplete => !Satisfied;
-    public string? Detail => Satisfied ? null : string.IsNullOrEmpty(Note) ? "Skipped" : Note;
+    public string? Detail => !string.IsNullOrEmpty(Note) ? Note : Satisfied ? null : "Skipped";
 }
 
-/// spec §3 step 8: a summary of what the earlier steps set up and what was skipped, and why.
-/// Dumb by design — the composition root aggregates every other step's Satisfied/skip state and
-/// supplies the why-skipped notes.
+/// Closing recap of what the earlier steps set up and what was skipped. Dumb by design — the
+/// composition root aggregates every other step's Satisfied/skip state and supplies the notes.
 public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<IReadOnlyList<(string Title, bool Satisfied, string? Note)>> _summaryProvider;
 
