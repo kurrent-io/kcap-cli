@@ -80,7 +80,7 @@ public class MainWindowViewModelTests {
         var attach = new FakeTerminalAttachClientFactory();
         return new WorkspaceViewModel(
             agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps());
+            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
     }
 
     [Test]

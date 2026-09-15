@@ -24,7 +24,7 @@ public enum ChatTabPhase { Waiting, Reading, Missing, Unavailable }
 /// Path identity is part of the read generation: a distinct transcript_path clears the rows and
 /// installs a fresh tail in one UI-thread step, and any read still in flight for the old file
 /// completes under a stale generation and is discarded.
-public sealed class ChatTabViewModel : ReactiveObject {
+public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     /// First retry gap after a failed withdraw; each further one doubles it.
     internal static readonly TimeSpan WithdrawRetryDelay = TimeSpan.FromSeconds(2);
@@ -32,6 +32,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
     readonly string _agentId;
     readonly ChatInput _input;
+    readonly IAttachmentUploader _uploader;
     readonly IChatTranscriptProjection? _projection;
     readonly string? _unavailableNote;
     readonly IUrlOpener _opener;
@@ -131,6 +132,19 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _                        => "",
     };
 
+    /// The chips staged for the next prompt. A send clears the ones it carried, never the tray.
+    public AttachmentTray Tray { get; } = new();
+
+    bool _uploading;
+    /// The staged bytes are on their way to the server; the prompt itself has not left yet.
+    public bool Uploading { get => _uploading; private set => this.RaiseAndSetIfChanged(ref _uploading, value); }
+
+    readonly BehaviorSubject<string?> _intakeNotice = new(null);
+
+    void Notice(string? text) {
+        if (!_lifetimeToken.IsCancellationRequested) _intakeNotice.OnNext(text);
+    }
+
     string _composerText = "";
     int _composerEdits;
     public string ComposerText {
@@ -138,6 +152,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         set {
             if (string.Equals(_composerText, value, StringComparison.Ordinal)) return;
             _composerEdits++;
+            Notice(null);
             this.RaiseAndSetIfChanged(ref _composerText, value);
         }
     }
@@ -254,12 +269,13 @@ public sealed class ChatTabViewModel : ReactiveObject {
     internal int WithdrawsInFlightForTesting => _withdrawing.Count;
 
     public ChatTabViewModel(
-            string agentId, IDaemonClientService daemon, ChatInput input,
+            string agentId, IDaemonClientService daemon, ChatInput input, IAttachmentUploader uploader,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null) {
         _agentId = agentId;
         _input = input;
+        _uploader = uploader;
         _disposables.Add(input);
         _projection = projection;
         _unavailableNote = unavailableNote;
@@ -317,7 +333,11 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _composerHint = Observable.CombineLatest(
                 _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-                (hint, readOnly) => readOnly ? "" : hint)
+                this.WhenAnyValue(x => x.Uploading),
+                _intakeNotice,
+                Tray.WhenAnyValue(t => t.Count),
+                (hint, readOnly, uploading, notice, staged) =>
+                    uploading ? $"Uploading {staged} files…" : notice ?? (readOnly ? "" : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
 
@@ -333,7 +353,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            (text, can, readOnly) => can && !readOnly && !string.IsNullOrWhiteSpace(text));
+            this.WhenAnyValue(x => x.Uploading),
+            (text, can, readOnly, uploading) => can && !readOnly && !uploading && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -341,12 +362,31 @@ public sealed class ChatTabViewModel : ReactiveObject {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
-            var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, TranscriptLength(_path));
+            var files = Tray.Snapshot();
+            if (files.Count > 0 && !_input.CanAttach) { Notice(_input.AttachHint); return; }
+            IReadOnlyList<string> ids = [];
+            if (files.Count > 0) {
+                // The bytes have to be on the server before the prompt names them: a prompt that
+                // arrives first points the agent at ids the store has never seen.
+                Uploading = true;
+                UploadOutcome upload;
+                try { upload = await _uploader.UploadAsync(files, _lifetimeToken); }
+                catch (OperationCanceledException) { return; }
+                finally { Uploading = false; }
+                if (_lifetimeToken.IsCancellationRequested) return;
+                if (upload.Kind != UploadKind.Uploaded) {
+                    Notice(upload.Kind == UploadKind.Unauthorized ? "sign in to attach files" : upload.Reason ?? "the upload failed");
+                    return;
+                }
+                ids = upload.Ids;
+            }
+            var chipIds = files.Select(f => f.Id).ToList();
+            var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, TranscriptLength(_path), chipIds);
             _lastSent = queued;
             _queuedMessages.Add(queued);
             RefreshQueue();
             ChatSendOutcome outcome;
-            try { outcome = await _input.SendAsync(snapshot, [], _lifetimeToken); }
+            try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
             catch (Exception ex) {
                 LogOnce($"send: {ex.Message}");
@@ -359,7 +399,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
             else if (outcome == ChatSendOutcome.Unconfirmed)
                 queued.MarkUnconfirmed();
             RefreshQueue();
-            if (outcome == ChatSendOutcome.Accepted) ClearSentDraft(queued);
+            if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
             if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);
         _disposables.Add(SendCommand);
@@ -449,6 +489,34 @@ public sealed class ChatTabViewModel : ReactiveObject {
     void ConfirmDelivery(QueuedChatMessage queued) {
         if (ReferenceEquals(queued, _lastSent)) _input.ConfirmLastSend();
         ClearSentDraft(queued);
+        Tray.RemoveAll(queued.AttachmentIds);
+    }
+
+    /// The one surface every intake source hands its result to.
+    public IAttachmentSink Attachments => this;
+
+    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant;
+    string? IAttachmentSink.AttachHint => _input.AttachHint;
+
+    void IAttachmentSink.Accept(IntakeResult result) {
+        var refused = Tray.AddAll(result.Accepted).Concat(result.Refused).ToList();
+        Notice(RefusalNotice(refused));
+    }
+
+    static readonly string CapReason = $"only {InputWire.MaxAttachmentsPerPrompt} files per message";
+
+    /// One line for the whole intake: the per-prompt cap is stated once with the names it dropped,
+    /// and a failure that names no file (the clipboard, a source that never opened) drops the name.
+    static string? RefusalNotice(IReadOnlyList<IntakeRefusal> refused) {
+        if (refused.Count == 0) return null;
+        var parts = new List<string>();
+        var overCap = new List<string>();
+        foreach (var refusal in refused) {
+            if (refusal.Reason == CapReason) overCap.Add($"`{refusal.Name}`");
+            else parts.Add(refusal.Reason.StartsWith("the ", StringComparison.Ordinal) ? refusal.Reason : $"`{refusal.Name}` {refusal.Reason}");
+        }
+        if (overCap.Count > 0) parts.Add($"{CapReason} — {string.Join(", ", overCap)} not added");
+        return string.Join("; ", parts);
     }
 
     void OnTick() {
@@ -644,7 +712,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();
+        Tray.Clear();
         _rootSubject.Dispose();
+        _intakeNotice.Dispose();
         _lifetime.Dispose();
         return Task.CompletedTask;
     }

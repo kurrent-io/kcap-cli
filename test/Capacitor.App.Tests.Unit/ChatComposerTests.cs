@@ -20,7 +20,7 @@ public class ChatComposerTests {
         var opener = new RecordingOpener();
         var terminal = new TerminalTabViewModel("a1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
         var chat = new ChatTabViewModel(
-            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), TranscriptChat.For("claude"), opener, time, new FakePermissionService());
+            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), opener, time, new FakePermissionService());
         daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude", "codex"]));
         daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo", model: "claude-opus-5") with { Status = "Running" });
         // The Avalonia scheduler always posts, even when the caller is already on the UI thread,
@@ -150,7 +150,7 @@ public class ChatComposerTests {
             var time = new FakeTimeProvider();
             var terminal = new TerminalTabViewModel("r1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
             var chat = new ChatTabViewModel(
-                "r1", daemon, new TerminalChatInput(terminal, "r1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), TranscriptChat.For("claude"), new RecordingOpener(), time,
+                "r1", daemon, new TerminalChatInput(terminal, "r1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), new RecordingOpener(), time,
                 new FakePermissionService());
             daemon.Agents.AddOrUpdate(
                 Agent("r1", "claude", hasTerminal: true, kind: "review-flow") with { FlowRunId = "f1", FlowRole = "reviewer" });

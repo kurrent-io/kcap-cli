@@ -600,7 +600,8 @@ public partial class App : Application {
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), TimeProvider.System, opener, permissions,
-            workContext, ops, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
+            workContext, ops, new ServerAttachmentUploader(ServerHttp(profiles), profiles),
+            requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             },

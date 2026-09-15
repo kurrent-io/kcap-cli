@@ -28,7 +28,7 @@ public class WorkspaceViewModelTests {
             SessionAccessService? access = null) =>
         new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            access: access);
+            new NoAttachmentUploader(), access: access);
 
     static FakeServerLane ConnectedLane() {
         var lane = new FakeServerLane();
@@ -294,7 +294,7 @@ public class WorkspaceViewModelTests {
                 "a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
                 new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
                 new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-                access: access, localDaemonOnAppServer: onAppServer);
+                new NoAttachmentUploader(), access: access, localDaemonOnAppServer: onAppServer);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false, sessionId: "s1"));
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
@@ -391,7 +391,7 @@ public class WorkspaceViewModelTests {
             var factory = new FakeTerminalAttachClientFactory();
             var vm = new WorkspaceViewModel("a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
                 factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), source,
-                new ScriptedLocalControlOps());
+                new ScriptedLocalControlOps(), new NoAttachmentUploader());
             await Assert.That(vm.WorkContext.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "0123456789abcdef0123456789abcdef"));

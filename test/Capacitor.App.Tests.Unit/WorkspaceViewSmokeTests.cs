@@ -43,7 +43,7 @@ public class WorkspaceViewSmokeTests {
         var vm = new WorkspaceViewModel(
             agentId, daemon, NewActions(), attach.Factory, surface ?? (() => new FakeTerminalSurface()),
             new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
-            new ScriptedLocalControlOps());
+            new ScriptedLocalControlOps(), new NoAttachmentUploader());
         return (new WorkspaceView { DataContext = vm }, vm, daemon, attach);
     }
 

@@ -50,7 +50,7 @@ public class ChatTabViewModelTests {
             seed?.Invoke(Permissions);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), projection, Opener, Time, Permissions, unavailableNote);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, unavailableNote);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {

@@ -87,7 +87,7 @@ public class WorkspaceNavigationTests {
                 opened.Add(agentId);
                 return new WorkspaceViewModel(
                     agentId, daemon, actions, attach.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
-                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps());
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
             });
 
         return new Nav {
