@@ -69,6 +69,8 @@ public static class WireTokens {
     public const string SessionNotVisible = "Session not visible to caller";
     /// HubException message for a transient post-admit re-check fault; retryable, never a denial.
     public const string SessionAccessRecheckFailed = "Session access recheck failed; retry";
+    /// HubException message for a stream subscribe the caller may not make.
+    public const string StreamNotAuthorized = "Not authorized to subscribe to this stream.";
 }
 
 /// Behaviors the permission-response route accepts.
@@ -76,4 +78,14 @@ public static class PermissionBehaviors {
     public const string Allow = "allow";
     public const string Deny = "deny";
     public const string Answered = "answered";
+}
+
+/// Stream names the hub's raw subscription takes. The server keys a session's stream by its
+/// canonical id — a GUID without dashes, any other id as given — so the same rule applies here
+/// or the subscribe names a stream that does not exist.
+public static class StreamNames {
+    public static string AgentSession(string sessionId) => $"AgentSession-{CanonicalSessionId(sessionId)}";
+
+    public static string CanonicalSessionId(string sessionId) =>
+        Guid.TryParse(sessionId, out var guid) ? guid.ToString("N") : sessionId;
 }

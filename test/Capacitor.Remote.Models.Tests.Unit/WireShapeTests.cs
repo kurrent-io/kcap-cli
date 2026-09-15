@@ -86,4 +86,20 @@ public class WireShapeTests {
         var route = ApiRoutes.PermissionResponse("s/1", "r 2");
         await Assert.That(route).IsEqualTo("api/sessions/s%2F1/permission-response/r%202");
     }
+
+    [Test]
+    public async Task AgentSessionStreamNameNormalizesAGuidLikeTheServer() {
+        await Assert.That(StreamNames.AgentSession("2B070DA3-EEB4-4E33-8B0E-F36EC411811B"))
+            .IsEqualTo("AgentSession-2b070da3eeb44e338b0ef36ec411811b");
+        await Assert.That(StreamNames.AgentSession("codex-abc")).IsEqualTo("AgentSession-codex-abc");
+    }
+
+    [Test]
+    public async Task SessionEventCarriesItsTimestampWhenPresent() {
+        const string json = """{"event_type":"UserMessageReceived","event_number":3,"timestamp":"2026-09-14T10:00:00Z","payload":{"content":"hi"}}""";
+        var evt = JsonSerializer.Deserialize(json, RemoteModelsJsonContext.Default.SessionEventDto)!;
+        await Assert.That(evt.Timestamp).IsEqualTo(new DateTimeOffset(2026, 9, 14, 10, 0, 0, TimeSpan.Zero));
+        var older = JsonSerializer.Deserialize("""{"event_type":"SessionEnded"}""", RemoteModelsJsonContext.Default.SessionEventDto)!;
+        await Assert.That(older.Timestamp).IsNull();
+    }
 }
