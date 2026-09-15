@@ -121,12 +121,18 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public bool ShowsChatPane => ShowsPanes && IsChatActive;
     public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
 
+    // What the terminal reports its viewport on. Same reason as _sessionEndedChanges above for a
+    // subject rather than this.WhenAnyValue; never disposed, so a projection raised after teardown
+    // cannot throw.
+    readonly BehaviorSubject<bool> _terminalPaneShown = new(false);
+
     void RaiseTabProjections() {
         this.RaisePropertyChanged(nameof(IsChatActive));
         this.RaisePropertyChanged(nameof(IsTerminalActive));
         this.RaisePropertyChanged(nameof(ShowsPanes));
         this.RaisePropertyChanged(nameof(ShowsChatPane));
         this.RaisePropertyChanged(nameof(ShowsTerminalPane));
+        _terminalPaneShown.OnNext(ShowsTerminalPane);
     }
 
     public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
@@ -158,7 +164,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))
                 .Switch());
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
-            ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, surfaceFactory)
+            ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
             : null;
         Apply(row);
 

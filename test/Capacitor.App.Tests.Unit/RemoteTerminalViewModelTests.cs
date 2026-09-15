@@ -10,18 +10,21 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 namespace Capacitor.App.Tests.Unit;
 
 /// The read-only terminal: subscribed only once access stands, sized by the source, its viewport
-/// reported while live and released on close, and a fresh surface per subscription.
+/// reported while the pane is showing and released when it stops driving, and a fresh surface per
+/// subscription.
 [NotInParallel(nameof(AvaloniaSession))]
 public class RemoteTerminalViewModelTests {
     sealed class Harness {
         public readonly FakeServerLane Lane = new();
         public readonly BehaviorSubject<SessionAccessState> Access = new(SessionAccessState.Establishing);
         public readonly BehaviorSubject<bool> Ended = new(false);
+        public readonly BehaviorSubject<bool> Visible;
         public readonly List<FakeTerminalSurface> Surfaces = [];
         public readonly RemoteTerminalViewModel Vm;
 
-        public Harness() {
-            Vm = new RemoteTerminalViewModel("a1", Lane, Access, Ended, () => { var s = new FakeTerminalSurface(); Surfaces.Add(s); return s; });
+        public Harness(bool visible = true) {
+            Visible = new BehaviorSubject<bool>(visible);
+            Vm = new RemoteTerminalViewModel("a1", Lane, Access, Ended, Visible, () => { var s = new FakeTerminalSurface(); Surfaces.Add(s); return s; });
         }
 
         public static string B64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
@@ -119,7 +122,9 @@ public class RemoteTerminalViewModelTests {
             await h.Vm.TeardownAsync();
             subscribeSource.SetResult(HubCallOutcome.Ok);
             await WaitUntilAsync(() => h.Lane.TerminalUnsubscribes.Contains("a1"), what: "the unsubscribe");
-            await WaitUntilAsync(() => h.Lane.ResizeReleases.Contains("a1"), what: "the release");
+            // Nothing was reported through an in-flight subscribe, so there is no viewport of ours
+            // in the server's aggregate to give back.
+            await Assert.That(h.Lane.ResizeReleases).IsEmpty();
         });
     }
 
@@ -160,6 +165,94 @@ public class RemoteTerminalViewModelTests {
             var surface = h.Surfaces.Single();
             await Assert.That(surface.Fed).IsEquivalentTo(new[] { "hel", "lo" });
             await Assert.That(surface.Resizes).Contains((120, 40));
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The server takes the smallest viewport across viewers, so a pane nobody is looking at —
+    /// still carrying its unmeasured constructor size — would clamp the live agent's PTY for
+    /// everyone. The subscription itself stays eager: the replay is what the tab switch shows.
+    [Test]
+    public async Task A_hidden_pane_subscribes_without_a_viewport_and_reports_one_when_it_is_shown() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(visible: false);
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
+            await Assert.That(h.Lane.Resizes).IsEmpty();
+
+            h.Visible.OnNext(true);
+            await WaitUntilAsync(() => h.Lane.Resizes.Contains(("a1", 80, 24)), what: "the viewport");
+
+            h.Visible.OnNext(false);
+            await WaitUntilAsync(() => h.Lane.ResizeReleases.Contains("a1"), what: "the viewport released");
+            await Assert.That(h.Lane.TerminalUnsubscribes).IsEmpty();
+
+            await h.Vm.TeardownAsync();
+            await Assert.That(h.Lane.ResizeReleases.Count).IsEqualTo(1);
+        });
+    }
+
+    /// The hub's bounds are 1..500 × 1..200, and (0,0) is its own clear sentinel.
+    [Test]
+    public async Task A_size_outside_the_servers_bounds_is_never_reported() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+            var reported = h.Lane.Resizes.Count;
+            var surface = h.Surfaces.Single();
+
+            surface.RaiseResize(0, 0);
+            surface.RaiseResize(501, 30);
+            surface.RaiseResize(100, 201);
+            surface.RaiseResize(100, 30);
+
+            await WaitUntilAsync(() => h.Lane.Resizes.Contains(("a1", 100, 30)), what: "the viewport in bounds");
+            await Assert.That(h.Lane.Resizes.Count).IsEqualTo(reported + 1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Group membership is the connection's, not the subscription's: a stale attempt's release
+    /// would deafen the pane the newer attach is already receiving on.
+    [Test]
+    public async Task A_stale_subscribe_resolving_behind_a_live_one_keeps_the_live_subscription() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var stale = new TaskCompletionSource<HubCallOutcome>();
+            var calls = 0;
+            h.Lane.TerminalSubscribeHandler = _ => ++calls == 1 ? stale.Task : Task.FromResult(HubCallOutcome.Ok);
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 1, what: "the first subscribe");
+
+            h.Access.OnNext(SessionAccessState.Unavailable);
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 2, what: "the second subscribe");
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+
+            stale.SetResult(HubCallOutcome.Ok);
+            await Task.Delay(50);
+            await Assert.That(h.Lane.TerminalUnsubscribes).IsEmpty();
+            await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The special keys are the only input that crosses, and off Live there is nothing to send
+    /// them to: the buttons say so instead of silently dropping them.
+    [Test]
+    public async Task The_key_command_is_offered_only_while_the_terminal_is_live() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(await h.Vm.SendKeyCommand.CanExecute.FirstAsync()).IsFalse();
+
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+            await Assert.That(await h.Vm.SendKeyCommand.CanExecute.FirstAsync()).IsTrue();
+
+            h.Access.OnNext(SessionAccessState.Unavailable);
+            await Assert.That(await h.Vm.SendKeyCommand.CanExecute.FirstAsync()).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }

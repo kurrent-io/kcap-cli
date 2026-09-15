@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using ReactiveUI.Reactive;
@@ -11,18 +12,26 @@ namespace Capacitor.App.ViewModels;
 public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended }
 
 /// A read-only view of a terminal on another machine: the server replays its buffer, then
-/// streams. The pane takes the source's size, and the viewport it reports back is released when
-/// it stops driving — the server's (0,0) is a clear sentinel a client never sends. Every access
-/// establishment subscribes again onto a fresh surface, so a replay never stacks on scrollback.
-/// Subscribing is attempted only once access stands: the server refuses with silence, so an
-/// empty pane after that is "no output yet", never "not allowed".
+/// streams. The pane takes the source's size, and reports a viewport back only while it is on
+/// screen — the server takes the minimum across viewers, so a hidden pane would clamp the live
+/// agent's PTY for everyone. Every access establishment subscribes again onto a fresh surface, so
+/// a replay never stacks on scrollback. Subscribing is attempted only once access stands: the
+/// server refuses with silence, so an empty pane after that is "no output yet", never "not
+/// allowed".
 public sealed class RemoteTerminalViewModel : ReactiveObject {
+    /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
+    const int MaxCols = 500, MaxRows = 200;
+
     readonly string _agentId;
     readonly IServerLane _lane;
     readonly Func<ITerminalSurface> _surfaceFactory;
     readonly CompositeDisposable _disposables = new();
     readonly CancellationTokenSource _lifetime = new();
     readonly CancellationToken _token;
+    // The key command's canExecute input. Not this.WhenAnyValue: that call routes through
+    // ReactiveUI's ObservableForProperty/RxAppBuilder global init, which only some other code
+    // having built the app primes.
+    readonly BehaviorSubject<RemoteTerminalPhase> _phases = new(RemoteTerminalPhase.Waiting);
     int _generation;
     Utf8StreamDecoder? _decoder;
     bool _subscribed;
@@ -32,6 +41,10 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     // starts the subscribe call, not from the moment it resolves.
     bool _receiving;
     bool _ended;
+    bool _visible;
+    /// Whether a viewport of ours stands in the server's aggregate: it holds a viewer's size until
+    /// told otherwise, so a reported one must always be given back and an unreported one never.
+    bool _reported;
     (int Cols, int Rows)? _sourceSize;
 
     ITerminalSurface? _surface;
@@ -44,6 +57,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             this.RaiseAndSetIfChanged(ref _phase, value);
             this.RaisePropertyChanged(nameof(PhaseNote));
             this.RaisePropertyChanged(nameof(ShowsBanner));
+            _phases.OnNext(value);
         }
     }
 
@@ -61,14 +75,20 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
 
     public RemoteTerminalViewModel(
             string agentId, IServerLane lane, IObservable<SessionAccessState> access, IObservable<bool> sessionEnded,
-            Func<ITerminalSurface> surfaceFactory) {
+            IObservable<bool> visible, Func<ITerminalSurface> surfaceFactory) {
         _agentId = agentId;
         _lane = lane;
         _surfaceFactory = surfaceFactory;
         _token = _lifetime.Token;
-        SendKeyCommand = ReactiveCommand.CreateFromTask<string>(SendKeyAsync);
+        SendKeyCommand = ReactiveCommand.CreateFromTask<string>(
+            SendKeyAsync, _phases.Select(phase => phase == RemoteTerminalPhase.Live));
         _disposables.Add(SendKeyCommand);
 
+        visible.DistinctUntilChanged().ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(shown => {
+            _visible = shown;
+            if (!shown) { _ = ReleaseViewportAsync(); return; }
+            if (Surface is { } surface) ReportViewport(surface.CurrentSize);
+        }).DisposeWith(_disposables);
         sessionEnded.Where(ended => ended).Take(1).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
             _ended = true;
             Detach(RemoteTerminalPhase.Ended);
@@ -101,8 +121,8 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             _ = SendKeyAsync(key);
         };
         surface.Resized += (cols, rows) => {
-            if (generation != _generation || !_subscribed) return;
-            _ = Report(_lane.RequestResizeTerminalAsync(_agentId, cols, rows, _token), "resize");
+            if (generation != _generation) return;
+            ReportViewport((cols, rows));
         };
         if (_sourceSize is { } size) surface.Resize(size.Cols, size.Rows);
         _decoder = decoder;
@@ -118,21 +138,38 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             outcome = await _lane.SubscribeToTerminalAsync(_agentId, _token);
         } catch (OperationCanceledException) {
             // Teardown cancelled _token while the hub may already have taken the subscribe —
-            // release regardless, since ReleaseAsync's own calls carry CancellationToken.None.
-            _ = ReleaseAsync();
+            // ReleaseAsync's own calls carry CancellationToken.None.
+            if (!_receiving) _ = ReleaseAsync();
             return;
         } catch (Exception ex) {
             outcome = HubCallOutcome.Failed(ex.Message);
         }
         await Dispatcher.UIThread.InvokeAsync(() => {
-            if (generation != _generation) { _ = ReleaseAsync(); return; }
+            // Group membership belongs to the connection, not to this attempt: unsubscribing for a
+            // superseded one would deafen the pane a newer attach is already receiving on.
+            if (generation != _generation) { if (!_receiving) _ = ReleaseAsync(); return; }
             // A refused subscribe must not render frames meant for another viewer on the connection.
             if (outcome.Result != HubCallResult.Ok) { _receiving = false; Phase = RemoteTerminalPhase.Offline; return; }
             _subscribed = true;
             Phase = RemoteTerminalPhase.Live;
-            var (cols, rows) = surface.CurrentSize;
-            _ = Report(_lane.RequestResizeTerminalAsync(_agentId, cols, rows, _token), "resize");
+            ReportViewport(surface.CurrentSize);
         });
+    }
+
+    /// The one place a viewport is reported: a pane off screen still carries its unmeasured
+    /// constructor size, and the server clamps the source to the smallest viewer.
+    void ReportViewport((int Cols, int Rows) size) {
+        if (!_visible || !_subscribed) return;
+        var (cols, rows) = size;
+        if (cols is not (> 0 and <= MaxCols) || rows is not (> 0 and <= MaxRows)) return;
+        _reported = true;
+        _ = Report(_lane.RequestResizeTerminalAsync(_agentId, cols, rows, _token), "resize");
+    }
+
+    Task ReleaseViewportAsync() {
+        if (!_reported) return Task.CompletedTask;
+        _reported = false;
+        return Report(_lane.ReleaseResizeTerminalAsync(_agentId, CancellationToken.None), "release");
     }
 
     void Detach(RemoteTerminalPhase phase) {
@@ -144,11 +181,11 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _ = ReleaseAsync();
     }
 
-    /// Unsubscribe, then release the viewport: the server keeps a viewer's size in its aggregate
-    /// until told otherwise or until the whole connection drops.
+    /// Unsubscribe, then give back whatever viewport this viewer still holds: the server keeps a
+    /// viewer's size in its aggregate until told otherwise or until the whole connection drops.
     async Task ReleaseAsync() {
         await Report(_lane.UnsubscribeFromTerminalAsync(_agentId, CancellationToken.None), "unsubscribe");
-        await Report(_lane.ReleaseResizeTerminalAsync(_agentId, CancellationToken.None), "release");
+        await ReleaseViewportAsync();
     }
 
     async Task SendKeyAsync(string key) {

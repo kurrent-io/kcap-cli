@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Capacitor.App.ViewModels;
@@ -28,5 +29,11 @@ public partial class RemoteSessionView : UserControl {
                     else TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));
         };
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _tabFocus?.Dispose();
+        _tabFocus = null;
+        base.OnDetachedFromVisualTree(e);
     }
 }
