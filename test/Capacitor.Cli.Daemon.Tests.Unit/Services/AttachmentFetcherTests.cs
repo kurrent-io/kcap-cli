@@ -188,6 +188,32 @@ public class AttachmentFetcherTests : IDisposable {
     }
 
     [Test]
+    public async Task A_dangling_gitignore_link_is_left_alone_and_its_target_is_never_created() {
+        Serve(Id(0), [1]);
+        var root    = Tmp.CreateDir(".attached");
+        var outside = Tmp.PathTo("outside", "missing");
+        File.CreateSymbolicLink(Path.Combine(root, ".gitignore"), outside);
+
+        var fetch = await Fetcher().FetchAsync(root, AttachmentPlacement.Worktree, [Id(0)], CancellationToken.None);
+
+        await Assert.That(fetch.Batch).IsNotNull();
+        await Assert.That(File.Exists(outside)).IsFalse();
+        await Assert.That(new FileInfo(Path.Combine(root, ".gitignore")).LinkTarget).IsEqualTo(outside);
+    }
+
+    [Test]
+    public async Task A_root_that_cannot_be_created_fails_the_fetch_instead_of_throwing() {
+        Serve(Id(0), [1]);
+        var root = Path.Combine(Tmp.CreateFile("plain-file"), ".attached");
+
+        var fetch = await Fetcher().FetchAsync(root, AttachmentPlacement.Worktree, [Id(0)], CancellationToken.None);
+
+        await Assert.That(fetch.Batch).IsNull();
+        await Assert.That(fetch.FailedId).IsEqualTo(Id(0));
+        await Assert.That(fetch.Error).IsNotNull();
+    }
+
+    [Test]
     public async Task Stale_staging_directory_is_removed_by_the_next_fetch() {
         Serve(Id(0), [1]);
         var root = Tmp.CreateDir(".attached");

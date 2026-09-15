@@ -20,43 +20,35 @@ internal sealed class AttachmentFetcher(
     public async Task<AttachmentFetch> FetchAsync(
             string destinationRoot, AttachmentPlacement placement,
             IReadOnlyList<string> ids, CancellationToken ct) {
-        // Checked before anything is created or deleted: a root that is a link — a repository can
-        // commit one at .attached — sends both the staging directory and the sweep's deletions
-        // wherever it points. CreateDirectory through an existing link to a directory succeeds
-        // silently, so the pre-existing entry is what has to be refused.
-        if (IsNotARealDirectory(destinationRoot)) return new(null, null, RootNotADirectory);
-
-        Directory.CreateDirectory(destinationRoot);
-
-        if (IsNotARealDirectory(destinationRoot)) return new(null, null, RootNotADirectory);
-
-        if (placement == AttachmentPlacement.Worktree) {
-            var gitignore = Path.Combine(destinationRoot, ".gitignore");
-
-            if (!File.Exists(gitignore)) await File.WriteAllTextAsync(gitignore, "*\n", ct);
-        }
-
-        // Sweeping every staging directory here is only safe because one fetch runs per destination
-        // root at a time — callers serialise deliveries per agent. The enumeration is inside the try:
-        // its MoveNext is where a vanishing or unreadable directory throws, and a failed sweep must
-        // not fail the fetch.
-        try {
-            foreach (var stale in Directory.EnumerateDirectories(destinationRoot, ".pending-*"))
-                WorktreeManager.DeleteTreeNoFollow(stale);
-        } catch (Exception ex) {
-            logger.LogWarning(ex, "Attachment staging cleanup skipped under {Dir}", destinationRoot);
-        }
-
-        var batchId   = Guid.NewGuid().ToString("N");
-        var staging   = Path.Combine(destinationRoot, ".pending-" + batchId);
-        var published = Path.Combine(destinationRoot, batchId);
-
-        Directory.CreateDirectory(staging);
-
         var paths = new List<string>(ids.Count);
-        var batch = new AttachmentBatch(staging, published, paths);
+        AttachmentBatch? batch = null;
 
+        // Root creation and the staging directory sit inside the same try as the fetch: a root the
+        // daemon cannot create or write is this call's failure, reported to the sender like any
+        // other, not an exception loose on the caller's lane.
         try {
+            // Checked before anything is created or deleted: a root that is a link — a repository can
+            // commit one at .attached — sends both the staging directory and the sweep's deletions
+            // wherever it points. CreateDirectory through an existing link to a directory succeeds
+            // silently, so the pre-existing entry is what has to be refused.
+            if (IsNotARealDirectory(destinationRoot)) return new(null, null, RootNotADirectory);
+
+            Directory.CreateDirectory(destinationRoot);
+
+            if (IsNotARealDirectory(destinationRoot)) return new(null, null, RootNotADirectory);
+
+            if (placement == AttachmentPlacement.Worktree) await EnsureGitignoreAsync(destinationRoot, ct);
+
+            SweepStaleStaging(destinationRoot);
+
+            var batchId   = Guid.NewGuid().ToString("N");
+            var staging   = Path.Combine(destinationRoot, ".pending-" + batchId);
+            var published = Path.Combine(destinationRoot, batchId);
+
+            Directory.CreateDirectory(staging);
+
+            batch = new AttachmentBatch(staging, published, paths);
+
             var resolution = await tokens();
 
             foreach (var id in ids) {
@@ -77,13 +69,39 @@ internal sealed class AttachmentFetcher(
 
             return new(batch, null, null);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            batch.Dispose();
+            batch?.Dispose();
 
             throw;
         } catch (Exception ex) {
-            batch.Dispose();
+            batch?.Dispose();
 
             return new(null, ids.Count > paths.Count ? ids[paths.Count] : null, ex.Message);
+        }
+    }
+
+    /// CreateNew never follows: an entry of any kind already at the path — a committed link included,
+    /// dangling or not — fails the open instead of writing through it to wherever it points.
+    static async Task EnsureGitignoreAsync(string root, CancellationToken ct) {
+        FileStream file;
+
+        try {
+            file = new FileStream(Path.Combine(root, ".gitignore"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        } catch (IOException) {
+            return;
+        }
+
+        await using (file) await file.WriteAsync("*\n"u8.ToArray(), ct);
+    }
+
+    /// Only safe because one fetch runs per destination root at a time — callers serialise deliveries
+    /// per agent. The enumeration is inside the try: its MoveNext is where a vanishing or unreadable
+    /// directory throws, and a failed sweep must not fail the fetch.
+    void SweepStaleStaging(string destinationRoot) {
+        try {
+            foreach (var stale in Directory.EnumerateDirectories(destinationRoot, ".pending-*"))
+                WorktreeManager.DeleteTreeNoFollow(stale);
+        } catch (Exception ex) {
+            logger.LogWarning(ex, "Attachment staging cleanup skipped under {Dir}", destinationRoot);
         }
     }
 
