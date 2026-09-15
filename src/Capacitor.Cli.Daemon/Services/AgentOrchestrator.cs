@@ -489,6 +489,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly string _pidRecordRoot;
 
     readonly AttachmentStore _attachmentStore;
+    readonly AttachmentFetcher _attachmentFetcher;
 
     // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
     // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
@@ -550,7 +551,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly WorktreeManager                                   _worktreeManager;
     readonly RepoMatcher                                       _repoMatcher;
     readonly IPtyProcessFactory                                _ptyFactory;
-    readonly IHttpClientFactory                                _httpClientFactory;
     readonly ICapacitorHttpClient                              _http;
     readonly TokenStore                                        _tokens;
     readonly LocalPermissionBridge                             _permissionBridge;
@@ -698,7 +698,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _worktreeManager   = worktreeManager;
         _repoMatcher       = repoMatcher;
         _ptyFactory        = ptyFactory;
-        _httpClientFactory = httpClientFactory;
         _http              = http;
         _permissionBridge  = permissionBridge;
         _permissionBroker  = permissionBroker ?? new();
@@ -717,6 +716,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var recordRoot = config.Store.StateDirectory(config.Name);
         _pidRecordRoot = recordRoot;
         _attachmentStore = new AttachmentStore(recordRoot);
+        _attachmentFetcher = new AttachmentFetcher(
+            httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
         _failedLaunchLog = new FailedLaunchLog(recordRoot);
         _quarantine  = new AgentKillQuarantine(logger);
@@ -2189,9 +2190,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Download attachments into worktree (best-effort)
                 if (attachmentIds is { Length: > 0 }) {
                     try {
-                        var paths = await DownloadAttachmentsAsync(worktree.Path, attachmentIds);
+                        var fetch = await _attachmentFetcher.FetchAsync(
+                            Path.Combine(worktree.Path, ".attached"), AttachmentPlacement.Worktree,
+                            attachmentIds, _shutdownCts.Token);
+                        var paths = fetch.Batch?.Paths;
 
-                        if (paths.Count > 0) {
+                        if (paths is { Count: > 0 }) {
                             var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
                             prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
                         }
@@ -3880,9 +3884,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var message = text;
 
             if (attachmentIds is { Length: > 0 }) {
-                var paths = await DownloadAttachmentsAsync(agent.Worktree.Path, attachmentIds);
+                var fetch = await _attachmentFetcher.FetchAsync(
+                    Path.Combine(agent.Worktree.Path, ".attached"), AttachmentPlacement.Worktree,
+                    attachmentIds, _shutdownCts.Token);
+                var paths = fetch.Batch?.Paths;
 
-                if (paths.Count > 0) {
+                if (paths is { Count: > 0 }) {
                     message = $"{text}\n\n[Attached files: {string.Join(", ", paths)}]";
                 }
             }
@@ -4094,88 +4101,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
         await agent.Runtime.SendSpecialKeyAsync(key);
-    }
-
-    async Task<List<string>> DownloadAttachmentsAsync(string worktreePath, string[] attachmentIds) {
-        var attachDir = Path.Combine(worktreePath, ".attached");
-        Directory.CreateDirectory(attachDir);
-
-        // Write .gitignore to prevent accidental commits
-        var gitignorePath = Path.Combine(attachDir, ".gitignore");
-
-        if (!File.Exists(gitignorePath)) {
-            await File.WriteAllTextAsync(gitignorePath, "*\n");
-        }
-
-        var paths = new List<string>();
-
-        foreach (var id in attachmentIds) {
-            try {
-                using var httpClient = _httpClientFactory.CreateClient("Attachments");
-
-                var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl);
-
-                if (resolution.Tokens is not null) {
-                    httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);
-                }
-
-                var response = await httpClient.GetAsync($"/api/attachments/{id}");
-
-                if (!response.IsSuccessStatusCode) {
-                    LogAttachmentNotFound(id, response.StatusCode);
-
-                    continue;
-                }
-
-                var rawFileName = response.Content.Headers.ContentDisposition?.FileNameStar
-                 ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"')
-                 ?? $"attachment-{id[..8]}";
-
-                // Sanitize: strip path separators to prevent directory traversal
-                var fileName = Path.GetFileName(rawFileName);
-
-                if (string.IsNullOrWhiteSpace(fileName))
-                    fileName = $"attachment-{id[..8]}";
-
-                var filePath = GetUniqueFilePath(attachDir, fileName);
-                var fullPath = Path.GetFullPath(filePath);
-                var safeDir  = Path.GetFullPath(attachDir) + Path.DirectorySeparatorChar;
-
-                if (!fullPath.StartsWith(safeDir)) {
-                    LogAttachmentPathEscape(rawFileName);
-
-                    continue;
-                }
-
-                await using var fs = File.Create(filePath);
-                await response.Content.CopyToAsync(fs);
-
-                paths.Add($".attached/{Path.GetFileName(filePath)}");
-            } catch (Exception ex) {
-                LogAttachmentError(ex, id);
-            }
-        }
-
-        return paths;
-    }
-
-    static string GetUniqueFilePath(string directory, string fileName) {
-        var path = Path.Combine(directory, fileName);
-
-        if (!File.Exists(path)) {
-            return path;
-        }
-
-        var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-        var ext            = Path.GetExtension(fileName);
-        var counter        = 2;
-
-        do {
-            path = Path.Combine(directory, $"{nameWithoutExt}-{counter}{ext}");
-            counter++;
-        } while (File.Exists(path));
-
-        return path;
     }
 
     Task<string[]> HandleFindRepoForRemote(FindRepoForRemoteRequest req)
@@ -5442,15 +5367,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Captured failed-launch terminal tail for agent {AgentId} at {Path}")]
     partial void LogFailedLaunchCaptured(string agentId, string path);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download attachment {Id}: {Status}")]
-    partial void LogAttachmentNotFound(string id, System.Net.HttpStatusCode status);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment filename would escape directory: {FileName}")]
-    partial void LogAttachmentPathEscape(string fileName);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Error downloading attachment {Id}")]
-    partial void LogAttachmentError(Exception ex, string id);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to re-register agent {AgentId}")]
     partial void LogReRegisterFailed(Exception ex, string agentId);
