@@ -338,6 +338,9 @@ public class RemoteSessionViewModelTests {
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Missing, "missing");
             await Assert.That(vm.Chat.PhaseNote).IsEqualTo(RemoteSessionViewModel.MissingNote);
+            // The stopped run answers every later poll with the same verdict.
+            await h.TickAsync(vm);
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Missing);
 
             h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Offline, what: "offline");

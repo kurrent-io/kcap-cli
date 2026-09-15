@@ -227,4 +227,25 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Reset);
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
     }
+
+    /// The pane polls, so a verdict answered once would be gone by the next poll; it stands until
+    /// a new attempt seeds, and a verdict the previous attempt left behind never outlives that.
+    [Test]
+    public async Task A_verdict_answers_every_read_until_a_new_attempt_seeds() {
+        using var h = new Harness { NextDetail = new(null, Unauthorized: true) };
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Feed.PendingRunForTesting is { IsCompleted: true }, what: "the run");
+        await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Failed);
+        await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Failed);
+
+        h.NextDetail = new(Detail(Event(0, CanonicalEventTypes.UserMessageReceived, Hello)));
+        h.Access.OnNext(SessionAccessState.Establishing);
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+
+        var seed = h.Feed.ReadAppended();
+        await Assert.That(seed.Status).IsEqualTo(FeedStatus.Reset);
+        await Assert.That(seed.Lines.Count).IsEqualTo(1);
+        await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
+    }
 }

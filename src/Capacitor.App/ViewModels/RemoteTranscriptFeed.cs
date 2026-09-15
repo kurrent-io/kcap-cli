@@ -27,9 +27,11 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     readonly IDisposable _access;
     readonly CancellationTokenSource _lifetime = new();
     FeedStatus _pendingStatus = FeedStatus.Ok;
-    /// A Missing/Failed verdict, held apart from the seed's own rows so a refusal that lands
-    /// after a successful seed never displaces the seed's still-undrained Reset.
-    (FeedStatus Status, string? Failure)? _pendingFailure;
+    /// The current attempt's Missing/Failed verdict, held apart from the seed's own rows so a
+    /// refusal landing after a successful seed never displaces the seed's still-undrained Reset,
+    /// and answered on every read with nothing else to deliver: the pane polls, and a verdict it
+    /// saw once would be gone by the next poll. A new attempt, or a seed, retires it.
+    (FeedStatus Status, string? Failure)? _verdict;
     /// The last event number applied; null until the seed lands.
     long? _position;
     /// How many pending lines the seed committed, and the position it ended at. A live event that
@@ -80,10 +82,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 _pending.Clear();
                 return new(FeedStatus.Ok, lines);
             }
-            if (_pendingFailure is { } pending) {
-                _pendingFailure = null;
-                return new(pending.Status, [], null, pending.Failure);
-            }
+            if (_verdict is { } verdict) return new(verdict.Status, [], null, verdict.Failure);
             return new(FeedStatus.Ok, []);
         }
     }
@@ -94,6 +93,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         lock (_lock) {
             if (_disposed) return;
             _tailCts?.Cancel();
+            _verdict = null;
             var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
             _tailCts = cts;
             var attempt = ++_attempt;
@@ -161,6 +161,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
             if (evt.Body is { } body && Project(evt.EventType, body.GetRawText(), evt.EventNumber, evt.Timestamp) is { } line) lines.Add(line);
         lock (_lock) {
             if (_attempt != attempt) return false;
+            _verdict = null;
             _position = detail.LastEventNumber;
             _pending.Clear();
             _pending.AddRange(lines);
@@ -199,7 +200,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     /// A verdict belongs to the attempt that reached it: one landing after its run was stopped
     /// must not become the current run's.
     void Enqueue(int attempt, FeedStatus status, string? failure = null) {
-        lock (_lock) { if (_attempt == attempt) _pendingFailure = (status, failure); }
+        lock (_lock) { if (_attempt == attempt) _verdict = (status, failure); }
     }
 
     void LogOnce(string reason) {

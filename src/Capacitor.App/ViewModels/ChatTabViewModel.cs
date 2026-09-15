@@ -35,8 +35,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
     readonly Func<string, IChatTranscriptFeed>? _openFeed;
     readonly string? _unavailableNote;
     readonly string? _missingNote;
-    /// The last read's refusal, cleared by the next read that delivers. It stands in for the rows
-    /// while there are none and sits under them otherwise.
+    /// The last read's refusal, cleared by the next read that is not one. It stands in for the
+    /// rows while there are none and sits under them otherwise.
     string? _failureNote;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
@@ -530,12 +530,15 @@ public sealed class ChatTabViewModel : ReactiveObject {
             case FeedStatus.Failed:
                 var reason = read.Failure ?? "read failed";
                 LogOnce(reason);
+                var changed = !string.Equals(_failureNote, reason, StringComparison.Ordinal);
                 _failureNote = reason;
                 // No rows on screen: the reason stands in for them. Rows already shown stay, with
                 // the reason beneath them.
                 if (_items.Count == 0) Phase = ChatTabPhase.Failed;
-                this.RaisePropertyChanged(nameof(PhaseNote));
-                RefreshActivityNote();
+                if (changed) {
+                    this.RaisePropertyChanged(nameof(PhaseNote));
+                    RefreshActivityNote();
+                }
                 return;
             case FeedStatus.Reset:
                 // Skip everything the new source replays: it may be history, not receipts. The feed
@@ -549,14 +552,13 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 break;
         }
 
-        // An empty read is no recovery: a refused feed keeps answering Ok with nothing, and the
-        // explanation has to outlive that. Rows, or a new source, clear it.
-        var delivered = read.Status == FeedStatus.Reset || read.Lines.Count > 0;
-        if (delivered && _failureNote is not null) {
+        // Any read that is not a refusal clears one: how long a refusal lasts is the feed's to
+        // say, and a feed whose refusal stands keeps answering with it.
+        if (_failureNote is not null) {
             _failureNote = null;
             RefreshActivityNote();
         }
-        if (delivered || Phase != ChatTabPhase.Failed) Phase = ChatTabPhase.Reading;
+        Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
         foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline && !q.IsForeign))

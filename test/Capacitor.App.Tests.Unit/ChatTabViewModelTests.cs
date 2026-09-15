@@ -1453,11 +1453,11 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A refusal with nothing on screen replaces the wait with its reason; the next read that
-    /// delivers clears it.
+    /// A refusal with nothing on screen replaces the wait with its reason; the next read that is
+    /// not one clears it.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_refused_read_says_why_in_place_of_the_wait_until_a_read_delivers() {
+    public async Task A_refused_read_says_why_in_place_of_the_wait_until_a_read_is_not_refused() {
         await RunOnUiAsync(async () => {
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var feed = new ScriptedFeed { FailNext = "not signed in" };
@@ -1470,12 +1470,7 @@ public class ChatTabViewModelTests {
             await Assert.That(chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");
             await Assert.That(chat.ActivityNote).IsEqualTo("");
 
-            // A refused feed keeps answering Ok with nothing; that is no recovery.
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
-            await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Failed);
-
-            feed.ResetNext = true;
+            // How long a refusal stands is the feed's to say: a read that is not one clears it.
             time.Advance(ChatTabViewModel.PollInterval);
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Reading);
