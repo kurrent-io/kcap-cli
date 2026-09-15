@@ -6,6 +6,22 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Support from the desktop rides the feedback lane
+
+The desktop app has no web view, so the Plain chat widget the web app uses cannot embed; instead a
+native "Send feedback" window posts through the same `POST /api/feedback` lane `kcap feedback` uses.
+Three things are deliberate. The message the server receives is the reporter's text plus one trailer
+line naming the client and daemon, because the lane's context has no slot for the daemon and the
+server caps the context fields — the hint under the form discloses the trailer and counts it
+against the 8000-character cap. A pressed Send binds the report into a snapshot with its
+`client_request_id`; an unchanged retry re-sends the snapshot, any edit mints a new id, and three
+duplicate cases are accepted rather than solved (an unchanged retry after Plain accepted but the
+tenant answered non-success, a changed retry after an ambiguous failure, a quit mid-call). The
+report entries follow one oracle — a resolved server URL — evaluated before the main window is
+shown, while Documentation stays reachable without a server; on Windows and Linux the rail-footer
+flyout is the only entry, since those builds draw no menu bar. `context.source = "desktop"` reaches
+the tenant server and stops there; the trailer is what support reads.
+
 ## Desktop prompts carry attachments
 
 The launcher's goal box and the session composer stage files and send ids, never bytes. The
