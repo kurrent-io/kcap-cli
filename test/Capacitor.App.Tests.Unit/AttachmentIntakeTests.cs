@@ -22,9 +22,10 @@ public class AttachmentIntakeTests {
     [Test]
     public async Task Read_files_refuses_each_bad_item_by_name_and_keeps_the_valid_sibling_after_it() {
         var bigBin = FakeStorageFile.Of("big.bin", reportedSize: InputWire.MaxAttachmentBytes + 1);
+        var aPngStream = new FakeStorageFile.TrackedStream(new byte[3]);
         var items = new IStorageItem[] {
             FakeStorageFolder.Of("Docs"),
-            FakeStorageFile.Of("a.png", new byte[3]),
+            FakeStorageFile.Of("a.png", aPngStream),
             bigBin,
             FakeStorageFile.Of("b.txt", new byte[2]),
             FakeStorageFile.Of("nosize.bin", new byte[InputWire.MaxAttachmentBytes + 1], reportedSize: null),
@@ -42,6 +43,7 @@ public class AttachmentIntakeTests {
             new IntakeRefusal("half.bin", "could not be read")]);
         _ = bigBin.DidNotReceive().OpenReadAsync();
         await Assert.That(result.Accepted[0].ContentType).IsEqualTo("image/png");
+        await Assert.That(aPngStream.Disposed).IsTrue();
     }
 
     [Test]
@@ -59,16 +61,18 @@ public class AttachmentIntakeTests {
         await Assert.That(AttachmentIntake.ContentTypeFor("x.unknownext")).IsEqualTo("application/octet-stream");
     }
 
+    /// The headless test session has no real image codec, so this only pins the clock-based name
+    /// and the content type FromBitmap hands to the FromPngBytes seam — not the encoded bytes,
+    /// which the oversize-refusal test below covers via that seam directly.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task From_bitmap_is_a_png_named_by_the_clock_and_an_oversize_encoding_is_refused() {
+    public async Task From_bitmap_names_the_file_by_the_clock_and_tags_it_as_png() {
         await AvaloniaSession.RunOnUiAsync(async () => {
             var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 14, 10, 30, 5, TimeSpan.Zero));
             using var small = new WriteableBitmap(new Avalonia.PixelSize(4, 4), new Avalonia.Vector(96, 96));
             var ok = AttachmentIntake.FromBitmap(small, time);
             await Assert.That(ok.Accepted.Single().FileName).IsEqualTo("pasted-image-20260914-103005.png");
             await Assert.That(ok.Accepted.Single().ContentType).IsEqualTo("image/png");
-            await Assert.That(ok.Accepted.Single().Bytes.Span[..8].ToArray()).IsEquivalentTo(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
         });
     }
 

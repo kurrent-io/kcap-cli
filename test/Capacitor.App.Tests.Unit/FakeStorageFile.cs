@@ -42,6 +42,16 @@ static class FakeStorageFile {
         return file;
     }
 
+    /// Hands out `stream` itself rather than a fresh one, so a caller can inspect it (e.g. its
+    /// `Disposed` flag) after ReadFilesAsync returns.
+    public static IStorageFile Of(string name, TrackedStream stream) {
+        var file = Substitute.For<IStorageFile>();
+        file.Name.Returns(name);
+        file.GetBasicPropertiesAsync().Returns<StorageItemProperties>(new StorageItemProperties((ulong)stream.Length, null, null));
+        file.OpenReadAsync().Returns<Stream>(stream);
+        return file;
+    }
+
     /// Reads normally up to `throwAfter` bytes, then fails the next read — models a file that
     /// goes unreadable partway through, not just on open.
     sealed class ThrowAfterStream(byte[] bytes, int throwAfter) : MemoryStream(bytes) {
@@ -50,5 +60,10 @@ static class FakeStorageFile {
             var capped = (int)Math.Min(buffer.Length, throwAfter - Position);
             return await base.ReadAsync(buffer[..capped], cancellationToken);
         }
+    }
+
+    public sealed class TrackedStream(byte[] bytes) : MemoryStream(bytes) {
+        public bool Disposed { get; private set; }
+        protected override void Dispose(bool disposing) { Disposed = true; base.Dispose(disposing); }
     }
 }

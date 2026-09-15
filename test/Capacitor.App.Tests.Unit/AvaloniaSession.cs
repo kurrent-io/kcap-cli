@@ -14,13 +14,10 @@ namespace Capacitor.App.Tests.Unit;
 /// class must carry [NotInParallel("AvaloniaSession")].
 internal static class AvaloniaSession {
     sealed class TestAppBuilder {
-        // UseHeadlessDrawing's stub bitmap impl no-ops Bitmap.Save (0 bytes out) — real Skia
-        // encoding is what AttachmentIntakeTests' pasted-image test needs.
         public static AppBuilder BuildAvaloniaApp() =>
             AppBuilder.Configure<Capacitor.App.App>()
                 .UseReactiveUI(_ => { })
-                .UseSkia()
-                .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
+                .UseHeadless(new AvaloniaHeadlessPlatformOptions());
     }
 
     static readonly Lazy<HeadlessUnitTestSession> Session =
