@@ -803,6 +803,38 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A shared agent id is no evidence on its own — the dedup fails open — so a server row for
+    /// another session is another agent, and the dropped row reads as the ended session it is.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_dropped_local_row_with_a_same_id_remote_row_for_another_session_keeps_the_local_workspace() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: id => host.Directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                    : host.Directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote : null,
+                remoteWorkspaceFactory: id => host.New(id, "a-different-session"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+
+            vm.OpenSession("a1");
+            var local = vm.CurrentWorkspace;
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "a-different-session", Status = "Running", DaemonName = "work-mac",
+                OwnerUserId = "u1", Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }));
+            host.Directory.Rows.Remove("local:a1");
+
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
+        });
+    }
+
     /// With no live server row, a dropped local row is what it always was: the session ended,
     /// and the workspace stays to say so.
     [Test]

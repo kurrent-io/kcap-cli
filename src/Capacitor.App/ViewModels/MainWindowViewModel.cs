@@ -514,13 +514,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
             WorkspaceViewModel local when _directory is { } directory => directory.Rows.Connect()
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Where(changes => changes.Any(c => c.Key == $"local:{local.AgentId}" && c.Reason == ChangeReason.Remove))
-                .Where(_ => directory.Rows.Lookup($"remote:{local.AgentId}") is { HasValue: true, Value: var row } && !SessionStatusDots.IsTerminal(row.Status))
+                .Select(changes => changes.FirstOrDefault(
+                    c => c.Key == $"local:{local.AgentId}" && c.Reason == ChangeReason.Remove))
+                .Where(dropped => dropped.Reason == ChangeReason.Remove && MovedToServer(directory, dropped.Current))
                 .Take(1)
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
             _ => Disposable.Empty,
         };
     }
+
+    /// The dropped row's own session, still live on the server lane. A shared agent id proves
+    /// nothing on its own — the directory's dedup fails open, so two unrelated agents can carry one
+    /// id — which is why the session ids must match, the same proof the remote host demands of a
+    /// local twin before it hands the id over.
+    static bool MovedToServer(IAgentDirectory directory, AgentRow dropped) =>
+        directory.Rows.Lookup($"remote:{dropped.Id}") is { HasValue: true, Value: var row }
+        && !SessionStatusDots.IsTerminal(row.Status)
+        && row.SessionId is { Length: > 0 }
+        && row.SessionId == dropped.SessionId;
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
