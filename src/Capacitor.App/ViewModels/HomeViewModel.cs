@@ -741,19 +741,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         ClearIntakeNotice();
         var refused = new List<IntakeRefusal>(result.Refused);
         refused.AddRange(Tray.AddAll(result.Accepted));
-        if (RefusalNotice(refused) is not { } notice) return;
+        if (RefusalNotice.Render(refused) is not { } notice) return;
         _intakeNotice = notice;
         StartError = notice;
-    }
-
-    /// One line per refusal, except the per-message cap: that one names its files once rather than
-    /// repeating the same sentence for each.
-    internal static string? RefusalNotice(IReadOnlyList<IntakeRefusal> refused) {
-        if (refused.Count == 0) return null;
-        var capped = refused.Where(r => r.Reason == AttachmentTray.CapReason).Select(r => $"`{r.Name}`").ToList();
-        var lines = refused.Where(r => r.Reason != AttachmentTray.CapReason).Select(r => $"`{r.Name}` {r.Reason}").ToList();
-        if (capped.Count > 0) lines.Add($"{AttachmentTray.CapReason} — {string.Join(", ", capped)} not added");
-        return string.Join("; ", lines);
     }
 
     void ClearIntakeNotice() {

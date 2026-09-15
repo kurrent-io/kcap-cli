@@ -62,10 +62,16 @@ public sealed class StagedAttachmentViewModel : ReactiveObject, IDisposable {
         } catch (Exception) {
             return;
         }
-        await Dispatcher.UIThread.InvokeAsync(() => {
-            if (_disposed) decoded.Dispose();
-            else Thumbnail = decoded;
-        });
+        // Nothing awaits this task outside the tests, so a dispatcher shutting down under a decode
+        // in flight must be caught here or the fault goes unobserved.
+        try {
+            await Dispatcher.UIThread.InvokeAsync(() => {
+                if (_disposed) decoded.Dispose();
+                else Thumbnail = decoded;
+            });
+        } catch (Exception) {
+            decoded.Dispose();
+        }
     }
 
     public void Dispose() {

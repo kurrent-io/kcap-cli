@@ -10,7 +10,7 @@ public class AttachmentStoreTests {
     public async Task Directory_is_hashed_under_the_state_dir_and_removed_without_following_links() {
         var store = new AttachmentStore(Tmp.Path);
         var dir = store.DirectoryFor("agent-1");
-        await Assert.That(dir).IsEqualTo(Path.Combine(Tmp.Path, "attachments", AgentFileNames.For("agent-1")));
+        await Assert.That(dir).IsEqualTo(Tmp.PathTo("attachments", AgentFileNames.For("agent-1")));
         Directory.CreateDirectory(dir);
         var outside = Tmp.CreateDir("outside");
         File.WriteAllText(Path.Combine(outside, "keep.txt"), "x");

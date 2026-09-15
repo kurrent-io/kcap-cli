@@ -523,21 +523,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void IAttachmentSink.Accept(IntakeResult result) {
         var refused = Tray.AddAll(result.Accepted).Concat(result.Refused).ToList();
-        Notice(RefusalNotice(refused));
-    }
-
-    /// One line for the whole intake: the per-prompt cap is stated once with the names it dropped,
-    /// and a failure that names no file (the clipboard, a source that never opened) drops the name.
-    static string? RefusalNotice(IReadOnlyList<IntakeRefusal> refused) {
-        if (refused.Count == 0) return null;
-        var parts = new List<string>();
-        var overCap = new List<string>();
-        foreach (var refusal in refused) {
-            if (refusal.Reason == AttachmentTray.CapReason) overCap.Add($"`{refusal.Name}`");
-            else parts.Add(refusal.Reason.StartsWith("the ", StringComparison.Ordinal) ? refusal.Reason : $"`{refusal.Name}` {refusal.Reason}");
-        }
-        if (overCap.Count > 0) parts.Add($"{AttachmentTray.CapReason} — {string.Join(", ", overCap)} not added");
-        return string.Join("; ", parts);
+        Notice(RefusalNotice.Render(refused));
     }
 
     void OnTick() {

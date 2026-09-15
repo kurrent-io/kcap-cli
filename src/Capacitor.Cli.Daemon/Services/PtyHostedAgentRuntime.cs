@@ -141,5 +141,8 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool
     public Task WaitForExitAsync(TimeSpan? timeout = null) => pty.WaitForExitAsync(timeout);
     public Task TerminateAsync(TimeSpan?   timeout = null) => pty.TerminateAsync(timeout);
 
-    public ValueTask DisposeAsync() => pty.DisposeAsync();
+    public async ValueTask DisposeAsync() {
+        await pty.DisposeAsync();
+        _lane.Dispose();
+    }
 }

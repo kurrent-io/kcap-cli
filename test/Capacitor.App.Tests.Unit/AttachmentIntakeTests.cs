@@ -38,8 +38,8 @@ public class AttachmentIntakeTests {
         var result = await AttachmentIntake.ReadFilesAsync(items, CancellationToken.None);
         await Assert.That(result.Accepted.Select(f => f.FileName)).IsEquivalentTo(["a.png", "b.txt", "c.md", "d.json", "e.csv"]);
         await Assert.That(result.Refused).IsEquivalentTo([
-            new IntakeRefusal("Docs", "is a folder"), new IntakeRefusal("big.bin", "is over 10 MB"),
-            new IntakeRefusal("nosize.bin", "is over 10 MB"), new IntakeRefusal("locked.txt", "could not be read"),
+            new IntakeRefusal("Docs", "is a folder"), new IntakeRefusal("big.bin", AttachmentTray.SizeReason),
+            new IntakeRefusal("nosize.bin", AttachmentTray.SizeReason), new IntakeRefusal("locked.txt", "could not be read"),
             new IntakeRefusal("half.bin", "could not be read")]);
         _ = bigBin.DidNotReceive().OpenReadAsync();
         await Assert.That(result.Accepted[0].ContentType).IsEqualTo("image/png");
@@ -82,6 +82,6 @@ public class AttachmentIntakeTests {
         var oversize = new byte[11 * 1024 * 1024];
         var result = AttachmentIntake.FromPngBytes(oversize, time);
         await Assert.That(result.Accepted).IsEmpty();
-        await Assert.That(result.Refused).IsEquivalentTo([new IntakeRefusal("pasted-image-20260914-103005.png", "is over 10 MB")]);
+        await Assert.That(result.Refused).IsEquivalentTo([new IntakeRefusal("pasted-image-20260914-103005.png", AttachmentTray.SizeReason)]);
     }
 }

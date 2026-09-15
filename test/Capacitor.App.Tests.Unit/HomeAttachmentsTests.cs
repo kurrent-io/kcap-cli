@@ -17,8 +17,8 @@ namespace Capacitor.App.Tests.Unit;
 public class HomeAttachmentsTests {
     const string LaunchedId = "0123456789abcdef0123456789abcdef";
     const string SecondLaunchedId = "fedcba9876543210fedcba9876543210";
-    const string CapableVersion = "1.0.4";
-    const string StaleVersion = "1.0.3";
+    const string CapableVersion = "1.0.3";
+    const string StaleVersion = "1.0.2";
 
     sealed class RecordingLaunchClient : ILaunchClient {
         public LaunchRequest? Last;
@@ -514,6 +514,22 @@ public class HomeAttachmentsTests {
             // The next goal edit is the user moving on — the notice goes with it.
             vm.Goal = "g";
             await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    /// A handler-level failure names no file, so the reason stands on its own rather than being
+    /// backticked behind a placeholder name.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_refusal_that_names_no_file_renders_its_reason_alone() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var rig = new Rig();
+            var vm = rig.Start(path);
+
+            vm.Attachments.Accept(new IntakeResult([], [new IntakeRefusal("clipboard", "the clipboard could not be read")]));
+
+            await Assert.That(vm.StartError).IsEqualTo("the clipboard could not be read");
         });
     }
 }

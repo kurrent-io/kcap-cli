@@ -11,6 +11,9 @@ public sealed class AttachmentTray : ReactiveObject {
     /// its notice by it rather than re-deriving the sentence.
     public static readonly string CapReason = $"only {InputWire.MaxAttachmentsPerPrompt} files per message";
 
+    /// The wording a refusal past the per-file byte cap carries, wherever the cap is enforced.
+    public static readonly string SizeReason = $"is over {InputWire.MaxAttachmentBytes / (1024 * 1024)} MB";
+
     readonly ObservableCollection<StagedAttachment> _items = new();
     int _generation;
 
@@ -26,7 +29,7 @@ public sealed class AttachmentTray : ReactiveObject {
         var refused = new List<IntakeRefusal>();
         var changed = false;
         foreach (var file in files) {
-            if (file.Bytes.Length > InputWire.MaxAttachmentBytes) { refused.Add(new(file.FileName, "is over 10 MB")); continue; }
+            if (file.Bytes.Length > InputWire.MaxAttachmentBytes) { refused.Add(new(file.FileName, SizeReason)); continue; }
             if (_items.Count >= InputWire.MaxAttachmentsPerPrompt) { refused.Add(new(file.FileName, CapReason)); continue; }
             _items.Add(Dedup(file));
             changed = true;

@@ -6,11 +6,11 @@ namespace Capacitor.App.Tests.Unit;
 /// launch closed when an id cannot be fetched.
 public class LaunchAttachmentsTests {
     [Test]
-    [Arguments("1.0.4", true)]
-    [Arguments("1.0.4-alpha.2", true)]
-    [Arguments("1.0.5+build.7", true)]
+    [Arguments("1.0.3", true)]
+    [Arguments("1.0.3-alpha.2", true)]
+    [Arguments("1.0.4+build.7", true)]
     [Arguments("2.0.0", true)]
-    [Arguments("1.0.3", false)]
+    [Arguments("1.0.2", false)]
     [Arguments("garbage", false)]
     [Arguments("", false)]
     [Arguments(null, false)]
@@ -20,6 +20,6 @@ public class LaunchAttachmentsTests {
 
     [Test]
     public async Task The_minimum_is_the_release_whose_daemon_fails_closed_on_a_missing_attachment() {
-        await Assert.That(LaunchAttachments.MinDaemonVersion).IsEqualTo(new Version(1, 0, 4));
+        await Assert.That(LaunchAttachments.MinDaemonVersion).IsEqualTo(new Version(1, 0, 3));
     }
 }

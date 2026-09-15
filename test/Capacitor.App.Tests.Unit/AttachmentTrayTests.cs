@@ -12,7 +12,7 @@ public class AttachmentTrayTests {
         var big = new StagedAttachment("report.zip", "application/zip", new byte[InputWire.MaxAttachmentBytes + 1]);
         var refused = tray.AddAll([File("a.png"), big, File("b.png")]);
         await Assert.That(tray.Items.Select(f => f.FileName)).IsEquivalentTo(["a.png", "b.png"]);
-        await Assert.That(refused).IsEquivalentTo([new IntakeRefusal("report.zip", "is over 10 MB")]);
+        await Assert.That(refused).IsEquivalentTo([new IntakeRefusal("report.zip", AttachmentTray.SizeReason)]);
 
         var many = Enumerable.Range(0, 10).Select(i => File($"f{i}.png")).ToList();
         refused = tray.AddAll(many);
@@ -26,6 +26,16 @@ public class AttachmentTrayTests {
         var tray = new AttachmentTray();
         tray.AddAll([File("shot.png"), File("shot.png"), File("shot.png")]);
         await Assert.That(tray.Items.Select(f => f.FileName)).IsEquivalentTo(["shot.png", "shot (2).png", "shot (3).png"]);
+    }
+
+    /// Deduplication renames the chip the caller already holds a receipt for, so a rename that
+    /// minted a fresh id would leave RemoveAll unable to clear what the send delivered.
+    [Test]
+    public async Task Renaming_a_chip_keeps_its_id() {
+        var file = File("shot.png");
+        var renamed = file.Renamed("shot (2).png");
+        await Assert.That(renamed.Id).IsEqualTo(file.Id);
+        await Assert.That(renamed.FileName).IsEqualTo("shot (2).png");
     }
 
     [Test]

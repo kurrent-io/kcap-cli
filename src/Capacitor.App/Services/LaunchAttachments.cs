@@ -4,7 +4,7 @@ namespace Capacitor.App.Services;
 /// would start the session without the files, so the launcher refuses to send ids there.
 public static class LaunchAttachments {
     /// The kcap release whose daemon fails a launch closed on an attachment it cannot fetch.
-    public static readonly Version MinDaemonVersion = new(1, 0, 4);
+    public static readonly Version MinDaemonVersion = new(1, 0, 3);
 
     /// A prerelease of the minimum counts: the build that carries the behaviour is what matters,
     /// not whether it shipped. A version this cannot parse is never guessed capable.
