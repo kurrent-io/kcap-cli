@@ -8,7 +8,6 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Claude;
-using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
 using DynamicData.Binding;
@@ -173,6 +172,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public bool Uploading {
         get => _uploading;
         private set {
+            if (_uploading == value) return;
             this.RaiseAndSetIfChanged(ref _uploading, value);
             _uploadingChanges.OnNext(value);
         }
@@ -319,8 +319,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     static readonly TimeSpan RecentFailureTtl = TimeSpan.FromSeconds(30);
     readonly IAgentDirectory? _directory;
 
-    /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch.
-    sealed record PendingLaunch(DateTime At, bool HadAttachments, DateTimeOffset? UploadedAt);
+    /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
+    /// stamps come from the same clock, so one TimeProvider governs every expiry.
+    sealed record PendingLaunch(DateTimeOffset At, bool HadAttachments, DateTimeOffset? UploadedAt);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -514,8 +515,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _canAttach = canAttach
             .ToProperty(this, x => x.CanAttach, initialValue: false)
             .DisposeWith(_disposables);
+        // ObserveOn BEFORE ToProperty, like every other bound projection here: signedIn is fed by
+        // the server lane, which emits on its own connection thread.
         _attachHint = signedIn
             .CombineLatest(canAttach, AttachHintFor)
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.AttachHint, initialValue: (string?)null)
             .DisposeWith(_disposables);
 
@@ -745,13 +750,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// repeating the same sentence for each.
     internal static string? RefusalNotice(IReadOnlyList<IntakeRefusal> refused) {
         if (refused.Count == 0) return null;
-        var capped = refused.Where(r => r.Reason == TooManyReason).Select(r => $"`{r.Name}`").ToList();
-        var lines = refused.Where(r => r.Reason != TooManyReason).Select(r => $"`{r.Name}` {r.Reason}").ToList();
-        if (capped.Count > 0) lines.Add($"{TooManyReason} — {string.Join(", ", capped)} not added");
+        var capped = refused.Where(r => r.Reason == AttachmentTray.CapReason).Select(r => $"`{r.Name}`").ToList();
+        var lines = refused.Where(r => r.Reason != AttachmentTray.CapReason).Select(r => $"`{r.Name}` {r.Reason}").ToList();
+        if (capped.Count > 0) lines.Add($"{AttachmentTray.CapReason} — {string.Join(", ", capped)} not added");
         return string.Join("; ", lines);
     }
-
-    static readonly string TooManyReason = $"only {InputWire.MaxAttachmentsPerPrompt} files per message";
 
     void ClearIntakeNotice() {
         if (_intakeNotice is null) return;
@@ -1136,7 +1139,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = new PendingLaunch(DateTime.UtcNow, hadAttachments, uploadedAt);
+            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), hadAttachments, uploadedAt);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (DateTime.UtcNow - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1174,7 +1177,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     bool IsExpired(PendingLaunch pending) =>
         pending.UploadedAt is { } uploadedAt
             ? _time.GetUtcNow() - uploadedAt > RetentionTtl
-            : DateTime.UtcNow - pending.At > PendingLaunchTtl;
+            : _time.GetUtcNow() - pending.At > PendingLaunchTtl;
 
     // Directory keys preserve the row's incoming id spelling (e.g. a dashed Guid never becomes
     // "local:{N-form}"), so a lookup by the "N"-normalized pending id would miss it — scan and

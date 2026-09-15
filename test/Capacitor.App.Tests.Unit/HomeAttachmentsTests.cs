@@ -316,12 +316,12 @@ public class HomeAttachmentsTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Delayed_failure_does_not_restore_over_user_edits_or_a_changed_target() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var tmp = new TempDir();
             const string ReAttach = "boom — re-attach the files to send them again";
 
             // (a) the user typed a new goal after the launch was accepted
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path);
+                await LaunchWithDraftAsync(rig, tmp.PathTo("a.json"));
                 rig.Vm.Goal = "new";
                 rig.Failures.OnNext(new LaunchFailure(LaunchedId, "boom"));
 
@@ -332,7 +332,7 @@ public class HomeAttachmentsTests {
 
             // (b) the user blanked the goal themselves while the request was in flight
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path, vm => { vm.Goal = ""; return Task.CompletedTask; });
+                await LaunchWithDraftAsync(rig, tmp.PathTo("b.json"), vm => { vm.Goal = ""; return Task.CompletedTask; });
                 rig.Failures.OnNext(new LaunchFailure(LaunchedId, "boom"));
 
                 await Assert.That(rig.Vm.StartError).IsEqualTo(ReAttach);
@@ -341,7 +341,7 @@ public class HomeAttachmentsTests {
 
             // (c) a chip added and removed again during the request — the tray moved under the draft
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path, vm => {
+                await LaunchWithDraftAsync(rig, tmp.PathTo("c.json"), vm => {
                     var extra = Chip("b.png");
                     vm.Attachments.Accept(new IntakeResult([extra], []));
                     vm.Tray.Remove(extra);
@@ -355,7 +355,7 @@ public class HomeAttachmentsTests {
 
             // (d) a chip added during the request is still staged at failure time
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path, vm => {
+                await LaunchWithDraftAsync(rig, tmp.PathTo("d.json"), vm => {
                     vm.Attachments.Accept(new IntakeResult([Chip("b.png")], []));
                     return Task.CompletedTask;
                 });
@@ -367,7 +367,7 @@ public class HomeAttachmentsTests {
 
             // (e) the launcher is pointed at a different repository by the time the failure lands
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path);
+                await LaunchWithDraftAsync(rig, tmp.PathTo("e.json"));
                 await rig.Vm.SelectRepositoryAsync("/repo/elsewhere");
                 rig.Failures.OnNext(new LaunchFailure(LaunchedId, "boom"));
 
@@ -431,12 +431,12 @@ public class HomeAttachmentsTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Row_confirmation_and_buffered_failure_before_registration_settle_the_draft() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var tmp = new TempDir();
 
             // A row that predates registration is success: the retained bytes are released, and a
             // later failure for the same id restores nothing.
             using (var rig = new Rig()) {
-                var vm = rig.Start(path, launch: new RowBeforeReturnLaunchClient { Directory = rig.Directory });
+                var vm = rig.Start(tmp.PathTo("row.json"), launch: new RowBeforeReturnLaunchClient { Directory = rig.Directory });
                 await vm.SelectRepositoryAsync("/repo/a");
                 vm.Attachments.Accept(new IntakeResult([Chip("a.png")], []));
                 vm.Goal = "g";
@@ -451,7 +451,7 @@ public class HomeAttachmentsTests {
 
             // A failure buffered before registration settles the same launch the delayed one does.
             using (var rig = new Rig()) {
-                var vm = rig.Start(path, launch: new FailureBeforeReturnLaunchClient {
+                var vm = rig.Start(tmp.PathTo("buffered.json"), launch: new FailureBeforeReturnLaunchClient {
                     Failures = rig.Failures, Reason = "boom",
                 });
                 await vm.SelectRepositoryAsync("/repo/a");
@@ -471,10 +471,10 @@ public class HomeAttachmentsTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Non_attachment_failure_reason_with_files_keeps_the_real_reason() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var tmp = new TempDir();
 
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path);
+                await LaunchWithDraftAsync(rig, tmp.PathTo("denied.json"));
                 rig.Failures.OnNext(new LaunchFailure(LaunchedId, "launch_denied_by_owner: default"));
 
                 await Assert.That(rig.Vm.StartError).Contains("consent policy denied");
@@ -483,7 +483,7 @@ public class HomeAttachmentsTests {
 
             // Only the delivery-side reason gets attachment wording.
             using (var rig = new Rig()) {
-                await LaunchWithDraftAsync(rig, path);
+                await LaunchWithDraftAsync(rig, tmp.PathTo("unavailable.json"));
                 rig.Failures.OnNext(new LaunchFailure(LaunchedId, "attachment_unavailable: 3 of 3 gone"));
 
                 await Assert.That(rig.Vm.StartError)
