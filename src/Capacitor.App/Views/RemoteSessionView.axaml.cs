@@ -12,6 +12,11 @@ public partial class RemoteSessionView : UserControl {
 
     public RemoteSessionView() {
         InitializeComponent();
+        TerminalHost.PropertyChanged += (_, e) => {
+            if (e.Property == SvcSystems.UI.Terminal.TerminalControl.ModelProperty && TerminalHost.Model is not null
+                && DataContext is RemoteSessionViewModel { IsTerminalActive: true })
+                TerminalHost.Focus();
+        };
         DataContextChanged += (_, _) => {
             _tabFocus?.Dispose();
             var model = DataContext as RemoteSessionViewModel;
@@ -20,6 +25,7 @@ public partial class RemoteSessionView : UserControl {
                 .Subscribe(pair => Dispatcher.UIThread.Post(() => {
                     if (!ReferenceEquals(model, DataContext) || !pair.Item2) return;
                     if (pair.Item1 == RemoteTab.Chat) ChatHost.FocusComposer();
+                    else TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));
         };
     }

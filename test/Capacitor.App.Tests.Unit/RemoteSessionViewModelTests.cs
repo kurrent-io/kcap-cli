@@ -36,7 +36,7 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface());
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -343,6 +343,31 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.AccessNote).IsEqualTo("Not connected to the server");
             await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_pty_harness_offers_a_terminal_tab_that_subscribes_once_access_stands_and_a_frame_harness_does_not() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var pty = h.Build(Harness.Row(vendor: "claude"));
+            await Assert.That(pty.ShowsTerminalTab).IsTrue();
+            await Assert.That(pty.IsChatActive).IsTrue();
+            await WaitUntilAsync(() => pty.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => pty.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
+            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
+
+            await pty.ShowTerminalCommand.Execute();
+            await Assert.That(pty.IsTerminalActive).IsTrue();
+            await Assert.That(pty.ShowsTerminalPane).IsTrue();
+            await Assert.That(pty.ShowsChatPane).IsFalse();
+            await pty.TeardownAsync();
+            await Assert.That(h.Lane.ResizeReleases).Contains("a1");
+
+            var frame = h.Build(Harness.Row(id: "a2", sessionId: "s2", vendor: "gemini"));
+            await Assert.That(frame.ShowsTerminalTab).IsFalse();
+            await Assert.That(frame.Terminal).IsNull();
+            await frame.TeardownAsync();
         });
     }
 }

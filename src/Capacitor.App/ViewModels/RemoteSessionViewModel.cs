@@ -41,6 +41,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public ReactiveCommand<Unit, Unit> OpenInWebCommand { get; }
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
+    public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
+
+    /// Null for a harness with no PTY; the server registry carries no terminal flag, so the
+    /// vendor's family decides, exactly as it does for a local dto without one.
+    public RemoteTerminalViewModel? Terminal { get; }
+    public bool ShowsTerminalTab => Terminal is not null;
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
@@ -63,6 +69,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
     public bool IsChatActive => ActiveTab == RemoteTab.Chat;
+    public bool IsTerminalActive => ActiveTab == RemoteTab.Terminal;
 
     // Stop's canExecute reads the ended flag here, not through this.WhenAnyValue: that call routes
     // through ReactiveUI's ObservableForProperty/RxAppBuilder global init, which only some other
@@ -111,11 +118,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// its transcript, an agent that moved to this machine shows the note instead.
     public bool ShowsPanes => Access == RemoteSessionAccess.Ready && !OriginChangedToLocal;
     public bool ShowsChatPane => ShowsPanes && IsChatActive;
+    public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
 
     void RaiseTabProjections() {
         this.RaisePropertyChanged(nameof(IsChatActive));
+        this.RaisePropertyChanged(nameof(IsTerminalActive));
         this.RaisePropertyChanged(nameof(ShowsPanes));
         this.RaisePropertyChanged(nameof(ShowsChatPane));
+        this.RaisePropertyChanged(nameof(ShowsTerminalPane));
     }
 
     public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
@@ -128,7 +138,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
-            AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time) {
+            AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time,
+            Func<ITerminalSurface>? surfaceFactory = null) {
         _row = row;
         _access = access;
         AgentId = row.Id;
@@ -140,6 +151,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input,
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
             opener, time, permissions, missingNote: MissingNote, sessionId: _sessionIds);
+        Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
+            ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, surfaceFactory)
+            : null;
         Apply(row);
 
         directory.Rows.Connect()
@@ -187,9 +201,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = RemoteTab.Chat; });
+        ShowTerminalCommand = ReactiveCommand.Create(() => { if (ShowsTerminalTab) ActiveTab = RemoteTab.Terminal; });
         _disposables.Add(OpenInWebCommand);
         _disposables.Add(StopCommand);
         _disposables.Add(ShowChatCommand);
+        _disposables.Add(ShowTerminalCommand);
         _disposables.Add(_lease);
     }
 
@@ -255,5 +271,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public async Task TeardownAsync() {
         _disposables.Dispose();
         await Chat.TeardownAsync();
+        if (Terminal is { } terminal) await terminal.TeardownAsync();
     }
 }

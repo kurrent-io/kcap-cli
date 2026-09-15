@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
@@ -36,11 +37,12 @@ public class RemoteSessionViewSmokeTests {
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
             var row = AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac",
-                Vendor = "gemini", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
+                Vendor = "claude", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
             _directory.Rows.AddOrUpdate(row);
             Vm = new RemoteSessionViewModel(row, _directory, _access, Permissions, NewActions(), Lane,
-                (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time);
+                (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time,
+                () => new FakeTerminalSurface());
             View = new RemoteSessionView { DataContext = Vm };
             Window = new Window { Content = View, Width = 900, Height = 700 };
             Window.Show();
@@ -114,6 +116,30 @@ public class RemoteSessionViewSmokeTests {
             await Assert.That(banner.IsVisible).IsTrue();
             await Assert.That(host.View.FindControl<TextBlock>("AccessNoteText")!.Text)
                 .IsEqualTo("You no longer have access to this session");
+
+            await host.Vm.TeardownAsync();
+            return true;
+        });
+    }
+
+    /// The tab strip swaps the panes; the terminal control is in the tree only for a PTY harness.
+    [Test]
+    public async Task The_terminal_tab_swaps_the_pane_and_offers_the_special_keys() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var host = new Host();
+            await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+            var terminalTab = host.View.FindControl<Button>("TerminalTabButton")!;
+            var terminalHost = host.View.FindControl<Control>("TerminalPane")!;
+            var chat = host.View.FindControl<ChatTabView>("ChatHost")!;
+            await Assert.That(terminalTab.IsVisible).IsTrue();
+            await Assert.That(terminalHost.IsVisible).IsFalse();
+
+            await host.Vm.ShowTerminalCommand.Execute();
+            await host.SettleUntilAsync(() => terminalHost.IsVisible, "the terminal pane");
+            await Assert.That(chat.IsVisible).IsFalse();
+            var keys = host.View.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("specialKey")).Select(b => b.Content as string).ToList();
+            await Assert.That(keys).Contains("Esc");
+            await Assert.That(keys).Contains("Ctrl+C");
 
             await host.Vm.TeardownAsync();
             return true;
