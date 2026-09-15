@@ -495,16 +495,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
-        WatchOrigin(next);
         if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
+        // Last, so a watch that fires synchronously on its first element cannot have the swap it
+        // caused overwritten by the arming that is still returning.
+        WatchOrigin(next);
     }
 
-    /// An open workspace follows its row across lanes: a remote host whose agent the local daemon
-    /// proved it hosts becomes the local workspace, and a local workspace whose row the daemon
-    /// dropped while the server still shows the agent live becomes the remote host. The tab in
-    /// use carries over. Nothing here ends a session — the row that wins says whether it did.
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
+    /// Nothing here ends a session — the row that wins says whether it did.
     void WatchOrigin(ISessionWorkspace? workspace) {
         _rebind.Disposable = workspace switch {
             RemoteSessionViewModel remote => remote.OriginChangedChanges
@@ -514,9 +514,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
             WorkspaceViewModel local when _directory is { } directory => directory.Rows.Connect()
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Select(changes => changes.FirstOrDefault(
-                    c => c.Key == $"local:{local.AgentId}" && c.Reason == ChangeReason.Remove))
-                .Where(dropped => dropped.Reason == ChangeReason.Remove && MovedToServer(directory, dropped.Current))
+                .SelectMany(changes => changes
+                    .Where(c => c.Key == $"local:{local.AgentId}" && c.Reason == ChangeReason.Remove)
+                    .Select(c => c.Current))
+                .Where(dropped => MovedToServer(directory, dropped))
                 .Take(1)
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
             _ => Disposable.Empty,

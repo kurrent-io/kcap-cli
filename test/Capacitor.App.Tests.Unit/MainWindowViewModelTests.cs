@@ -769,6 +769,43 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// The carried-over tab is only ever one this agent has: the remote row guesses the terminal
+    /// from the vendor family, while the local dto carries the daemon's own answer — and a blank
+    /// pane is what that disagreement would otherwise leave in front.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_rebound_workspace_keeps_the_terminal_tab_only_while_its_agent_has_one(bool hasTerminal) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+
+            vm.OpenSession("r1");
+            await ((RemoteSessionViewModel)vm.CurrentWorkspace!).ShowTerminalCommand.Execute().ToTask();
+
+            host.Directory.ProvenTwins.Add("r1");
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("r1", "claude", hasTerminal, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            host.Directory.Rows.Remove("remote:r1");
+
+            var local = (WorkspaceViewModel)vm.CurrentWorkspace!;
+            await Assert.That(local.IsTerminalActive).IsTrue(); // no dto yet: nothing has said otherwise
+
+            service.Agents.AddOrUpdate(WorkspaceFixtures.Agent("r1", "claude", hasTerminal, "/repos/kcap-cli", sessionId: "s1"));
+
+            await Assert.That(local.IsTerminalActive).IsEqualTo(hasTerminal);
+            await Assert.That(local.IsChatActive).IsEqualTo(!hasTerminal);
+        });
+    }
+
     /// The daemon dropping a row is not the end of the session while the server still shows the
     /// same agent live under the user's other daemon: the workspace follows it there.
     [Test]
@@ -881,6 +918,36 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsNull();
             await Assert.That(localBuilt).IsEqualTo(0);
             await Assert.That(remoteBuilt).IsEqualTo(0);
+        });
+    }
+
+    /// The latch means quiesce is already running: a lane change landing after it must open no
+    /// workspace at all, the same refusal a click gets.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_row_changing_lanes_after_the_shutdown_latch_opens_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            vm.OpenSession("a1");
+            vm.LatchShutdown();
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }));
+            host.Directory.Rows.Remove("local:a1");
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
         });
     }
 }
