@@ -35,7 +35,7 @@ public class AttachmentIntakeTests {
             FakeStorageFile.Of("half.bin", new byte[100], throwAfterBytes: 50),
             FakeStorageFile.Of("e.csv", new byte[1]),
         };
-        var result = await AttachmentIntake.ReadFilesAsync(items, CancellationToken.None);
+        var result = await AttachmentIntake.ReadFilesAsync(items, InputWire.MaxAttachmentsPerPrompt, CancellationToken.None);
         await Assert.That(result.Accepted.Select(f => f.FileName)).IsEquivalentTo(["a.png", "b.txt", "c.md", "d.json", "e.csv"]);
         await Assert.That(result.Refused).IsEquivalentTo([
             new IntakeRefusal("Docs", "is a folder"), new IntakeRefusal("big.bin", AttachmentTray.SizeReason),
@@ -46,10 +46,23 @@ public class AttachmentIntakeTests {
         await Assert.That(aPngStream.Disposed).IsTrue();
     }
 
+    /// The third file's fake throws if opened, so a refusal by cap rather than "could not be read" is
+    /// the proof that nothing past the free slots is read.
+    [Test]
+    public async Task Read_files_opens_nothing_past_the_free_slots_and_names_the_rest() {
+        var items = new IStorageItem[] {
+            FakeStorageFile.Of("a.png", new byte[1]), FakeStorageFile.Of("b.png", new byte[1]),
+            FakeStorageFile.Of("c.png", reportedSize: 1), FakeStorageFolder.Of("Docs"),
+        };
+        var result = await AttachmentIntake.ReadFilesAsync(items, 2, CancellationToken.None);
+        await Assert.That(result.Accepted.Select(f => f.FileName)).IsEquivalentTo(["a.png", "b.png"]);
+        await Assert.That(result.Refused).IsEquivalentTo([new IntakeRefusal("c.png", AttachmentTray.CapReason), new IntakeRefusal("Docs", "is a folder")]);
+    }
+
     [Test]
     public async Task Read_files_propagates_the_callers_cancellation() {
         using var cts = new CancellationTokenSource(); cts.Cancel();
-        await Assert.ThrowsAsync<OperationCanceledException>(() => AttachmentIntake.ReadFilesAsync([FakeStorageFile.Of("a.png", new byte[1])], cts.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => AttachmentIntake.ReadFilesAsync([FakeStorageFile.Of("a.png", new byte[1])], InputWire.MaxAttachmentsPerPrompt, cts.Token));
     }
 
     [Test]

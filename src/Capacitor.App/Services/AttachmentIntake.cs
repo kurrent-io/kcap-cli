@@ -28,12 +28,15 @@ public static class AttachmentIntake {
     public static string ContentTypeFor(string fileName) =>
         ContentTypes.TryGetValue(Path.GetExtension(fileName), out var type) ? type : "application/octet-stream";
 
-    public static async Task<IntakeResult> ReadFilesAsync(IEnumerable<IStorageItem> items, CancellationToken ct) {
+    /// <paramref name="capacity"/> is the prompt's free slots: nothing past it is opened, since bytes
+    /// the tray would refuse anyway are bytes held for nothing.
+    public static async Task<IntakeResult> ReadFilesAsync(IEnumerable<IStorageItem> items, int capacity, CancellationToken ct) {
         var accepted = new List<StagedAttachment>();
         var refused = new List<IntakeRefusal>();
         foreach (var item in items) {
             ct.ThrowIfCancellationRequested();
             if (item is not IStorageFile file) { refused.Add(new(item.Name, "is a folder")); continue; }
+            if (accepted.Count >= capacity) { refused.Add(new(file.Name, AttachmentTray.CapReason)); continue; }
             try {
                 var props = await file.GetBasicPropertiesAsync().ConfigureAwait(false);
                 if (props.Size is { } size && size > (ulong)InputWire.MaxAttachmentBytes) { refused.Add(new(file.Name, AttachmentTray.SizeReason)); continue; }

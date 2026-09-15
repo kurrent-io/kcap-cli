@@ -189,6 +189,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ObservableAsPropertyHelper<string?> _attachHint;
     /// Why CanAttach is false, or null when it isn't.
     public string? AttachHint => _attachHint.Value;
+    public int FreeSlots => Tray.FreeSlots;
 
     /// The refusal line from the last intake. Held apart from StartError so the next edit or
     /// intake can retract exactly it, and nothing else that has since been reported.

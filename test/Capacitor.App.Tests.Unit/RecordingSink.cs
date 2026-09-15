@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -11,5 +12,7 @@ sealed class RecordingSink : IAttachmentSink {
 
     public bool CanAttach => CanAttachValue;
     public string? AttachHint => AttachHintValue;
+    public int FreeSlotsValue { get; set; } = InputWire.MaxAttachmentsPerPrompt;
+    public int FreeSlots => FreeSlotsValue;
     public void Accept(IntakeResult result) => Accepted.Add(result);
 }

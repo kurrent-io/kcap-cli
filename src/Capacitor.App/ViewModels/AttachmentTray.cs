@@ -21,6 +21,7 @@ public sealed class AttachmentTray : ReactiveObject {
 
     public ReadOnlyObservableCollection<StagedAttachment> Items { get; }
     public int Count => _items.Count;
+    public int FreeSlots => Math.Max(0, InputWire.MaxAttachmentsPerPrompt - _items.Count);
     public bool HasAttachments => _items.Count > 0;
     public long TotalBytes => _items.Sum(f => (long)f.Bytes.Length);
     public int Generation => _generation;

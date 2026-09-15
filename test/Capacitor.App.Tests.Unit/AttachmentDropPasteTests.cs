@@ -261,6 +261,45 @@ public class AttachmentDropPasteTests {
     /// tooltip already carries the reason, and the drag never offered to copy.
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_drop_whose_provider_faults_is_the_stated_refusal_not_an_exception() {
+        await RunOnUiAsync(async () => {
+            using var harness = new Harness();
+            harness.Drop(new FaultingTransfer());
+            await harness.SettleAsync();
+            await Assert.That(harness.Sink.Accepted.Single().Refused)
+                .IsEquivalentTo([new IntakeRefusal("dropped files", "the dropped files could not be read")]);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Files_on_the_clipboard_win_without_the_text_flavour_being_read() {
+        await RunOnUiAsync(async () => {
+            using var harness = new Harness();
+            var both = new FakeAsyncDataTransfer(text: "/tmp/a.png", files: [FakeStorageFile.Of("a.png", new byte[] { 1 })], throwOnText: true);
+            harness.ClipboardHolds(both);
+            harness.RaisePaste();
+            await harness.SettleAsync();
+            await Assert.That(harness.Sink.Accepted.Single().Accepted.Select(f => f.FileName)).IsEquivalentTo(["a.png"]);
+            await Assert.That(harness.Box.Text ?? "").IsEmpty();
+            await Assert.That(both.Disposed).IsEqualTo(1);
+        });
+    }
+
+    /// A drag source that is gone by the time its payload is read.
+    sealed class FaultingTransfer : IDataTransfer {
+        public IReadOnlyList<DataFormat> Formats => [DataFormat.File];
+        public IReadOnlyList<IDataTransferItem> Items => [new Item()];
+        public void Dispose() { }
+
+        sealed class Item : IDataTransferItem {
+            public IReadOnlyList<DataFormat> Formats => [DataFormat.File];
+            public object? TryGetRaw(DataFormat format) => throw new InvalidOperationException("the drag source is gone");
+        }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_drop_stages_files_and_drag_over_copies_only_for_files_the_sink_can_take() {
         await RunOnUiAsync(async () => {
             using var harness = new Harness();

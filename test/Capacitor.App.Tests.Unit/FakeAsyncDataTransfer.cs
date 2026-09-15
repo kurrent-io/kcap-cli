@@ -6,15 +6,15 @@ namespace Capacitor.App.Tests.Unit;
 
 /// A clipboard payload the test writes by hand: one item per value, so Avalonia's own
 /// TryGet*Async extensions do the reading exactly as they would over a platform transfer.
-/// `gate` holds every read until the test releases it; `throwOnRead` fails them.
+/// `gate` holds every read until the test releases it; `throwOnRead` fails them, `throwOnText` only the text one.
 sealed class FakeAsyncDataTransfer : IAsyncDataTransfer {
     readonly List<DataFormat> _formats = [];
     readonly List<IAsyncDataTransferItem> _items = [];
 
     public FakeAsyncDataTransfer(
             string? text = null, Bitmap? bitmap = null, IReadOnlyList<IStorageItem>? files = null,
-            bool throwOnRead = false, Task? gate = null) {
-        if (text is not null) Add(DataFormat.Text, text, throwOnRead, gate);
+            bool throwOnRead = false, Task? gate = null, bool throwOnText = false) {
+        if (text is not null) Add(DataFormat.Text, text, throwOnRead || throwOnText, gate);
         if (bitmap is not null) Add(DataFormat.Bitmap, bitmap, throwOnRead, gate);
         foreach (var file in files ?? []) Add(DataFormat.File, file, throwOnRead, gate);
     }

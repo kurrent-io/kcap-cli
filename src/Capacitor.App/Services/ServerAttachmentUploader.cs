@@ -47,11 +47,11 @@ public sealed class ServerAttachmentUploader(ICapacitorHttpClient? http, Profile
     internal static UploadOutcome ParseIds(string body, int expected) {
         try {
             using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() != expected) return UploadOutcome.Rejected(UnexpectedResponse);
+            if (!doc.RootElement.IsArray || doc.RootElement.GetArrayLength() != expected) return UploadOutcome.Rejected(UnexpectedResponse);
             var ids = new List<string>(expected);
             foreach (var element in doc.RootElement.EnumerateArray()) {
-                if (!element.TryGetProperty("id", out var idProp) || idProp.ValueKind != JsonValueKind.String) return UploadOutcome.Rejected(UnexpectedResponse);
-                ids.Add(idProp.GetString()!);
+                if (element.Str("id") is not { } id) return UploadOutcome.Rejected(UnexpectedResponse);
+                ids.Add(id);
             }
             if (AttachmentIds.Validate(ids) is not null || (ids.Count == 0 && expected > 0)) return UploadOutcome.Rejected(UnexpectedResponse);
             return new UploadOutcome(UploadKind.Uploaded, ids, null);

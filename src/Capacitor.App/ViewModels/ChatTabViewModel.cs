@@ -574,6 +574,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant;
     string? IAttachmentSink.AttachHint => _input.AttachHint;
+    int IAttachmentSink.FreeSlots => Tray.FreeSlots;
 
     void IAttachmentSink.Accept(IntakeResult result) {
         var refused = Tray.AddAll(result.Accepted).Concat(result.Refused).ToList();

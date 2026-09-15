@@ -6,5 +6,7 @@ public interface IAttachmentSink {
     /// False carries its reason in <see cref="AttachHint"/>.
     bool CanAttach { get; }
     string? AttachHint { get; }
+    /// How many more files the prompt can take; intake opens nothing past it.
+    int FreeSlots { get; }
     void Accept(IntakeResult result);
 }

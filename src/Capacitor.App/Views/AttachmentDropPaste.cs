@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -5,6 +6,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Views;
 
@@ -68,7 +70,9 @@ public sealed class AttachmentDropPaste : IDisposable {
             var transfer = await _clipboard();
             if (transfer is null) return null;
             using (transfer) {
-                var text = transfer.Contains(DataFormat.Text) ? await transfer.TryGetTextAsync() : null;
+                // Files win, so their presence settles the kind before any other flavour is touched: a
+                // copied file often carries a text flavour too, and one that faults must not cost the files.
+                var text = !transfer.Contains(DataFormat.File) && transfer.Contains(DataFormat.Text) ? await transfer.TryGetTextAsync() : null;
                 var sink = _sink();
                 switch (AttachmentIntake.Classify(transfer.Formats, !string.IsNullOrWhiteSpace(text))) {
                     case IntakeKind.Text:
@@ -76,7 +80,7 @@ public sealed class AttachmentDropPaste : IDisposable {
                         return null;
                     case IntakeKind.Files:
                         if (sink is { CanAttach: false }) return Refusal(sink);
-                        return await AttachmentIntake.ReadFilesAsync(await transfer.TryGetFilesAsync() ?? [], ct);
+                        return await AttachmentIntake.ReadFilesAsync(await transfer.TryGetFilesAsync() ?? [], Capacity(sink), ct);
                     case IntakeKind.Bitmap: {
                         if (sink is { CanAttach: false }) return Refusal(sink);
                         using var bitmap = await transfer.TryGetBitmapAsync();
@@ -112,10 +116,17 @@ public sealed class AttachmentDropPaste : IDisposable {
 
     void OnDrop(object? sender, DragEventArgs e) {
         _card.Classes.Set("dragOver", false);
-        var files = e.DataTransfer.TryGetFiles()?.ToList() ?? [];
         e.Handled = true;
-        StartIntake(async ct => _sink() is { CanAttach: false } ? null : await AttachmentIntake.ReadFilesAsync(files, ct),
-            new IntakeRefusal("dropped files", "the dropped files could not be read"));
+        // Enumerated now, while the platform's payload is still live, but a provider that faults
+        // becomes the intake's refusal rather than an exception loose in the event handler.
+        List<IStorageItem>? files = null;
+        Exception? failure = null;
+        try { files = e.DataTransfer.TryGetFiles()?.ToList() ?? []; } catch (Exception ex) { failure = ex; }
+        StartIntake(async ct => {
+            if (failure is not null) ExceptionDispatchInfo.Throw(failure);
+            var sink = _sink();
+            return sink is { CanAttach: false } ? null : await AttachmentIntake.ReadFilesAsync(files!, Capacity(sink), ct);
+        }, new IntakeRefusal("dropped files", "the dropped files could not be read"));
     }
 
     void OnPick(object? sender, RoutedEventArgs e) => StartIntake(async ct => {
@@ -129,8 +140,10 @@ public sealed class AttachmentDropPaste : IDisposable {
             _ = picking.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
             throw;
         }
-        return await AttachmentIntake.ReadFilesAsync(files, ct);
+        return await AttachmentIntake.ReadFilesAsync(files, Capacity(sink), ct);
     }, new IntakeRefusal("file picker", "the file picker could not be opened"));
+
+    static int Capacity(IAttachmentSink? sink) => sink?.FreeSlots ?? InputWire.MaxAttachmentsPerPrompt;
 
     static IntakeResult Refusal(IAttachmentSink sink) =>
         new([], [new("attachments", sink.AttachHint ?? "attachments are not available")]);

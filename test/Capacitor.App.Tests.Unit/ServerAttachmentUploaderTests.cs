@@ -58,6 +58,8 @@ public class ServerAttachmentUploaderTests {
     [Arguments("[{\"id\":\"nope\"},{\"id\":\"" + IdB + "\"}]")]
     [Arguments("[{\"id\":\"" + IdA + "\"},{\"id\":\"" + IdA + "\"}]")]
     [Arguments("not json")]
+    [Arguments("[null,null]")]
+    [Arguments("[1,2]")]
     public async Task A_200_with_the_wrong_shape_is_rejected_with_the_stated_reason(string body) {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/attachments/upload").UsingPost())
