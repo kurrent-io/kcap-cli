@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Collections.Specialized;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -13,6 +15,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -524,5 +527,167 @@ public class HomeViewSmokeTests {
 
         await Assert.That(thickness).IsEqualTo(new Avalonia.Thickness(0));
         await Assert.That(transparent).IsTrue();
+    }
+
+    /// A launcher whose attachment gate is open: a connected lane for the credential the upload
+    /// needs, and a local daemon advertising the capability the files ride on.
+    static (HomeViewModel Vm, TempDir Tmp) BuildAttachable(IAttachmentUploader? uploader = null) {
+        var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", "input/2"]));
+        var vm = new HomeViewModel(
+            service, new AppStateStore(path), new RecordingLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()),
+            laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
+            uploader: uploader);
+        return (vm, tmp);
+    }
+
+    static List<StagedAttachmentViewModel> Chips(Window window) => window.GetVisualDescendants()
+        .OfType<TextBlock>().Where(t => t.Name == "ChipName").Select(t => (StagedAttachmentViewModel)t.DataContext!).ToList();
+
+    static void Settle(Window window) {
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// Real input, not a raised ClickEvent: a Button's Command runs off its own click handling,
+    /// which a synthesized routed event never reaches. Aim at the center — a corner miss is easy.
+    static void Click(Window window, Control target) {
+        Settle(window);
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        var origin = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)
+            ?? throw new InvalidOperationException("Click target is not under the window.");
+        window.MouseDown(origin, MouseButton.Left);
+        window.MouseUp(origin, MouseButton.Left);
+        Settle(window);
+    }
+
+    /// The chip strip's whole wiring on the goal card: collapsed with an empty tray, one chip per
+    /// staged file carrying its name and size, and the chip's own button takes that file back out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Staged_chips_render_on_the_goal_card_and_a_chip_removes_its_own_file() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, tmp) = BuildAttachable();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+
+            var strip = Find<AttachmentChipStrip>(window, "ChipStrip")!;
+            await Assert.That(strip.IsVisible).IsFalse();
+
+            vm.Tray.AddAll([
+                new StagedAttachment("a.png", "image/png", new byte[] { 1, 2, 3 }),
+                new StagedAttachment("notes.txt", "text/plain", new byte[2048])]);
+            Settle(window);
+
+            await Assert.That(strip.IsVisible).IsTrue();
+            await Assert.That(Chips(window).Select(c => c.FileName)).IsEquivalentTo(["a.png", "notes.txt"], CollectionOrdering.Matching);
+            await Assert.That(Chips(window).Select(c => c.SizeLabel)).IsEquivalentTo(["3 B", "2 KB"], CollectionOrdering.Matching);
+
+            var remove = strip.GetVisualDescendants().OfType<Button>().First(b => b.Name == "ChipRemove");
+            Click(window, remove);
+
+            await Assert.That(vm.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["notes.txt"]);
+            await Assert.That(Chips(window).Select(c => c.FileName)).IsEquivalentTo(["notes.txt"]);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// The view's half of the intake: a file dropped anywhere on the goal card reaches the
+    /// launcher's tray.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_drop_on_the_goal_card_stages_the_file() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, tmp) = BuildAttachable();
+            using var _tmp = tmp;
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+            await Assert.That(vm.CanAttach).IsTrue();
+
+            var card = Find<Border>(window, "GoalCard")!;
+            var transfer = new DataTransfer();
+            var item = new DataTransferItem();
+            item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
+            transfer.Add(item);
+            card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            await (view.PendingIntakeForTesting ?? Task.CompletedTask);
+            Settle(window);
+
+            await Assert.That(vm.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// A shut gate leaves the "+" reachable but disabled, and the tooltip that says why has to
+    /// survive the disabled state — Avalonia suppresses tips on disabled controls otherwise.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task AttachButton_is_disabled_with_the_hint_when_attaching_is_not_available() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (_, vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+
+            var attach = Find<Button>(window, "AttachButton")!;
+            await Assert.That(attach.IsEnabled).IsFalse();
+            await Assert.That(ToolTip.GetTip(attach) as string).IsEqualTo(HomeViewModel.SignInToAttach);
+            await Assert.That(ToolTip.GetShowOnDisabled(attach)).IsTrue();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// Start is unusable while the files it would carry are still going up, so its tip says so
+    /// rather than leaving the repository-gate wording standing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task StartButton_tooltip_reports_an_upload_in_flight() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var held = new TaskCompletionSource<UploadOutcome>();
+            var (vm, tmp) = BuildAttachable(new ScriptedUploader { Pending = held });
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Settle(window);
+
+            var startButton = Find<Button>(window, "StartButton")!;
+            await vm.SelectRepositoryAsync("/repos/kcap-cli");
+            vm.Tray.AddAll([new StagedAttachment("a.png", "image/png", new byte[] { 1, 2, 3 })]);
+            Settle(window);
+            await Assert.That(ToolTip.GetTip(startButton) as string).IsEqualTo("Start");
+
+            var launching = vm.StartCommand.Execute().ToTask();
+            Settle(window);
+            await Assert.That(ToolTip.GetTip(startButton) as string).IsEqualTo("Uploading…");
+
+            held.SetResult(new UploadOutcome(UploadKind.Uploaded, ["u1"], null));
+            await launching;
+            Settle(window);
+            await Assert.That(ToolTip.GetTip(startButton) as string).IsEqualTo("Start");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
     }
 }
