@@ -512,8 +512,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Take(1)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
+            // Not a one-shot: a swap the host cannot complete leaves the watch armed for the next
+            // proof, and one that completes retires it through the swap's own re-arming.
             WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
-                .Take(1)
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
             _ => Disposable.Empty,
         };
@@ -534,12 +535,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .SelectMany(changes => changes)
             .Where(change => {
-                if (change.Key == localKey) {
-                    droppedSession = change.Reason == ChangeReason.Remove ? change.Current.SessionId : null;
-                    return directory.Rows.Lookup(remoteKey) is { HasValue: true, Value: var twin } && MovedToServer(twin, droppedSession);
-                }
-                return change.Key == remoteKey && change.Reason is ChangeReason.Add or ChangeReason.Update
-                    && MovedToServer(change.Current, droppedSession);
+                if (change.Key == localKey) droppedSession = change.Reason == ChangeReason.Remove ? change.Current.SessionId : null;
+                else if (change.Key != remoteKey) return false;
+                // Judged on the directory as it stands, never on the change: a queued revision can
+                // describe a twin the directory has since dropped, with the local row back.
+                return droppedSession is { Length: > 0 }
+                    && !directory.Rows.Lookup(localKey).HasValue
+                    && directory.Rows.Lookup(remoteKey) is { HasValue: true, Value: var twin }
+                    && MovedToServer(twin, droppedSession);
             })
             .Select(_ => true);
     }

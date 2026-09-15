@@ -1017,4 +1017,43 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
         });
     }
+
+    /// A proof the host cannot act on — the twin is gone again by the time its revision is
+    /// handled — must not spend the watch: the next proof still rebinds.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_rebind_the_remote_host_cannot_be_built_for_keeps_watching() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var builds = 0;
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: id => host.Directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                    : host.Directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote : null,
+                remoteWorkspaceFactory: id => ++builds == 1 ? null : host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+
+            vm.OpenSession("a1");
+            var local = vm.CurrentWorkspace;
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }));
+            host.Directory.Rows.Remove("local:a1");
+            await Assert.That(builds).IsEqualTo(1);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", PrTitle = "renamed", RegisteredAt = DateTime.UtcNow,
+            }));
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+        });
+    }
 }
