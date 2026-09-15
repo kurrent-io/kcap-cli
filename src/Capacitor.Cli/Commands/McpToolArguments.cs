@@ -50,7 +50,7 @@ static class McpToolArguments {
 
         if (node is JsonValue v) {
             if (v.TryGetValue<JsonElement>(out var el)) {
-                if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out value)) return true;
+                if (el.IsNumber && el.TryGetInt32(out value)) return true;
 
                 throw new ArgumentException($"'{key}' must be an integer within int range.");
             }
