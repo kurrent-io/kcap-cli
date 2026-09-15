@@ -126,6 +126,37 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(failed.Failure).Contains("not authorized");
     }
 
+    /// An unauthorized seed is a refusal like any other: without it the pane shows an empty
+    /// transcript and nothing says the sign-in lapsed.
+    [Test]
+    public async Task An_unauthorized_seed_reads_as_failed_and_tails_nothing() {
+        using var h = new Harness { NextDetail = new(null, Unauthorized: true) };
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Feed.PendingRunForTesting is { IsCompleted: true }, what: "the run");
+
+        var read = h.Feed.ReadAppended();
+        await Assert.That(read.Status).IsEqualTo(FeedStatus.Failed);
+        await Assert.That(read.Failure).Contains("not signed in");
+        await Assert.That(h.Lane.Tails).IsEmpty();
+    }
+
+    /// A hub that answers the subscribe with anything else — a method it does not have, say — is
+    /// refusing too, and retrying it forever only hides that.
+    [Test]
+    public async Task A_stream_the_hub_refuses_for_any_other_reason_is_not_retried_either() {
+        using var h = new Harness();
+        h.Lane.TailHandler = (_, _) => new HubException("Method does not exist");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Feed.PendingRunForTesting is { IsCompleted: true }, what: "the run");
+        h.Feed.ReadAppended(); // drains the seed the run committed before the tail was refused
+
+        var read = h.Feed.ReadAppended();
+        await Assert.That(read.Status).IsEqualTo(FeedStatus.Failed);
+        await Assert.That(read.Failure).Contains("Method does not exist");
+        await Assert.That(h.Feed.WaitingToRetryForTesting).IsFalse();
+        await Assert.That(h.Lane.Tails.Count).IsEqualTo(1);
+    }
+
     [Test]
     public async Task A_re_established_access_resumes_the_tail_from_its_position_without_a_second_seed() {
         using var h = new Harness();

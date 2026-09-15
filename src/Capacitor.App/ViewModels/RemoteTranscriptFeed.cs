@@ -123,8 +123,12 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 if (await TailAsync(attempt, ct).ConfigureAwait(false)) failures = 0;
             } catch (OperationCanceledException) {
                 return;
-            } catch (HubException ex) when (ex.Message.Contains(WireTokens.StreamNotAuthorized, StringComparison.Ordinal)) {
-                Enqueue(FeedStatus.Failed, "not authorized to read this session's stream");
+            } catch (HubException ex) {
+                // The hub refused the subscribe, and a refusal it repeats is not worth retrying:
+                // report it and stop, rather than tailing a stream this caller cannot read.
+                Enqueue(FeedStatus.Failed, ex.Message.Contains(WireTokens.StreamNotAuthorized, StringComparison.Ordinal)
+                    ? "not authorized to read this session's stream"
+                    : ex.Message);
                 return;
             } catch (Exception ex) {
                 LogOnce($"remote transcript: {ex.Message}");
@@ -141,14 +145,15 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         }
     }
 
-    /// True once a seed is in place. A hidden session is Missing and stops the run; an
-    /// unauthorized read leaves the pane waiting for the sign-in the host asks for.
+    /// True once a seed is in place. Both refusals stop the run and say so: a hidden session is
+    /// Missing, an unauthorized read Failed — otherwise the pane shows an empty transcript with
+    /// nothing to explain it.
     async Task<bool> EnsureSeededAsync(int attempt, CancellationToken ct) {
         lock (_lock) if (_position is not null) return true;
         var fetch = await _readDetail(_sessionId, ct).ConfigureAwait(false);
         if (!IsCurrent(attempt)) return false;
         if (fetch.NotFound) { Enqueue(FeedStatus.Missing); return false; }
-        if (fetch.Unauthorized) return false;
+        if (fetch.Unauthorized) { Enqueue(FeedStatus.Failed, "not signed in"); return false; }
         if (fetch.Detail is not { } detail) throw new InvalidOperationException("session detail unavailable");
 
         var lines = new List<ProjectedLine>();
