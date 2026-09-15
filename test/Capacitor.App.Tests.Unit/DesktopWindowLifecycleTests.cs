@@ -195,6 +195,20 @@ public class DesktopWindowLifecycleTests {
             await Assert.That(app.FeedbackWindowForTests).IsNull();
         });
 
+    /// The trailer carries the daemon version the status line shows, so a report and the version
+    /// chip in the window it was sent from can never disagree.
+    [Test]
+    public async Task Feedback_trailer_strips_the_daemon_build_metadata() {
+        var service = new FakeDaemonClientService { DaemonName = "daemon-a" };
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", version: "1.0.3+abc123"));
+
+        var emitted = new List<string>();
+        using (Capacitor.App.App.FeedbackTrailerFeed(service, "9.9.9", () => "0.0.1").Subscribe(emitted.Add)) { }
+
+        await Assert.That(emitted[^1]).IsEqualTo("Sent from Kurrent Capacitor Desktop 9.9.9 · daemon daemon-a 1.0.3");
+        await Assert.That(emitted[^1]).DoesNotContain("abc123");
+    }
+
     static IObservable<string> Trailer =>
         Observable.Return("Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3");
 

@@ -609,12 +609,8 @@ public partial class App : Application {
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
 
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
-        // profile name for its store. Deferred so each window reads the CLI version installed when
-        // it opens, not the one known at startup.
-        var appVersion = CapacitorVersion.CurrentDisplay();
-        var feedbackTrailer = Observable.Defer(() => service.Snapshots
-            .Select(s => FeedbackTrailer.Build(appVersion, service.DaemonName, s.Daemon.Version, lifecycle.CliVersion))
-            .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, lifecycle.CliVersion)));
+        // profile name for its store.
+        var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         var feedbackApi = ServerHttp(profiles) is null ? null : _serverHttp?.GetRequiredService<IFeedbackApi>();
         Action<FeedbackCategory>? openFeedback = feedbackApi is null
             ? null
@@ -722,6 +718,16 @@ public partial class App : Application {
         window.Show();
         window.Activate();
     }
+
+    // Deferred, so each window reads the CLI version installed when it opens rather than the one
+    // known at startup — the seed is what a daemon that never reported carries. The daemon version
+    // is the same stripped form the status line shows, so a report and that chip cannot disagree.
+    internal static IObservable<string> FeedbackTrailerFeed(
+            IDaemonClientService service, string appVersion, Func<string?> cliVersion) =>
+        Observable.Defer(() => service.Snapshots
+            .Select(s => FeedbackTrailer.Build(appVersion, service.DaemonName,
+                MainWindowViewModel.StripBuildMetadata(s.Daemon.Version), cliVersion()))
+            .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, cliVersion())));
 
     internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category) {
         if (_shutdownStarted) return;
