@@ -30,7 +30,6 @@ public sealed class ChatTabViewModel : ReactiveObject {
     internal static readonly TimeSpan WithdrawRetryDelay = TimeSpan.FromSeconds(2);
     internal const int MaxWithdrawRetries = 3;
 
-    readonly string _agentId;
     readonly ChatInput _input;
     readonly Func<string, IChatTranscriptFeed>? _openFeed;
     readonly string? _unavailableNote;
@@ -253,8 +252,13 @@ public sealed class ChatTabViewModel : ReactiveObject {
             .Select(info => info!)
             .DistinctUntilChanged();
 
-    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time) =>
-        path => new LocalTranscriptFeed(path, projection, agentId, time, reason => Console.Error.WriteLine($"kcap: chat transcript: {reason}"));
+    /// The dedup is per pane, not per feed: a projection failure that survives a transcript switch
+    /// would otherwise be logged again by every feed the pane opens.
+    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time) {
+        var logged = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        return path => new LocalTranscriptFeed(path, projection, agentId, time,
+            reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); });
+    }
 
     IBrush _statusDot = SessionStatusDots.For("");
     public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
@@ -281,7 +285,6 @@ public sealed class ChatTabViewModel : ReactiveObject {
             ChatInput input, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
             IPermissionService permissions, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null) {
-        _agentId = agentId;
         _input = input;
         _disposables.Add(input);
         _openFeed = openFeed;

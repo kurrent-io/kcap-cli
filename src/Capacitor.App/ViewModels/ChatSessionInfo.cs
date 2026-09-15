@@ -15,7 +15,8 @@ public sealed record ChatSessionInfo(
     public static ChatSessionInfo FromLocal(AgentStatusDto dto, bool ended) => new(
         dto.Status, SessionStatusDots.Label(dto), dto.Vendor, dto.Model,
         // Tool paths are relative to the checkout the agent runs in. An older daemon sends only
-        // RepoPath: the repository for a primary, or the borrowed checkout for a reviewer.
+        // RepoPath: the repository for a primary, whose worktree beneath it ToolDetail strips, or
+        // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
         ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath);
 

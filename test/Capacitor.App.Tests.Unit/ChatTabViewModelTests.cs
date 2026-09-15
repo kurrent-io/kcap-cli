@@ -1268,6 +1268,31 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A cache removal is the other way a session ends: the footer has to say so — the daemon's
+    /// vocabulary has no word for an agent it has already dropped — and a send that can never be
+    /// echoed must stop claiming it is still queued.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_removed_agent_reads_as_Completed_and_unconfirms_the_queue() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            try {
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false));
+                h.Chat.ComposerText = "hello";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                await Assert.That(h.Chat.StatusText).IsEqualTo("Running");
+                await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsFalse();
+
+                h.Daemon.Agents.Remove("a1");
+                await Assert.That(h.Chat.StatusText).IsEqualTo("Completed");
+                await Assert.That(h.Chat.QueuedMessages.Single().IsUnconfirmed).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     sealed class CountingProjection(ITranscriptProjection inner) : ITranscriptProjection {
         public List<int> LineNumbers { get; } = [];
         public int ContextsCreated { get; private set; }
