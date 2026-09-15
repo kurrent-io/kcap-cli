@@ -12,12 +12,18 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// assertion passes for the wrong reason. Everything here uses <see cref="EntryNames"/> or
 /// <see cref="IsPresent"/>, which read the parent directory and the entry's own attributes.</para></summary>
 [ParallelLimiter<SubprocessLimit>]
+// Keyed, not bare: nothing here is process-global, but a claim test holds two real snapshots
+// open at once, and four of those running together starve the suite's port and journal tests.
+// The key keeps this class's own tests apart without taking the assembly.
+[NotInParallel(nameof(StandaloneSnapshotTests))]
 public class StandaloneSnapshotTests {
     // ---- fixtures -----------------------------------------------------------------------------------
 
 
-    static WorktreeManager NewManager() =>
-        new(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
+    static WorktreeManager NewManager() => NewManager(NoSnapshotBarrier.Instance);
+
+    static WorktreeManager NewManager(ISnapshotBarrier barrier) =>
+        new(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, barrier);
 
     /// <summary>Entry names directly under a directory, WITHOUT following anything.</summary>
     static string[] EntryNames(string dir) =>
@@ -492,7 +498,7 @@ public class StandaloneSnapshotTests {
     /// destination does, and only then does the second caller attempt acquisition. At that instant the
     /// winner's handle is already closed, so the only thing that can refuse the second caller is the file
     /// being there — which is exactly what <c>FileMode.CreateNew</c> provides.</para></summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task The_claim_files_existence_excludes_a_second_caller() {
         using var root = new TempDir("standalone");
         var source     = root.CreateDir("proj");
@@ -500,13 +506,14 @@ public class StandaloneSnapshotTests {
         source.CreateFile("README.md", "hello");
         var claimed = new TaskCompletionSource();
         var release = new TaskCompletionSource();
+        var barrier = new FakeSnapshotBarrier();
         try {
-            WorktreeManager.SnapshotPostClaimHook = async () => {
+            barrier.At(SnapshotPoint.PostClaim, async () => {
                 claimed.TrySetResult();
                 await release.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            };
+            });
 
-            var manager = NewManager();
+            var manager = NewManager(barrier);
             var winner = Task.Run(() => manager.CreateAsync(source, "contended"));
 
             await claimed.Task.WaitAsync(TimeSpan.FromSeconds(30));
@@ -517,8 +524,8 @@ public class StandaloneSnapshotTests {
             await Assert.That(IsPresent(Path.Combine(worktrees, "contended"))).IsFalse()
                 .Because("fixture control: the destination does not exist, so only the claim can refuse");
 
-            // Cleared so the second caller is not itself parked by the hook.
-            WorktreeManager.SnapshotPostClaimHook = null;
+            // Cleared so the second caller is not itself parked here.
+            barrier.Clear(SnapshotPoint.PostClaim);
 
             var loser = await Assert.That(async () => await manager.CreateAsync(source, "contended"))
                 .Throws<InvalidOperationException>();
@@ -530,13 +537,12 @@ public class StandaloneSnapshotTests {
             await Assert.That(CommittedPaths(built.Path)).Contains("README.md")
                 .Because("the winner's snapshot must be intact");
         } finally {
-            WorktreeManager.SnapshotPostClaimHook = null;
             release.TrySetResult();
         }
     }
 
     /// <summary>Two callers racing from the same starting line still yield exactly one winner.</summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task Concurrent_same_name_creates_yield_one_winner() {
         using var root = new TempDir("standalone");
         var source     = root.CreateDir("proj");
@@ -544,13 +550,14 @@ public class StandaloneSnapshotTests {
         source.CreateFile("README.md", "hello");
         var arrived = 0;
         var bothArrived = new TaskCompletionSource();
+        var barrier = new FakeSnapshotBarrier();
         try {
-            WorktreeManager.SnapshotPreClaimHook = async () => {
+            barrier.At(SnapshotPoint.PreClaim, async () => {
                 if (Interlocked.Increment(ref arrived) == 2) bothArrived.TrySetResult();
                 await bothArrived.Task.WaitAsync(TimeSpan.FromSeconds(30));
-            };
+            });
 
-            var manager = NewManager();
+            var manager = NewManager(barrier);
             var a = Task.Run(() => manager.CreateAsync(source, "raced"));
             var b = Task.Run(() => manager.CreateAsync(source, "raced"));
 
@@ -563,7 +570,6 @@ public class StandaloneSnapshotTests {
             await Assert.That(CommittedPaths(Path.Combine(source, ".capacitor", "worktrees", "raced")))
                 .Contains("README.md").Because("the winner's snapshot must be intact");
         } finally {
-            WorktreeManager.SnapshotPreClaimHook = null;
             bothArrived.TrySetResult();
         }
     }
@@ -576,7 +582,7 @@ public class StandaloneSnapshotTests {
     /// window, and a timing-based one would be flaky and could pass by luck. If the claim were released in
     /// the build method's own <c>finally</c>, a second caller would acquire here — and the first call's
     /// delayed rollback would then delete the second's freshly created tree.</para></summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task Claim_is_held_through_rollback() {
         using var root = new TempDir("standalone");
         var source     = root.CreateDir("proj");
@@ -584,20 +590,21 @@ public class StandaloneSnapshotTests {
         source.CreateFile("README.md", "hello");
         var inRollback = new TaskCompletionSource();
         var release = new TaskCompletionSource();
+        var barrier = new FakeSnapshotBarrier();
         try {
-            WorktreeManager.SnapshotFailurePoint = "CopySnapshotTree";
-            WorktreeManager.SnapshotRollbackHook = async () => {
+            barrier.FailAt(SnapshotPoint.TreeCopied);
+            barrier.At(SnapshotPoint.Rollback, async () => {
                 inRollback.TrySetResult();
                 await release.Task;
-            };
+            });
 
-            var manager = NewManager();
+            var manager = NewManager(barrier);
             var failing = Task.Run(() => manager.CreateAsync(source, "held"));
 
             await inRollback.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
             // The first call is parked inside its rollback, holding the claim.
-            WorktreeManager.SnapshotFailurePoint = null;
+            barrier.Clear(SnapshotPoint.TreeCopied);
             await Assert.That(async () => await manager.CreateAsync(source, "held"))
                 .Throws<InvalidOperationException>()
                 .Because("the claim must still exclude a same-name caller during rollback");
@@ -609,8 +616,6 @@ public class StandaloneSnapshotTests {
             var after = await manager.CreateAsync(source, "held");
             await Assert.That(CommittedPaths(after.Path)).Contains("README.md");
         } finally {
-            WorktreeManager.SnapshotFailurePoint = null;
-            WorktreeManager.SnapshotRollbackHook = null;
             release.TrySetResult();
         }
     }
@@ -711,17 +716,18 @@ public class StandaloneSnapshotTests {
 
     /// <summary>Cleanup also happens on failure, so a crashed launch does not permanently block its name
     /// through a leaked marker.</summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task Bookkeeping_files_are_cleaned_up_on_failure() {
         using var root = new TempDir("standalone");
         var source     = root.CreateDir("proj");
 
         source.CreateFile("README.md", "hello");
 
-        try {
-            WorktreeManager.SnapshotFailurePoint = "CopySnapshotTree";
+        var barrier = new FakeSnapshotBarrier();
+        barrier.FailAt(SnapshotPoint.TreeCopied);
 
-            await Assert.That(async () => await NewManager().CreateAsync(source, "doomed"))
+        {
+            await Assert.That(async () => await NewManager(barrier).CreateAsync(source, "doomed"))
                 .Throws<InvalidOperationException>();
 
             var worktreeRoot = Path.Combine(source, ".capacitor", "worktrees");
@@ -729,9 +735,6 @@ public class StandaloneSnapshotTests {
                 .Because("a failed launch must not leak its marker or claim");
             await Assert.That(IsPresent(Path.Combine(worktreeRoot, "doomed"))).IsFalse()
                 .Because("the claimant's own partial tree is rolled back");
-
-        } finally {
-            WorktreeManager.SnapshotFailurePoint = null;
         }
     }
 

@@ -11,8 +11,8 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 class PermissionRequestCommand(
-        ConfigRoot config, ProfileContext profiles, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+        ConfigRoot config, ProfileContext profiles, HostedAgent hosted,
+        ICapacitorHttpClient http, WatcherManager watchers) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -132,7 +132,7 @@ class PermissionRequestCommand(
                 return;
             }
 
-            await _watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: GetString(node, "cwd"));
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: GetString(node, "cwd"));
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"[kcap] permission-request watcher self-heal failed: {ex.Message}");
         }

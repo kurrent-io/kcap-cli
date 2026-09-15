@@ -626,15 +626,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         await ReBindAcpSessionsAsync();
     }
 
-    /// <summary>Serialises DTO construction AND invocation. Two registrations can otherwise each
-    /// capture their own <c>_config</c> snapshot and land in either order: the heartbeat's
-    /// slot-displaced re-registration can capture the OLD capabilities, the certification self-heal
-    /// can then publish the NEW ones, and if the heartbeat's frame is processed last the server ends
-    /// up advertising the stale set while the daemon's local config says otherwise. That silently
-    /// undoes the self-heal — which this area now depends on to restore a missing advertisement, so
-    /// it is not a harmless duplicate registration.
-    /// <para>Held across the hub invoke, not just the construction: releasing early would let a
-    /// second DTO built from fresher config overtake an in-flight older one.</para></summary>
+    /// <summary>Serialises every send that pairs server state with a local snapshot — registration
+    /// and the repo-path update — across the whole snapshot-and-invoke. The server runs one client's
+    /// invocations in parallel, so without it an older snapshot can land after a newer one while the
+    /// newer bookkeeping is recorded last, leaving the server with state nothing will repair.</summary>
     readonly SemaphoreSlim _registerLock = new(1, 1);
 
     async Task DaemonConnectAsync() {
@@ -648,6 +643,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
+        var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
         var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
@@ -701,6 +697,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ),
                 cancellationToken: _ct
             );
+            _advertisedRepoStore = repoStore;
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -731,6 +728,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// the registration bracket. Null until wired (early startup / tests) — a no-op; failures are contained
     /// by the caller so they never un-register the daemon.</summary>
     internal Func<Task>? OnRegisteredHook { get; set; }
+
+    /// <summary>The <c>repos.json</c> the server's copy of the repo paths was read from; null until a
+    /// send succeeds. <see cref="RepoStoreWatcher"/> re-sends when the file differs from it.</summary>
+    internal RepoStoreFingerprint? AdvertisedRepoStore => _advertisedRepoStore;
+
+    volatile RepoStoreFingerprint? _advertisedRepoStore;
+
+    // Taken before the read it pairs with, so a write landing during the read still reads as a
+    // change afterwards.
+    RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot).Fingerprint();
 
     async Task<string[]> MergeRepoPathsAsync() {
         var persisted = await new RepoPathStore(_config.ConfigRoot).GetSortedPathsAsync();
@@ -835,12 +842,25 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public virtual async Task UpdateRepoPathsAsync() {
         try {
+            await _registerLock.WaitAsync(_ct).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            return;
+        }
+
+        try {
+            var repoStore = FingerprintRepoStore();
             var repoPaths = await MergeRepoPathsAsync();
-            await _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
+            await SendRepoPathsAsync(repoPaths);
+            _advertisedRepoStore = repoStore;
         } catch (Exception ex) {
             LogRepoPathUpdateFailed(ex);
+        } finally {
+            _registerLock.Release();
         }
     }
+
+    internal virtual Task SendRepoPathsAsync(string[] repoPaths)
+        => _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
 
     // Outgoing messages to server
     public virtual Task AgentRegisteredAsync(

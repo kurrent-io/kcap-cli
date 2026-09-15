@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -27,31 +28,30 @@ public class PostWithRetryTests : IDisposable {
 
     [Test]
     public async Task RetriesOnConnectionFailureThenSucceeds() {
-        var tempServer = WireMockServer.Start();
-        var port       = tempServer.Port;
-        var url        = $"http://localhost:{port}/hooks/test";
-        tempServer.Stop();
+        // The retry path fires on a transport fault, so inject one: a first attempt that faults like
+        // a refused connection, then a success. Driving this through a real server on a restarted
+        // port is racy — a neighbour can grab the freed port, or a request can land after the
+        // listener opens but before its mapping is registered, which returns a final 404.
+        var handler = new ScriptedHandler(
+            _ => throw new HttpRequestException("connection refused"),
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("recovered") });
 
-        WireMockServer? restartedServer = null;
+        using var client   = new HttpClient(handler);
+        using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
+        var       response = await client.PostWithRetryAsync(
+            "http://localhost/hooks/test", content, timeout: TimeSpan.FromSeconds(15));
 
-        _ = Task.Run(async () => {
-                await Task.Delay(600);
-                restartedServer = WireMockServer.Start(port);
+        await Assert.That((int)response.StatusCode).IsEqualTo(200);
+        await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("recovered");
+    }
 
-                restartedServer.Given(Request.Create().WithPath("/hooks/test").UsingPost())
-                    .RespondWith(Response.Create().WithStatusCode(200).WithBody("recovered"));
-            }
-        );
+    sealed class ScriptedHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] steps) : HttpMessageHandler {
+        int _attempt;
 
-        try {
-            using var client   = new HttpClient();
-            using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
-            var       response = await client.PostWithRetryAsync(url, content, timeout: TimeSpan.FromSeconds(15));
-
-            await Assert.That((int)response.StatusCode).IsEqualTo(200);
-            await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("recovered");
-        } finally {
-            restartedServer?.Stop();
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            var step = steps[Math.Min(_attempt++, steps.Length - 1)];
+            try                  { return Task.FromResult(step(request)); }
+            catch (Exception ex) { return Task.FromException<HttpResponseMessage>(ex); }
         }
     }
 }
@@ -60,7 +60,7 @@ public class InlineDrainTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     WatcherManager? _watchers;
-    WatcherManager  Watchers => _watchers ??= new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
+    WatcherManager  Watchers => _watchers ??= TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient());
 
     readonly WireMockServer _server = WireMockServer.Start();
 

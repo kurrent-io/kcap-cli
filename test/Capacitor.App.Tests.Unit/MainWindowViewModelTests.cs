@@ -26,6 +26,11 @@ public class MainWindowViewModelTests {
 
     /// The view-state/rail-wiring tests' standard construction: a VM over the fake service, with
     /// an optional workspace factory and rail — mirrors NewActions' shape.
+    sealed class UnusedLaunchClient : ILaunchClient {
+        public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
+            Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
+    }
+
     static MainWindowViewModel NewVm(
             FakeDaemonClientService service, Func<string, WorkspaceViewModel>? workspaceFactory = null,
             SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
@@ -175,6 +180,18 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
+    [Arguments(AttachState.Connected, null, "reconnecting")]
+    [Arguments(AttachState.Connected, null, "connected")]
+    [Arguments(AttachState.Connecting, null, "connected")]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected")]
+    public async Task ConnectionDisplayFor_signed_out_wins_over_attach_and_daemon_connection(
+            AttachState state, string? reason, string daemonConnection) {
+        var status = new AttachStatus(state, reason, null);
+        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection, signInExpired: true))
+            .IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+    }
+
+    [Test]
     [Arguments(null, "")]
     [Arguments("", "")]
     [Arguments("   ", "")]
@@ -198,6 +215,43 @@ public class MainWindowViewModelTests {
         var status = new AttachStatus(state, reason, null);
         var brush = (SolidColorBrush)MainWindowViewModel.StatusDotFor(status, daemonConnection);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
+    }
+
+    [Test]
+    [Arguments(AttachState.Connected, null, "reconnecting")]
+    [Arguments(AttachState.Connecting, null, "connected")]
+    public async Task StatusDotFor_signed_out_uses_the_disrupted_color(
+            AttachState state, string? reason, string daemonConnection) {
+        var status = new AttachStatus(state, reason, null);
+        var brush = (SolidColorBrush)MainWindowViewModel.StatusDotFor(status, daemonConnection, signInExpired: true);
+        await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ConnectionDisplay_signed_out_wins_over_daemon_reconnecting() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var home = new HomeViewModel(
+                service, new AppStateStore(path), new UnusedLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), laneStatus: lane.Status);
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(),
+                home: home, laneStatus: lane.Status);
+            using var activation = vm.Activator.Activate();
+
+            service.SnapshotsSubject.OnNext(Snap(connection: "reconnecting"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Reconnecting…");
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
+            await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+            var brush = (SolidColorBrush)vm.StatusDotBrush;
+            await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+        });
     }
 
     // ---- Start/Reconnect visibility (one primary action: Start when unreachable-down;

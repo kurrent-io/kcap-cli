@@ -18,6 +18,7 @@ public class UpdateNoticeIsHumanFacingTests {
     [Arguments("generate-whats-done")]
     [Arguments("set-title")]
     [Arguments("copilot-finalize")]
+    [Arguments("refresh-token")]
     public async Task FailOpenCommands_AreSuppressed(string command) {
         await Assert.That(UpdateNotice.IsHumanFacing(command, [command])).IsFalse();
     }

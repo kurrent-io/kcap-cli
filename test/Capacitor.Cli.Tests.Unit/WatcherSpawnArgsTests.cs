@@ -1,33 +1,34 @@
 namespace Capacitor.Cli.Tests.Unit;
 
-public class WatcherManagerSpawnArgsTests {
+public class WatcherSpawnArgsTests {
+    /// <summary>Every spawn names its vendor, including the one `kcap watch` would have defaulted
+    /// to: a reader of the command line never has to know what that default is.</summary>
     [Test]
-    public async Task BuildSpawnArgs_default_vendor_omits_flag() {
-        var args = WatcherManager.BuildSpawnArgs(
+    public async Task BuildSpawnArgs_names_the_default_vendor() {
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
             cwd: null, skipTitle: false, parentPid: null, vendor: "claude"
         );
 
         await Assert.That(args).Contains("watch abc \"/tmp/t.jsonl\"");
-        await Assert.That(args).DoesNotContain("--vendor");
+        await Assert.That(args).Contains("--vendor \"claude\"");
     }
 
     [Test]
     public async Task BuildSpawnArgs_codex_vendor_appends_flag() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
             cwd: null, skipTitle: false, parentPid: null, vendor: "codex"
         );
 
-        // Fix #4: vendor must be quoted the same way transcriptPath/cwd are.
         await Assert.That(args).Contains("--vendor \"codex\"");
     }
 
     [Test]
     public async Task BuildSpawnArgs_vendor_with_spaces_is_quoted() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "abc", transcriptPath: "/tmp/t.jsonl",
             agentId: null, sessionIdOverride: null,
             cwd: null, skipTitle: false, parentPid: null, vendor: "my vendor"
@@ -38,7 +39,7 @@ public class WatcherManagerSpawnArgsTests {
 
     [Test]
     public async Task BuildSpawnArgs_with_agent_uses_session_override() {
-        var args = WatcherManager.BuildSpawnArgs(
+        var args = ProcessWatcherSpawner.BuildSpawnArgs(
             key: "sess-agent", transcriptPath: "/tmp/t.jsonl",
             agentId: "agent1", sessionIdOverride: "sess",
             cwd: "/repo", skipTitle: true, parentPid: 4242, vendor: "claude"

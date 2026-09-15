@@ -24,7 +24,7 @@ public class BorrowedReviewContextTests {
         await File.WriteAllBytesAsync(repo.PathTo(".mcp.json"), privateBytes);
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root.Path }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root.Path }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(repo.Path, "review", CancellationToken.None);
 
         try {
@@ -477,7 +477,7 @@ public class BorrowedReviewContextTests {
     }
 
     static WorktreeManager Manager(string root) => new(
-        new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+        new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
     static byte[] RawIndexRecord(string oid, ReadOnlySpan<byte> pathPrefix, byte trailingByte) {
         using var bytes = new MemoryStream();

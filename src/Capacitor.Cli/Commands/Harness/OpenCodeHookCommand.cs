@@ -31,9 +31,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class OpenCodeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -184,7 +183,7 @@ sealed class OpenCodeHookCommand(
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;
 
-        await _watchers.EnsureWatcherRunning(sessionId, file,
+        await watchers.EnsureWatcherRunning(sessionId, file,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: false, vendor: "opencode"
         );

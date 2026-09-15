@@ -30,9 +30,9 @@ static class ClaudeSessionEndHandoff {
 
     /// <summary>
     /// Starts the detached continuation and feeds it <paramref name="body"/>. False when that did
-    /// not fully happen — the caller then runs the event inline, as before.
+    /// not fully happen — the caller then runs the event inline.
     /// </summary>
-    public static bool TrySpawn(string[] args, string body, ConfigRoot config) {
+    public static bool TrySpawn(string[] args, string body, ConfigRoot config, IProcessStarter starter) {
         Process? process = null;
 
         try {
@@ -55,7 +55,7 @@ static class ClaudeSessionEndHandoff {
             // pipes open, or Claude waits on them past the hook's own exit.
             ProcessHelpers.PreventInheritedHandles();
 
-            process = WatcherManager.StartProcess(psi);
+            process = starter.Start(psi);
 
             if (process is null) {
                 Console.Error.WriteLine("[kcap] session-end hand-off: failed to start the detached continuation; running inline");

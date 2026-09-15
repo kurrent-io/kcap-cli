@@ -37,9 +37,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class AntigravityHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -248,7 +247,7 @@ sealed class AntigravityHookCommand(
         // injection and the zero exit — a stall here would discard an already-written fragment. The
         // stale-watcher path can wait up to 5s for a graceful kill.
         try {
-            await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "antigravity"
             ).WaitAsync(budget.Remaining);

@@ -58,8 +58,8 @@ internal enum HookPostOutcome {
 /// the user before the request — and names the fix on stderr, the only channel these vendors have.
 /// A no-op for the <c>None</c> provider (posts normally, unauthenticated) and unchanged when authenticated.
 /// </summary>
-internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+internal sealed class AgentHookPoster(
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers) {
 
     // The one URL this process resolved. A hook posting to one server while its watcher streams to
     // another is not a configuration this can represent.
@@ -95,9 +95,20 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
             Func<Task<AuthAttempt>> clientFactory,
             string                                             endpoint,
             string                                             body,
-            string                                             agentTag
+            string                                             agentTag,
+            TimeSpan?                                          authCap         = null,
+            Action?                                            onAuthAbandoned = null
         ) {
-        var (client, status) = await clientFactory();
+        // Past the cap the payload is dropped the way a lapse drops it: this path has no spool, and
+        // a hook killed by its host while waiting on the refresh lock would lose it just the same.
+        var created = await BoundedAuth.CreateClientWithinAsync(
+            clientFactory, authCap ?? AuthCap, onAuthAbandoned ?? HandOffRefresh);
+
+        if (created is null) {
+            return HookPostOutcome.AuthLapsed;
+        }
+
+        var (client, status) = created.Value;
 
         using (client) {
             // Auth lapsed: the POST would 401. Skip it and report so the caller exits cleanly
@@ -271,7 +282,7 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
                 // parent-exit path) must still trigger the what's-done generator, mirroring
                 // ClaudeHookCommand.ClaudePoster's own session-end replay side effect.
                 await LifecycleSpoolDrain.RunAsync(new CursorMarkers(config), client, Url!, lifecycle, transcript, sessionId, budget, cts.Token,
-                    onWhatsDoneRequested: (sid, vendor) => _watchers.SpawnWhatsDoneGenerator(sid, vendor));
+                    onWhatsDoneRequested: (sid, vendor) => watchers.SpawnWhatsDoneGenerator(sid, vendor));
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
@@ -302,11 +313,30 @@ internal sealed class AgentHookPoster(ConfigRoot config, ProfileContext profiles
     }
 
     /// <summary>Core with an injectable client factory (test seam).</summary>
+    // Every vendor's hook ceiling is 5 s with a 1.5 s safety reserve. A stored token resolves in
+    // milliseconds and an uncontended refresh in well under a second; longer means a peer holds the
+    // refresh lock or WorkOS is faltering, and the event belongs in the spool for the drain to replay.
+    internal static readonly TimeSpan AuthCap = TimeSpan.FromSeconds(3);
+
+    // A hook process ends with this invocation, so a rotation its client creation started must be
+    // finished by a process that will still be alive to persist it.
+    // The real starter, not an injected one: this default runs only in a hook process, and a test
+    // that reaches the abandon path passes its own onAuthAbandoned instead.
+    void HandOffRefresh() => RefreshTokenHandoff.Spawn(config, profiles.Name, SystemProcessStarter.Instance);
+
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,
             string endpoint, string body, string agentTag,
-            HookSpool spool, string sessionId, string route) {
-        var (client, status) = await clientFactory();
+            HookSpool spool, string sessionId, string route,
+            TimeSpan? authCap = null, Action? onAuthAbandoned = null) {
+        var created = await BoundedAuth.CreateClientWithinAsync(
+            clientFactory, authCap ?? AuthCap, onAuthAbandoned ?? HandOffRefresh);
+
+        if (created is null) {
+            return SpoolOrSkip(spool, sessionId, route, body, agentTag);
+        }
+
+        var (client, status) = created.Value;
 
         using (client) {
             // Auth lapsed → the POST would 401. Spool for replay after `kcap login`; caller still spawns.
