@@ -102,6 +102,22 @@ public class PendingLaunchRowsTests {
         await Assert.That(dir.Rows.Lookup("pending:p5").HasValue).IsFalse();
     }
 
+    /// The expiry timer fires on a pool thread, so its recompute can land after Dispose; a recompute
+    /// against the disposed timer and cache must be a no-op rather than an exception.
+    [Test]
+    public async Task A_recompute_after_dispose_is_a_no_op() {
+        var time = new FakeTimeProvider();
+        var (local, dir) = Build(time);
+        dir.AddPlaceholder("p9", "claude", "/r", null, null);
+
+        dir.Dispose();
+
+        dir.AddPlaceholder("p10", "claude", "/r", null, null);
+        local.Pending.AddOrUpdate(Pending("p11"));
+        time.Advance(TimeSpan.FromMinutes(11));
+        await Assert.That(dir.Rows.Lookup("pending:p10").HasValue).IsFalse();
+    }
+
     /// The server accepts a launch as a dashed Guid and the daemon publishes the "N" form; the
     /// stand-ins match on the normalized id, or the placeholder would outlive the real row.
     [Test]

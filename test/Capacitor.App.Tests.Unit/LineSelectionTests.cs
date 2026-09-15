@@ -11,8 +11,8 @@ using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Avalonia's own TextBox and SelectableTextBlock answer a triple click with SelectAll; the app
-/// replaces that with the logical line under the pointer.
+/// A triple click in a TextBox or SelectableTextBlock selects the logical line under the pointer,
+/// not the whole text: Avalonia's own class handler answers the third click with SelectAll.
 public class LineSelectionTests {
     [Test]
     [Arguments("ab\ncd\nef", 3, 3, 5)]

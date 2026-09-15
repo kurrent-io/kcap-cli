@@ -26,7 +26,8 @@ public interface IAgentDirectory {
     /// Whether the local daemon has proven it hosts this agent — the daemon proved to be its
     /// server twin registers it. A shared agent id proves nothing: the dedup fails open.
     bool IsProvenLocalTwin(string agentId);
-    /// A row for a launch the server accepted, standing until any lane reports the id. It is
+    /// A row for a launch the server accepted, standing until the local lane publishes the id;
+    /// a same-id row on the remote lane is a different agent and leaves it in place. It is
     /// dropped by the caller on a launch failure, and expires on its own after ten minutes.
     void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model);
     void RemovePlaceholder(string agentId);
@@ -61,6 +62,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     readonly Dictionary<string, AgentRow> _placeholders = new(StringComparer.Ordinal);
     static readonly TimeSpan PlaceholderTtl = TimeSpan.FromMinutes(10);
     FrozenSet<string> _twinAgents = FrozenSet<string>.Empty;
+    bool _disposed;
 
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
@@ -174,6 +176,9 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     // seed gap after every connect), so an unpaired local row stands as display-only history.
     void Recompute() {
         lock (_lock) {
+            // The expiry timer's callback can land after Dispose ran; the lock serialises the two
+            // and the flag turns the late callback into a no-op instead of an edit of a disposed cache.
+            if (_disposed) return;
             var twin = LocalDaemonTwin.Find(_daemons, _localMachineId, _local.DaemonName, _localServerUrl, _appServerUrl);
             var twinProven = twin is not null;
             bool OnTwin(AgentInstanceDto a) =>
@@ -242,7 +247,11 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     }
 
     public void Dispose() {
-        _placeholderExpiry.Dispose();
+        lock (_lock) {
+            if (_disposed) return;
+            _disposed = true;
+            _placeholderExpiry.Dispose();
+        }
         _subscriptions.Dispose();
         _rows.Dispose();
     }
