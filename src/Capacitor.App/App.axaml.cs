@@ -608,10 +608,10 @@ public partial class App : Application {
         var attachFactory = CoreTerminalAttachClient.Factory(() => _daemonStore.SocketPath(service.DaemonName));
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
 
+        var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
         // profile name for its store.
-        var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
-        var feedbackApi = ServerHttp(profiles) is null ? null : _serverHttp?.GetRequiredService<IFeedbackApi>();
+        var feedbackApi = ServerHttp(profiles) is null ? null : _serverHttp!.GetRequiredService<IFeedbackApi>();
         Action<FeedbackCategory>? openFeedback = feedbackApi is null
             ? null
             : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);

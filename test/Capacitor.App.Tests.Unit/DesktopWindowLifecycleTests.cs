@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
@@ -195,6 +196,25 @@ public class DesktopWindowLifecycleTests {
             await Assert.That(app.FeedbackWindowForTests).IsNull();
         });
 
+    [Test]
+    public Task Feedback_window_refuses_to_close_while_a_send_is_in_flight() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var app = new Capacitor.App.App();
+            var api = new BlockingFeedbackApi();
+            app.OpenFeedback(api, Trailer, null, FeedbackCategory.Bug);
+            var window = app.FeedbackWindowForTests!;
+            var vm = (FeedbackViewModel)window.DataContext!;
+            vm.Message = "It broke.";
+
+            _ = vm.SendCommand.Execute().ToTask();
+            await api.Started.Task;
+
+            window.Close();
+
+            await Assert.That(app.FeedbackWindowForTests).IsSameReferenceAs(window);
+            await Assert.That(window.IsVisible).IsTrue();
+        });
+
     /// The trailer carries the daemon version the status line shows, so a report and the version
     /// chip in the window it was sent from can never disagree.
     [Test]
@@ -215,6 +235,14 @@ public class DesktopWindowLifecycleTests {
     sealed class SilentFeedbackApi : IFeedbackApi {
         public Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) =>
             throw new NotSupportedException("these tests never send");
+    }
+
+    sealed class BlockingFeedbackApi : IFeedbackApi {
+        public TaskCompletionSource Started { get; } = new();
+        public Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) {
+            Started.TrySetResult();
+            return new TaskCompletionSource<FeedbackResult>().Task;
+        }
     }
 
     sealed class Fixture : IDisposable {
