@@ -17,7 +17,7 @@ The server side already exists. `POST /api/feedback` files a bug or feedback rep
 - `SessionRailView`'s footer is one `DockPanel`: the connection dot, the connection word, the tenant name on the left; `Rail.HostedText` on the right. The whole strip carries a tooltip with the daemon identity. `MainWindow`'s Activity button shows the flyout pattern (`Button.Flyout` with `FlyoutPresenterClasses="kcapPanel"`).
 - `FeedbackApi.SubmitAsync(category, message)` mints a fresh `ClientRequestId` per call, passes the category string through unchanged, and fixes the context to `source: "cli"`, `client_version: CapacitorVersion.CurrentDisplay()`, `os: RuntimeInformation.OSDescription`. It maps every refusal the server distinguishes to a `FeedbackResult` case and throws `CapacitorApiException` for anything else, including a 401. `Commands/FeedbackSubmission.cs` holds the three wire records in one file.
 - `FeedbackCommand.ReportResultAsync` holds the user-facing sentence for each `FeedbackResult` case; its success line is pinned by tests as `✓ Sent to Kurrent support as {email} — replies will reach you by email.`.
-- Server rules, taken as given: category exactly `bug` or `feedback`; the message is trimmed, then must be 1–8000 characters; `context.client_version` ≤ 100 and `context.os` ≤ 200 characters; `context.source` is carried as free text. The idempotency store is keyed by `(user, client_request_id)` only, replays a stored success for a while and never compares the payload; it evicts every non-success; Plain's `externalId` is audit-only, so a retry after an ambiguous failure can file again.
+- Server rules, taken as given: category exactly `bug` or `feedback`; the message is trimmed, then must be 1–8000 characters; `context.client_version` ≤ 100 and `context.os` ≤ 200 characters; `context.source` is accepted as free text and then dropped when the proxy submission is built — only the server release, client version and OS reach the proxy, so Plain never sees it. The idempotency store is keyed by `(user, client_request_id)` only, replays a stored success for a while and never compares the payload; it evicts every non-success; Plain's `externalId` is audit-only, so a retry after an ambiguous failure can file again.
 - `HomeViewModel.SignInExpiredNotice` is the app's wording for a lapsed sign-in.
 
 ## Decisions
@@ -71,7 +71,7 @@ Whether the tenant has `Features:Feedback` on is not probed: the lane answers a 
 
 `FeedbackResultMessages.ForRefusal(FeedbackResult)` (Cli.Core) returns the sentence for every non-`Sent` case and `null` for `Sent`. Core shares refusals only: each surface owns its success presentation, so the CLI's pinned success line is unchanged and the window's shorter line is its own. `FeedbackCommand` prints `ForRefusal` for refusals and keeps its success line and exit codes.
 
-`source` is free text on the server; `desktop` joins `cli` and the widget's own value.
+`source = "desktop"` reaches the tenant server and stops there: `FeedbackService` discards it today, so Plain cannot tell a desktop report from a CLI one by this field, and nothing here claims it can — the trailer in D4 is what support reads. The value is set so a later proxy change can forward it without touching the app; no server or proxy change is part of this design.
 
 ### D6 — What this deliberately does not do
 
@@ -110,13 +110,14 @@ One kcap-cli PR. No server change is required: the lane accepts the request as i
 - A report sent against a server older than the feedback lane gets `NotConfigured` (bare 404), which reads as "not enabled". True enough for the reporter, and the admin's remediation is the same.
 - `NoEmailOnFile` on a GitHubApp tenant is AI-1953's condition; the sentence sends the reporter to the web app, which is where the profile refreshes.
 - The trailer makes the message the reporter typed and the message support reads differ by one line, and takes its length out of the 8000-character allowance. The hint line discloses both.
+- `source` is not visible in Plain; a support engineer tells a desktop report apart by the trailer line.
 - The two duplicate cases in D4 are accepted rather than solved: solving them needs a durable pending-report store and a payload-aware server cache, neither of which this change adds.
 
 ## Testing
 
 - **`AppMenuBarTests`**: the Help layout becomes `Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…`; each new item invokes the action with its category; with no action both are disabled; `SetFeedbackAction` after `Attach` flips the items of an already-attached window without rebuilding the menu; a window attached after the action is set gets enabled items.
 - **`FeedbackViewModelTests`** (new): `CanSend` false on empty and whitespace-only text, false when the composed message is 8001 characters and true at exactly 8000 (boundary against the largest accepted user text), false while busy; the composed message carries the trailer once with the daemon name and version; `Bug` and `Feedback` reach the fake api as their enum values; the same snapshot and id are sent twice when the content is unchanged after `TemporarilyUnavailable`; a new id after an edit to the text, after a category switch, and after `Sent`; a lost-success (thrown) response followed by an edit sends a new id; every `FeedbackResult` refusal and the 401 exception map to their sentence; a non-401 exception leaves `CanSend` true.
-- **`FeedbackApiTests`** (Cli.Core): `Bug`/`Feedback` and `Cli`/`Desktop` serialise to their lowercase wire strings; `client_request_id` passes through unchanged.
+- **`FeedbackApiTests`** (Cli.Core): `Bug`/`Feedback` and `Cli`/`Desktop` serialise to their lowercase wire strings in the request body (asserted on the wire, which is as far as `source` travels); `client_request_id` passes through unchanged.
 - **`FeedbackMessageComposerTests`**: trim, separator and trailer; length arithmetic at the boundary.
 - **`FeedbackResultMessagesTests`**: one assertion per refusal case; `Sent` returns null.
 - **`FeedbackCommandTests`** (existing): the success line and exit codes are unchanged; `--bug` sends `bug`.
