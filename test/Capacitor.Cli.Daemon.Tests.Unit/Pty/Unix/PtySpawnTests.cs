@@ -131,17 +131,23 @@ public class PtySpawnTests {
         var plan = Preflight("/bin/sleep", ["sleep", "0"]);
         try {
             var rc = Spawn(plan, out var result);
-            await Assert.That(rc).IsEqualTo(0);
-            await Assert.That(result.FailedStep).IsEqualTo(0);
+            try {
+                await Assert.That(rc).IsEqualTo(0);
+                await Assert.That(result.FailedStep).IsEqualTo(0);
 
-            var identity = result.StartIdentityString;
-            if (OperatingSystem.IsLinux())
-                await Assert.That(identity).StartsWith("lx:");
-            else
-                await Assert.That(identity == "" || identity.StartsWith("mac:", StringComparison.Ordinal)).IsTrue()
-                    .Because($"macOS yields the empty uncapturable marker or a mac: token, never '{identity}'");
-
-            UnixPtyInterop.waitpid(result.Pid, out _, 0); // reap the exited child
+                var identity = result.StartIdentityString;
+                if (OperatingSystem.IsLinux())
+                    await Assert.That(identity).StartsWith("lx:");
+                else
+                    await Assert.That(identity == "" || identity.StartsWith("mac:", StringComparison.Ordinal)).IsTrue()
+                        .Because($"macOS yields the empty uncapturable marker or a mac: token, never '{identity}'");
+            } finally {
+                // Guarded, not gated: a failing assertion must still reap the child. The sentinels
+                // matter because pty_spawn zero-fills result on failure (Pid 0, MasterFd -1), and
+                // waitpid(0) would wait on the whole process group.
+                if (result.MasterFd >= 0) UnixPtyInterop.close(result.MasterFd);
+                if (result.Pid > 0) UnixPtyInterop.waitpid(result.Pid, out _, 0); // the child has exited; this only reaps
+            }
         } finally { Free(plan); }
     }
 
