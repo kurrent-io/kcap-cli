@@ -29,7 +29,9 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     }
 
     /// The daemon appends the trailer to a prompt that carried files, so that turn — and not the
-    /// bare text, which may be replayed history — is the only receipt an attachment send has.
+    /// bare text, which may be replayed history — is the only receipt an attachment send has. The
+    /// trailer follows the prompt untrimmed, so whatever trailing whitespace Normalize took off the
+    /// sent text still stands between the two in the echo.
     internal bool Matches(string text, int generation, long offset) {
         if (_generation != generation || _offset is not { } baseline || offset < baseline) return false;
         var sent = Normalize(Text);
@@ -37,7 +39,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         if (AttachmentIds.Count == 0) return sent == seen;
         return seen.Length > sent.Length
             && seen.StartsWith(sent, StringComparison.Ordinal)
-            && seen.AsSpan(sent.Length).TrimStart('\n').StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
+            && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
     }
 
     static string Normalize(string text) => text.Replace("\r\n", "\n").Trim();

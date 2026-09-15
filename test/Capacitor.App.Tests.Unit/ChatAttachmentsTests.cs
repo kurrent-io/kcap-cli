@@ -14,13 +14,13 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 namespace Capacitor.App.Tests.Unit;
 
 /// The composer's attachment path: staging through the sink, the upload that must land before the
-/// send, and which chips a delivery clears. Every test runs under RunOnUiAsync and carries
-/// [NotInParallel("AvaloniaSession")], like every other VM suite touching the dispatcher.
+/// send, and which chips a delivery clears.
 public class ChatAttachmentsTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     const string BareTurn = """{"type":"user","message":{"role":"user","content":"hi"}}""";
     const string TrailerTurn = """{"type":"user","message":{"role":"user","content":"hi\n\n[Attached files: .attached/x/a.png]"}}""";
+    const string SpacedTrailerTurn = """{"type":"user","message":{"role":"user","content":"hi \n\n[Attached files: .attached/x/b.png]"}}""";
 
     static StagedAttachment Chip(string name) => new(name, "image/png", new byte[] { 1, 2, 3 });
 
@@ -94,6 +94,8 @@ public class ChatAttachmentsTests {
     static async Task RunningAsync(Harness h) =>
         await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
 
+    /// A second Send cannot start while the first is uploading — ReactiveCommand's own executing
+    /// gate is what the CanExecute assertion pins.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Send_with_attachments_uploads_first_then_passes_the_ids_and_clears_exactly_the_sent_chips() {
@@ -110,6 +112,10 @@ public class ChatAttachmentsTests {
             await Assert.That(h.Uploader.Calls.Single().Select(f => f.FileName))
                 .IsEquivalentTo(new[] { "a.png", "b.png" }, CollectionOrdering.Matching);
 
+            // The count is the snapshot the send took, not a tray the user goes on staging into.
+            h.Chat.Tray.AddAll([Chip("staged-during.png")]);
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("Uploading 2 files…");
+
             h.Release(new UploadOutcome(UploadKind.Uploaded, ["A", "B"], null));
             await WaitUntilAsync(() => h.Input.Sends.Count == 1, what: "the send that follows the upload");
 
@@ -121,7 +127,7 @@ public class ChatAttachmentsTests {
             await send;
 
             await Assert.That(h.Chat.Tray.Items.Select(f => f.FileName))
-                .IsEquivalentTo(new[] { "c.png" }, CollectionOrdering.Matching);
+                .IsEquivalentTo(new[] { "staged-during.png", "c.png" }, CollectionOrdering.Matching);
             await Assert.That(h.Chat.ComposerText).IsEqualTo("");
             await h.TeardownAsync();
         });
@@ -135,6 +141,8 @@ public class ChatAttachmentsTests {
             await RunningAsync(h);
 
             var send = h.Begin("hi", "a.png");
+            await Assert.That(h.Chat.UploadingFiles).IsEqualTo(1);
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("Uploading 1 file…");
             h.Release(UploadOutcome.Unauthorized("not_signed_in"));
             await send;
 
@@ -233,6 +241,22 @@ public class ChatAttachmentsTests {
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
             await Assert.That(h.Chat.Tray.Items.Select(f => f.FileName))
                 .IsEquivalentTo(new[] { "b.png" }, CollectionOrdering.Matching);
+
+            // The prompt goes out verbatim and the trailer follows it untrimmed, so the space the
+            // user left stands between the two in the echo.
+            h.Chat.ComposerText = "hi ";
+            send = h.Resend();
+            h.Release(new UploadOutcome(UploadKind.Uploaded, ["B"], null));
+            await WaitUntilAsync(() => h.Input.Sends.Count == 2, what: "the send of the spaced prompt");
+            h.Input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+            await send;
+            await Assert.That(h.Chat.QueueSummary).IsEqualTo("1 message unconfirmed");
+
+            File.AppendAllText(path, SpacedTrailerTurn + "\n");
+            await h.TickAsync();
+
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(0);
             await h.TeardownAsync();
         });
     }
@@ -296,6 +320,66 @@ public class ChatAttachmentsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task An_unreachable_server_and_a_reasonless_rejection_both_say_something() {
+        await RunOnUiAsync(async () => {
+            var h = Hosted();
+            await RunningAsync(h);
+
+            var send = h.Begin("hi", "a.png");
+            h.Release(UploadOutcome.Unreachable("the server could not be reached"));
+            await send;
+
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("the server could not be reached");
+            await Assert.That(h.Input.Sends).IsEmpty();
+
+            send = h.Resend();
+            h.Release(new UploadOutcome(UploadKind.Rejected, [], null));
+            await send;
+
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("the upload failed");
+            await Assert.That(h.Input.Sends).IsEmpty();
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The banner, not the composer, is a flow participant's surface: it can no more be handed
+    /// files than typed into.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_read_only_participant_refuses_the_sink() {
+        await RunOnUiAsync(async () => {
+            var h = Hosted();
+            await Assert.That(h.Chat.Attachments.CanAttach).IsTrue();
+
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false, kind: "review-flow") with { Status = "Running" });
+
+            await Assert.That(h.Chat.IsReadOnlyParticipant).IsTrue();
+            await Assert.That(h.Chat.Attachments.CanAttach).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_accept_with_nothing_refused_clears_the_standing_notice() {
+        await RunOnUiAsync(async () => {
+            var h = Hosted();
+            await RunningAsync(h);
+
+            h.Chat.Attachments.Accept(new IntakeResult([], [new("Docs", "is a folder")]));
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("`Docs` is a folder");
+
+            h.Chat.Attachments.Accept(new IntakeResult([Chip("a.png")], []));
+
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("scripted");
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Sink_accept_stages_files_and_shows_one_refusal_line() {
         await RunOnUiAsync(async () => {
             var h = Hosted();
@@ -329,7 +413,7 @@ public class ChatAttachmentsTests {
 
             await Assert.That(h.Chat.Tray.Count).IsEqualTo(InputWire.MaxAttachmentsPerPrompt);
             await Assert.That(h.Chat.ComposerHint).IsEqualTo(
-                $"only {InputWire.MaxAttachmentsPerPrompt} files per message — `c.png`, `d.png` not added");
+                $"{AttachmentTray.CapReason} — `c.png`, `d.png` not added");
             await h.TeardownAsync();
         });
     }

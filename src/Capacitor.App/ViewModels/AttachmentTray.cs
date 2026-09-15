@@ -7,6 +7,10 @@ namespace Capacitor.App.ViewModels;
 /// The chips staged in one prompt. The single boundary every source passes through, so both limits
 /// hold whatever produced the file.
 public sealed class AttachmentTray : ReactiveObject {
+    /// The wording a refusal past the per-prompt cap carries. Public because the composer groups
+    /// its notice by it rather than re-deriving the sentence.
+    public static readonly string CapReason = $"only {InputWire.MaxAttachmentsPerPrompt} files per message";
+
     readonly ObservableCollection<StagedAttachment> _items = new();
     int _generation;
 
@@ -14,6 +18,7 @@ public sealed class AttachmentTray : ReactiveObject {
 
     public ReadOnlyObservableCollection<StagedAttachment> Items { get; }
     public int Count => _items.Count;
+    public bool HasAttachments => _items.Count > 0;
     public long TotalBytes => _items.Sum(f => (long)f.Bytes.Length);
     public int Generation => _generation;
 
@@ -22,7 +27,7 @@ public sealed class AttachmentTray : ReactiveObject {
         var changed = false;
         foreach (var file in files) {
             if (file.Bytes.Length > InputWire.MaxAttachmentBytes) { refused.Add(new(file.FileName, "is over 10 MB")); continue; }
-            if (_items.Count >= InputWire.MaxAttachmentsPerPrompt) { refused.Add(new(file.FileName, $"only {InputWire.MaxAttachmentsPerPrompt} files per message")); continue; }
+            if (_items.Count >= InputWire.MaxAttachmentsPerPrompt) { refused.Add(new(file.FileName, CapReason)); continue; }
             _items.Add(Dedup(file));
             changed = true;
         }
@@ -63,6 +68,7 @@ public sealed class AttachmentTray : ReactiveObject {
     void Bump() {
         _generation++;
         this.RaisePropertyChanged(nameof(Count));
+        this.RaisePropertyChanged(nameof(HasAttachments));
         this.RaisePropertyChanged(nameof(TotalBytes));
         this.RaisePropertyChanged(nameof(Generation));
     }

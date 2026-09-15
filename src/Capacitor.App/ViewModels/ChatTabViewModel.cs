@@ -135,9 +135,21 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The chips staged for the next prompt. A send clears the ones it carried, never the tray.
     public AttachmentTray Tray { get; } = new();
 
-    bool _uploading;
+    int _uploadingFiles;
+    /// How many chips the upload in flight carries — the snapshot the send took, not the tray,
+    /// which the user may go on staging into. Zero when nothing is uploading.
+    public int UploadingFiles {
+        get => _uploadingFiles;
+        private set {
+            if (_uploadingFiles == value) return;
+            var was = Uploading;
+            this.RaiseAndSetIfChanged(ref _uploadingFiles, value);
+            if (was != Uploading) this.RaisePropertyChanged(nameof(Uploading));
+        }
+    }
+
     /// The staged bytes are on their way to the server; the prompt itself has not left yet.
-    public bool Uploading { get => _uploading; private set => this.RaiseAndSetIfChanged(ref _uploading, value); }
+    public bool Uploading => UploadingFiles > 0;
 
     readonly BehaviorSubject<string?> _intakeNotice = new(null);
 
@@ -333,11 +345,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _composerHint = Observable.CombineLatest(
                 _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-                this.WhenAnyValue(x => x.Uploading),
+                this.WhenAnyValue(x => x.UploadingFiles),
                 _intakeNotice,
-                Tray.WhenAnyValue(t => t.Count),
-                (hint, readOnly, uploading, notice, staged) =>
-                    uploading ? $"Uploading {staged} files…" : notice ?? (readOnly ? "" : hint))
+                (hint, readOnly, uploading, notice) =>
+                    uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
+                        : notice ?? (readOnly ? "" : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
 
@@ -349,12 +361,23 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended)
             .DisposeWith(_disposables);
 
+        // The view reaches the gate through the sink, so its two members are the ones the binding
+        // listens for: the channel's own notifications are republished under those names.
+        Observable.Merge(
+                _input.WhenAnyValue(i => i.CanAttach).Select(_ => Unit.Default),
+                _input.WhenAnyValue(i => i.AttachHint).Select(_ => Unit.Default),
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default))
+            .Subscribe(_ => {
+                this.RaisePropertyChanged(nameof(IAttachmentSink.CanAttach));
+                this.RaisePropertyChanged(nameof(IAttachmentSink.AttachHint));
+            })
+            .DisposeWith(_disposables);
+
         var canSend = Observable.CombineLatest(
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            this.WhenAnyValue(x => x.Uploading),
-            (text, can, readOnly, uploading) => can && !readOnly && !uploading && !string.IsNullOrWhiteSpace(text));
+            (text, can, readOnly) => can && !readOnly && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -368,11 +391,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (files.Count > 0) {
                 // The bytes have to be on the server before the prompt names them: a prompt that
                 // arrives first points the agent at ids the store has never seen.
-                Uploading = true;
+                UploadingFiles = files.Count;
                 UploadOutcome upload;
                 try { upload = await _uploader.UploadAsync(files, _lifetimeToken); }
                 catch (OperationCanceledException) { return; }
-                finally { Uploading = false; }
+                finally { UploadingFiles = 0; }
                 if (_lifetimeToken.IsCancellationRequested) return;
                 if (upload.Kind != UploadKind.Uploaded) {
                     Notice(upload.Kind == UploadKind.Unauthorized ? "sign in to attach files" : upload.Reason ?? "the upload failed");
@@ -503,8 +526,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Notice(RefusalNotice(refused));
     }
 
-    static readonly string CapReason = $"only {InputWire.MaxAttachmentsPerPrompt} files per message";
-
     /// One line for the whole intake: the per-prompt cap is stated once with the names it dropped,
     /// and a failure that names no file (the clipboard, a source that never opened) drops the name.
     static string? RefusalNotice(IReadOnlyList<IntakeRefusal> refused) {
@@ -512,10 +533,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var parts = new List<string>();
         var overCap = new List<string>();
         foreach (var refusal in refused) {
-            if (refusal.Reason == CapReason) overCap.Add($"`{refusal.Name}`");
+            if (refusal.Reason == AttachmentTray.CapReason) overCap.Add($"`{refusal.Name}`");
             else parts.Add(refusal.Reason.StartsWith("the ", StringComparison.Ordinal) ? refusal.Reason : $"`{refusal.Name}` {refusal.Reason}");
         }
-        if (overCap.Count > 0) parts.Add($"{CapReason} — {string.Join(", ", overCap)} not added");
+        if (overCap.Count > 0) parts.Add($"{AttachmentTray.CapReason} — {string.Join(", ", overCap)} not added");
         return string.Join("; ", parts);
     }
 
