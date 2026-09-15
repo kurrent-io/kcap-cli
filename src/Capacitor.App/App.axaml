@@ -58,6 +58,19 @@
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
             <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
+        <!-- A MenuFlyout presents through MenuFlyoutPresenter, which is not a FlyoutPresenter, so
+             the same class needs its own arm or the flyout silently keeps the theme's chrome. -->
+        <Style Selector="MenuFlyoutPresenter.kcapPanel">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MaxWidth" Value="10000" />
+            <Setter Property="MaxHeight" Value="10000" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+        </Style>
         <!-- A TextBox inside one of our cards: the card is its boundary, so the theme's focused
              ring and fill would read as a second box. Fluent's default placeholder follows the
              system theme and goes near-black on our dark surfaces — pin a readable muted tone. -->

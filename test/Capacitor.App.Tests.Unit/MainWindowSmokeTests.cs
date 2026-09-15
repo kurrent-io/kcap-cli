@@ -1,4 +1,5 @@
 using System.Reactive.Threading.Tasks;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -669,6 +670,13 @@ public class MainWindowSmokeTests {
             await Assert.That(items[0].IsEffectivelyEnabled).IsTrue();
             await Assert.That(items[1].IsEffectivelyEnabled).IsFalse();
             await Assert.That(items[2].IsEffectivelyEnabled).IsFalse();
+
+            // The class reaching the presenter is only the positive control — it lands there
+            // whether or not a style matches it. The corner radius is what pins the kit chrome.
+            var presenter = items[0].FindAncestorOfType<MenuFlyoutPresenter>()!;
+            await Assert.That(presenter.Classes.Contains("kcapPanel")).IsTrue();
+            await Assert.That(presenter.CornerRadius).IsEqualTo(new CornerRadius(12));
+
             flyout.Hide();
             Dispatcher.UIThread.RunJobs();
         } finally {
