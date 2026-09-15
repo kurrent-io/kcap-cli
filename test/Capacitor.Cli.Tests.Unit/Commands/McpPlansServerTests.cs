@@ -203,16 +203,37 @@ public class McpPlansServerTests {
     }
 
     [Test]
-    public async Task Declaration_accepts_a_link_that_stays_inside_the_project() {
+    public async Task Declaration_refuses_a_relative_link_target_that_climbs_out_of_a_linked_directory() {
+        if (OperatingSystem.IsWindows()) return;
+
+        // docs2/ -> outside/subdir, and outside/subdir/plan.md -> ../secret.txt: normalized against
+        // the lexical parent the `..` lands inside the repo; against the real one it lands outside.
+        var (root, _) = SeedRepo();
+        var outside = Tmp.CreateDir("outside");
+        var subdir  = outside.CreateDir("subdir");
+        outside.CreateFile("secret.txt", "hunter2");
+        Directory.CreateSymbolicLink(root.PathTo("docs2"), subdir.Path);
+        File.CreateSymbolicLink(subdir.PathTo("plan.md"), "../secret.txt");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs2/plan.md"}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("links outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_accepts_links_that_stay_inside_the_project() {
         if (OperatingSystem.IsWindows()) return;
 
         var (root, _) = SeedRepo("# Plan\n");
         File.CreateSymbolicLink(root.PathTo("docs", "alias.md"), root.PathTo("docs", "plan.md"));
+        File.CreateSymbolicLink(root.PathTo("docs", "relative.md"), "plan.md");
+        Directory.CreateSymbolicLink(root.PathTo("linked-docs"), root.PathTo("docs"));
 
-        var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/alias.md"}"""), root, root);
+        foreach (var path in new[] { "docs/alias.md", "docs/relative.md", "linked-docs/plan.md" }) {
+            var d = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = path }, root, root);
 
-        await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo("docs/alias.md");
-        await Assert.That(d.Body["content"]!.GetValue<string>()).IsEqualTo("# Plan\n");
+            await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(path);
+            await Assert.That(d.Body["content"]!.GetValue<string>()).IsEqualTo("# Plan\n");
+        }
     }
 
     [Test]

@@ -360,40 +360,44 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         if (!IsInside(fullPath, boundary))
             throw new ArgumentException($"'{rawPath}' is outside the project root ({boundary}); only files under it can be declared.");
 
-        // Each link between the boundary and the file is resolved and the walk restarts on the
-        // resolved path: ResolveLinkTarget canonicalizes only the final component, so a target can
-        // itself sit under a linked directory that leads outside.
-        var current = fullPath;
+        // Mirrors how the kernel opens the path: one component at a time from the boundary, each
+        // link's raw target resolved against the canonical prefix walked so far and then re-walked.
+        // A relative target's `..` therefore climbs the real tree, never an unresolved link, and a
+        // linked directory inside a target is met on the re-walk.
+        var pending = new Queue<string>(Components(fullPath, boundary));
+        var current = boundary;
+        var hops    = 0;
 
-        for (var hops = 0; hops < MaxLinkHops; hops++) {
-            if (FirstLinkBelow(current, boundary) is not var (link, remainder)) return fullPath;
+        while (pending.Count > 0) {
+            var candidate = Path.Combine(current, pending.Dequeue());
+            FileSystemInfo node = Directory.Exists(candidate) ? new DirectoryInfo(candidate) : new FileInfo(candidate);
 
-            var target   = link.ResolveLinkTarget(returnFinalTarget: true)?.FullName;
-            var resolved = target is null ? null : Path.GetFullPath(Path.Combine(target, remainder));
+            if (node.LinkTarget is not { } target) {
+                current = candidate;
+                continue;
+            }
 
-            if (resolved is null || !IsInside(resolved, boundary))
+            if (++hops > MaxLinkHops)
+                throw new ArgumentException($"'{rawPath}' links too deeply to resolve.");
+
+            var resolved = Path.GetFullPath(Path.IsPathRooted(target) ? target : Path.Combine(current, target));
+
+            if (!IsInside(resolved, boundary))
                 throw new ArgumentException($"'{rawPath}' links outside the project root ({boundary}); only files under it can be declared.");
 
-            current = resolved;
+            pending = new Queue<string>(Components(resolved, boundary).Concat(pending));
+            current = boundary;
         }
 
-        throw new ArgumentException($"'{rawPath}' links too deeply to resolve.");
+        return fullPath;
     }
 
-    /// <summary>The nearest link on the way up from <paramref name="path"/> to the boundary, with
-    /// the path below it; null when nothing on the way is a link.</summary>
-    static (FileSystemInfo Link, string Remainder)? FirstLinkBelow(string path, string boundary) {
-        var remainder = "";
+    static IEnumerable<string> Components(string path, string boundary) {
+        var relative = Path.GetRelativePath(boundary, path);
 
-        for (FileSystemInfo? node = new FileInfo(path);
-             node is not null && node.FullName != boundary && IsInside(node.FullName, boundary);
-             node = Directory.GetParent(node.FullName)) {
-            if (node.LinkTarget is not null) return (node, remainder);
-
-            remainder = Path.Combine(node.Name, remainder);
-        }
-
-        return null;
+        return relative == "."
+            ? []
+            : relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
     }
 
     static bool IsInside(string path, string root) {
