@@ -38,7 +38,7 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
-    public PullRequestStatus LifecycleStatus => new(Lifecycle, CanDisplay ? _overview?.Lifecycle ?? "neutral" : "neutral");
+    public PullRequestStatus LifecycleStatus => CanDisplay ? PullRequestTones.LifecycleStatus(_overview) : new("");
     public PullRequestStatus ReviewStatus => new(ReviewSummary, CanDisplay ? _overview?.ReviewDecision switch {
         "approved" => "success", "changes_requested" => "failure", "review_required" => "pending", _ => "neutral"
     } : "neutral");
