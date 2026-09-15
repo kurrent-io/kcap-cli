@@ -153,7 +153,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 var dto = p.Dto!;
                 var (projection, note) = ChatTranscriptSource.Resolve(dto);
                 ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
-                    ? new TerminalChatInput(Terminal)
+                    ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
                     agentId, daemon, input, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);

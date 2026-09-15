@@ -50,7 +50,7 @@ public class ChatTabViewModelTests {
             seed?.Invoke(Permissions);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal), projection, Opener, Time, Permissions, unavailableNote);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), projection, Opener, Time, Permissions, unavailableNote);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -675,12 +675,15 @@ public class ChatTabViewModelTests {
     sealed class ScriptedInput : ChatInput {
         public TaskCompletionSource<ChatSendOutcome>? Pending;
         public int Disposals;
-        public List<(string Text, CancellationToken Ct)> Sends { get; } = [];
+        public bool CanAttachValue = true;
+        public List<(string Text, IReadOnlyList<string> Ids, CancellationToken Ct)> Sends { get; } = [];
         public override SendAvailability Availability => Pending is null ? SendAvailability.Ready : SendAvailability.Sending;
         public override bool CanAcceptText => Pending is null;
         public override string Hint => "scripted";
-        public override Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) {
-            Sends.Add((text, ct));
+        public override bool CanAttach => CanAttachValue;
+        public override string? AttachHint => CanAttachValue ? null : "attachments need the daemon updated";
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
+            Sends.Add((text, attachmentIds, ct));
             Pending = new TaskCompletionSource<ChatSendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             this.RaisePropertyChanged(nameof(CanAcceptText));
             return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);

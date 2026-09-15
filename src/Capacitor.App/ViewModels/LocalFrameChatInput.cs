@@ -10,7 +10,8 @@ namespace Capacitor.App.ViewModels;
 /// daemon's delivery settles. A lost ack is an unknown outcome and the hint says so.
 internal sealed class LocalFrameChatInput : ChatInput {
     const string InputCapability = "input/1";
-    const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
+    const string AttachCapability = "input/2";
+    internal const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
 
     readonly string _agentId;
     readonly ILocalControlOps _ops;
@@ -62,12 +63,31 @@ internal sealed class LocalFrameChatInput : ChatInput {
         _                            => "Connecting to the agent…",
     };
 
-    public override async Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) {
+    public override bool CanAttach =>
+        Availability == SendAvailability.Ready && HasAttachCapability(_status) && IsOwnedWorktree(_presence);
+
+    public override string? AttachHint => CanAttach ? null : AttachHintFor(_status, _presence, Hint);
+
+    internal static bool HasAttachCapability(AttachStatus status) =>
+        status.Capabilities is { } caps && caps.Contains(AttachCapability);
+
+    internal static bool IsOwnedWorktree(AgentPresence presence) =>
+        string.Equals(presence.Dto?.WorkLocation, WorkLocationText.Owned, StringComparison.Ordinal);
+
+    internal static string AttachHintFor(AttachStatus status, AgentPresence presence, string fallback) =>
+        !HasAttachCapability(status) ? "attachments need the daemon updated"
+        : !IsOwnedWorktree(presence) ? "attachments aren't available for an in-place session"
+        : fallback;
+
+    public override async Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
         if (_disposed || !CanAcceptText || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
+        if (attachmentIds.Count > 0 && !CanAttach) return ChatSendOutcome.Rejected;
         _sending = true; _notice = null; Raise();
         SendTextResult result;
         try {
-            result = await _ops.SendTextAsync(_agentId, text, ct);
+            result = attachmentIds.Count == 0
+                ? await _ops.SendTextAsync(_agentId, text, ct)
+                : await _ops.SendTextWithAttachmentsAsync(_agentId, text, attachmentIds, ct);
         } catch (OperationCanceledException) {
             return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
         } catch (Exception) {
@@ -75,21 +95,24 @@ internal sealed class LocalFrameChatInput : ChatInput {
         }
         if (result.Ok) return Settle(ChatSendOutcome.Accepted, null);
         var outcome = result.Reason == SendTextReasons.Transport ? ChatSendOutcome.Unconfirmed : ChatSendOutcome.Rejected;
-        return Settle(outcome, result.Reason switch {
-            SendTextReasons.Transport      => Unconfirmed,
-            SendTextReasons.NotRunning     => "agent is no longer running",
-            SendTextReasons.NoSuchAgent    => "agent is no longer running",
-            SendTextReasons.ProtectedKind  => "read-only participant",
-            SendTextReasons.QueueFull      => "the agent's input queue is full, try again shortly",
-            SendTextReasons.StopFailed     => "the agent did not stop",
-            SendTextReasons.ReaperClaimed or SendTextReasons.ReaperClaimedLate => "the agent is being stopped",
-            SendTextReasons.TooLarge       => result.Error ?? "message is too large",
-            SendTextReasons.DeliveryFailed => result.Error ?? "delivery failed",
-            // A reason this build has no wording for is still not composer text: the raw wire token
-            // would read as a bug report to the user.
-            _                              => "delivery failed",
-        });
+        return Settle(outcome, NoticeFor(result));
     }
+
+    internal static string NoticeFor(SendTextResult result) => result.Reason switch {
+        SendTextReasons.Transport           => Unconfirmed,
+        SendTextReasons.NotRunning          => "agent is no longer running",
+        SendTextReasons.NoSuchAgent         => "agent is no longer running",
+        SendTextReasons.ProtectedKind       => "read-only participant",
+        SendTextReasons.QueueFull           => "the agent's input queue is full, try again shortly",
+        SendTextReasons.StopFailed          => "the agent did not stop",
+        SendTextReasons.ReaperClaimed or SendTextReasons.ReaperClaimedLate => "the agent is being stopped",
+        SendTextReasons.TooLarge            => result.Error ?? "message is too large",
+        SendTextReasons.DeliveryFailed      => result.Error ?? "delivery failed",
+        SendTextReasons.AttachmentsRefused  => result.Error ?? "attachments were refused",
+        // A reason this build has no wording for is still not composer text: the raw wire token
+        // would read as a bug report to the user.
+        _                                   => "delivery failed",
+    };
 
     ChatSendOutcome Settle(ChatSendOutcome outcome, string? notice) {
         if (_disposed) return outcome;
@@ -108,6 +131,8 @@ internal sealed class LocalFrameChatInput : ChatInput {
         this.RaisePropertyChanged(nameof(Availability));
         this.RaisePropertyChanged(nameof(CanAcceptText));
         this.RaisePropertyChanged(nameof(Hint));
+        this.RaisePropertyChanged(nameof(CanAttach));
+        this.RaisePropertyChanged(nameof(AttachHint));
     }
 
     public override void Dispose() {

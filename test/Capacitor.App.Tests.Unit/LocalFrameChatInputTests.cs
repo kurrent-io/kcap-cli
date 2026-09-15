@@ -13,6 +13,8 @@ namespace Capacitor.App.Tests.Unit;
 /// the process-global scheduler is what the class constraint protects.
 /// </summary>
 public class LocalFrameChatInputTests {
+    const string Id = "0123456789abcdef0123456789abcdef";
+
     sealed class Rig {
         public FakeDaemonClientService Daemon { get; } = new();
         public ScriptedLocalControlOps Ops { get; } = new();
@@ -33,7 +35,7 @@ public class LocalFrameChatInputTests {
             rig.Running();
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Unsupported);
             await Assert.That(rig.Input.Hint).IsEqualTo("Update the daemon to send messages from the app");
-            await Assert.That(await rig.Input.SendAsync("x", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await rig.Input.SendAsync("x", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
 
             rig.Connected("status/1", "input/1");
@@ -53,10 +55,10 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             var gate = rig.Ops.ArmSendText();
-            var pending = rig.Input.SendAsync("hello", CancellationToken.None);
+            var pending = rig.Input.SendAsync("hello", [], CancellationToken.None);
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Sending);
             await Assert.That(rig.Input.CanAcceptText).IsFalse();
-            await Assert.That(await rig.Input.SendAsync("second", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await rig.Input.SendAsync("second", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             gate.SetResult(new SendTextResult(true, null, null, SendTextOutcomes.Delivered));
             await Assert.That(await pending).IsEqualTo(ChatSendOutcome.Accepted);
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ready);
@@ -80,12 +82,12 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(false, reason, error, null));
-            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(
+            await Assert.That(await rig.Input.SendAsync("hello", [], CancellationToken.None)).IsEqualTo(
                 reason == SendTextReasons.Transport ? ChatSendOutcome.Unconfirmed : ChatSendOutcome.Rejected);
             await Assert.That(rig.Input.Hint).IsEqualTo(hint);
             await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ready);
             rig.Ops.ArmSendText();
-            _ = rig.Input.SendAsync("again", CancellationToken.None);
+            _ = rig.Input.SendAsync("again", [], CancellationToken.None);
             await Assert.That(rig.Input.Hint).IsEqualTo("Sending…"); // the notice clears when the next send starts
         });
     }
@@ -96,9 +98,9 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(true, null, null, SendTextOutcomes.Stopped));
-            await Assert.That(await rig.Input.SendAsync("/quit", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
+            await Assert.That(await rig.Input.SendAsync("/quit", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
             rig.Ops.QueueSendText(new SendTextResult(true, null, null, "future_outcome"));
-            await Assert.That(await rig.Input.SendAsync("x", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
+            await Assert.That(await rig.Input.SendAsync("x", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
         });
     }
 
@@ -109,7 +111,7 @@ public class LocalFrameChatInputTests {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.ArmSendText();
             using var cts = new CancellationTokenSource();
-            var pending = rig.Input.SendAsync("hello", cts.Token);
+            var pending = rig.Input.SendAsync("hello", [], cts.Token);
             await cts.CancelAsync();
             await Assert.That(await pending).IsEqualTo(ChatSendOutcome.Unconfirmed);
             await Assert.That(rig.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
@@ -123,7 +125,7 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(false, "queue_full", null, null));
-            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await rig.Input.SendAsync("hello", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
 
             rig.Presence.OnNext(new AgentPresence(rig.Presence.Value.Dto, true));
@@ -137,7 +139,7 @@ public class LocalFrameChatInputTests {
     public async Task Cancellation_before_send_does_not_attempt_delivery() {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
-            await Assert.That(await rig.Input.SendAsync("hello", new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await rig.Input.SendAsync("hello", [], new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
             rig.Input.Dispose();
         });
@@ -149,7 +151,7 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             var gate = rig.Ops.ArmSendText();
-            var send = rig.Input.SendAsync("hello", CancellationToken.None);
+            var send = rig.Input.SendAsync("hello", [], CancellationToken.None);
             gate.SetException(new IOException("connection closed"));
             await Assert.That(await send).IsEqualTo(ChatSendOutcome.Unconfirmed);
             await Assert.That(rig.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
@@ -165,7 +167,7 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             rig.Ops.QueueSendText(new SendTextResult(false, "queue_full", null, null));
-            await Assert.That(await rig.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await rig.Input.SendAsync("hello", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
 
             rig.Connected("input/1");
@@ -180,7 +182,7 @@ public class LocalFrameChatInputTests {
         await RunOnUiAsync(async () => {
             var rig = new Rig(); rig.Connected("input/1"); rig.Running();
             var gate = rig.Ops.ArmSendText();
-            var pending = rig.Input.SendAsync("hello", CancellationToken.None);
+            var pending = rig.Input.SendAsync("hello", [], CancellationToken.None);
             rig.Input.Dispose();
             var raised = 0;
             rig.Input.PropertyChanged += (_, _) => raised++;
@@ -202,8 +204,66 @@ public class LocalFrameChatInputTests {
             rig.Input.Dispose();
 
             await Assert.That(rig.Input.CanAcceptText).IsTrue();
-            await Assert.That(await rig.Input.SendAsync("after", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await rig.Input.SendAsync("after", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Can_attach_needs_input_2_and_an_owned_worktree() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig();
+            rig.Connected("status/1", "input/1"); rig.Running();
+            await Assert.That(rig.Input.CanAttach).IsFalse();
+            await Assert.That(rig.Input.AttachHint).IsEqualTo("attachments need the daemon updated");
+
+            rig.Connected("status/1", "input/1", "input/2");
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "borrowed") with { Status = "Running" }, false));
+            await Assert.That(rig.Input.CanAttach).IsFalse();
+            await Assert.That(rig.Input.AttachHint).IsEqualTo("attachments aren't available for an in-place session");
+
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "owned") with { Status = "Running" }, false));
+            await Assert.That(rig.Input.CanAttach).IsTrue();
+            await Assert.That(rig.Input.AttachHint).IsNull();
+
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Ids_ride_the_attachment_frame_and_attachments_refused_maps_to_its_error() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig();
+            rig.Connected("status/1", "input/1", "input/2");
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "owned") with { Status = "Running" }, false));
+            rig.Ops.QueueSendText(new SendTextResult(false, SendTextReasons.AttachmentsRefused, "attachments need a daemon-owned worktree", null));
+
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Ops.SendTextWithAttachmentsPayloads.Single().Ids).IsEquivalentTo(new[] { Id });
+            await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
+            await Assert.That(rig.Input.Hint).IsEqualTo("attachments need a daemon-owned worktree");
+
+            rig.Ops.QueueSendText(new SendTextResult(true, null, null, SendTextOutcomes.Delivered));
+            await rig.Input.SendAsync("plain", [], CancellationToken.None);
+            await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(1);
+            await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(1);
+        });
+    }
+
+    /// An attachments_refused with no error still never shows the caller the wire token.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Attachments_refused_without_a_detail_falls_back_to_its_own_wording() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig();
+            rig.Connected("input/1", "input/2");
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "owned") with { Status = "Running" }, false));
+            rig.Ops.QueueSendText(new SendTextResult(false, SendTextReasons.AttachmentsRefused, null, null));
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Input.Hint).IsEqualTo("attachments were refused");
         });
     }
 }

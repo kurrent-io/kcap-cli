@@ -346,7 +346,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
             _queuedMessages.Add(queued);
             RefreshQueue();
             ChatSendOutcome outcome;
-            try { outcome = await _input.SendAsync(snapshot, _lifetimeToken); }
+            try { outcome = await _input.SendAsync(snapshot, [], _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
             catch (Exception ex) {
                 LogOnce($"send: {ex.Message}");
