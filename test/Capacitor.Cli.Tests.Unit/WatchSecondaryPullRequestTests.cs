@@ -53,6 +53,25 @@ public class WatchSecondaryPullRequestTests {
         await Assert.That(probed).IsEquivalentTo([CliRoot, OtherRoot, CliRoot], CollectionOrdering.Matching);
     }
 
+    // The first probe returns on its own, but only after the budget has run out, so the pass
+    // ends between iterations: the root it never reached must be next, not the one after it.
+    [Test]
+    public async Task A_pass_that_runs_out_between_probes_resumes_at_the_root_it_skipped() {
+        var state  = StateWithSecondaryRoot(OtherRoot);
+        var probed = new List<string>();
+
+        Task<RepositoryPayload?> Detect(string root, TimeSpan _) {
+            probed.Add(root);
+            if (probed.Count == 1) Thread.Sleep(100);
+            return Task.FromResult<RepositoryPayload?>(null);
+        }
+
+        await Link(state, Detect, (_, _) => Task.FromResult(true), budget: TimeSpan.FromMilliseconds(20));
+        await Link(state, Detect, (_, _) => Task.FromResult(true));
+
+        await Assert.That(probed).IsEquivalentTo([CliRoot, OtherRoot, CliRoot], CollectionOrdering.Matching);
+    }
+
     [Test]
     public async Task A_completed_pass_wraps_around_to_the_first_root() {
         var state  = StateWithSecondaryRoot(OtherRoot);

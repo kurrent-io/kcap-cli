@@ -3379,11 +3379,13 @@ partial class WatchCommand(
         var first = Math.Max(0, Array.IndexOf(roots, state.NextSecondaryRoot));
 
         for (var i = 0; i < roots.Length; i++) {
-            var root = roots[(first + i) % roots.Length];
-            state.NextSecondaryRoot = roots[(first + i + 1) % roots.Length];
-
             var remaining = budget - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero || linked.IsCancellationRequested) return;
+
+            // Advanced only once this root is actually attempted, so a root the check above
+            // skips is the one the next pass starts with.
+            var root = roots[(first + i) % roots.Length];
+            state.NextSecondaryRoot = roots[(first + i + 1) % roots.Length];
 
             beat();
 
