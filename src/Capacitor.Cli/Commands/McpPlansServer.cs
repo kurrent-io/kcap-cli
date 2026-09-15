@@ -360,16 +360,34 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         if (!IsInside(fullPath, boundary))
             throw new ArgumentException($"'{rawPath}' is outside the project root ({boundary}); only files under it can be declared.");
 
-        // Mirrors how the kernel opens the path: one component at a time from the boundary, each
-        // link's raw target resolved against the canonical prefix walked so far and then re-walked.
-        // A relative target's `..` therefore climbs the real tree, never an unresolved link, and a
-        // linked directory inside a target is met on the re-walk.
-        var pending = new Queue<string>(Components(fullPath, boundary));
-        var current = boundary;
+        // Both sides are resolved the way the kernel opens them, so a link above the root (macOS's
+        // /var → /private/var) cancels out and only a link that leaves the tree remains.
+        if (!IsInside(ResolveLinks(fullPath, rawPath), ResolveLinks(boundary, rawPath)))
+            throw new ArgumentException($"'{rawPath}' links outside the project root ({boundary}); only files under it can be declared.");
+
+        return fullPath;
+    }
+
+    /// <summary>The path with every link resolved, walked as the kernel opens it: one raw component
+    /// at a time from the filesystem root, <c>..</c> applied to the canonical directory reached so
+    /// far, and a link's raw target spliced in unnormalized — so a <c>..</c> inside a target climbs
+    /// out of whatever the link before it resolved to, never out of a lexical stand-in.</summary>
+    static string ResolveLinks(string absolutePath, string rawPath) {
+        var current = Path.GetPathRoot(absolutePath)!;
+        var pending = new Queue<string>(RawComponents(absolutePath[current.Length..]));
         var hops    = 0;
 
         while (pending.Count > 0) {
-            var candidate = Path.Combine(current, pending.Dequeue());
+            var component = pending.Dequeue();
+
+            if (component == ".") continue;
+
+            if (component == "..") {
+                current = Path.GetDirectoryName(current) ?? current;
+                continue;
+            }
+
+            var candidate = Path.Combine(current, component);
             FileSystemInfo node = Directory.Exists(candidate) ? new DirectoryInfo(candidate) : new FileInfo(candidate);
 
             if (node.LinkTarget is not { } target) {
@@ -380,25 +398,19 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
             if (++hops > MaxLinkHops)
                 throw new ArgumentException($"'{rawPath}' links too deeply to resolve.");
 
-            var resolved = Path.GetFullPath(Path.IsPathRooted(target) ? target : Path.Combine(current, target));
+            if (Path.IsPathRooted(target)) {
+                current = Path.GetPathRoot(target)!;
+                target  = target[current.Length..];
+            }
 
-            if (!IsInside(resolved, boundary))
-                throw new ArgumentException($"'{rawPath}' links outside the project root ({boundary}); only files under it can be declared.");
-
-            pending = new Queue<string>(Components(resolved, boundary).Concat(pending));
-            current = boundary;
+            pending = new Queue<string>(RawComponents(target).Concat(pending));
         }
 
-        return fullPath;
+        return current;
     }
 
-    static IEnumerable<string> Components(string path, string boundary) {
-        var relative = Path.GetRelativePath(boundary, path);
-
-        return relative == "."
-            ? []
-            : relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
-    }
+    static IEnumerable<string> RawComponents(string path) =>
+        path.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
 
     static bool IsInside(string path, string root) {
         var relative = Path.GetRelativePath(root, path);

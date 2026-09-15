@@ -220,15 +220,34 @@ public class McpPlansServerTests {
     }
 
     [Test]
+    public async Task Declaration_refuses_a_link_target_whose_dotdot_climbs_out_of_a_linked_directory() {
+        if (OperatingSystem.IsWindows()) return;
+
+        // plan.md -> linked/../secret.txt with linked/ -> outside/subdir: collapsed lexically the
+        // target is the in-repo decoy, but the kernel follows `linked` first and lands outside.
+        var (root, _) = SeedRepo();
+        var outside = Tmp.CreateDir("outside");
+        outside.CreateDir("subdir");
+        outside.CreateFile("secret.txt", "hunter2");
+        root.CreateFile("secret.txt", "decoy");
+        Directory.CreateSymbolicLink(root.PathTo("linked"), outside.PathTo("subdir"));
+        File.CreateSymbolicLink(root.PathTo("plan.md"), "linked/../secret.txt");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"plan.md"}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("links outside the project root");
+    }
+
+    [Test]
     public async Task Declaration_accepts_links_that_stay_inside_the_project() {
         if (OperatingSystem.IsWindows()) return;
 
         var (root, _) = SeedRepo("# Plan\n");
         File.CreateSymbolicLink(root.PathTo("docs", "alias.md"), root.PathTo("docs", "plan.md"));
         File.CreateSymbolicLink(root.PathTo("docs", "relative.md"), "plan.md");
+        File.CreateSymbolicLink(root.PathTo("docs", "via-dotdot.md"), "../docs/plan.md");
         Directory.CreateSymbolicLink(root.PathTo("linked-docs"), root.PathTo("docs"));
 
-        foreach (var path in new[] { "docs/alias.md", "docs/relative.md", "linked-docs/plan.md" }) {
+        foreach (var path in new[] { "docs/alias.md", "docs/relative.md", "docs/via-dotdot.md", "linked-docs/plan.md" }) {
             var d = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = path }, root, root);
 
             await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(path);
