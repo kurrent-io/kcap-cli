@@ -27,12 +27,15 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     readonly IDisposable _access;
     readonly CancellationTokenSource _lifetime = new();
     FeedStatus _pendingStatus = FeedStatus.Ok;
-    string? _failure;
+    /// A Missing/Failed verdict, held apart from the seed's own rows so a refusal that lands
+    /// after a successful seed never displaces the seed's still-undrained Reset.
+    (FeedStatus Status, string? Failure)? _pendingFailure;
     /// The last event number applied; null until the seed lands.
     long? _position;
     int _attempt;
     CancellationTokenSource? _tailCts;
     volatile bool _waitingToRetry;
+    bool _disposed;
 
     internal Task? PendingRunForTesting { get; private set; }
     internal bool WaitingToRetryForTesting => _waitingToRetry;
@@ -58,28 +61,36 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
 
     public FeedRead ReadAppended() {
         lock (_lock) {
-            var status = _pendingStatus;
-            var failure = _failure;
-            var lines = _pending.Count == 0 ? [] : _pending.ToArray();
-            _pending.Clear();
-            _pendingStatus = FeedStatus.Ok;
-            _failure = null;
-            return new(status, lines, status == FeedStatus.Reset ? CurrentOffsetLocked() : null, failure);
+            if (_pendingStatus == FeedStatus.Reset || _pending.Count > 0) {
+                var status = _pendingStatus;
+                var lines = _pending.Count == 0 ? [] : _pending.ToArray();
+                _pending.Clear();
+                _pendingStatus = FeedStatus.Ok;
+                return new(status, lines, status == FeedStatus.Reset ? CurrentOffsetLocked() : null);
+            }
+            if (_pendingFailure is { } pending) {
+                _pendingFailure = null;
+                return new(pending.Status, [], null, pending.Failure);
+            }
+            return new(FeedStatus.Ok, []);
         }
     }
 
     long? CurrentOffsetLocked() => _position is { } p ? p + 1 : null;
 
     void Restart() {
-        int attempt;
-        CancellationTokenSource cts;
         lock (_lock) {
-            if (_lifetime.IsCancellationRequested) return;
+            if (_disposed) return;
             _tailCts?.Cancel();
-            _tailCts = cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            attempt = ++_attempt;
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            _tailCts = cts;
+            var attempt = ++_attempt;
+            var run = Task.Run(() => RunAsync(attempt, cts.Token));
+            PendingRunForTesting = run.ContinueWith(_ => {
+                lock (_lock) { if (ReferenceEquals(_tailCts, cts)) _tailCts = null; }
+                cts.Dispose();
+            }, TaskScheduler.Default);
         }
-        PendingRunForTesting = Task.Run(() => RunAsync(attempt, cts.Token));
     }
 
     void StopTail() {
@@ -97,12 +108,11 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         while (!ct.IsCancellationRequested && IsCurrent(attempt)) {
             try {
                 if (!await EnsureSeededAsync(attempt, ct).ConfigureAwait(false)) return;
-                await TailAsync(attempt, ct).ConfigureAwait(false);
-                failures = 0;
+                if (await TailAsync(attempt, ct).ConfigureAwait(false)) failures = 0;
             } catch (OperationCanceledException) {
                 return;
             } catch (HubException ex) when (ex.Message.Contains(WireTokens.StreamNotAuthorized, StringComparison.Ordinal)) {
-                Enqueue(FeedStatus.Failed, [], "not authorized to read this session's stream");
+                Enqueue(FeedStatus.Failed, "not authorized to read this session's stream");
                 return;
             } catch (Exception ex) {
                 LogOnce($"remote transcript: {ex.Message}");
@@ -111,8 +121,9 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
             // same stream replaced it. A superseded attempt stops; the current one waits and resumes.
             if (!IsCurrent(attempt)) return;
             var delay = Retry[Math.Min(failures++, Retry.Length - 1)];
+            var wait = Task.Delay(delay, _time, ct);
             _waitingToRetry = true;
-            try { await Task.Delay(delay, _time, ct).ConfigureAwait(false); }
+            try { await wait.ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
             finally { _waitingToRetry = false; }
         }
@@ -124,50 +135,50 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         lock (_lock) if (_position is not null) return true;
         var fetch = await _readDetail(_sessionId, ct).ConfigureAwait(false);
         if (!IsCurrent(attempt)) return false;
-        if (fetch.NotFound) { Enqueue(FeedStatus.Missing, []); return false; }
+        if (fetch.NotFound) { Enqueue(FeedStatus.Missing); return false; }
         if (fetch.Unauthorized) return false;
         if (fetch.Detail is not { } detail) throw new InvalidOperationException("session detail unavailable");
 
         var lines = new List<ProjectedLine>();
         foreach (var evt in detail.Events ?? [])
-            if (evt.Body is { } body && Project(evt.EventType, body.GetRawText(), evt.EventNumber) is { } line) lines.Add(line);
+            if (evt.Body is { } body && Project(evt.EventType, body.GetRawText(), evt.EventNumber, evt.Timestamp) is { } line) lines.Add(line);
         lock (_lock) {
             if (_attempt != attempt) return false;
             _position = detail.LastEventNumber;
             _pending.Clear();
             _pending.AddRange(lines);
             _pendingStatus = FeedStatus.Reset;
-            _failure = null;
         }
         return true;
     }
 
-    async Task TailAsync(int attempt, CancellationToken ct) {
+    /// True when the tail delivered at least one envelope, which is what resets the retry ladder;
+    /// a tail that ends without ever yielding keeps the caller's failure count climbing.
+    async Task<bool> TailAsync(int attempt, CancellationToken ct) {
         ulong? from;
         lock (_lock) from = _position is >= 0 ? (ulong)_position : null;
+        var received = false;
         await foreach (var envelope in _lane.TailStreamAsync(StreamNames.AgentSession(_sessionId), from, ct).ConfigureAwait(false)) {
-            var line = Project(envelope.EventType, envelope.JsonPayload, (long)envelope.StreamPosition);
+            received = true;
+            var line = Project(envelope.EventType, envelope.JsonPayload, (long)envelope.StreamPosition, envelope.Timestamp);
             lock (_lock) {
-                if (_attempt != attempt) return;
+                if (_attempt != attempt) return received;
                 _position = (long)envelope.StreamPosition;
                 if (line is { } l) _pending.Add(l);
             }
         }
+        return received;
     }
 
-    ProjectedLine? Project(string eventType, string json, long offset) {
+    ProjectedLine? Project(string eventType, string json, long offset, DateTimeOffset? timestamp) {
         var payload = CanonicalEventJson.TryParse(eventType, json);
         if (payload is null) return null;
-        var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, _time.GetUtcNow()), _rules);
+        var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, timestamp ?? _time.GetUtcNow()), _rules);
         return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 ? null : new(projected, offset);
     }
 
-    void Enqueue(FeedStatus status, IReadOnlyList<ProjectedLine> lines, string? failure = null) {
-        lock (_lock) {
-            _pendingStatus = status;
-            _failure = failure;
-            _pending.AddRange(lines);
-        }
+    void Enqueue(FeedStatus status, string? failure = null) {
+        lock (_lock) { _pendingFailure = (status, failure); }
     }
 
     void LogOnce(string reason) {
@@ -175,9 +186,15 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     }
 
     public void Dispose() {
+        lock (_lock) {
+            if (_disposed) return;
+            _disposed = true;
+            _tailCts?.Cancel();
+            _tailCts = null;
+            _attempt++;
+        }
         _access.Dispose();
-        StopTail();
-        try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
+        _lifetime.Cancel();
         _lifetime.Dispose();
     }
 }

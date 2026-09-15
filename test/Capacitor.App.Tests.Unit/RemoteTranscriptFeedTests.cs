@@ -81,10 +81,29 @@ public class RemoteTranscriptFeedTests {
         h.Lane.TailHandler = (_, _) => new HubException(WireTokens.StreamNotAuthorized);
         h.Access.OnNext(SessionAccessState.Established);
         await WaitUntilAsync(() => h.Feed.PendingRunForTesting is { IsCompleted: true }, what: "the run");
+        h.Feed.ReadAppended(); // drains the seed the run committed before the tail was refused
         var read = h.Feed.ReadAppended();
         await Assert.That(read.Status).IsEqualTo(FeedStatus.Failed);
         await Assert.That(read.Failure).Contains("not authorized");
         await Assert.That(h.Feed.WaitingToRetryForTesting).IsFalse();
+    }
+
+    [Test]
+    public async Task A_refused_stream_keeps_the_seed_rows_then_reports_the_failure() {
+        using var h = new Harness();
+        h.Lane.TailHandler = (_, _) => new HubException(WireTokens.StreamNotAuthorized);
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Feed.PendingRunForTesting is { IsCompleted: true }, what: "the run");
+
+        var seed = h.Feed.ReadAppended();
+        await Assert.That(seed.Status).IsEqualTo(FeedStatus.Reset);
+        await Assert.That(seed.Lines.Count).IsEqualTo(2);
+        await Assert.That(seed.SnapshotOffset).IsEqualTo(2);
+
+        var failed = h.Feed.ReadAppended();
+        await Assert.That(failed.Status).IsEqualTo(FeedStatus.Failed);
+        await Assert.That(failed.Lines).IsEmpty();
+        await Assert.That(failed.Failure).Contains("not authorized");
     }
 
     [Test]
@@ -115,6 +134,13 @@ public class RemoteTranscriptFeedTests {
         h.Time.Advance(RemoteTranscriptFeed.Retry[0]);
         await WaitUntilAsync(() => h.Lane.Tails.Count == 2, what: "the second tail");
         await Assert.That(h.Lane.Tails[1].From).IsEqualTo((ulong?)1);
+
+        h.Lane.CloseTail(h.Stream);
+        await WaitUntilAsync(() => h.Feed.WaitingToRetryForTesting, what: "the retry armed again");
+        h.Time.Advance(RemoteTranscriptFeed.Retry[0]);
+        await Assert.That(h.Lane.Tails.Count).IsEqualTo(2);
+        h.Time.Advance(RemoteTranscriptFeed.Retry[1] - RemoteTranscriptFeed.Retry[0]);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 3, what: "the third tail");
     }
 
     [Test]
