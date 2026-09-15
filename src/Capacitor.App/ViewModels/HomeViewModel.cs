@@ -964,6 +964,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
+            // A launch that never produced a row or a failure notice stays tracked past its TTL,
+            // where nothing consults it; each new launch sweeps those so the map cannot grow unbounded.
+            var cutoff = DateTime.UtcNow - PendingLaunchTtl;
+            foreach (var stale in _pendingLaunches.Where(kv => kv.Value.At < cutoff).Select(kv => kv.Key).ToList())
+                _pendingLaunches.Remove(stale);
             _pendingLaunches[agentId] = (DateTime.UtcNow, lane);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (DateTime.UtcNow - recent.At <= RecentFailureTtl) {
