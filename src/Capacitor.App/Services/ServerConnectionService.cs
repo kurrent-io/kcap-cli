@@ -27,6 +27,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
 
     readonly string? _serverUrl;
     readonly Func<Task<string?>> _token;
+    /// SignalR's own reconnect ladder, which a test shortens; null keeps the client's default.
+    readonly TimeSpan[]? _reconnectDelays;
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
@@ -68,9 +70,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                 : async () => (await tokenStore.GetValidTokensForServerAsync(
                     profiles.Name, profiles.Resolution.ServerUrl!)).Tokens?.AccessToken) { }
 
-    internal ServerConnectionService(string? serverUrl, Func<Task<string?>> accessTokenProvider) {
+    internal ServerConnectionService(
+            string? serverUrl, Func<Task<string?>> accessTokenProvider, TimeSpan[]? reconnectDelays = null) {
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;
+        _reconnectDelays = reconnectDelays;
     }
 
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
@@ -236,9 +240,9 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     }
 
     HubConnection Build() {
-        var hub = new HubConnectionBuilder()
-            .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token)
-            .WithAutomaticReconnect()
+        var builder = new HubConnectionBuilder()
+            .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token);
+        var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())
             .AddJsonProtocol(o => o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));

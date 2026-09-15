@@ -15,6 +15,11 @@ public class ServerConnectionServiceTests {
     static ServerConnectionService Lane(HubTestHost host, string? token = null) =>
         new(host.Url, () => Task.FromResult(token));
 
+    /// A lane whose SignalR reconnect ladder is the caller's, for the one test whose bound is
+    /// that ladder rather than the behaviour under it.
+    static ServerConnectionService Lane(HubTestHost host, TimeSpan[] reconnectDelays) =>
+        new(host.Url, () => Task.FromResult<string?>(null), reconnectDelays);
+
     static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 10) =>
         await source.Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
 
@@ -476,25 +481,24 @@ public class ServerConnectionServiceTests {
         await Assert.That(error!.Message).Contains(WireTokens.StreamNotAuthorized);
     }
 
-    // SignalR's own automatic reconnect (0/2/10/30s delays, ~42s worst case before it gives up
-    // and fires Closed) sits between the host stopping and the tail actually ending — pinned via
-    // Microsoft.AspNetCore.SignalR.Client.Internal.DefaultRetryPolicy — so the bound here is that
-    // ladder plus margin, not an arbitrary "shouldn't hang" timeout.
+    // SignalR's automatic reconnect sits between the host stopping and the tail actually ending,
+    // and its default ladder is ~42s before it gives up and fires Closed. This lane retries once,
+    // immediately, so the bound below measures the tail ending rather than that wait.
     [Test]
     public async Task StreamTailEndsCleanlyWhenTheHostStops() {
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = Lane(host);
+        await using var lane = Lane(host, [TimeSpan.Zero]);
         lane.Start();
         await Next(lane.Status, s => s.State == ServerLaneState.Connected);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(55));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var tail = Task.Run(async () => {
             await foreach (var _ in lane.TailStreamAsync("AgentSession-s1", null, cts.Token)) { }
         });
         await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Contains(("AgentSession-s1", (ulong?)null)), what: "the subscribe");
 
         await host.StopAsync();
-        await tail.WaitAsync(TimeSpan.FromSeconds(50));
+        await tail.WaitAsync(TimeSpan.FromSeconds(15));
     }
 
     [Test]
