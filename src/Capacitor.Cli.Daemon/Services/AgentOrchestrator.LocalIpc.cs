@@ -217,15 +217,15 @@ internal partial class AgentOrchestrator {
 
         // Named refusals rather than the delivery core's one drop token: the composer shows the
         // wording to the person who picked the files, and can keep their text to retry without them.
-        // The core refuses the same cases again for the server-dispatched lane, which never gets here.
+        // The core refuses the same cases again, on the same wordings, for the server-dispatched lane.
         if (attachmentIds is { Length: > 0 }) {
             if (AttachmentIds.Validate(attachmentIds) is { } invalid) return Refuse(SendTextReasons.AttachmentsRefused, invalid);
 
             if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
-                return Refuse(SendTextReasons.AttachmentsRefused, "attachments need a daemon-owned worktree");
+                return Refuse(SendTextReasons.AttachmentsRefused, AttachmentRefusals.NeedsOwnedWorktree);
 
             if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
-                return Refuse(SendTextReasons.AttachmentsRefused, "a quit command takes no attachments");
+                return Refuse(SendTextReasons.AttachmentsRefused, AttachmentRefusals.QuitTakesNone);
         }
 
         InputDeliveryOutcome outcome;

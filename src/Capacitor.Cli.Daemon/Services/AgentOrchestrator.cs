@@ -3860,20 +3860,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // user's own checkout — a vendor whose files would land there gets none — and a TUI-less
         // runtime's quit command never reaches a model, so files fetched for it would be orphaned.
         if (attachmentIds is { Length: > 0 }) {
-            if (AttachmentIds.Validate(attachmentIds) is { } invalid)
-                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, invalid);
-
-            if (agent.Kind != LaunchKind.Default)
-                return InputDeliveryOutcome.Drop(
-                    SendInputDropReason.DeliveryFailed, "attachments are not accepted by a review participant");
+            if (AttachmentIds.Validate(attachmentIds) is { } invalid) return RefuseAttachments(invalid);
+            if (agent.Kind != LaunchKind.Default) return RefuseAttachments(AttachmentRefusals.ReviewParticipant);
 
             if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
-                return InputDeliveryOutcome.Drop(
-                    SendInputDropReason.DeliveryFailed, "attachments need a daemon-owned worktree");
+                return RefuseAttachments(AttachmentRefusals.NeedsOwnedWorktree);
 
             if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
-                return InputDeliveryOutcome.Drop(
-                    SendInputDropReason.DeliveryFailed, "a quit command takes no attachments");
+                return RefuseAttachments(AttachmentRefusals.QuitTakesNone);
         }
 
         // A quit command typed into chat: a runtime with no TUI has nothing that interprets it, so
@@ -3909,6 +3903,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (isCodex && outcome.Kind is InputDeliveryKind.Delivered) ArmCodexTurnProbe(agent, codexBaseline, codexGen);
 
         return outcome;
+
+        // The wire carries only the drop token, so an attachment refusal's wording lives in the
+        // daemon's own log or nowhere: a server-dispatched prompt refused before the section is
+        // otherwise a bare "delivery_failed" with no local trace of why.
+        InputDeliveryOutcome RefuseAttachments(string detail) {
+            LogSendInputAttachmentsRefused(agent.Id, detail);
+
+            return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, detail);
+        }
 
         async Task<InputDeliveryOutcome> DeliverInSectionAsync() {
             // Losing side of the reap claim: a reap-claimed agent gets nothing — no write, no clock
@@ -3999,6 +4002,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                     return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, ex.Message);
                 }
+
+                // The write landed, so the files are the agent's: nothing after this point may take
+                // them back, however it fails.
+                batch = null;
 
                 // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
                 // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
@@ -5358,6 +5365,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment {AttachmentId} for agent {AgentId} unavailable: {Error}")]
     partial void LogAttachmentFetchFailed(string agentId, string? attachmentId, string? error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} cannot take attachments ({Detail})")]
+    partial void LogSendInputAttachmentsRefused(string agentId, string detail);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
     partial void LogSendInputUnknownAgent(string agentId, int knownAgents);

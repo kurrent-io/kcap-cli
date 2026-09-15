@@ -65,6 +65,49 @@ public class DeliverInputAttachmentsTests : IDisposable {
         await Assert.That(rt.SentInputs).IsEquivalentTo(new[] { "round 2" });
     }
 
+    /// <summary>The borrowed cwd is the user's own checkout, and a runtime placing files there is
+    /// refused on the delivery core too — not only on the local frame, which the server lane never
+    /// passes through.</summary>
+    [Test]
+    public async Task Borrowed_cwd_with_worktree_placement_is_dropped_before_any_fetch() {
+        await using var orch = Build();
+        Serve(Id(0));
+        var rt = new FakeAcpRuntime();
+        var agent = AgentOrchestratorHarness.SeedBorrowedAcpAgent(orch, "b1", rt);
+
+        var outcome = await orch.DeliverInputAsync(agent, "hello", [Id(0)]);
+
+        await Assert.That(outcome.Kind).IsEqualTo(InputDeliveryKind.Dropped);
+        await Assert.That(outcome.Reason).IsEqualTo(AgentOrchestrator.SendInputDropReason.DeliveryFailed);
+        await Assert.That(outcome.Error).IsEqualTo(AttachmentRefusals.NeedsOwnedWorktree);
+        await Assert.That(_server.LogEntries).IsEmpty();
+        await Assert.That(rt.SentInputs).IsEmpty();
+    }
+
+    /// <summary>A TUI-less runtime's quit never reaches a model, so files fetched for it would be
+    /// orphaned. The refusal replaces the quit outcome the same text without ids would produce, so
+    /// the agent keeps running rather than being stopped on a message that was refused.</summary>
+    [Test]
+    public async Task Quit_with_ids_on_a_non_pty_runtime_is_dropped_and_the_agent_keeps_running() {
+        await using var orch = Build();
+        Serve(Id(0));
+        var rt = new FakeAcpRuntime();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "a1", rt, worktreePath: Tmp.CreateDir("quit"));
+
+        var outcome = await orch.DeliverInputAsync(agent, " /quit ", [Id(0)]);
+
+        await Assert.That(outcome.Kind).IsEqualTo(InputDeliveryKind.Dropped);
+        await Assert.That(outcome.Reason).IsEqualTo(AgentOrchestrator.SendInputDropReason.DeliveryFailed);
+        await Assert.That(outcome.Error).IsEqualTo(AttachmentRefusals.QuitTakesNone);
+        await Assert.That(_server.LogEntries).IsEmpty();
+        await Assert.That(rt.HasExited).IsFalse();
+        await Assert.That(agent.Status).IsEqualTo("Running");
+
+        // The same text without ids is the quit it always was.
+        await Assert.That((await orch.DeliverInputAsync(agent, " /quit ", null)).Kind)
+            .IsEqualTo(InputDeliveryKind.QuitRequested);
+    }
+
     [Test]
     public async Task Failed_fetch_is_a_delivery_failed_drop_naming_the_id_and_the_runtime_gets_nothing() {
         await using var orch = Build();
