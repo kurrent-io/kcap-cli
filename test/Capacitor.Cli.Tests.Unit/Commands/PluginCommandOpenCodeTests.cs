@@ -27,7 +27,7 @@ public class PluginCommandOpenCodeTests {
         using var tmp = new TempDir();
         var pluginPath = tmp.PathTo("plugins", "kcap.ts");
 
-        var exit = await new PluginCommand(TestEnv(tmp.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(tmp.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--opencode", "--opencode-plugin-path", pluginPath, "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -47,7 +47,7 @@ public class PluginCommandOpenCodeTests {
 
         // Plugin-only: skip MCP/instructions so this stays isolated to the plugin file
         // (their config path derives from ambient OPENCODE_CONFIG_DIR/XDG, not this TempDir).
-        var exit = await new PluginCommand(TestEnv(tmp.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(tmp.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--opencode", "--opencode-plugin-path", pluginPath, "--if-installed",
              "--skip-opencode-mcp", "--skip-opencode-instructions"]);
         await Assert.That(exit).IsEqualTo(0);
@@ -67,7 +67,7 @@ public class PluginCommandOpenCodeTests {
         // via the marker, so --if-installed must still RECREATE the missing plugin, not skip it.
         dir.CreateFile(".kcap-extension-version", CapacitorVersion.Current());
 
-        var exit = await new PluginCommand(TestEnv(tmp.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(tmp.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--opencode", "--opencode-plugin-path", pluginPath, "--if-installed",
              "--skip-opencode-mcp", "--skip-opencode-instructions"]);
         await Assert.That(exit).IsEqualTo(0);
@@ -87,7 +87,7 @@ public class PluginCommandOpenCodeTests {
         await File.WriteAllTextAsync(pluginPath, "export const KcapPlugin = async () => ({})");
         await File.WriteAllTextAsync(marker, "1.0.0");
 
-        var exit = await new PluginCommand(TestEnv(tmp.Path)).HandleAsync(
+        var exit = await new PluginCommand(TestEnv(tmp.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "remove", "--opencode", "--opencode-plugin-path", pluginPath]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -113,7 +113,7 @@ public class PluginCommandOpenCodeTests {
             {"$schema":"https://opencode.ai/config.json","mcp":{"my-tool":{"type":"local","command":["my-tool","serve"],"enabled":true}}}
             """);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--opencode", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--opencode", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(env.Harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson))!.AsObject();
@@ -139,7 +139,7 @@ public class PluginCommandOpenCodeTests {
         var env = TestEnv(home.Path);
         SeedPlugin(env);
 
-        var exit = await new PluginCommand(env).HandleAsync(
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--opencode", "--if-installed", "--skip-opencode-mcp"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -155,7 +155,7 @@ public class PluginCommandOpenCodeTests {
         Directory.CreateDirectory(Path.GetDirectoryName(env.Harnesses.Of<OpenCodeHarness>().Paths.AgentsMd)!);
         await File.WriteAllTextAsync(env.Harnesses.Of<OpenCodeHarness>().Paths.AgentsMd, "# My rules\n\nAlways use tabs.\n");
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--opencode", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--opencode", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var content = await File.ReadAllTextAsync(env.Harnesses.Of<OpenCodeHarness>().Paths.AgentsMd);
@@ -170,7 +170,7 @@ public class PluginCommandOpenCodeTests {
         var env = TestEnv(home.Path);
         SeedPlugin(env);
 
-        var exit = await new PluginCommand(env).HandleAsync(
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--opencode", "--if-installed", "--skip-opencode-instructions"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -192,7 +192,7 @@ public class PluginCommandOpenCodeTests {
         await File.WriteAllTextAsync(env.Harnesses.Of<OpenCodeHarness>().Paths.AgentsMd, "# My rules\n\nAlways use tabs.\n");
         AgentInstructionsWriter.Write(env.Harnesses.Of<OpenCodeHarness>().Paths.AgentsMd, KcapAgentInstructions.Body);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "remove", "--opencode"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--opencode"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var mcp  = JsonNode.Parse(await File.ReadAllTextAsync(env.Harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson))!.AsObject()["mcp"]!.AsObject();

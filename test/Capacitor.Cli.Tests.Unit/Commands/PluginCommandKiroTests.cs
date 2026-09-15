@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Mcp;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -31,7 +32,7 @@ public class PluginCommandKiroTests {
             {"mcpServers":{"my-tool":{"command":"my-tool","args":["serve"],"autoApprove":["do_thing"]}}}
             """);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var servers = JsonNode.Parse(await File.ReadAllTextAsync(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson))!.AsObject()["mcpServers"]!.AsObject();
@@ -56,7 +57,7 @@ public class PluginCommandKiroTests {
         var env = TestEnv(home.Path);
         SeedAgent(env);
 
-        var exit = await new PluginCommand(env).HandleAsync(
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--kiro", "--if-installed", "--skip-kiro-mcp"]);
         await Assert.That(exit).IsEqualTo(0);
 
@@ -71,7 +72,7 @@ public class PluginCommandKiroTests {
         // settings/ dir does not exist yet — Register must create it.
         await Assert.That(Directory.Exists(Path.GetDirectoryName(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson)!)).IsFalse();
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         await Assert.That(File.Exists(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson)).IsTrue();
@@ -88,7 +89,7 @@ public class PluginCommandKiroTests {
         seeded["mcpServers"]!["my-tool"] = JsonNode.Parse("""{"command":"my-tool","args":["serve"]}""");
         await File.WriteAllTextAsync(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson, seeded.ToJsonString());
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "remove", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove", "--kiro"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var servers = JsonNode.Parse(await File.ReadAllTextAsync(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson))!.AsObject()["mcpServers"]!.AsObject();
@@ -109,7 +110,7 @@ public class PluginCommandKiroTests {
         JsonMcpConfigWriter.Register(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson, partial, McpConfigShape.Standard, cwd: null, new McpMarker("kiro", env.Home));
         await Assert.That(File.Exists(env.Harnesses.Of<KiroHarness>().Paths.KcapAgentJson)).IsFalse();  // no agent installed
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         // The refresh reached RegisterKiroMcpServersAsync (instead of bailing on the missing agent
@@ -129,7 +130,7 @@ public class PluginCommandKiroTests {
         var env = TestEnv(home.Path);
 
         // Neither agent nor MCP present → refresh must be a pure no-op (never force-installs).
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         await Assert.That(File.Exists(env.Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson)).IsFalse();

@@ -7,6 +7,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -36,7 +37,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class PiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -141,10 +143,10 @@ sealed class PiHookCommand(
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
         SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, forwarded.ToJsonString());
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
 
         if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -325,7 +327,7 @@ sealed class PiHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(file, reason),

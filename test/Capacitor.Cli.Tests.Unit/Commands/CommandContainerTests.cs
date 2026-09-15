@@ -2,6 +2,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -19,7 +20,7 @@ public class CommandContainerTests {
     ServiceProvider Build(string? baseUrl) =>
         new ServiceCollection()
             .AddCapacitorCli(
-                Config.Root, Home, Daemons.Store,
+                Config.Root, Home, new WorkingDirectory(AppContext.BaseDirectory), Daemons.Store,
                 baseUrl is null ? Resolutions.None(Config.Root) : Resolutions.At(baseUrl, Config.Root),
                 ProfileOverrides.None, MachineAuth.None, AuthEndpoints.Defaults,
                 new HookClock(TimeProvider.System), baseUrl, NoTelemetry.Startup)

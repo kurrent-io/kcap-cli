@@ -5,6 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -57,7 +58,7 @@ public class CodexSessionStartHandshakeOnPostFailureTests : IDisposable {
 
         using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient())).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
 
         // The rejection is still reported — this is not "pretend it worked".
         await Assert.That(exit).IsEqualTo(1);

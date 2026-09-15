@@ -162,7 +162,9 @@ public class ProcessHelpersTests {
                 .TrimEnd(Path.DirectorySeparatorChar);
         }
 
+#pragma warning disable RS0030 // the process's own directory is what this reports
         await Assert.That(Canonical(reported!)).IsEqualTo(Canonical(Directory.GetCurrentDirectory()));
+#pragma warning restore RS0030
     }
 
     [Test]

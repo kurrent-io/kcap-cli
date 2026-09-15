@@ -26,7 +26,7 @@ public class PluginCommandClaudeTests {
         using var fakeHome = new TempDir();
         var env            = TestEnv(fakeHome.Path);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var settingsPath = fakeHome.PathTo(".claude", "settings.json");
@@ -50,7 +50,7 @@ public class PluginCommandClaudeTests {
 
         var env = TestEnv(fakeHome.Path, pluginPath: pluginDir.Path);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         // Marketplace path must now point at the new plugin dir.
@@ -74,7 +74,7 @@ public class PluginCommandClaudeTests {
         claudeDir.CreateFile(ClaudePluginInstaller.MarkerFileName,
             CapacitorVersion.Current());
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(["plugin", "install", "--if-installed"]);
+        var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
@@ -95,7 +95,7 @@ public class PluginCommandClaudeTests {
         // …but plugin dir resolution fails (null = no plugin available).
         var env = TestEnv(fakeHome.Path, pluginPath: null, stderr: capturedErr);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capturedErr.ToString()).IsEmpty();
     }
@@ -107,7 +107,7 @@ public class PluginCommandClaudeTests {
         var       stdout    = new StringWriter();
 
         var env  = TestEnv(fakeHome.Path, pluginPath: pluginDir.Path, stdout: stdout);
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install"]);
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -133,7 +133,7 @@ public class PluginCommandClaudeTests {
             """);
 
         var env  = TestEnv(fakeHome.Path, pluginPath: pluginDir.Path, stdout: stdout);
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--if-installed"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--if-installed"]);
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -155,7 +155,7 @@ public class PluginCommandClaudeTests {
             """);
         claudeDir.CreateFile(ClaudePluginInstaller.MarkerFileName, CapacitorVersion.Current());
 
-        var exit = await new PluginCommand(TestEnv(fakeHome.Path)).HandleAsync(["plugin", "remove"]);
+        var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "remove"]);
         await Assert.That(exit).IsEqualTo(0);
 
         await Assert.That(File.Exists(claudeDir.PathTo(ClaudePluginInstaller.MarkerFileName))).IsFalse();

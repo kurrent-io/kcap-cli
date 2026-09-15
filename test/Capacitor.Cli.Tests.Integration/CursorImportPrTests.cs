@@ -4,6 +4,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -78,7 +79,7 @@ public class CursorImportPrTests : IDisposable {
                 detectCalls++;
                 return Task.FromResult<RepositoryPayload?>(
                     new RepositoryPayload { Owner = "acme", RepoName = "widgets" });
-            });
+            }, router: new GitProviderRouter());
 
         using var client = new HttpClient();
 

@@ -27,7 +27,7 @@ public class ImportProviderDetectionTests {
     public async Task Import_detection_resolves_repo_without_spawning_a_provider_cli() {
         var log = new List<string>();
 
-        var repo = await RepositoryDetection.DetectRepositoryAsync(Config.Root, 
+        var repo = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
             "/fake/import/skip-pr", budget: null, detectPullRequest: false, run: Recording(log));
 
         // Base repo info still resolves from git alone…
@@ -43,7 +43,7 @@ public class ImportProviderDetectionTests {
     public async Task Live_detection_still_runs_provider_detection() {
         var log = new List<string>();
 
-        var repo = await RepositoryDetection.DetectRepositoryAsync(Config.Root, 
+        var repo = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
             "/fake/live/do-pr", budget: null, detectPullRequest: true, run: Recording(log));
 
         await Assert.That(log.Any(c => c.StartsWith("gh pr view", StringComparison.Ordinal))).IsTrue(); // provider detection ran

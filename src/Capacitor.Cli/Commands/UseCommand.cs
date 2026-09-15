@@ -5,7 +5,7 @@ using RepoConfigJsonContextIndented = Capacitor.Cli.Core.Config.RepoConfigJsonCo
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class UseCommand(ConfigRoot config) {
+public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await Console.Error.WriteLineAsync("Usage: kcap use <profile-name> [--global] [--save]");
@@ -15,9 +15,12 @@ public sealed class UseCommand(ConfigRoot config) {
         var name = args[1];
         var global = args.Contains("--global");
         var save = args.Contains("--save");
-        var repoPath = global ? null : AppConfig.RepoRoot;
+        // Resolved at most once, and not at all for a global selection that saves nothing:
+        // RepoRootOf shells out to git, which a change needing no repository must not wait on.
+        var repoRoot = !global || save ? AppConfig.RepoRootOf(workdir) : null;
+        var repoPath = global ? null : repoRoot;
 
-        return await SetProfile(name, repoPath, global, save, save ? AppConfig.RepoRoot : null);
+        return await SetProfile(name, repoPath, global, save, save ? repoRoot : null);
     }
 
     internal async Task<int> SetProfile(

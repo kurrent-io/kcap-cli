@@ -341,33 +341,38 @@ public class LocalPermissionBridgeTests {
         }
     }
 
+    /// <summary>A port below every platform's ephemeral range — Linux allocates from 32768, macOS
+    /// and Windows from 49152 — so nothing else on the machine is handed it while this test holds
+    /// the gap between releasing it and binding it again.</summary>
+    const int RebindablePort = 28137;
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StopAsyncReleasesPort() {
-        var (bridge, _) = CreateBridge();
+        var (bridge, _) = CreateBridgeOn(new FakeLoopbackPortSource(RebindablePort));
+
         TcpListener? probe    = null;
         var          disposed = false;
 
         try {
             await bridge.StartAsync(CancellationToken.None);
 
-            var port = new Uri(bridge.BaseUrl!).Port;
+            // The bridge retries onto an ephemeral port when its first choice is taken, and a probe
+            // rebinding a port the bridge never held would pass whatever StopAsync did.
+            await Assert.That(new Uri(bridge.BaseUrl!).Port).IsEqualTo(RebindablePort);
+
             await bridge.StopAsync(CancellationToken.None);
 
-            // After stop, the port should accept a fresh bind. If StopAsync didn't release
-            // it, this would either throw or hang.
-            probe = new TcpListener(IPAddress.Loopback, port);
+            probe = new TcpListener(IPAddress.Loopback, RebindablePort);
             probe.Start();
 
-            // Keep the replacement listener bound while disposing the bridge. This reproduces
-            // the suite-level race where StopAsync released the port, another fixture claimed it,
-            // and the old listener's later Close() threw EADDRINUSE.
+            // Disposed while the replacement listener holds the port: shutting down a bridge that
+            // no longer owns what it bound must not fault.
             await bridge.DisposeAsync();
             disposed = true;
         } finally {
             probe?.Stop();
 
-            // Ensure cleanup still runs if setup or the assertion above fails. Dispose is
-            // intentionally idempotent, so retrying after a partial shutdown is safe.
+            // Dispose is idempotent, so cleaning up after a partial shutdown is safe.
             if (!disposed) await bridge.DisposeAsync();
         }
     }

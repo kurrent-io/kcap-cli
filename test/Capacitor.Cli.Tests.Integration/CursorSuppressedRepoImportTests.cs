@@ -4,6 +4,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -66,7 +67,7 @@ public class CursorSuppressedRepoImportTests : IDisposable {
             WriteOneCursorSessionWithWorkspace(),
             WorkspaceStorageDir,
             repoDetector: _ => Task.FromResult<RepositoryPayload?>(
-                new RepositoryPayload { Owner = "acme", RepoName = "widgets" }));
+                new RepositoryPayload { Owner = "acme", RepoName = "widgets" }), router: new GitProviderRouter());
 
         using var client = new HttpClient();
 
