@@ -269,6 +269,44 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- The chip look on a radio. Fluent draws an ellipse glyph beside the content, so this is a
+             template swap rather than setters; the presenter is deliberately not named
+             PART_ContentPresenter, which keeps Fluent's per-state presenter styles off the chip. -->
+        <Style Selector="RadioButton.kcapChoice">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="RadioButton">
+                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Name="ChipContent" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Foreground="{TemplateBinding Foreground}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="RadioButton.kcapChoice:pointerover">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="RadioButton.kcapChoice:checked,
+                         RadioButton.kcapChoice:checked:pointerover">
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <!-- Dimming the whole chip rather than its brushes keeps the checked one legible while a
+             send holds the form. -->
+        <Style Selector="RadioButton.kcapChoice:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
         <Style Selector="Button.kcapPrimary">
             <Setter Property="Background" Value="{StaticResource KcapPrimaryBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
