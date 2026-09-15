@@ -1470,6 +1470,12 @@ public class ChatTabViewModelTests {
             await Assert.That(chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");
             await Assert.That(chat.ActivityNote).IsEqualTo("");
 
+            // A refused feed keeps answering Ok with nothing; that is no recovery.
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Failed);
+
+            feed.ResetNext = true;
             time.Advance(ChatTabViewModel.PollInterval);
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Reading);

@@ -398,6 +398,10 @@ public class RemoteSessionViewModelTests {
             await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Failed, "the refusal");
             await Assert.That(vm.Chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");
             await Assert.That(vm.ShowsChatPane).IsTrue();
+            // The stopped run answers every later poll with nothing; the explanation stays.
+            await h.TickAsync(vm);
+            await h.TickAsync(vm);
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Failed);
             await vm.TeardownAsync();
         });
     }

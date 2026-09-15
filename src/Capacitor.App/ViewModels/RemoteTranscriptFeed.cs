@@ -126,7 +126,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
             } catch (HubException ex) {
                 // The hub refused the subscribe, and a refusal it repeats is not worth retrying:
                 // report it and stop, rather than tailing a stream this caller cannot read.
-                Enqueue(FeedStatus.Failed, ex.Message.Contains(WireTokens.StreamNotAuthorized, StringComparison.Ordinal)
+                Enqueue(attempt, FeedStatus.Failed, ex.Message.Contains(WireTokens.StreamNotAuthorized, StringComparison.Ordinal)
                     ? "not authorized to read this session's stream"
                     : ex.Message);
                 return;
@@ -152,8 +152,8 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         lock (_lock) if (_position is not null) return true;
         var fetch = await _readDetail(_sessionId, ct).ConfigureAwait(false);
         if (!IsCurrent(attempt)) return false;
-        if (fetch.NotFound) { Enqueue(FeedStatus.Missing); return false; }
-        if (fetch.Unauthorized) { Enqueue(FeedStatus.Failed, "not signed in"); return false; }
+        if (fetch.NotFound) { Enqueue(attempt, FeedStatus.Missing); return false; }
+        if (fetch.Unauthorized) { Enqueue(attempt, FeedStatus.Failed, "not signed in"); return false; }
         if (fetch.Detail is not { } detail) throw new InvalidOperationException("session detail unavailable");
 
         var lines = new List<ProjectedLine>();
@@ -196,8 +196,10 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 ? null : new(projected, offset);
     }
 
-    void Enqueue(FeedStatus status, string? failure = null) {
-        lock (_lock) { _pendingFailure = (status, failure); }
+    /// A verdict belongs to the attempt that reached it: one landing after its run was stopped
+    /// must not become the current run's.
+    void Enqueue(int attempt, FeedStatus status, string? failure = null) {
+        lock (_lock) { if (_attempt == attempt) _pendingFailure = (status, failure); }
     }
 
     void LogOnce(string reason) {

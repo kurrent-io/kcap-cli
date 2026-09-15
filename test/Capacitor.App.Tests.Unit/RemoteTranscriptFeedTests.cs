@@ -206,4 +206,25 @@ public class RemoteTranscriptFeedTests {
         await Task.Delay(50);
         await Assert.That(h.Lane.Tails.Count).IsEqualTo(1);
     }
+
+    /// A refusal that lands after the run it belongs to was stopped is that run's verdict, not
+    /// the current one's.
+    [Test]
+    public async Task A_refusal_from_a_superseded_run_is_not_reported() {
+        using var h = new Harness();
+        var gate = new TaskCompletionSource();
+        h.Lane.TailHandler = (_, _) => {
+            gate.Task.Wait(TimeSpan.FromSeconds(5));
+            return new HubException(WireTokens.StreamNotAuthorized);
+        };
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+
+        h.Access.OnNext(SessionAccessState.Unavailable);
+        gate.SetResult();
+        await WaitUntilAsync(() => h.Feed.PendingRunForTesting is { IsCompleted: true }, what: "the run");
+
+        await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Reset);
+        await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
+    }
 }

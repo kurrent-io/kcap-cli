@@ -549,11 +549,14 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 break;
         }
 
-        if (_failureNote is not null) {
+        // An empty read is no recovery: a refused feed keeps answering Ok with nothing, and the
+        // explanation has to outlive that. Rows, or a new source, clear it.
+        var delivered = read.Status == FeedStatus.Reset || read.Lines.Count > 0;
+        if (delivered && _failureNote is not null) {
             _failureNote = null;
             RefreshActivityNote();
         }
-        Phase = ChatTabPhase.Reading;
+        if (delivered || Phase != ChatTabPhase.Failed) Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
         foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline && !q.IsForeign))
