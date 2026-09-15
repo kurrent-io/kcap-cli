@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -327,7 +328,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             Func<CancellationToken, Task<string?>>? viewerId = null,
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
-            IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null) {
+            IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
+            string? appServerUrl = null) {
         _daemon = daemon;
         _state = state;
         _launch = launch;
@@ -437,12 +439,20 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         var signInRequired = _signInRequired.CombineLatest(laneSignedOut, (expired, lane) => expired || lane);
         SignInExpired = signInRequired;
 
+        // IPC attaches by daemon name, so an existing local daemon can target another server.
+        var selectedServerLane = _laneStatus.CombineLatest(
+            daemon.Snapshots.Select(s => ServerIdentity.SameServer(s.Daemon.ServerUrl, appServerUrl)).StartWith(false),
+            _machineSelectionChanges,
+            (lane, sameServer, sel) => (
+                State: sel.Remote || sameServer ? lane.State : ServerLaneState.Dormant,
+                Applies: sel.Remote || sameServer));
+
         var signInState = selectedAvailability
             .CombineLatest(
                 signInRequired,
                 _awaitingServerAfterSignIn,
-                _laneStatus.Select(s => s.State),
-                (a, expired, awaiting, lane) => (Availability: a, Expired: expired, Awaiting: awaiting, Lane: lane))
+                selectedServerLane,
+                (a, expired, awaiting, lane) => (Availability: a, Expired: expired, Awaiting: awaiting && lane.Applies, Lane: lane.State))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Chained rather than one wide CombineLatest: local status/connection/signIn/awaiting
         // first, then folded against the selection-aware availability and the selection itself —
@@ -453,8 +463,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
                 daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""),
                 signInRequired,
                 _awaitingServerAfterSignIn,
-                _laneStatus.Select(s => s.State),
-                (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting, lane));
+                selectedServerLane,
+                (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State));
         var notices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
@@ -475,7 +485,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             .Select(message => message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _bannerBusy = notices
+        _bannerBusy = bannerMessages
             .Select(BusyNotice)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
@@ -578,8 +588,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// only for a local selection's daemon-down/incompatible text — a remote pick has no local
     /// daemon affordance to name, so those never apply to it (a lost lane there is always the
     /// generic ServerLostNotice/ConnectingNotice, matching RemoteAvailabilityFor's own vocabulary).
-    /// A live app lane (`Connecting`/`Retrying`/`Connected`) with the daemon still disconnected is
-    /// catch-up, not a lost session — ServerLostNotice is only for a dormant/absent lane.
+    /// For a local selection, lane is Dormant unless its server matches the daemon's.
     internal static string? NoticeFor(
             AttachStatus status, string daemonConnection, bool signInExpired, bool awaitingServer,
             bool remoteSelected, LaunchAvailability selectedAvailability,

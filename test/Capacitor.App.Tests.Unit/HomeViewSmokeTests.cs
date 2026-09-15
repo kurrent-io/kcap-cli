@@ -22,6 +22,8 @@ namespace Capacitor.App.Tests.Unit;
 /// headless something to Show(); session setup and control lookup otherwise copy
 /// MainWindowSmokeTests exactly (see that file's own header comment).
 public class HomeViewSmokeTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     /// Real-shaped agent ids (Guid("N"), 32 hex digits): a Started outcome carrying anything else
     /// is HomeViewModel's "launched but unopenable" error, which would keep StartErrorText visible.
     const string LaunchedId = "0123456789abcdef0123456789abcdef";
@@ -131,32 +133,33 @@ public class HomeViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task After_sign_in_the_banner_shows_a_loader_until_the_daemon_reconnects() {
         var (text, signIn, busy) = await AvaloniaSession.DispatchAsync(() => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
-            var vm = new HomeViewModel(
+            using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(Array.Empty<string>()), laneStatus: lane.Status);
+                () => Task.FromResult(Array.Empty<string>()), laneStatus: lane.Status,
+                appServerUrl: "http://localhost:9999");
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
             var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
+            try {
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
 
-            vm.NotifySignInCompleted();
-            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            Dispatcher.UIThread.RunJobs();
+                vm.NotifySignInCompleted();
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+                Dispatcher.UIThread.RunJobs();
 
-            var notice = Find<TextBlock>(window, "BannerMessageText")!;
-            var signInBtn = Find<Button>(window, "HomeSignInButton")!;
-            var bar = Find<ProgressBar>(window, "BannerBusyBar")!;
-            var result = (notice.Text, signInBtn.IsVisible, bar.IsVisible);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return result;
+                var notice = Find<TextBlock>(window, "BannerMessageText")!;
+                var signInBtn = Find<Button>(window, "HomeSignInButton")!;
+                var bar = Find<ProgressBar>(window, "BannerBusyBar")!;
+                return (notice.Text, signInBtn.IsVisible, bar.IsVisible);
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
         });
 
         await Assert.That(text).IsEqualTo(HomeViewModel.FinishingSignInNotice);
