@@ -512,12 +512,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Take(1)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
-            WorkspaceViewModel local when _directory is { } directory => directory.Rows.Connect()
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .SelectMany(changes => changes
-                    .Where(c => c.Key == $"local:{local.AgentId}" && c.Reason == ChangeReason.Remove)
-                    .Select(c => c.Current))
-                .Where(dropped => MovedToServer(directory, dropped))
+            WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
                 .Take(1)
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
             _ => Disposable.Empty,
@@ -528,15 +523,35 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         else watch.Dispose();
     }
 
+    /// Fires once a dropped local row's own session stands live on the server lane. The registry
+    /// can list the twin before it knows its session id, so the dropped row's id is kept and the
+    /// twin's later revisions are held against it until the local row returns.
+    static IObservable<bool> LocalRowMoves(IAgentDirectory directory, string agentId) {
+        var localKey = $"local:{agentId}";
+        var remoteKey = $"remote:{agentId}";
+        string? droppedSession = null;
+        return directory.Rows.Connect()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .SelectMany(changes => changes)
+            .Where(change => {
+                if (change.Key == localKey) {
+                    droppedSession = change.Reason == ChangeReason.Remove ? change.Current.SessionId : null;
+                    return directory.Rows.Lookup(remoteKey) is { HasValue: true, Value: var twin } && MovedToServer(twin, droppedSession);
+                }
+                return change.Key == remoteKey && change.Reason is ChangeReason.Add or ChangeReason.Update
+                    && MovedToServer(change.Current, droppedSession);
+            })
+            .Select(_ => true);
+    }
+
     /// The dropped row's own session, still live on the server lane. A shared agent id proves
     /// nothing on its own — the directory's dedup fails open, so two unrelated agents can carry one
     /// id — which is why the session ids must match, the same proof the remote host demands of a
     /// local twin before it hands the id over.
-    static bool MovedToServer(IAgentDirectory directory, AgentRow dropped) =>
-        directory.Rows.Lookup($"remote:{dropped.Id}") is { HasValue: true, Value: var row }
-        && !SessionStatusDots.IsTerminal(row.Status)
-        && row.SessionId is { Length: > 0 }
-        && row.SessionId == dropped.SessionId;
+    static bool MovedToServer(AgentRow twin, string? droppedSession) =>
+        droppedSession is { Length: > 0 }
+        && !SessionStatusDots.IsTerminal(twin.Status)
+        && twin.SessionId == droppedSession;
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;

@@ -980,4 +980,41 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsNull();
         });
     }
+
+    /// The registry can list the twin before it knows its session id: the proof completes when
+    /// the id arrives, and the workspace follows then.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_dropped_local_row_follows_its_twin_once_the_twins_session_id_arrives() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: id => host.Directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                    : host.Directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote : null,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+
+            vm.OpenSession("a1");
+            var local = vm.CurrentWorkspace;
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = null, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }));
+            host.Directory.Rows.Remove("local:a1");
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }));
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+        });
+    }
 }
