@@ -12,12 +12,43 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class PtyHostedAgentRuntimeInputLaneTests {
     const string Paste = "\x1b[200~hi\x1b[201~";
 
+    static readonly TimeSpan PollBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>A window long enough for a write the test expects NOT to happen to show up.</summary>
+    static readonly TimeSpan NegativeBudget = TimeSpan.FromMilliseconds(250);
+
     /// <summary>
-    /// Lets a continuation the fake clock just released reach the PTY before an assertion reads it:
-    /// advancing a <see cref="FakeTimeProvider"/> completes the delay but does not run the awaiting
-    /// state machine, and the next <c>Task.Delay</c> is only registered once it does.
+    /// Polls <paramref name="condition"/> until it holds or the real-time budget runs out, returning
+    /// whether it held. Advancing a <see cref="FakeTimeProvider"/> releases a delay but does not run
+    /// the awaiting state machine, so a fixed sleep would race the continuation instead of observing
+    /// it.
     /// </summary>
-    static Task SettleAsync() => Task.Delay(25);
+    static async Task<bool> PollAsync(Func<bool> condition, TimeSpan? budget = null) {
+        var deadline = DateTime.UtcNow + (budget ?? PollBudget);
+
+        while (!condition()) {
+            if (DateTime.UtcNow > deadline) return false;
+            await Task.Delay(5);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Advances the fake clock in <paramref name="step"/>s until <paramref name="condition"/> holds.
+    /// An advance only credits a delay that is already registered, and the continuation registering
+    /// the next one runs after the advance returns — so the clock is driven from the condition, never
+    /// from a guessed number of advances.
+    /// </summary>
+    static async Task AdvanceUntilAsync(FakeTimeProvider time, TimeSpan step, Func<bool> condition, string what) {
+        var deadline = DateTime.UtcNow + PollBudget;
+
+        while (!condition()) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for {what}.");
+            time.Advance(step);
+            await Task.Delay(5);
+        }
+    }
 
     [Test]
     public async Task Paste_is_followed_by_one_cr_no_earlier_than_150ms() {
@@ -30,11 +61,10 @@ public class PtyHostedAgentRuntimeInputLaneTests {
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { Paste }, CollectionOrdering.Matching);
 
         time.Advance(TimeSpan.FromMilliseconds(149));
-        await SettleAsync();
-        await Assert.That(pty.Writes.Count).IsEqualTo(1);
+        await Assert.That(await PollAsync(() => pty.Writes.Count > 1, NegativeBudget)).IsFalse();
 
         time.Advance(TimeSpan.FromMilliseconds(1));
-        await send;
+        await send.WaitAsync(PollBudget);
 
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { Paste, "\r" }, CollectionOrdering.Matching);
     }
@@ -51,12 +81,10 @@ public class PtyHostedAgentRuntimeInputLaneTests {
         var raw  = rt.SendRawInputAsync("b"u8.ToArray());
         var key  = rt.SendSpecialKeyAsync("Escape");
 
-        await SettleAsync();
-        await Assert.That(raw.IsCompleted).IsFalse();
-        await Assert.That(key.IsCompleted).IsFalse();
+        await Assert.That(await PollAsync(() => raw.IsCompleted || key.IsCompleted, NegativeBudget)).IsFalse();
 
-        time.Advance(TimeSpan.FromMilliseconds(150));
-        await Task.WhenAll(send, raw, key);
+        await AdvanceUntilAsync(time, TimeSpan.FromMilliseconds(150),
+            () => send.IsCompleted && raw.IsCompleted && key.IsCompleted, "the queued writers to drain");
 
         await Assert.That(pty.Writes[0]).IsEqualTo("a");
         await Assert.That(pty.Writes[1]).IsEqualTo(Paste);
@@ -73,12 +101,8 @@ public class PtyHostedAgentRuntimeInputLaneTests {
         var send = rt.SendUserInputAsync("hi");
         var raw  = rt.SendRawInputAsync("k"u8.ToArray());
 
-        foreach (var d in PtyHostedAgentRuntime.SubmitCarriageReturnSchedule) {
-            await SettleAsync();
-            time.Advance(d);
-        }
-
-        await Task.WhenAll(send, raw);
+        await AdvanceUntilAsync(time, PtyHostedAgentRuntime.SubmitCarriageReturnSchedule[^1],
+            () => send.IsCompleted && raw.IsCompleted, "the submit spray to finish");
 
         await Assert.That(pty.Writes[^1]).IsEqualTo("k");
         await Assert.That(pty.Writes.Count(w => w == "\r")).IsEqualTo(PtyHostedAgentRuntime.SubmitCarriageReturnSchedule.Length);
@@ -93,15 +117,10 @@ public class PtyHostedAgentRuntimeInputLaneTests {
         var send = rt.SendUserInputAsync("hi");
         var stop = rt.RequestGracefulStopAsync();
 
-        await SettleAsync();
-        await Assert.That(pty.Writes).IsEquivalentTo(new[] { Paste }, CollectionOrdering.Matching);
+        await Assert.That(await PollAsync(() => pty.Writes.Count > 1, NegativeBudget)).IsFalse();
 
-        time.Advance(TimeSpan.FromMilliseconds(150));
-        await send;
-
-        await SettleAsync();
-        time.Advance(TimeSpan.FromMilliseconds(150));
-        await stop;
+        await AdvanceUntilAsync(time, TimeSpan.FromMilliseconds(150),
+            () => send.IsCompleted && stop.IsCompleted, "the paste and the stop to finish");
 
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { Paste, "\r", "/exit", "\r" }, CollectionOrdering.Matching);
     }

@@ -30,7 +30,9 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool
         TimeSpan.FromMilliseconds(1200),
     ];
 
+    /// <summary>
     /// Past codex's 120ms post-paste Enter-suppression window, so the one CR still submits.
+    /// </summary>
     static readonly TimeSpan SingleSubmitDelay = TimeSpan.FromMilliseconds(150);
 
     readonly TimeProvider   _time = time ?? TimeProvider.System;
