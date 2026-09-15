@@ -3,6 +3,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Remote.Models;
 using DynamicData;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.RemoteFixtures;
@@ -384,6 +385,39 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.Chat.QueuedMessages[0].IsForeign).IsTrue();
             h.Lane.PendingInputSubject.OnNext(new("other-session", []));
             await Assert.That(vm.Chat.QueuedMessages.Count).IsEqualTo(1);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_lapsed_sign_in_says_so_in_place_of_the_transcript() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness { Detail = new(null, Unauthorized: true) };
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Failed, "the refusal");
+            await Assert.That(vm.Chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The detail route answered but the stream refused: the seeded rows stay, and the reason sits
+    /// under them instead of leaving a transcript that silently stops growing.
+    [Test]
+    public async Task A_refused_stream_keeps_the_seeded_rows_and_says_why_beneath_them() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.UserMessageReceived, Hello),
+                Event(1, CanonicalEventTypes.AssistantTextGenerated, HiThere)));
+            h.Lane.TailHandler = (_, _) => new HubException(WireTokens.StreamNotAuthorized);
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.ActivityNote.Length > 0, "the reason");
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(vm.Chat.Items.Count).IsEqualTo(2);
+            await Assert.That(vm.Chat.ActivityNote).IsEqualTo("The transcript could not be read: not authorized to read this session's stream");
             await vm.TeardownAsync();
         });
     }

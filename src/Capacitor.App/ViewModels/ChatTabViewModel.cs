@@ -17,7 +17,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-public enum ChatTabPhase { Waiting, Reading, Missing, Unavailable }
+public enum ChatTabPhase { Waiting, Reading, Missing, Unavailable, Failed }
 
 /// The Chat tab: the session's transcript, drained from a feed into chat rows, plus the composer
 /// that sends through whatever channel the session offers. Ctor-scoped; TeardownAsync is the one exit.
@@ -35,6 +35,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
     readonly Func<string, IChatTranscriptFeed>? _openFeed;
     readonly string? _unavailableNote;
     readonly string? _missingNote;
+    /// The last read's refusal, cleared by the next read that delivers. It stands in for the rows
+    /// while there are none and sits under them otherwise.
+    string? _failureNote;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
@@ -121,8 +124,12 @@ public sealed class ChatTabViewModel : ReactiveObject {
         ChatTabPhase.Waiting     => "Waiting for the transcript…",
         ChatTabPhase.Missing     => _missingNote ?? "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
+        ChatTabPhase.Failed      => FailureNote(_failureNote),
         _                        => "",
     };
+
+    static string FailureNote(string? reason) =>
+        reason is null ? "The transcript could not be read" : $"The transcript could not be read: {reason}";
 
     string _composerText = "";
     int _composerEdits;
@@ -201,10 +208,12 @@ public sealed class ChatTabViewModel : ReactiveObject {
             _worked += _time.GetElapsedTime(pausedAt);
             _workingSince = null;
         }
-        ActivityNote = _status == "Starting"
-            ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
-            : working && _workingSince is { } since
-                ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
+        ActivityNote = _failureNote is { } failure && Phase != ChatTabPhase.Failed
+            ? FailureNote(failure)
+            : _status == "Starting"
+                ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
+                : working && _workingSince is { } since
+                    ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
     }
 
     static string WorkingNote(TimeSpan elapsed) {
@@ -464,6 +473,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation));
         previous?.Feed.Dispose();
         RebaseQueuedMessages(CurrentOffset);
+        _failureNote = null;
         var wasWaiting = _phase == ChatTabPhase.Waiting;
         Phase = ChatTabPhase.Waiting;
         // The rows are gone, so the view has to re-read what stands in for them even when the phase
@@ -518,7 +528,14 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 Phase = ChatTabPhase.Missing;
                 return;
             case FeedStatus.Failed:
-                LogOnce(read.Failure ?? "read failed");
+                var reason = read.Failure ?? "read failed";
+                LogOnce(reason);
+                _failureNote = reason;
+                // No rows on screen: the reason stands in for them. Rows already shown stay, with
+                // the reason beneath them.
+                if (_items.Count == 0) Phase = ChatTabPhase.Failed;
+                this.RaisePropertyChanged(nameof(PhaseNote));
+                RefreshActivityNote();
                 return;
             case FeedStatus.Reset:
                 // Skip everything the new source replays: it may be history, not receipts. The feed
@@ -532,6 +549,10 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 break;
         }
 
+        if (_failureNote is not null) {
+            _failureNote = null;
+            RefreshActivityNote();
+        }
         Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.

@@ -1330,8 +1330,13 @@ public class ChatTabViewModelTests {
     /// construction, so a feed that resets on its first read would spend it before the test.
     sealed class ScriptedFeed : IChatTranscriptFeed {
         public bool ResetNext;
+        public string? FailNext;
 
         public FeedRead ReadAppended() {
+            if (FailNext is { } failure) {
+                FailNext = null;
+                return new(FeedStatus.Failed, [], Failure: failure);
+            }
             if (!ResetNext) return new(FeedStatus.Ok, []);
             ResetNext = false;
             return new(FeedStatus.Reset, []);
@@ -1444,6 +1449,31 @@ public class ChatTabViewModelTests {
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.QueuedMessages.Single(q => q.IsForeign)).IsSameReferenceAs(foreign);
             await Assert.That(foreign.IsUnconfirmed).IsFalse();
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A refusal with nothing on screen replaces the wait with its reason; the next read that
+    /// delivers clears it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_refused_read_says_why_in_place_of_the_wait_until_a_read_delivers() {
+        await RunOnUiAsync(async () => {
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feed = new ScriptedFeed { FailNext = "not signed in" };
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => feed,
+                new RecordingOpener(), time, new FakePermissionService());
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Failed);
+            await Assert.That(chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");
+            await Assert.That(chat.ActivityNote).IsEqualTo("");
+
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(chat.PhaseNote).IsEqualTo("");
             await chat.TeardownAsync();
         });
     }
