@@ -300,6 +300,16 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
+        <!-- A prompt card that takes dropped files. The resting border lives here rather than on
+             the card so the drag-over ring can outrank it: a local value on the control beats
+             every style, and a style closer to the control beats one declared here — which is why
+             the resting brush cannot stay behind in the view either. -->
+        <Style Selector="Border.attachTarget">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="Border.attachTarget.dragOver">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+        </Style>
         <!-- Live tool-call status: a soft pulse so an in-flight row is never a blank gap. -->
         <Style Selector="Border.toolRunning">
             <Style.Animations>

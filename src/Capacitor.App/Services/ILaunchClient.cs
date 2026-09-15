@@ -6,7 +6,8 @@ namespace Capacitor.App.Services;
 /// conventions (the server rejects a null model; the daemon treats whitespace as no request).
 public sealed record LaunchRequest(
     string DaemonName, string RepoPath, string Vendor, string? Prompt,
-    string Model = "", string? Effort = null, string? PermissionMode = null);
+    string Model = "", string? Effort = null, string? PermissionMode = null,
+    IReadOnlyList<string>? AttachmentIds = null);
 
 /// Unauthorized marks a server 401 — the caller routes it to sign-in instead of rendering the
 /// raw transport message.
@@ -59,6 +60,9 @@ public static class LaunchPayload {
         Effort     = string.IsNullOrWhiteSpace(r.Effort) ? null : r.Effort,
         RepoPath   = r.RepoPath,
         Vendor     = r.Vendor,
+        // Null, not an empty array: a launch with no files sends what it sent before attachments
+        // existed.
+        AttachmentIds = r.AttachmentIds is { Count: > 0 } ids ? [.. ids] : null,
         PermissionMode = string.IsNullOrWhiteSpace(r.PermissionMode) ? null : r.PermissionMode,
     };
 }

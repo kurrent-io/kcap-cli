@@ -28,9 +28,12 @@
                            IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
 
-            <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+            <Border x:Name="GoalCard" Classes="attachTarget" Background="{StaticResource KcapSurfaceBrush}"
                     BorderThickness="1" CornerRadius="12" Padding="14">
                 <StackPanel Spacing="12">
+                    <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
+                                               IsVisible="{Binding Tray.HasAttachments}" />
+
                     <TextBox x:Name="GoalInput" Classes="kcapEmbedded" Text="{Binding Goal}"
                              PlaceholderText="What should we build? Type a goal or paste an issue, PR, or work-item URL…"
                              Background="Transparent" Foreground="{StaticResource KcapTextBrush}"
@@ -67,6 +70,15 @@
 
                         <Grid ColumnDefinitions="*,Auto">
                             <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
+                                <Button x:Name="AttachButton" Content="+"
+                                        IsEnabled="{Binding CanAttach}" ToolTip.Tip="{Binding AttachHint}"
+                                        ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
+                                        Width="26" Height="26" Padding="0" FontSize="15" CornerRadius="999" Cursor="Hand"
+                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                        Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                                        Foreground="{StaticResource KcapMutedBrush}" />
+
                                 <!-- Harness + model picker: built per open in code-behind, like the repo menu. -->
                                 <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
@@ -106,10 +118,15 @@
                                     Background="{StaticResource KcapPrimaryBrush}" Width="36" Height="36" CornerRadius="18"
                                     Padding="0" Margin="12,0,0,0" VerticalAlignment="Center"
                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                    ToolTip.Tip="{Binding StartButtonTip}"
                                     ToolTip.ShowOnDisabled="True"
                                     AutomationProperties.Name="Start"
                                     IsEnabled="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <ToolTip.Tip>
+                                    <MultiBinding Converter="{x:Static views:StartButtonTipConverter.Instance}">
+                                        <Binding Path="StartButtonTip" />
+                                        <Binding Path="Uploading" />
+                                    </MultiBinding>
+                                </ToolTip.Tip>
                                 <Path Data="M8,13.5 L8,3 M3.5,7.5 L8,3 L12.5,7.5"
                                       Stroke="{StaticResource KcapOnPrimaryBrush}" StrokeThickness="2"
                                       StrokeLineCap="Round" StrokeJoin="Round" Width="16" Height="16" />

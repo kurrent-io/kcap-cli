@@ -37,4 +37,32 @@ public class InputWireContractsTests {
     [Test]
     public async Task Empty_text_is_structurally_valid_so_the_handler_can_name_it() =>
         await Assert.That(InputWire.IsStructurallyValid(new SendTextDto("a1", ""))).IsTrue();
+
+    [Test]
+    public async Task Send_text_with_attachments_serializes_snake_case_with_every_member() =>
+        await Assert.That(JsonSerializer.Serialize(
+                new SendTextWithAttachmentsDto("a1", "hello", ["0123456789abcdef0123456789abcdef"]),
+                InputIpcJsonContext.Default.SendTextWithAttachmentsDto))
+            .IsEqualTo("""{"agent_id":"a1","text":"hello","attachment_ids":["0123456789abcdef0123456789abcdef"]}""");
+
+    [Test]
+    [Arguments("{}")]
+    [Arguments("""{"agent_id":"a1","text":"x"}""")]
+    [Arguments("""{"agent_id":"a1","text":"x","attachment_ids":null}""")]
+    public async Task Attachment_frame_without_ids_is_structurally_invalid(string json) {
+        var dto = JsonSerializer.Deserialize(json, InputIpcJsonContext.Default.SendTextWithAttachmentsDto);
+        await Assert.That(InputWire.IsStructurallyValid(dto)).IsFalse();
+    }
+
+    [Test]
+    [Arguments("0123456789abcdef0123456789abcdef", true)]
+    [Arguments("0123456789ABCDEF0123456789ABCDEF", true)]
+    [Arguments("0123456789abcdef0123456789abcde", false)]
+    [Arguments("0123456789abcdef0123456789abcdef0", false)]
+    [Arguments("01234567-89ab-cdef-0123-456789abcdef", false)]
+    [Arguments("../etc/passwd", false)]
+    [Arguments("", false)]
+    [Arguments(null, false)]
+    public async Task Attachment_id_is_a_guid_n(string? id, bool valid) =>
+        await Assert.That(InputWire.IsValidAttachmentId(id)).IsEqualTo(valid);
 }

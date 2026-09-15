@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -22,6 +23,7 @@ public partial class ChatTabView : UserControl {
     const double BottomTolerance = 2;
 
     ScrollViewer? _scroll;
+    AttachmentDropPaste? _attachments;
     bool _followTail = true;
     /// Armed by a gesture inside the list and released once the dispatcher queue drains past
     /// layout, so it covers exactly the scroll changes that gesture produced — an expansion click
@@ -49,6 +51,23 @@ public partial class ChatTabView : UserControl {
             _scroll = ChatItems.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
             if (_scroll is not null) _scroll.ScrollChanged += OnScrollChanged;
         };
+    }
+
+    internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
+
+    /// Paired with the visual tree rather than the constructor: a tab swap detaches and re-attaches
+    /// the same view, and a behaviour disposed on the way out has to come back with it.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _attachments ??= AttachmentDropPaste.Attach(
+            ComposerCard, ComposerInput, AttachButton,
+            () => (DataContext as ChatTabViewModel)?.Attachments, TimeProvider.System);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _attachments?.Dispose();
+        _attachments = null;
+        base.OnDetachedFromVisualTree(e);
     }
 
     void OnReaderGesture(object? sender, RoutedEventArgs e) {

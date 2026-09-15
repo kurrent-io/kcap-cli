@@ -68,6 +68,12 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
 
+    // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
+    // the only one whose fetch happens alongside a live, write-contained process: the store keeps
+    // that write outside every cwd it could steer. Protected kinds fetch before the process exists.
+    public AttachmentPlacement AttachmentPlacementFor(LaunchKind kind) =>
+        kind == LaunchKind.Default ? AttachmentPlacement.DaemonStore : AttachmentPlacement.Worktree;
+
     /// <summary>App-server hosts unattended reviewers (review-flow) wherever the daemon resolved it
     /// active. INTERACTIVE launches join only where the operator opted that daemon in, so one daemon can
     /// run interactive on app-server while the rest of a fleet stays on PTY.

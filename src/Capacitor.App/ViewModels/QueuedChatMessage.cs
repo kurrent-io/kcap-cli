@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using ReactiveUI.Reactive;
 
@@ -5,8 +6,10 @@ namespace Capacitor.App.ViewModels;
 
 /// An outgoing message stays here until the transcript acknowledges it. Transport acceptance
 /// alone does not mean the runtime has started consuming a prompt queued behind its current turn.
-public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset) : ReactiveObject {
+/// Only the ids are held: the chips themselves live in the tray until a delivery clears them.
+public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset, IReadOnlyList<Guid> attachmentIds) : ReactiveObject {
     public string Text { get; } = text;
+    public IReadOnlyList<Guid> AttachmentIds { get; } = attachmentIds;
     internal int ComposerEdits { get; } = composerEdits;
     internal bool Acknowledged { get; set; }
     int _generation = generation;
@@ -25,7 +28,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     public string Sender { get; private init; } = "";
 
     internal static QueuedChatMessage FromServer(QueuedInputItem item) =>
-        new(item.Text, composerEdits: -1, generation: -1, offset: null) { DispatchId = item.DispatchId, IsForeign = true, Sender = item.SenderUserId ?? "" };
+        new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true, Sender = item.SenderUserId ?? "" };
 
     internal void MarkQueued(Guid dispatchId) {
         DispatchId = dispatchId;
@@ -42,9 +45,19 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         MarkUnconfirmed();
     }
 
-    internal bool Matches(string text, int generation, long offset) =>
-        _generation == generation && _offset is { } baseline && offset >= baseline
-        && Normalize(Text) == Normalize(text);
+    /// The daemon appends the trailer to a prompt that carried files, so that turn — and not the
+    /// bare text, which may be replayed history — is the only receipt an attachment send has. The
+    /// trailer follows the prompt untrimmed, so whatever trailing whitespace Normalize took off the
+    /// sent text still stands between the two in the echo.
+    internal bool Matches(string text, int generation, long offset) {
+        if (_generation != generation || _offset is not { } baseline || offset < baseline) return false;
+        var sent = Normalize(Text);
+        var seen = Normalize(text);
+        if (AttachmentIds.Count == 0) return sent == seen;
+        return seen.Length > sent.Length
+            && seen.StartsWith(sent, StringComparison.Ordinal)
+            && seen.AsSpan(sent.Length).TrimStart().StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal);
+    }
 
     static string Normalize(string text) => text.Replace("\r\n", "\n").Trim();
 }

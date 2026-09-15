@@ -26,4 +26,17 @@ public class FrameCodecInputTests {
         await Assert.That((byte)FrameType.SendTextAck).IsEqualTo((byte)80);
 #pragma warning restore TUnitAssertions0005
     }
+
+    [Test]
+    public async Task Send_text_with_attachments_frame_round_trips_and_is_24() {
+#pragma warning disable TUnitAssertions0005
+        await Assert.That((byte)FrameType.SendTextWithAttachments).IsEqualTo((byte)24);
+#pragma warning restore TUnitAssertions0005
+        using var ms = new MemoryStream();
+        await FrameCodec.WriteAsync(ms, LocalFrame.InputJson(FrameType.SendTextWithAttachments, """{"agent_id":"a"}"""), CancellationToken.None);
+        ms.Position = 0;
+        var read = await FrameCodec.ReadAsync(ms, CancellationToken.None);
+        await Assert.That(read!.Type).IsEqualTo(FrameType.SendTextWithAttachments);
+        await Assert.That(read.Text).IsEqualTo("""{"agent_id":"a"}""");
+    }
 }

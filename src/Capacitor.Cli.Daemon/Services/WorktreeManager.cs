@@ -1086,7 +1086,7 @@ public partial class WorktreeManager(
             protectedTarget, protectedStaging, protectedSegments, protectedIndex + 1);
     }
 
-    static void DeleteTreeNoFollow(string path) {
+    internal static void DeleteTreeNoFollow(string path) {
         // Path.Exists, not File.Exists || Directory.Exists: both of those FOLLOW, so a DANGLING symlink
         // reports absent and this returned early, leaving the link behind. Its parent then failed to
         // delete — and under the fail-closed config strip that turned a branch committing one dangling

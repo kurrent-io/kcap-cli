@@ -161,6 +161,75 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 
+    /// <summary>The graceful stop reaches its "/exit" write while a delivery is parked mid-write —
+    /// the state a child that stopped draining its stdin puts every writer in. The parked delivery
+    /// holds the input lane until the terminate that follows this stop, so a stop that waited on the
+    /// lane unboundedly could never be the thing that got there.</summary>
+    [Test]
+    public async Task RequestGracefulStop_writes_exit_while_a_parked_delivery_holds_the_lane() {
+        var pty     = new ParkingPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, approvalsDisabled: false);
+
+        var delivery = runtime.SendUserInputAsync("round 1");
+        await pty.FirstWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var bound = PtyHostedAgentRuntime.GracefulStopLaneWait + TimeSpan.FromSeconds(3);
+        await runtime.RequestGracefulStopAsync().WaitAsync(bound);
+
+        await Assert.That(pty.Writes).Contains("/exit");
+        await Assert.That(delivery.IsCompleted).IsFalse();   // still parked; the lane was never freed
+
+        pty.ReleaseFirstWrite();
+        await delivery.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // Fake PTY whose first write parks until released, modelling a child that has stopped reading
+    // its stdin. Later writes go through, so the stop's own "/exit" is observable.
+    sealed class ParkingPty : IPtyProcess {
+        readonly TaskCompletionSource _entered  = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly Lock                 _gate     = new();
+        readonly List<string>         _writes   = [];
+        int _writeCount;
+
+        public Task FirstWriteEntered => _entered.Task;
+        public void ReleaseFirstWrite() => _released.TrySetResult();
+
+        public IReadOnlyList<string> Writes { get { lock (_gate) return [.. _writes]; } }
+
+        public int  Pid       => 77;
+        public bool HasExited => false;
+        public int? ExitCode  => null;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   timeout = null) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public async Task WriteAsync(string input) {
+            bool first;
+
+            lock (_gate) {
+                _writes.Add(input);
+                first = _writeCount++ == 0;
+            }
+
+            if (!first) return;
+
+            _entered.TrySetResult();
+            await _released.Task;
+        }
+
+        public Task WriteAsync(byte[] data) => WriteAsync(System.Text.Encoding.UTF8.GetString(data));
+        public void Resize(ushort cols, ushort rows) { }
+        public void SendInterrupt() { }
+    }
+
     // Fake PTY that can report HasExited as a function of writes-so-far, and/or throw a
     // pipe-closed IOException on a chosen carriage-return write — to exercise SubmitAsync's
     // mid-schedule exit handling.

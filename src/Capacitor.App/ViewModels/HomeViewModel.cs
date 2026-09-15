@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -23,10 +24,12 @@ public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selec
 /// One entry of the launcher's machine chip: the local daemon, or one of the viewer's own remote
 /// daemons — name-based launch routing is only defined within one owner, so a daemon owned by
 /// someone else is never surfaced as an option. RepoPaths/SupportedVendors come from DaemonInfo
-/// verbatim for a remote machine; the local entry's come from the existing repo flow.
+/// verbatim for a remote machine; the local entry's come from the existing repo flow. Version is
+/// the remote daemon's own advertised build, which is what the attachment gate reads; null for the
+/// local entry, whose capability comes from the attach handshake instead.
 public sealed record MachineOption(
     string DaemonName, bool IsLocal, bool Connected, string? Platform,
-    string[] RepoPaths, string[]? SupportedVendors, bool Selected);
+    string[] RepoPaths, string[]? SupportedVendors, bool Selected, string? Version = null);
 
 /// Whether a launch can reach a daemon right now, merged from the local attach state and the
 /// daemon's own upstream connection word — the same two inputs the footer's status line reads.
@@ -40,7 +43,7 @@ internal enum LaunchAvailability { Ready, Pending, DaemonUnavailable, ServerDisc
 /// MainWindowViewModel/ConsentPromptViewModel), so both projections below ObserveOn
 /// RxSchedulers.MainThreadScheduler BEFORE the operator that touches bound state — the
 /// ItemsControl binding must never see a mutation off the UI thread.
-public sealed class HomeViewModel : ReactiveObject, IDisposable {
+public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink {
     /// A repository with no remembered choice falls back to this — never to whatever vendor was
     /// selected for a DIFFERENT repository, which would leak a preference across repositories.
     public const string DefaultVendor = "claude";
@@ -62,6 +65,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// straight past CanExecute — the wire request is never built for a machine that failed the
     /// ownership/connected check at the moment of launch, whatever the UI-affordance state said.
     public const string MachineUnavailableMessage = "This machine is no longer available. Choose a different one.";
+
+    /// The daemon capability that accepts uploaded attachment ids on a launch.
+    internal const string AttachCapability = "input/2";
+    internal const string SignInToAttach = "sign in to attach files";
+    internal const string DaemonNeedsAttachments = "attachments need the daemon updated";
 
     internal const string ConnectingNotice     = "Connecting to the server…";
     internal const string FinishingSignInNotice =
@@ -140,10 +148,52 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     }
 
     string _goal = "";
+    int _goalEdits;
+    /// Every real edit bumps _goalEdits: a launch clears only the goal it captured, and only while
+    /// nothing has been typed into it since.
     public string Goal {
         get => _goal;
-        set => this.RaiseAndSetIfChanged(ref _goal, value);
+        set {
+            if (string.Equals(_goal, value, StringComparison.Ordinal)) return;
+            _goalEdits++;
+            ClearIntakeNotice();
+            this.RaiseAndSetIfChanged(ref _goal, value);
+        }
     }
+
+    /// The chips staged for the next launch. Cleared only of what a launch actually sent.
+    public AttachmentTray Tray { get; } = new();
+
+    /// Where every intake source (paste, drop, picker) hands its result.
+    public IAttachmentSink Attachments => this;
+
+    readonly BehaviorSubject<bool> _uploadingChanges = new(false);
+    bool _uploading;
+    /// True while a launch's staged files are going up. Start is blocked, never queued.
+    public bool Uploading {
+        get => _uploading;
+        private set {
+            if (_uploading == value) return;
+            this.RaiseAndSetIfChanged(ref _uploading, value);
+            // A window closing mid-upload disposes this object while StartAsync is still inside its
+            // try, and the finally that clears the flag would then publish onto a disposed subject.
+            if (!_disposed) _uploadingChanges.OnNext(value);
+        }
+    }
+
+    readonly ObservableAsPropertyHelper<bool> _canAttach;
+    /// Whether the selected machine can take files right now: signed in, and that machine's build
+    /// accepts attachment ids.
+    public bool CanAttach => _canAttach.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _attachHint;
+    /// Why CanAttach is false, or null when it isn't.
+    public string? AttachHint => _attachHint.Value;
+    public int FreeSlots => Tray.FreeSlots;
+
+    /// The refusal line from the last intake. Held apart from StartError so the next edit or
+    /// intake can retract exactly it, and nothing else that has since been reported.
+    string? _intakeNotice;
 
     string? _startError;
     public string? StartError {
@@ -271,17 +321,44 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// A launch must be cancellable: the app disposes the launch client (and its HubConnection) on
     /// shutdown, so an in-flight hub invoke holding no token races that teardown.
     readonly CancellationToken _shutdown;
+    volatile bool _disposed;
 
     // The id RequestLaunchAgentV2 hands back is request-accepted, not success: failure arrives
     // later as a LaunchFailed broadcast, success as the agent's row appearing. StartAsync tracks
-    // the id here (id -> recorded-at UTC) until one of those settles it; one lock covers both maps
+    // the id here until one of those settles it; one lock covers both maps and the retained draft,
     // since StartAsync, the failure subscription and the rows subscription all touch them.
     readonly object _launchTrackingLock = new();
-    readonly Dictionary<string, DateTime> _pendingLaunches = new(StringComparer.Ordinal);
+    readonly Dictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
     readonly Dictionary<string, (string Reason, DateTime At)> _recentFailures = new(StringComparer.Ordinal);
     static readonly TimeSpan PendingLaunchTtl = TimeSpan.FromMinutes(10);
     static readonly TimeSpan RecentFailureTtl = TimeSpan.FromSeconds(30);
     readonly IAgentDirectory? _directory;
+
+    /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
+    /// stamps come from the same clock, so one TimeProvider governs every expiry.
+    sealed record PendingLaunch(DateTimeOffset At, bool HadAttachments, DateTimeOffset? UploadedAt);
+
+    /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
+    /// window closes. The two counters are what the composer looked like AFTER the launch emptied
+    /// it: restoring over anything the user has done since would overwrite their work.
+    sealed record RetainedDraft(
+        string AgentId, LaunchDraft Draft, DateTimeOffset UploadedAt,
+        bool ClearedGoal, int GoalEditsAfterClear, bool ClearedTray, int TrayGenerationAfterClear);
+
+    /// Only the latest accepted attachment launch keeps its bytes — one draft, replaced by the
+    /// next, released on settlement or when the window closes.
+    RetainedDraft? _retainedDraft;
+    static readonly TimeSpan RetentionTtl = TimeSpan.FromMinutes(10);
+
+    readonly IAttachmentUploader _uploader;
+    readonly TimeProvider _time;
+    readonly ITimer _retentionTimer;
+
+    // Live mirrors of the attachment gate's inputs, read (never bound) by the in-method re-check
+    // StartAsync runs against the captured draft rather than the current selection.
+    bool _signedIn;
+    IReadOnlyList<string>? _currentCapabilities;
+    IReadOnlyList<DaemonInfo> _currentDaemons = [];
 
     /// The server's per-vendor model catalog (empty until the first fetch lands). The launcher's
     /// model picker prefers it and falls back to HostedHarnessCatalog's curated list per vendor.
@@ -329,7 +406,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            string? appServerUrl = null) {
+            IAttachmentUploader? uploader = null, TimeProvider? time = null, string? appServerUrl = null) {
         _daemon = daemon;
         _state = state;
         _launch = launch;
@@ -344,8 +421,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         _laneStatus = laneStatus ?? Observable.Return(new ServerLaneStatus(ServerLaneState.Dormant));
         _localMachineId = localMachineId;
         _directory = directory;
+        _uploader = uploader ?? new NoAttachmentUploader();
+        _time = time ?? TimeProvider.System;
         _selectedMachine = daemon.DaemonName;
         _machineSelectionChanges = new((daemon.DaemonName, false));
+        _retentionTimer = _time.CreateTimer(
+            _ => ReleaseExpired(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
 
         // Never starts empty: a null SupportedVendors means "daemon
         // capability unknown", not "hosts nothing" — Build(null) offers everything until the first
@@ -421,15 +502,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             _laneStatus, _daemons, _machineSelectionChanges,
             (local, lane, list, sel) => sel.Remote ? RemoteAvailabilityFor(lane, FindMachine(list, sel.Name, _lastViewerId)) : local);
 
-        var canLaunch = selectedAvailability.Select(a => a == LaunchAvailability.Ready);
-
-        // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
-        // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
-        // comment) — without it CanExecuteChanged would touch the bound Button off the UI thread.
-        StartCommand = ReactiveCommand.CreateFromTask(
-            StartAsync,
-            canLaunch.ObserveOn(RxSchedulers.MainThreadScheduler));
-
         // OR'd into _signInRequired at the read side (never written into the subject itself) so
         // NotifySignInCompleted's reset stays a clean false — a subject write here would let the
         // lane's still-SignedOut status immediately re-flip it back to true.
@@ -446,6 +518,56 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             (lane, sameServer, sel) => (
                 State: sel.Remote || sameServer ? lane.State : ServerLaneState.Dormant,
                 Applies: sel.Remote || sameServer));
+
+        // Uploading an attachment needs a live server credential, so the gate reads the app's own
+        // lane rather than the daemon's — and the machine half is asked of the machine that would
+        // receive the files: the attach handshake locally, the daemon's advertised build remotely.
+        var signedIn = _laneStatus
+            .Select(s => s.State == ServerLaneState.Connected)
+            .CombineLatest(signInRequired, (connected, expired) => connected && !expired)
+            .DistinctUntilChanged();
+        var localCapabilities = daemon.Status.Select(s => s.Capabilities);
+        signedIn.Subscribe(v => _signedIn = v).DisposeWith(_disposables);
+        localCapabilities.Subscribe(c => _currentCapabilities = c).DisposeWith(_disposables);
+        _daemons.Subscribe(list => _currentDaemons = list).DisposeWith(_disposables);
+
+        var canAttach = signedIn
+            .CombineLatest(localCapabilities, _daemons, _machineSelectionChanges,
+                (signed, caps, list, sel) => CanAttachTo(signed, caps, list, _lastViewerId, sel.Name, sel.Remote))
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        _canAttach = canAttach
+            .ToProperty(this, x => x.CanAttach, initialValue: false)
+            .DisposeWith(_disposables);
+        // ObserveOn BEFORE ToProperty, like every other bound projection here: signedIn is fed by
+        // the server lane, which emits on its own connection thread.
+        _attachHint = signedIn
+            .CombineLatest(canAttach, AttachHintFor)
+            .DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .ToProperty(this, x => x.AttachHint, initialValue: (string?)null)
+            .DisposeWith(_disposables);
+
+        var stagedCount = Observable.FromEvent<PropertyChangedEventHandler, PropertyChangedEventArgs>(
+                handler => (_, e) => handler(e),
+                h => Tray.PropertyChanged += h,
+                h => Tray.PropertyChanged -= h)
+            .Select(_ => Tray.Count)
+            .StartWith(0);
+        // Staged chips the target cannot take block Start rather than launching without them, and
+        // an upload in flight owns the composer until it settles.
+        var canLaunch = selectedAvailability.Select(a => a == LaunchAvailability.Ready)
+            .CombineLatest(
+                stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
+                _uploadingChanges,
+                (ready, attachable, uploading) => ready && attachable && !uploading);
+
+        // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
+        // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
+        // comment) — without it CanExecuteChanged would touch the bound Button off the UI thread.
+        StartCommand = ReactiveCommand.CreateFromTask(
+            StartAsync,
+            canLaunch.ObserveOn(RxSchedulers.MainThreadScheduler));
 
         var signInState = selectedAvailability
             .CombineLatest(
@@ -633,8 +755,45 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     // Constructor-scoped (like TrayViewModel/ActivityViewModel), not WhenActivated — the OAPH and
     // the Agents subscription above run for this object's whole lifetime, not a window's.
     public void Dispose() {
+        _disposed = true;
         _disposables.Dispose();
         _daemonStartMessageFeed.Dispose();
+        _uploadingChanges.Dispose();
+        _retentionTimer.Dispose();
+        Tray.Clear();
+        lock (_launchTrackingLock) _retainedDraft = null;
+    }
+
+    /// The machine half of the gate is asked of the machine a launch would target, not of whatever
+    /// is selected now — StartAsync re-runs it against its captured draft after the upload.
+    internal static bool CanAttachTo(
+            bool signedIn, IReadOnlyList<string>? localCapabilities, IReadOnlyList<DaemonInfo> daemons,
+            string? viewerId, string machine, bool remote) =>
+        signedIn && (remote
+            ? LaunchAttachments.IsCapable(FindMachine(daemons, machine, viewerId)?.Version)
+            : localCapabilities is { } caps && caps.Contains(AttachCapability));
+
+    internal static string? AttachHintFor(bool signedIn, bool canAttach) =>
+        !signedIn ? SignInToAttach : canAttach ? null : DaemonNeedsAttachments;
+
+    bool CanAttachFor(LaunchDraft draft) =>
+        CanAttachTo(_signedIn, _currentCapabilities, _currentDaemons, _lastViewerId, draft.Machine, draft.Remote);
+
+    /// What every intake source hands its result to: the tray takes what it can, and the rest
+    /// becomes one line the launcher shows until the next edit or intake.
+    public void Accept(IntakeResult result) {
+        ClearIntakeNotice();
+        var refused = new List<IntakeRefusal>(result.Refused);
+        refused.AddRange(Tray.AddAll(result.Accepted));
+        if (RefusalNotice.Render(refused) is not { } notice) return;
+        _intakeNotice = notice;
+        StartError = notice;
+    }
+
+    void ClearIntakeNotice() {
+        if (_intakeNotice is null) return;
+        if (StartError == _intakeNotice) StartError = null;
+        _intakeNotice = null;
     }
 
     /// Sets the selection and persists it for SelectedRepoPath — except in remote mode, where the
@@ -733,7 +892,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         foreach (var d in await OwnRemoteDaemonsAsync())
             options.Add(new MachineOption(
                 d.Name, IsLocal: false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors,
-                Selected: RemoteMachineSelected && string.Equals(d.Name, SelectedMachine, StringComparison.Ordinal)));
+                Selected: RemoteMachineSelected && string.Equals(d.Name, SelectedMachine, StringComparison.Ordinal),
+                Version: d.Version));
 
         return options;
     }
@@ -768,7 +928,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         if (match is null) return; // not one of the viewer's own daemons — never guess ownership
 
         var machine = new MachineOption(match.Name, false, match.Connected, match.Platform,
-            match.RepoPaths ?? [], match.SupportedVendors, true);
+            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version);
 
         SetMachineSelection(daemonName, remote: true);
         _selectedRemoteMachine = machine;
@@ -824,7 +984,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         if (viewerId is null) return null;
         foreach (var d in daemons)
             if (string.Equals(d.Name, name, StringComparison.Ordinal) && d.OwnerUserId == viewerId)
-                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true);
+                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version);
         return null;
     }
 
@@ -897,26 +1057,67 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     public void OpenSessionRequested(string agentId) => _openSession?.Invoke(agentId);
 
     async Task StartAsync() {
+        // Captured before anything can await: an upload takes time the user can spend re-pointing
+        // the launcher, and the files must reach the machine the composer was aimed at.
+        var draft = new LaunchDraft(
+            SelectedMachine, RemoteMachineSelected, SelectedRepoPath, SelectedVendor, Goal, _goalEdits,
+            SelectedModel, SelectedEffort, PermissionModeFor(SelectedVendor, SelectedPermissionMode),
+            Tray.Snapshot(), Tray.Generation);
+
+        if (draft.Files.Count > 0 && !CanAttachFor(draft)) {
+            StartError = AttachHintFor(_signedIn, false);
+            return;
+        }
+
         // ReactiveCommand.Execute() does not itself gate on CanExecute — a caller that bypasses
         // the bound Button (or the canExecute observable's own staleness, however small) can still
         // reach here, so a remote target gets one more, fully fresh ownership+connected check
         // right before the wire request is built. This is the actual boundary; canLaunch/
         // FindMachine above are the UI-responsive affordance, not a substitute for it.
-        if (RemoteMachineSelected) {
-            var owned = await OwnRemoteDaemonsAsync();
-            if (!owned.Any(d => string.Equals(d.Name, SelectedMachine, StringComparison.Ordinal) && d.Connected)) {
+        if (draft.Remote && !await OwnsConnectedAsync(draft.Machine)) {
+            StartError = MachineUnavailableMessage;
+            return;
+        }
+
+        IReadOnlyList<string>? attachmentIds = null;
+        DateTimeOffset? uploadedAt = null;
+        if (draft.Files.Count > 0) {
+            Uploading = true;
+            UploadOutcome upload;
+            // The app closing mid-upload is not a launch failure, and the command's only subscriber
+            // is the Enter key: a fault here would surface as an unhandled command exception.
+            try { upload = await _uploader.UploadAsync(draft.Files, _shutdown); }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { return; }
+            finally { Uploading = false; }
+            if (upload.Kind == UploadKind.Unauthorized) {
+                _signInRequired.OnNext(true);
+                StartError = SignInToAttach;
+                return;
+            }
+            if (upload.Kind != UploadKind.Uploaded) {
+                StartError = upload.Reason ?? "the upload failed";
+                return;
+            }
+            attachmentIds = upload.Ids;
+            uploadedAt = _time.GetUtcNow();
+            // Both checks run again against the DRAFT: the upload window is long enough for the
+            // target to have been revoked or downgraded under it.
+            if (draft.Remote && !await OwnsConnectedAsync(draft.Machine)) {
                 StartError = MachineUnavailableMessage;
+                return;
+            }
+            if (!CanAttachFor(draft)) {
+                StartError = AttachHintFor(_signedIn, false);
                 return;
             }
         }
 
         var request = new LaunchRequest(
-            SelectedMachine, SelectedRepoPath, SelectedVendor, Goal, SelectedModel, SelectedEffort,
-            PermissionModeFor(SelectedVendor, SelectedPermissionMode));
-        // Both captured BEFORE the call, never after: the whole point is to notice a navigation —
-        // or a machine selection — that changed WHILE the launch was in flight.
+            draft.Machine, draft.RepoPath, draft.Vendor, draft.Goal, draft.Model, draft.Effort,
+            draft.PermissionMode, attachmentIds);
+        // Captured BEFORE the call, never after: the whole point is to notice a navigation that
+        // changed WHILE the launch was in flight.
         var generation = _navigationGeneration?.Invoke() ?? 0;
-        var launchedRemote = RemoteMachineSelected;
 
         var outcome = await _launch.StartAsync(request, _shutdown);
         if (!outcome.Started) {
@@ -929,22 +1130,41 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
 
         _signInRequired.OnNext(false);
         StartError = null;
-        Goal = ""; // the launch really did start — the goal is spent either way
+        // The launch really did start, so what it sent is spent — but only what it sent: a goal
+        // typed into since, and chips staged since, belong to the next one.
+        var clearedGoal = _goalEdits == draft.GoalEdits;
+        if (clearedGoal) Goal = "";
+        var trayUntouched = Tray.Generation == draft.TrayGeneration;
+        Tray.RemoveAll([.. draft.Files.Select(f => f.Id)]);
+        var clearedTray = trayUntouched && Tray.Count == 0;
+
         if (NormalizeAgentId(outcome.AgentId) is not { } agentId) {
-            StartError = UnusableIdMessage;
+            StartError = draft.Files.Count > 0
+                ? UnusableIdMessage + " — re-attach the files if it did not start"
+                : UnusableIdMessage;
             return;
         }
 
         // The accepted id is request-accepted, not success — track it until a LaunchFailed or a
-        // directory row settles it. RecordPendingLaunch also resolves the race where the failure
-        // already arrived (and was buffered) while the invoke above was still in flight.
-        RecordPendingLaunch(agentId);
+        // directory row settles it, holding the sent bytes for that long so a failure can hand the
+        // draft back. Retained BEFORE registering: RecordPendingLaunch settles a failure that
+        // arrived while the invoke above was still in flight, and that failure gets the same
+        // restore a delayed one does.
+        if (draft.Files.Count > 0)
+            lock (_launchTrackingLock)
+                _retainedDraft = new RetainedDraft(
+                    agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
+        RecordPendingLaunch(agentId, draft.Files.Count > 0, uploadedAt);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
         // an agent that isn't there — auto-open only ever applies to a local target.
-        if (!launchedRemote) _openSessionIfCurrent?.Invoke(agentId, generation);
+        if (!draft.Remote) _openSessionIfCurrent?.Invoke(agentId, generation);
     }
 
-    void RecordPendingLaunch(string agentId) {
+    async Task<bool> OwnsConnectedAsync(string machine) =>
+        (await OwnRemoteDaemonsAsync())
+        .Any(d => string.Equals(d.Name, machine, StringComparison.Ordinal) && d.Connected);
+
+    void RecordPendingLaunch(string agentId, bool hadAttachments, DateTimeOffset? uploadedAt) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -958,7 +1178,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = DateTime.UtcNow;
+            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), hadAttachments, uploadedAt);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (DateTime.UtcNow - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -971,15 +1191,32 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             ForgetLaunch(agentId);
             return;
         }
-        if (bufferedReason is not null) StartError = FriendlyLaunchFailure(bufferedReason);
+        if (bufferedReason is not null) ApplyLaunchFailure(agentId, hadAttachments, bufferedReason);
     }
 
     void ForgetLaunch(string agentId) {
         lock (_launchTrackingLock) {
             _pendingLaunches.Remove(agentId);
             _recentFailures.Remove(agentId);
+            if (_retainedDraft?.AgentId == agentId) _retainedDraft = null;
         }
     }
+
+    /// Releases what neither a failure nor a row will settle: bytes are held for one window from
+    /// the upload, never for the life of the launcher.
+    void ReleaseExpired() {
+        lock (_launchTrackingLock) {
+            if (_retainedDraft is { } retained && _time.GetUtcNow() - retained.UploadedAt > RetentionTtl)
+                _retainedDraft = null;
+            foreach (var stale in _pendingLaunches.Where(kv => IsExpired(kv.Value)).Select(kv => kv.Key).ToList())
+                _pendingLaunches.Remove(stale);
+        }
+    }
+
+    bool IsExpired(PendingLaunch pending) =>
+        pending.UploadedAt is { } uploadedAt
+            ? _time.GetUtcNow() - uploadedAt > RetentionTtl
+            : _time.GetUtcNow() - pending.At > PendingLaunchTtl;
 
     // Directory keys preserve the row's incoming id spelling (e.g. a dashed Guid never becomes
     // "local:{N-form}"), so a lookup by the "N"-normalized pending id would miss it — scan and
@@ -1004,14 +1241,46 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// recorded — the hub returns either shape (NormalizeAgentId's own comment).
     void ApplyFailureIfPending(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
-        bool applies;
+        PendingLaunch? pending = null;
         lock (_launchTrackingLock) {
-            applies = _pendingLaunches.TryGetValue(agentId, out var recordedAt)
-                && DateTime.UtcNow - recordedAt <= PendingLaunchTtl;
+            if (_pendingLaunches.TryGetValue(agentId, out var entry) && !IsExpired(entry)) pending = entry;
             _pendingLaunches.Remove(agentId);
         }
-        if (applies) StartError = FriendlyLaunchFailure(failure.Reason);
+        if (pending is not null) ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
     }
+
+    /// A text-only launch just renders its reason. A launch that carried files hands the draft
+    /// back when the composer is still exactly as this launch left it and still aimed at the same
+    /// target — otherwise it says to re-attach, because restoring would overwrite what is there.
+    void ApplyLaunchFailure(string agentId, bool hadAttachments, string reason) {
+        var friendly = FriendlyLaunchFailure(reason);
+        if (!hadAttachments) {
+            StartError = friendly;
+            return;
+        }
+
+        RetainedDraft? retained;
+        lock (_launchTrackingLock) {
+            retained = _retainedDraft is { } r && r.AgentId == agentId
+                && _time.GetUtcNow() - r.UploadedAt <= RetentionTtl ? r : null;
+            if (_retainedDraft?.AgentId == agentId) _retainedDraft = null;
+        }
+
+        if (retained is not null && IsRestorable(retained)) {
+            Goal = retained.Draft.Goal;
+            Tray.Restore(retained.Draft.Files);
+            StartError = friendly + " — your draft is back";
+            return;
+        }
+        StartError = friendly + " — re-attach the files to send them again";
+    }
+
+    bool IsRestorable(RetainedDraft retained) =>
+        retained.ClearedGoal && _goalEdits == retained.GoalEditsAfterClear
+        && retained.ClearedTray && Tray.Generation == retained.TrayGenerationAfterClear
+        && retained.Draft.Machine == SelectedMachine
+        && retained.Draft.RepoPath == SelectedRepoPath
+        && retained.Draft.Vendor == SelectedVendor;
 
     /// A row for a tracked id is success confirmation: drop the pending entry and any buffered
     /// failure so a later, stale LaunchFailed for the same id cannot override it. Same
@@ -1022,16 +1291,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
                 if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId) {
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
+                    if (_retainedDraft?.AgentId == agentId) _retainedDraft = null;
                 }
         }
     }
 
     /// <see cref="WireTokens.LaunchDeniedByOwnerPrefix"/> is a consent-gate denial on the target
-    /// machine; every other reason passes through verbatim (the server already truncates to 400
-    /// characters).
+    /// machine, and an attachment_unavailable reason is the files failing to reach it; every other
+    /// reason passes through verbatim (the server already truncates to 400 characters).
     internal static string FriendlyLaunchFailure(string reason) =>
         reason.StartsWith(WireTokens.LaunchDeniedByOwnerPrefix, StringComparison.Ordinal)
             ? "That machine's consent policy denied the launch. Approve it there, or pre-set a rule with kcap consent."
+        : reason.StartsWith("attachment_unavailable:", StringComparison.Ordinal)
+            ? "the attached files could not be delivered to the machine"
             : reason;
 
     /// Null for Manual (the harness's own default) and for any vendor that takes no mode.
