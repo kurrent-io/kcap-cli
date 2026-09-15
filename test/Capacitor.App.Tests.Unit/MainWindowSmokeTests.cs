@@ -1,4 +1,5 @@
 using System.Reactive.Threading.Tasks;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -637,6 +638,44 @@ public class MainWindowSmokeTests {
             await Assert.That(ok).IsTrue();
         });
     }
+
+    /// Help and support is reachable from the rail footer whatever the server says: the button and
+    /// Documentation stay enabled with no feedback action, and only the two report items follow it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_footer_offers_help_with_docs_always_and_reports_only_with_a_server() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), openFeedback: null);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
+            await Assert.That(help.IsEnabled).IsTrue();
+            await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
+            await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
+
+            // Opened, because a MenuFlyout's items only join a tree — and so only bind — once its
+            // presenter exists; unopened they all read disabled, which Documentation below catches.
+            var flyout = (MenuFlyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var items = flyout.Items.OfType<MenuItem>().ToList();
+            await Assert.That(items.Select(i => (string)i.Header!)).IsEquivalentTo(["Documentation", "Report a bug…", "Send feedback…"]);
+            // A command's CanExecute reaches a MenuItem through IsEffectivelyEnabled; IsEnabled
+            // stays at its unset true, so reading it here would assert nothing.
+            await Assert.That(items[0].IsEffectivelyEnabled).IsTrue();
+            await Assert.That(items[1].IsEffectivelyEnabled).IsFalse();
+            await Assert.That(items[2].IsEffectivelyEnabled).IsFalse();
+            flyout.Hide();
+            Dispatcher.UIThread.RunJobs();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
 
     /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.
     [Test]

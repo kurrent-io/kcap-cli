@@ -5,6 +5,8 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
+using Capacitor.App.Views;
+using Capacitor.Cli.Core.Commands;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -182,6 +184,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
+    /// Opens the product documentation. Enabled whatever the server says — a user who cannot reach
+    /// a tenant is exactly the one who needs the docs.
+    public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }
+
+    /// Opens the bug/feedback window for one category; inert without an action to route it to.
+    public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
+
+    /// Whether the two report items have somewhere to go — the same oracle the menu bar's items use.
+    public bool CanOpenFeedback { get; }
+
     string? _startMessage;
     // Cleared on every new start attempt and on Connected; set when a start attempt fails.
     public string? StartMessage {
@@ -272,7 +284,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
-            IAgentDirectory? directory = null) {
+            IAgentDirectory? directory = null,
+            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null) {
         _service = service;
         _time = time ?? TimeProvider.System;
         Activity = activity;
@@ -288,6 +301,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
         ShowHomeCommand = ReactiveCommand.Create(() => { CurrentView = ShellView.Home; });
         ShowSessionsCommand = ReactiveCommand.Create(() => { CurrentView = ShellView.Sessions; });
+        CanOpenFeedback     = openFeedback is not null;
+        OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
+        OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
         // "not currently executing" (confirmed against the installed ReactiveUI 23.2.28 API
