@@ -3,14 +3,16 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Remote.Models;
 using DynamicData;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
+using static Capacitor.App.Tests.Unit.RemoteFixtures;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The remote card host over a scripted lane: access is the server's verdict, and the cards are
-/// only ever shown once it says the session is readable.
+/// The remote chat host over a scripted lane: the pane follows the lease, which follows the row's
+/// session id, and the chat is shown only while the lease's verdict says the session is readable.
 [NotInParallel(nameof(AvaloniaSession))]
 public class RemoteSessionViewModelTests {
     sealed class Harness : IDisposable {
@@ -19,21 +21,39 @@ public class RemoteSessionViewModelTests {
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
         public readonly AgentActionService Actions = NewActions();
+        public readonly FakeTimeProvider Time = new();
+        public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
-            Access = new SessionAccessService(Lane, new FakeTimeProvider());
+            Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
 
-        public static AgentRow Row(string id = "a1", string? sessionId = "s1", string status = "Running") =>
+        public static AgentRow Row(string id = "a1", string? sessionId = "s1", string status = "Running", string vendor = "gemini") =>
             AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = id, SessionId = sessionId, Status = status, DaemonName = "work-mac",
-                Vendor = "gemini", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
+                Vendor = vendor, OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
 
         public RemoteSessionViewModel Build(AgentRow row) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface());
+        }
+
+        /// One chat poll: the pane reads its feed on the timer this harness owns.
+        public async Task TickAsync(RemoteSessionViewModel vm) {
+            Time.Advance(ChatTabViewModel.PollInterval);
+            await (vm.Chat.PendingReadForTesting ?? Task.CompletedTask);
+        }
+
+        /// Polls the condition, ticking the chat between checks, since rows land on the poll.
+        public async Task UntilAsync(RemoteSessionViewModel vm, Func<bool> condition, string what) {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!condition()) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for: {what}");
+                await TickAsync(vm);
+                await Task.Delay(10);
+            }
         }
 
         public void Dispose() {
@@ -50,7 +70,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await Assert.That(h.Lane.ChatSubscribes).Contains("s1");
-            await Assert.That(vm.ShowsCards).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
             await Assert.That(vm.AccessNote).IsEqualTo("");
 
             var card = PendingPermissionRequest.FromServer(new ServerElicitationRequest("s1", "q1", "Pick", [], false), DateTimeOffset.UtcNow);
@@ -74,7 +94,7 @@ public class RemoteSessionViewModelTests {
             h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
             h.Lane.SessionAccessChangedSubject.OnNext("s1");
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Denied, what: "denied");
-            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.AccessNote).IsEqualTo("You no longer have access to this session");
 
             h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
@@ -92,7 +112,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(id: "a2", sessionId: null));
             await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.NoSession);
             await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
-            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(h.Lane.AccessWatches).IsEmpty();
 
             h.Directory.Rows.Remove("remote:a2");
@@ -120,8 +140,9 @@ public class RemoteSessionViewModelTests {
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3", status: "Completed"));
             await Assert.That(vm.SessionEnded).IsTrue();
-            // The last access verdict is still Ready — the cards go with the session, not the lease.
-            await Assert.That(vm.ShowsCards).IsFalse();
+            // The transcript stays while the lease's last verdict stands: an ended session is still
+            // readable, and giving the lease back is what stops new rows arriving.
+            await Assert.That(vm.ShowsChatPane).IsTrue();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s3"), what: "released on the terminal status");
             await vm.TeardownAsync();
         });
@@ -143,7 +164,7 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.SessionEnded).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count == 2, what: "the lease re-acquired");
-            await WaitUntilAsync(() => vm.ShowsCards, what: "the cards back");
+            await WaitUntilAsync(() => vm.ShowsChatPane, what: "the pane back");
             await vm.TeardownAsync();
         });
     }
@@ -165,8 +186,8 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.SessionEnded).IsFalse();
-            // Nothing is answerable or stoppable through the released lease.
-            await Assert.That(vm.ShowsCards).IsFalse();
+            // Nothing is readable or stoppable through the released lease.
+            await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.AccessNote).IsEqualTo(RemoteSessionViewModel.OriginChangedNote);
             await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "the lease released");
@@ -259,6 +280,151 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.SessionEnded).IsTrue();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "released on the removed row");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task The_chat_seeds_from_the_session_detail_and_follows_the_stream() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.UserMessageReceived, Hello),
+                Event(1, CanonicalEventTypes.AssistantTextGenerated, HiThere)));
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            await h.UntilAsync(vm, () => vm.Chat.Items.Count == 2, "the seeded rows");
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(vm.Chat.Items[0]).IsTypeOf<UserTurnItem>();
+            await Assert.That(vm.Chat.Items[1]).IsTypeOf<AssistantTextItem>();
+
+            h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.AssistantToolCallsGenerated, LsCall));
+            await h.UntilAsync(vm, () => vm.Chat.Items.Count == 3, "the live row");
+            await Assert.That(vm.Chat.Items[2]).IsTypeOf<ToolGroupItem>();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_sent_prompt_waits_in_the_queue_until_the_stream_echoes_it() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Reading, "the empty seed");
+            await WaitUntilAsync(() => vm.Chat.ShowsComposer && vm.Chat.ComposerHint.StartsWith("Enter sends", StringComparison.Ordinal), what: "the composer");
+
+            vm.Chat.ComposerText = "do it";
+            await vm.Chat.SendCommand.Execute();
+            await Assert.That(h.Lane.UserInputs).Contains(("a1", "do it"));
+            await Assert.That(vm.Chat.QueuedMessages.Count).IsEqualTo(1);
+            await Assert.That(vm.Chat.ComposerText).IsEqualTo("");
+
+            h.Lane.PushStreamEvent(Envelope("s1", 0, CanonicalEventTypes.UserMessageReceived, """{"content":"do it"}"""));
+            await h.UntilAsync(vm, () => vm.Chat.QueuedMessages.Count == 0, "the echo");
+            await Assert.That(vm.Chat.Items.Single()).IsTypeOf<UserTurnItem>();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_hidden_transcript_reads_as_not_available_and_a_lost_lane_keeps_the_rows() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness { Detail = new(null, NotFound: true) };
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Missing, "missing");
+            await Assert.That(vm.Chat.PhaseNote).IsEqualTo(RemoteSessionViewModel.MissingNote);
+            // The stopped run answers every later poll with the same verdict.
+            await h.TickAsync(vm);
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Missing);
+
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Offline, what: "offline");
+            // The banner has its own row above the panes: it reads over the retained rows rather
+            // than replacing them, so a dropped lane does not blank the transcript.
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await Assert.That(vm.AccessNote).IsEqualTo("Not connected to the server");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_pty_harness_offers_a_terminal_tab_that_subscribes_once_access_stands_and_a_frame_harness_does_not() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var pty = h.Build(Harness.Row(vendor: "claude"));
+            await Assert.That(pty.ShowsTerminalTab).IsTrue();
+            await Assert.That(pty.IsChatActive).IsTrue();
+            await WaitUntilAsync(() => pty.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => pty.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
+            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
+
+            await pty.ShowTerminalCommand.Execute();
+            await Assert.That(pty.IsTerminalActive).IsTrue();
+            await Assert.That(pty.ShowsTerminalPane).IsTrue();
+            await Assert.That(pty.ShowsChatPane).IsFalse();
+            await pty.TeardownAsync();
+            await Assert.That(h.Lane.ResizeReleases).Contains("a1");
+
+            var frame = h.Build(Harness.Row(id: "a2", sessionId: "s2", vendor: "gemini"));
+            await Assert.That(frame.ShowsTerminalTab).IsFalse();
+            await Assert.That(frame.Terminal).IsNull();
+            await frame.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_prompt_queued_by_another_client_shows_in_the_chats_queue() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            h.Lane.PendingInputSubject.OnNext(new("s1", [new QueuedInputItem { DispatchId = Guid.NewGuid(), SenderUserId = "u2", Text = "after this one" }]));
+            await WaitUntilAsync(() => vm.Chat.QueuedMessages.Count == 1, what: "the foreign row");
+            await Assert.That(vm.Chat.QueuedMessages[0].IsForeign).IsTrue();
+            h.Lane.PendingInputSubject.OnNext(new("other-session", []));
+            await Assert.That(vm.Chat.QueuedMessages.Count).IsEqualTo(1);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_lapsed_sign_in_says_so_in_place_of_the_transcript() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness { Detail = new(null, Unauthorized: true) };
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Failed, "the refusal");
+            await Assert.That(vm.Chat.PhaseNote).IsEqualTo("The transcript could not be read: not signed in");
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            // The stopped run answers every later poll with nothing; the explanation stays.
+            await h.TickAsync(vm);
+            await h.TickAsync(vm);
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Failed);
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The detail route answered but the stream refused: the seeded rows stay, and the reason sits
+    /// under them instead of leaving a transcript that silently stops growing.
+    [Test]
+    public async Task A_refused_stream_keeps_the_seeded_rows_and_says_why_beneath_them() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.UserMessageReceived, Hello),
+                Event(1, CanonicalEventTypes.AssistantTextGenerated, HiThere)));
+            h.Lane.TailHandler = (_, _) => new HubException(WireTokens.StreamNotAuthorized);
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.ActivityNote.Length > 0, "the reason");
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(vm.Chat.Items.Count).IsEqualTo(2);
+            await Assert.That(vm.Chat.ActivityNote).IsEqualTo("The transcript could not be read: not authorized to read this session's stream");
             await vm.TeardownAsync();
         });
     }

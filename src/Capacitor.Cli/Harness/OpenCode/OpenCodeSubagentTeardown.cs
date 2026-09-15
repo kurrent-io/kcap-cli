@@ -24,8 +24,7 @@ namespace Capacitor.Cli.Harness.OpenCode;
 /// session-end path OpenCode has. Best-effort per step (a failure on one subagent — or
 /// one step — never skips the rest).
 /// </summary>
-sealed class OpenCodeSubagentTeardown(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+sealed class OpenCodeSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers) {
 
     /// <summary>
     /// Shared budget for the best-effort kill+drain cleanup ACROSS all children, so a slow
@@ -69,8 +68,8 @@ sealed class OpenCodeSubagentTeardown(ConfigRoot config, ProfileContext profiles
             if (DateTimeOffset.UtcNow < cleanupDeadline) {
                 // InlineDrain overlaps harmlessly with any still-live watcher (server dedupes by
                 // deterministic event id); both capped so neither blocks process termination.
-                await CappedAsync(() => _watchers.KillWatcher($"{sessionId}-{agentId}"),                               TimeSpan.FromSeconds(1.5));
-                await CappedAsync(() => _watchers.InlineDrainAsync(sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
+                await CappedAsync(() => watchers.KillWatcher($"{sessionId}-{agentId}"),                               TimeSpan.FromSeconds(1.5));
+                await CappedAsync(() => watchers.InlineDrainAsync(sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
             }
 
             // The critical SubagentCompleted — attempted for every child within the overall budget.

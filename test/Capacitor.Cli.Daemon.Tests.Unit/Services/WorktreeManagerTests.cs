@@ -55,7 +55,7 @@ public class WorktreeManagerTests {
     public async Task CreateAsync_WithBaseRef_WorktreeHeadMatchesFetchedCommit() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/42/head", out var sideSha);
 
-        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var worktree = await manager.CreateAsync(repo.Clone, name: "review-pr-42", baseRef: "refs/pull/42/head");
 
         try {
@@ -72,7 +72,7 @@ public class WorktreeManagerTests {
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
 
-        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var worktree = await manager.CreateAsync(repo.Clone);
 
         try {
@@ -119,7 +119,7 @@ public class WorktreeManagerTests {
         using var cloneDir = new TempDir("clone");
         var clone = upstream.Clone(cloneDir.PathTo("repo"));
 
-        var manager   = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
+        var manager   = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var worktrees = new WorktreeInfo[concurrency];
 
         await Task.WhenAll(
@@ -152,7 +152,7 @@ public class WorktreeManagerTests {
     public async Task RemoveAsync_DeletesFetchedRef() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/77/head", out _);
 
-        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var worktree = await manager.CreateAsync(repo.Clone, name: "review-77", baseRef: "refs/pull/77/head");
 
         await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/review-77");
@@ -189,7 +189,7 @@ public class WorktreeManagerTests {
         superRepo.Clone.CreateFile(["vendored", "scratch.txt"], "sub-untracked");
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(superRepo.Clone, "review", CancellationToken.None);
 
         try {
@@ -227,7 +227,7 @@ public class WorktreeManagerTests {
         repo.Clone.Do("update-index", "--add", "--cacheinfo", "160000," + new string('a', 40) + ",vendored");
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await manager.CreateBorrowedSnapshotAsync(repo.Clone, "review", CancellationToken.None));
@@ -243,7 +243,7 @@ public class WorktreeManagerTests {
         repo.Clone.CreateFile("main.txt", "dirty");
         repo.Clone.CreateFile("untracked.txt", "one");
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(repo.Clone, "review", CancellationToken.None);
         try {
             await Assert.That(snapshot.IsStandalone).IsTrue();
@@ -278,31 +278,41 @@ public class WorktreeManagerTests {
         Directory.CreateDirectory(sourceCwd);
         File.WriteAllText(Path.Combine(sourceCwd, "round.txt"), "one");
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(
             repo.Clone, sourceCwd, "review-subdir", CancellationToken.None);
         try {
+            var isWindows = OperatingSystem.IsWindows();
             var psi = new ProcessStartInfo {
-                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                // Launch the long-lived process directly so the tracked Process IS the one holding
+                // snapshot.Path as its cwd. After a tree kill, WaitForExit reflects only the tracked
+                // process; a wrapper (cmd.exe) whose child (ping.exe) is the real cwd owner could exit
+                // first and leave that child still holding the directory on Windows — the very lock the
+                // teardown's wait exists to clear. On Unix `exec` replaces the shell with sleep, so the
+                // tracked pid stays the cwd owner there too.
+                FileName = isWindows ? "ping.exe" : "/bin/sh",
                 WorkingDirectory = snapshot.Path,
                 UseShellExecute = false,
-                CreateNoWindow = true
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
             };
-            psi.RedirectStandardOutput = true;
-            if (OperatingSystem.IsWindows()) {
-                psi.ArgumentList.Add("/d");
-                psi.ArgumentList.Add("/c");
-                psi.ArgumentList.Add("echo ready& ping -n 30 127.0.0.1 >nul");
+            if (isWindows) {
+                psi.ArgumentList.Add("-n");
+                psi.ArgumentList.Add("30");
+                psi.ArgumentList.Add("127.0.0.1");
             } else {
                 psi.ArgumentList.Add("-c");
-                psi.ArgumentList.Add("echo ready; sleep 30");
+                psi.ArgumentList.Add("echo ready; exec sleep 30");
             }
             holder = Process.Start(psi);
-            // Wait for the child to say it is up rather than for a fixed 200ms: the assertions
-            // below only mean anything once a live process is holding snapshot.Path as its cwd,
-            // and on a loaded runner process start can take longer than any guess.
+            // The first non-empty stdout line proves a live process now holds snapshot.Path as its cwd:
+            // wait for it rather than a fixed delay, since a loaded runner can start slowly. (ping emits
+            // a leading blank line before its banner, so skip empties.)
             using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await Assert.That((await holder!.StandardOutput.ReadLineAsync(ready.Token))?.Trim()).IsEqualTo("ready");
+            string? firstLine;
+            do { firstLine = await holder!.StandardOutput.ReadLineAsync(ready.Token); }
+            while (firstLine is { Length: 0 });
+            await Assert.That(firstLine).IsNotNull();
 
             File.WriteAllText(Path.Combine(sourceCwd, "round.txt"), "two");
             File.WriteAllText(Path.Combine(snapshot.Path, "reviewer-created.txt"), "remove");
@@ -314,7 +324,12 @@ public class WorktreeManagerTests {
             await Assert.That(File.ReadAllText(Path.Combine(snapshot.Path, "round.txt"))).IsEqualTo("two");
             await Assert.That(File.Exists(Path.Combine(snapshot.Path, "reviewer-created.txt"))).IsFalse();
         } finally {
-            if (holder is { HasExited: false }) holder.Kill(entireProcessTree: true);
+            if (holder is { HasExited: false }) {
+                holder.Kill(entireProcessTree: true);
+                // Kill returns before the process releases its working-directory handle; on Windows the
+                // snapshot it is standing in cannot be deleted until it has actually exited.
+                await holder.WaitForExitAsync();
+            }
             holder?.Dispose();
             await WorktreeManager.RemoveAsync(snapshot);
         }
@@ -329,7 +344,7 @@ public class WorktreeManagerTests {
 
         File.CreateSymbolicLink(repo.Clone.PathTo("escape"), repo.Upstream.PathTo("main.txt"));
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await manager.CreateBorrowedSnapshotAsync(repo.Clone, "review", CancellationToken.None));
@@ -389,7 +404,7 @@ public class WorktreeManagerTests {
         File.WriteAllText(Path.Combine(route, "dirty.txt"), "dirty working bytes");
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await manager.CreateBorrowedSnapshotAsync(repo.Clone, "review", CancellationToken.None));
 
@@ -416,7 +431,7 @@ public class WorktreeManagerTests {
         File.WriteAllText(route, "dirty working bytes");
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await manager.CreateBorrowedSnapshotAsync(repo.Clone, "review", CancellationToken.None));
 
@@ -459,7 +474,7 @@ public class WorktreeManagerTests {
         Directory.CreateSymbolicLink(trackedDir, external);
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await manager.CreateBorrowedSnapshotAsync(repo.Clone, "review", CancellationToken.None));
 
@@ -482,7 +497,7 @@ public class WorktreeManagerTests {
         repo.Clone.CreateFile("alias.txt", "new staged spelling");
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = tmp.Path }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = tmp.Path }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         snapshot = await manager.CreateBorrowedSnapshotAsync(
             repo.Clone, "review", CancellationToken.None);
 
@@ -511,7 +526,7 @@ public class WorktreeManagerTests {
         Directory.CreateDirectory(orphanSidecar);
         Directory.CreateDirectory(legacy);
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
         await manager.CleanupOrphanedAsync([activeCwd]);
 
@@ -535,7 +550,7 @@ public class WorktreeManagerTests {
             File.WriteAllText(Path.Combine(externalChild, "sentinel.txt"), "keep-me");
             Directory.CreateSymbolicLink(borrowedSnapshots, external);
             var manager = new WorktreeManager(
-                new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+                new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
             await manager.CleanupOrphanedAsync();
 
@@ -566,7 +581,7 @@ public class WorktreeManagerTests {
         Directory.CreateDirectory(liveState);
         Directory.CreateDirectory(deadState);
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
         await manager.CleanupOrphanedAsync([activeCwd]);
 
@@ -590,7 +605,7 @@ public class WorktreeManagerTests {
         var activeCwd  = Path.Combine(activeRoot, "src");
         Directory.CreateDirectory(activeCwd);
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
         await manager.CleanupOrphanedAsync([activeCwd]);
 

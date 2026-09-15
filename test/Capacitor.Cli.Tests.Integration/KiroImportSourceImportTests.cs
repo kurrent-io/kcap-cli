@@ -4,6 +4,7 @@ using Capacitor.Cli.Harness.Kiro;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -56,7 +57,7 @@ public class KiroImportSourceImportTests : IDisposable {
         using var client = new HttpClient();
         var source = new KiroImportSource(Config.Root,
             root,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);

@@ -21,6 +21,7 @@ using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -30,9 +31,9 @@ namespace Capacitor.Cli.Commands;
 
 partial class WatchCommand(
         ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, ICredentialSource credentials) {
+        ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
+        GitProviderRouter router) {
     readonly CursorMarkers  _markers  = new(config);
-    readonly WatcherManager _watchers = new(config, profiles, http);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -119,9 +120,9 @@ partial class WatchCommand(
             TimeSpan        noProgressElapsed,
             TimeSpan        ceiling
         ) =>
-        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
-        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
-        :                                          ParentDeadRecovery.KeepWaiting;
+        reResolvedPid is { } pid && pid > 1 && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling                        ? ParentDeadRecovery.EndTerminal
+        :                                                      ParentDeadRecovery.KeepWaiting;
 
     /// <summary>
     /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
@@ -256,7 +257,7 @@ partial class WatchCommand(
         // once here (startup) and then every main-loop iteration below so a hook-side
         // staleness probe can distinguish a wedged (hung-but-alive) watcher from a healthy
         // one — a PID-only liveness check can't tell the difference.
-        var heartbeatPath = _watchers.GetHeartbeatFilePath(logKey);
+        var heartbeatPath = watchers.GetHeartbeatFilePath(logKey);
 
         void TouchHeartbeat() {
             try {
@@ -432,7 +433,9 @@ partial class WatchCommand(
                                 return;
                             }
 
-                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
+                            // No fallback: this watcher has been reparented, so the heuristic here
+                            // resolves systemd/init rather than the agent.
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false);
                             var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
 
                             switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
@@ -503,7 +506,7 @@ partial class WatchCommand(
 
         // Detect repository info upfront if cwd is provided (session watchers only, not agents)
         if (cwd is not null) {
-            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
             state.LastRepoDetection = DateTimeOffset.UtcNow;
         }
 
@@ -518,7 +521,7 @@ partial class WatchCommand(
         // watcher is always spawned with cwd: null too and has never had its own repo detection.
         if (vendor == "claude" && agentId is null && (cwd is null || GitRepository.FindRoot(cwd) is null)) {
             state.EvidenceScanner = new RepoEvidenceScanner<RepositoryPayload>(
-                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(config, root),
+                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(router, config, root),
                 p => p.Owner is not null && p.RepoName is not null);
 
             try {
@@ -735,7 +738,7 @@ partial class WatchCommand(
 
                 // Periodically refresh repository info (every 60s)
                 if (cwd is not null && DateTimeOffset.UtcNow - state.LastRepoDetection > TimeSpan.FromSeconds(60)) {
-                    var detected = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+                    var detected = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
 
                     // An evidence-derived repo may only be replaced by another real detection,
                     // never cleared back to null by a launch-cwd probe that still finds nothing.
@@ -920,7 +923,7 @@ partial class WatchCommand(
         // that orphan case is what the codex-child reap ceiling backstops.
         if (spawnedChildWatcherKeys.Count > 0) {
             Log($"Stopping {spawnedChildWatcherKeys.Count} spawned child watcher(s)");
-            await _watchers.KillWatchers(spawnedChildWatcherKeys);
+            await watchers.KillWatchers(spawnedChildWatcherKeys);
         }
 
         Log($"Done. {state.LinesProcessed} total lines processed.");
@@ -964,7 +967,7 @@ partial class WatchCommand(
 
         // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
         // on a recycled pid (KillWatcher's token guard is the crash-exit backstop).
-        _watchers.RemoveOwnPidFile(
+        watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
 
         await logWriter.DisposeAsync();
@@ -1016,7 +1019,7 @@ partial class WatchCommand(
                 continue;
             }
 
-            await _watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+            await watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
                 agentId: agentId, sessionIdOverride: sessionId, vendor: "gemini");
             spawnedChildKeys.Add($"{sessionId}-{agentId}");
 
@@ -1081,7 +1084,7 @@ partial class WatchCommand(
                 continue;
             }
 
-            await _watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+            await watchers.EnsureWatcherRunning(key: $"{sessionId}-{agentId}", transcriptPath: subFile,
                 agentId: agentId, sessionIdOverride: sessionId, vendor: "opencode");
             spawnedChildKeys.Add($"{sessionId}-{agentId}");
 
@@ -1168,7 +1171,7 @@ partial class WatchCommand(
                 continue;
             }
 
-            await _watchers.EnsureWatcherRunning(key: $"{sessionId}-{childAgentId}", transcriptPath: sub.FilePath,
+            await watchers.EnsureWatcherRunning(key: $"{sessionId}-{childAgentId}", transcriptPath: sub.FilePath,
                 agentId: childAgentId, sessionIdOverride: sessionId, vendor: "codex");
             spawnedChildKeys.Add($"{sessionId}-{childAgentId}");
 
@@ -1663,7 +1666,7 @@ partial class WatchCommand(
         if (vendor == "gemini") {
             try {
                 var finalized = await TimeBudget.RunCappedAsync(
-                    () => new GeminiSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath),
+                    () => new GeminiSubagentTeardown(profiles, http, watchers).DrainAsync(sessionId, transcriptPath),
                     GeminiSubagentTeardown.DrainCap);
 
                 if (!finalized) {
@@ -1684,7 +1687,7 @@ partial class WatchCommand(
         if (vendor == "codex") {
             try {
                 var finalized = await TimeBudget.RunCappedAsync(
-                    () => new CodexSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath),
+                    () => new CodexSubagentTeardown(profiles, http, watchers).DrainAsync(sessionId, transcriptPath),
                     CodexSubagentTeardown.DrainCap);
 
                 if (!finalized) {
@@ -1709,7 +1712,7 @@ partial class WatchCommand(
             // ceiling and returns how many were left unfinalized (logged below — OpenCode has no
             // historical import to recover a missed stop).
             try {
-                var unfinalized = await new OpenCodeSubagentTeardown(config, profiles, http).DrainAsync(sessionId, transcriptPath);
+                var unfinalized = await new OpenCodeSubagentTeardown(profiles, http, watchers).DrainAsync(sessionId, transcriptPath);
                 if (unfinalized > 0) {
                     Log($"Parent-exit OpenCode subagent teardown hit the {OpenCodeSubagentTeardown.OverallBudget.TotalSeconds:0}s ceiling; "
                       + $"{unfinalized} subagent(s) left without SubagentCompleted");
@@ -1761,7 +1764,7 @@ partial class WatchCommand(
                 var node = JsonNode.Parse(body);
 
                 if (node?["generate_whats_done"]?.GetValue<bool>() == true) {
-                    _watchers.SpawnWhatsDoneGenerator(sessionId, vendor);
+                    watchers.SpawnWhatsDoneGenerator(sessionId, vendor);
                 }
             } catch (Exception ex) {
                 Log($"Parent-exit session-end response parse failed: {ex.Message}");

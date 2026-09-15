@@ -6,6 +6,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Cursor;
 
@@ -53,6 +54,7 @@ internal sealed class CursorImportSource : IImportSource {
         ConfigRoot                               config,
         string                                   projectsDir,
         string                                   workspaceStorageDir,
+        GitProviderRouter                        router,
         Func<string, Task<RepositoryPayload?>>?  repoDetector                = null
     ) {
         _config              = config;
@@ -68,7 +70,7 @@ internal sealed class CursorImportSource : IImportSource {
         // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
         // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
         // separate call site untouched by this default and keeps live PR detection.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false));
     }
 
     /// <summary>
@@ -325,7 +327,7 @@ internal sealed class CursorImportSource : IImportSource {
             // source D0's quarantine exists to shut off. Quarantine is always keyed on the FAMILY
             // identity — the top-level (parent) session id — since CursorRewriteGuard is
             // constructed from the watcher process's own `sessionId` argument, which for a
-            // spawned CHILD watcher is the parent id (WatcherManager.BuildSpawnArgs:
+            // spawned CHILD watcher is the parent id (ProcessWatcherSpawner.BuildSpawnArgs:
             // sessionIdOverride ?? key). ResolveQuarantineIdentity resolves that mapping — see its
             // doc for round-2 review fix #7's fallback when `--session <child>` (or an
             // inaccessible/omitted parent transcript) filters the parent out of `subagentLinks`

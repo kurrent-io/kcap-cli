@@ -6,6 +6,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Copilot;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Copilot;
 
@@ -33,10 +34,11 @@ internal sealed class CopilotImportSource : IImportSource {
     public CopilotImportSource(
         ConfigRoot                              config,
         CopilotPaths                            paths,
+        GitProviderRouter                        router,
         Func<string, Task<RepositoryPayload?>>? repoDetector = null
     ) {
         _paths        = paths;
-        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
+        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false));
     }
 
     static StringComparison PathComparison =>

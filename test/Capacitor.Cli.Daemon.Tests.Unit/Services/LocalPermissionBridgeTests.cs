@@ -15,12 +15,20 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class LocalPermissionBridgeTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
+    /// <summary>A bridge whose port the test chooses, so a bind collision is arranged rather than
+    /// waited for.</summary>
+    static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridgeOn(ILoopbackPortSource ports) {
+        var server = new FakeServerConnection(null);
+
+        return (new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, ports), server);
+    }
+
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
             Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null,
             ILogger<LocalPermissionBridge>? logger = null
         ) {
         var server = new FakeServerConnection(respond);
-        var bridge = new LocalPermissionBridge(server, logger ?? NullLogger<LocalPermissionBridge>.Instance);
+        var bridge = new LocalPermissionBridge(server, logger ?? NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
 
         return (bridge, server);
     }
@@ -89,6 +97,7 @@ public class LocalPermissionBridgeTests {
         builder.Services.AddSingleton<ServerConnection>(_ => new FakeServerConnection(null));
 
         // The exact two-descriptor registration from DaemonRunner.RunAsync.
+        builder.Services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         builder.Services.AddSingleton<LocalPermissionBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalPermissionBridge>());
 
@@ -332,33 +341,38 @@ public class LocalPermissionBridgeTests {
         }
     }
 
+    /// <summary>A port below every platform's ephemeral range — Linux allocates from 32768, macOS
+    /// and Windows from 49152 — so nothing else on the machine is handed it while this test holds
+    /// the gap between releasing it and binding it again.</summary>
+    const int RebindablePort = 28137;
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StopAsyncReleasesPort() {
-        var (bridge, _) = CreateBridge();
+        var (bridge, _) = CreateBridgeOn(new FakeLoopbackPortSource(RebindablePort));
+
         TcpListener? probe    = null;
         var          disposed = false;
 
         try {
             await bridge.StartAsync(CancellationToken.None);
 
-            var port = new Uri(bridge.BaseUrl!).Port;
+            // The bridge retries onto an ephemeral port when its first choice is taken, and a probe
+            // rebinding a port the bridge never held would pass whatever StopAsync did.
+            await Assert.That(new Uri(bridge.BaseUrl!).Port).IsEqualTo(RebindablePort);
+
             await bridge.StopAsync(CancellationToken.None);
 
-            // After stop, the port should accept a fresh bind. If StopAsync didn't release
-            // it, this would either throw or hang.
-            probe = new TcpListener(IPAddress.Loopback, port);
+            probe = new TcpListener(IPAddress.Loopback, RebindablePort);
             probe.Start();
 
-            // Keep the replacement listener bound while disposing the bridge. This reproduces
-            // the suite-level race where StopAsync released the port, another fixture claimed it,
-            // and the old listener's later Close() threw EADDRINUSE.
+            // Disposed while the replacement listener holds the port: shutting down a bridge that
+            // no longer owns what it bound must not fault.
             await bridge.DisposeAsync();
             disposed = true;
         } finally {
             probe?.Stop();
 
-            // Ensure cleanup still runs if setup or the assertion above fails. Dispose is
-            // intentionally idempotent, so retrying after a partial shutdown is safe.
+            // Dispose is idempotent, so cleaning up after a partial shutdown is safe.
             if (!disposed) await bridge.DisposeAsync();
         }
     }
@@ -1187,51 +1201,44 @@ public class LocalPermissionBridgeTests {
     /// <summary>A second bridge retries when its first probed port is already claimed in-process.</summary>
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StartAsync_FirstPortAlreadyClaimed_RetriesAndRecovers() {
-        var (first, _)  = CreateBridge();
-        var (second, _) = CreateBridge();
+        var (first, _) = CreateBridge();
+
+        LocalPermissionBridge? second = null;
 
         try {
             await first.StartAsync(CancellationToken.None);
-            var firstPort    = new Uri(first.BaseUrl!).Port;
-            var reservations = 0;
+            var firstPort = new Uri(first.BaseUrl!).Port;
 
-            second.ReserveLoopbackPortOverrideForTest = () => {
-                if (Interlocked.Increment(ref reservations) == 1) return firstPort;
-
-                var probe = new TcpListener(IPAddress.Loopback, 0);
-                probe.Start();
-                try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
-            };
+            var ports = new FakeLoopbackPortSource(firstPort);
+            (second, _) = CreateBridgeOn(ports);
 
             await second.StartAsync(CancellationToken.None);
 
-            await Assert.That(reservations).IsGreaterThanOrEqualTo(2);
+            await Assert.That(ports.Reservations).IsGreaterThanOrEqualTo(2);
             await Assert.That(new Uri(second.BaseUrl!).Port).IsNotEqualTo(firstPort);
         } finally {
-            await second.DisposeAsync();
+            if (second is not null) await second.DisposeAsync();
             await first.DisposeAsync();
         }
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StartAsync_CancellationInterruptsClaimRetry() {
-        var (first, _)  = CreateBridge();
-        var (second, _) = CreateBridge();
-        using var cts = new CancellationTokenSource();
+        var (first, _) = CreateBridge();
+        using var cts  = new CancellationTokenSource();
+
+        LocalPermissionBridge? second = null;
 
         try {
             await first.StartAsync(CancellationToken.None);
             var firstPort = new Uri(first.BaseUrl!).Port;
 
-            second.ReserveLoopbackPortOverrideForTest = () => {
-                cts.Cancel();
-                return firstPort;
-            };
+            (second, _) = CreateBridgeOn(new FakeLoopbackPortSource(firstPort, onReserve: cts.Cancel));
 
             await Assert.ThrowsAsync<OperationCanceledException>(() => second.StartAsync(cts.Token));
             await Assert.That(second.BaseUrl).IsNull();
         } finally {
-            await second.DisposeAsync();
+            if (second is not null) await second.DisposeAsync();
             await first.DisposeAsync();
         }
     }

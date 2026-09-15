@@ -23,6 +23,9 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
         new("public",     "All public — others can see all your sessions"),
     ];
 
+    public const string PublicNotice =
+        "Everyone in this workspace can see every session you start on this machine, including private repos.";
+
     readonly ConfigRoot     _config;
     readonly Func<string?>? _resolveProfileName;
 
@@ -46,7 +49,7 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public WizardStepId Id         => WizardStepId.Defaults;
-    public string       Title      => "Defaults";
+    public string       Title      => "This machine";
     public bool         Applicable => true;
 
     public bool Satisfied {
@@ -56,8 +59,13 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
 
     public string Visibility {
         get => _visibility;
-        set => this.RaiseAndSetIfChanged(ref _visibility, value);
+        set {
+            this.RaiseAndSetIfChanged(ref _visibility, value);
+            this.RaisePropertyChanged(nameof(PublicSelected));
+        }
     }
+
+    public bool PublicSelected => Visibility == "public";
 
     public string DaemonName {
         get => _daemonName;

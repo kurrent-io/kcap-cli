@@ -11,9 +11,6 @@ namespace Capacitor.Cli.Tests.Unit;
 public class RepositoryDetectionPrSkipTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    [Before(Test)]
-    public void Reset() => GitProviderRouter.ResetMemoForTests();
-
     static CommandRunner RecordingRunner(List<string> commands) =>
         (cmd, args, _, _) => {
             commands.Add(cmd);
@@ -32,7 +29,7 @@ public class RepositoryDetectionPrSkipTests {
         using var cwd = new TempDir();
         var commands = new List<string>();
 
-        var repo = await RepositoryDetection.DetectRepositoryAsync(Config.Root, 
+        var repo = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
             cwd.Path, budget: TimeSpan.FromSeconds(5), detectPullRequest: false, run: RecordingRunner(commands));
 
         await Assert.That(repo).IsNotNull();
@@ -51,7 +48,7 @@ public class RepositoryDetectionPrSkipTests {
         using var cwd = new TempDir();
         var commands = new List<string>();
 
-        await RepositoryDetection.DetectRepositoryAsync(Config.Root, 
+        await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, 
             cwd.Path, budget: TimeSpan.FromSeconds(5), detectPullRequest: true, run: RecordingRunner(commands));
 
         // Proves the flag actually gates the round-trip: with detection ON, the
@@ -65,7 +62,7 @@ public class RepositoryDetectionPrSkipTests {
         var commands = new List<string>();
         var payload  = $$"""{"cwd":"{{cwd.Path.Replace("\\", "/")}}","hook_event_name":"session-start"}""";
 
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(Config.Root, 
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(new GitProviderRouter(), Config.Root, 
             payload, budget: TimeSpan.FromSeconds(5), detectPullRequest: false, run: RecordingRunner(commands));
 
         await Assert.That(enriched).Contains("acme");

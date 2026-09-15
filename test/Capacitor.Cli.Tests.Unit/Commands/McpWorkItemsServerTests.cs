@@ -11,66 +11,7 @@ public class McpWorkItemsServerTests {
     McpWorkItemsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup);
 
-    const string CapacitorSessionIdEnvVar = "KCAP_SESSION_ID";
-    const string CodexThreadIdEnvVar      = "CODEX_THREAD_ID";
-
-    // Shares ArgParsingTests' NotInParallel key: both suites mutate the same process-global
-    // KCAP_SESSION_ID / CODEX_THREAD_ID env vars, so tests in either must not interleave.
-    const string SessionEnvVarMutation = "SessionEnvVarMutation";
-
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
-
-    [Test]
-    public async Task Resolve_session_id_prefers_explicit_argument() {
-        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"explicit1"}"""));
-
-        await Assert.That(id).IsEqualTo("explicit1");
-    }
-
-    [Test]
-    public async Task Resolve_session_id_strips_dashes_from_explicit_argument() {
-        // Matches ArgParsing.ResolveSessionIdFromEnv's normalization so an explicit dashed GUID
-        // (e.g. copy-pasted from a UI) resolves to the same dashless key as the ambient env var.
-        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"1234abcd-56ef-78ab-90cd-1234567890ab"}"""));
-
-        await Assert.That(id).IsEqualTo("1234abcd56ef78ab90cd1234567890ab");
-    }
-
-    [Test]
-    [NotInParallel(SessionEnvVarMutation)]
-    public async Task Resolve_session_id_falls_back_to_env_when_argument_missing() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "envsess1");
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
-
-        try {
-            var id = McpWorkItemsServer.ResolveSessionId(new JsonObject());
-
-            await Assert.That(id).IsEqualTo("envsess1");
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
-    }
-
-    [Test]
-    [NotInParallel(SessionEnvVarMutation)]
-    public async Task Resolve_session_id_throws_when_neither_argument_nor_env_present() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, null);
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
-
-        try {
-            var ex = Assert.Throws<ArgumentException>(() => McpWorkItemsServer.ResolveSessionId(new JsonObject()));
-
-            await Assert.That(ex!.Message).IsEqualTo(McpWorkItemsServer.NoSessionIdMessage);
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
-    }
 
     [Test]
     public async Task Declare_body_carries_session_id_and_issue_key() {

@@ -394,6 +394,7 @@ public static partial class DaemonRunner {
         // singleton so AgentOrchestrator can read its bound URL at agent-spawn time, AND
         // as a hosted service so its IHostedService lifecycle starts the listener before
         // any agent is spawned.
+        builder.Services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         builder.Services.AddSingleton<LocalPermissionBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalPermissionBridge>());
 
@@ -415,6 +416,7 @@ public static partial class DaemonRunner {
             builder.Services.AddSingleton<IPtyProcessFactory, UnixPtyProcessFactory>();
         }
 
+        builder.Services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         builder.Services.AddSingleton<WorktreeManager>();
         builder.Services.AddSingleton<RepoMatcher>();
 
@@ -562,6 +564,9 @@ public static partial class DaemonRunner {
 
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
+
+        builder.Services.AddSingleton<RepoStoreWatcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
 
         // Local control socket: lets `kcap agent start`/`attach`/`ls`/`stop` drive daemon-hosted
         // agents from the user's own terminal (AI local-attach Phase 1).
@@ -732,6 +737,8 @@ public static partial class DaemonRunner {
                 await orchestrator.ReapOrphansOnceAsync();
 
                 await host.Services.GetRequiredService<TranscriptJournalSweep>().RunOnceAsync(lifetime.ApplicationStopping);
+
+                orchestrator.AttachmentStore.SweepOrphans(orchestrator.IsLiveAttachmentStem, logger);
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);

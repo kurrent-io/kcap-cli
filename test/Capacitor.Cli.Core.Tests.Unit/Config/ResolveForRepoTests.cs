@@ -3,9 +3,7 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Core.Tests.Unit.Config;
 
 /// <summary>
-/// The short-circuit that skips repo discovery when an explicit URL is given. Bare
-/// <c>[NotInParallel]</c>: the repo is discovered from the working directory, which is
-/// process-global.
+/// The short-circuit that skips repo discovery when an explicit URL is given.
 /// </summary>
 public class ResolveForRepoTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -27,19 +25,11 @@ public class ResolveForRepoTests {
         Repo.CreateFile(".kcap.json", """{"profile":"pinned"}""");
     }
 
-    async Task<string?> ResolveIn(string[] args, ProfileOverrides env) {
-        var originalCwd = Environment.CurrentDirectory;
-        try {
-            Environment.CurrentDirectory = Repo.Path;
+    async Task<string?> ResolveIn(string[] args, ProfileOverrides env) =>
+        (await AppConfig.ResolveForRepo(args, Config.Root, env, new WorkingDirectory(Repo.Path), gitTimeoutMs: 1000))
+        .Resolution.ServerUrl;
 
-            return (await AppConfig.ResolveForRepo(args, Config.Root, env, gitTimeoutMs: 1000))
-                   .Resolution.ServerUrl;
-        } finally {
-            Environment.CurrentDirectory = originalCwd;
-        }
-    }
-
-    [Test, NotInParallel]
+    [Test]
     public async Task Nothing_overridden_resolves_the_repos_own_profile() {
         await WriteRepoPinnedToAnotherProfile();
 
@@ -49,7 +39,7 @@ public class ResolveForRepoTests {
     /// <summary>A named override outranks what the repo pins, so the profile named in
     /// <c>.kcap.json</c> loses to it. Says nothing about whether discovery ran — both paths feed the
     /// resolver the same override, and only the git probe tells them apart.</summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task A_named_override_outranks_the_repos_own_profile() {
         await WriteRepoPinnedToAnotherProfile();
 
@@ -60,7 +50,7 @@ public class ResolveForRepoTests {
     /// <summary>An empty <c>--server-url</c> names no server: the resolver discards it and falls
     /// through, so withholding the repo inputs from that fall-through would silently answer the
     /// active profile instead of the one the repo pins.</summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task An_empty_server_url_flag_still_resolves_the_repos_profile() {
         await WriteRepoPinnedToAnotherProfile();
 

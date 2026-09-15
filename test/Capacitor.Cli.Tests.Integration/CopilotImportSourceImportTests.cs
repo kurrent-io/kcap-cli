@@ -5,6 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness.Copilot;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -62,7 +63,7 @@ public class CopilotImportSourceImportTests : IDisposable {
 
         using var client = new HttpClient();
         var source = new CopilotImportSource(Config.Root, CopilotLayout,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);

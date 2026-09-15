@@ -5,3 +5,17 @@ Usage: kcap validate-plan [sessionId]
 Arguments:
   sessionId               Session ID (defaults to KCAP_SESSION_ID
                           on Claude or CODEX_THREAD_ID on Codex 0.81+)
+
+Output:
+  ## Plan          The plan text — the document declared through
+                   `kcap mcp plans` when there is one, else the
+                   server's best discovered candidate, then the
+                   other candidates.
+  ## Tasks         The declared task list (ordinal, status, title,
+                   source) and its progress; omitted when nothing
+                   was declared.
+  ## What's Done   AI summary and the session's file writes/edits.
+  ## Instructions  What to compare against what.
+
+Exit codes: 0 rendered or no plan found; 1 refused/unreachable
+server; 2 the leading plan's content could not be retrieved.

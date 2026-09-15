@@ -9,8 +9,11 @@ public abstract class ChatInput : ReactiveObject, IDisposable {
     public abstract SendAvailability Availability { get; }
     public abstract bool CanAcceptText { get; }
     public abstract string Hint { get; }
+    /// False carries its reason in <see cref="AttachHint"/>.
+    public abstract bool CanAttach { get; }
+    public abstract string? AttachHint { get; }
     /// Acceptance may clear the composer; an unconfirmed delivery must await transcript evidence.
-    public abstract Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct);
+    public abstract Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct);
     /// The caller has transcript evidence for its latest send. Older receipts must not clear a
     /// newer send's delivery notice.
     public virtual void ConfirmLastSend() { }

@@ -46,6 +46,7 @@ public class RepositoryDetectionTrackedBranchTests {
 
         var ghCalls = new List<string>();
         var payload = await RepositoryDetection.DetectRepositoryAsync(
+            new GitProviderRouter(),
             Config.Root, repo, run: RealGitFakeGh(args => args == TrackedLookup ? TrackedPr : null, ghCalls));
 
         await Assert.That(payload!.Branch).IsEqualTo("local-name");
@@ -60,6 +61,7 @@ public class RepositoryDetectionTrackedBranchTests {
 
         var ghCalls = new List<string>();
         var payload = await RepositoryDetection.DetectRepositoryAsync(
+            new GitProviderRouter(),
             Config.Root, repo,
             run: RealGitFakeGh(args => args == NormalLookup
                 ? """{"number":5,"headRefName":"local-name"}"""
@@ -76,9 +78,9 @@ public class RepositoryDetectionTrackedBranchTests {
         var prOpened = false;
         var run      = RealGitFakeGh(args => prOpened && args == TrackedLookup ? TrackedPr : null);
 
-        var before = await RepositoryDetection.DetectRepositoryAsync(Config.Root, repo, run: run);
+        var before = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, run: run);
         prOpened = true;
-        var after = await RepositoryDetection.DetectRepositoryAsync(Config.Root, repo, run: run);
+        var after = await RepositoryDetection.DetectRepositoryAsync(new GitProviderRouter(), Config.Root, repo, run: run);
 
         await Assert.That(before!.PrNumber).IsNull();
         await Assert.That(after!.PrNumber).IsEqualTo(874);

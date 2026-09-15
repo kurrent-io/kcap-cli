@@ -5,6 +5,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -31,9 +32,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 sealed class OpenCodeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -129,10 +130,10 @@ sealed class OpenCodeHookCommand(
         }
 
         SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, forwarded.ToJsonString());
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
 
         if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -174,7 +175,9 @@ sealed class OpenCodeHookCommand(
         // stdout regardless of what the watcher did.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
-            ? WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses)
+            ? HarnessNudgeEmitter.Combine(
+                WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+                PlansNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisablePlansNudge is true, harnesses))
             : null;
         // The harness nudge is independent of the once-per-session memory lease — it has its own
         // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
@@ -184,7 +187,7 @@ sealed class OpenCodeHookCommand(
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;
 
-        await _watchers.EnsureWatcherRunning(sessionId, file,
+        await watchers.EnsureWatcherRunning(sessionId, file,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: false, vendor: "opencode"
         );
@@ -256,7 +259,7 @@ sealed class OpenCodeHookCommand(
 
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId),

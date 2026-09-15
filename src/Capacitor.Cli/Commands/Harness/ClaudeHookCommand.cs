@@ -9,6 +9,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -22,8 +23,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -120,7 +121,7 @@ public sealed class ClaudeHookCommand(
         // into the same degraded arm a client-creation timeout already uses — keeping capture and
         // the spool intact without inventing a second disposition for a not-usable AuthAttempt.
         var created = HookHttp.IsPostable(Url)
-            ? await CreateClientWithinBudgetAsync(clientFactory, clientCap)
+            ? await BoundedAuth.CreateClientWithinAsync(clientFactory, clientCap, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter))
             : null;
 
         if (created is null) {
@@ -136,7 +137,7 @@ public sealed class ClaudeHookCommand(
                     (source.Equals("resume", StringComparison.OrdinalIgnoreCase) ||
                      source.Equals("compact", StringComparison.OrdinalIgnoreCase));
                 try {
-                    await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+                    await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                         agentId: null, cwd: cwd, skipTitle: isResumeOrCompact);
                 } catch { }
             }
@@ -181,26 +182,6 @@ public sealed class ClaudeHookCommand(
         } finally {
             client.Dispose();
         }
-    }
-
-    // Returns (client,status) if created within `cap`; null if the cap elapsed first
-    // (abandoned creation task reaped on process exit).
-    internal static async Task<AuthAttempt?> CreateClientWithinBudgetAsync(
-            Func<Task<AuthAttempt>> factory, TimeSpan cap) {
-        if (cap <= TimeSpan.Zero) return null;
-        var task = factory();
-        var winner = await Task.WhenAny(task, Task.Delay(cap));
-        if (winner != task) {
-            // Abandoned: observe ALL terminal states so a late fault (likely during the very
-            // outage this guards) doesn't surface as an UnobservedTaskException; dispose the
-            // client only if creation actually completed after the cap elapsed.
-            _ = task.ContinueWith(static t => {
-                if (t.IsFaulted) _ = t.Exception;
-                else if (t.Status == TaskStatus.RanToCompletion) t.Result.Client.Dispose();
-            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            return null;
-        }
-        try { return await task; } catch { return null; }
     }
 
     // Minimal normalization for an auth-timeout-spooled body: dashless ids (match the server's
@@ -297,7 +278,7 @@ public sealed class ClaudeHookCommand(
 
     internal async Task<bool> IsSessionExcludedAsync(Profile? profile, string body, HookBudget budget) {
         if (profile?.ExcludedRepos is { Length: > 0 } repos
-         && await RepoExclusion.IsExcludedAsync(config, body, repos, budget.Remaining)) {
+         && await RepoExclusion.IsExcludedAsync(router, config, body, repos, budget.Remaining)) {
             return true;
         }
 
@@ -394,7 +375,7 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
-            return await new PermissionRequestCommand(config, profiles, hosted, http)
+            return await new PermissionRequestCommand(config, profiles, hosted, http, watchers)
                 .Handle(body, selfHeal, stdout);
         }
 
@@ -426,13 +407,13 @@ public sealed class ClaudeHookCommand(
         if (command == "session-start") {
             // Awaited INSIDE the session-start block after EnsureWatcherRunning so it never delays
             // transcript-capture start.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
         } else if (command is "session-end" or "subagent-stop") {
             // Budgeted so a slow git probe can't push the bounded POST/spool path past the hook
             // deadline. The await below is also budget-bounded as a hard backstop.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
         } else {
-            body = await RepositoryDetection.EnrichWithRepositoryInfo(config, body, detectPullRequest: false);
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, detectPullRequest: false);
         }
 
         // Resolve the V2 profile once for repo/path exclusion and
@@ -492,10 +473,10 @@ public sealed class ClaudeHookCommand(
 
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
-                                await _watchers.KillWatcher(sessionId);
+                                await watchers.KillWatcher(sessionId);
 
                                 if (transcriptPath is not null) {
-                                    await _watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null);
+                                    await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null);
                                 }
                             },
                             effectiveCap
@@ -535,12 +516,12 @@ public sealed class ClaudeHookCommand(
 
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
-                                await _watchers.KillWatcher($"{sessionId}-{agentId}");
+                                await watchers.KillWatcher($"{sessionId}-{agentId}");
 
                                 if (transcriptPath is not null) {
                                     var sessionDir          = Path.ChangeExtension(transcriptPath, null);
                                     var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-                                    await _watchers.InlineDrainAsync(sessionId, agentTranscriptPath, agentId);
+                                    await watchers.InlineDrainAsync(sessionId, agentTranscriptPath, agentId);
                                 }
                             },
                             effectiveCap
@@ -578,14 +559,14 @@ public sealed class ClaudeHookCommand(
             // 1. Capture never lost: spawn the watcher before any slow git/gh/POST.
             //    Idempotent — safe to call even if the POST subsequently fails.
             if (sessionId is not null && transcriptPath is not null) {
-                await _watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+                await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                     agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
             }
 
             // Opt-in background skills refresh: detached and never awaited (the hook's latency
             // budget must not pay for a sync); the child throttles itself off the manifest.
             if (activeProfile?.Skills?.AutoSync == true && sessionCwd is not null)
-                SkillsAutoSync.SpawnDetached(sessionCwd);
+                SkillsAutoSync.SpawnDetached(sessionCwd, starter);
 
             // Now that the watcher is running, await the deferred repo enrichment (a slow git/gh
             // probe could not have delayed capture start) and then inject default_visibility +
@@ -789,14 +770,15 @@ public sealed class ClaudeHookCommand(
                     var coordinationFragment = CoordinationNoticesEmitter.BuildFragment(
                         responseNode, coordinationNoticesDisabled);
 
-                    // The static work-items nudge. Claude has always carried kcap-workitems, so
-                    // the availability gate is always satisfied here; only the opt-out can suppress it.
+                    // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
                     var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
                         HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses);
+                    var plansNudge = PlansNudgeEmitter.Resolve(
+                        HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, harnessNudge);
+                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }
@@ -867,7 +849,7 @@ public sealed class ClaudeHookCommand(
             try {
                 var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
                 if (node?["generate_whats_done"]?.GetValue<bool>() == true && sessionId is not null)
-                    _watchers.SpawnWhatsDoneGenerator(sessionId);
+                    watchers.SpawnWhatsDoneGenerator(sessionId);
             } catch { }
             resp.Dispose();
             return 0;
@@ -969,7 +951,7 @@ public sealed class ClaudeHookCommand(
                 if (sessionId is not null && agentId is not null && transcriptPath is not null) {
                     var sessionDir          = Path.ChangeExtension(transcriptPath, null);
                     var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-                    await _watchers.EnsureWatcherRunning($"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
+                    await watchers.EnsureWatcherRunning($"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
                 }
 
                 break;
@@ -981,7 +963,7 @@ public sealed class ClaudeHookCommand(
                 var sessionCwd     = node?["cwd"]?.GetValue<string>();
 
                 if (sessionId is not null && transcriptPath is not null) {
-                    await _watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: sessionCwd);
+                    await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, cwd: sessionCwd);
                 }
 
                 break;
@@ -1132,7 +1114,7 @@ public sealed class ClaudeHookCommand(
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(config, clock.Time), http.ForMemoryAsync, clock.Time);
+                new SessionStartMemoryScopeResolver(router, config, workdir, clock.Time), http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
@@ -1186,7 +1168,7 @@ public sealed class ClaudeHookCommand(
                         var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
                         var sid  = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
                         if (node?["generate_whats_done"]?.GetValue<bool>() == true && sid is not null)
-                            _watchers.SpawnWhatsDoneGenerator(sid);
+                            watchers.SpawnWhatsDoneGenerator(sid);
                     } catch { }
                 }
                 return DrainOutcome.Delivered;

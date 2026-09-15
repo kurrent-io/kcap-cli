@@ -13,12 +13,13 @@ using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Cursor;
 using Spectre.Console;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http) {
+        ICapacitorHttpClient http, GitProviderRouter router) {
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
     /// channel-based dispatcher in ImportChainsAsync and the TTY slot-row
@@ -764,7 +765,7 @@ class ImportCommand(
 
         // --- Sources ---
         // A caller that names none means Claude only.
-        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects)];
+        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router)];
 
         // --- No-source exit policy ---
         var available = sources.Where(s => s.IsAvailable).ToList();
@@ -933,7 +934,7 @@ class ImportCommand(
                     async (cwd, _) => {
                         try {
                             // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                            var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
+                            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
                             repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
                         } catch {
                             repoByCwd[cwd] = null;
@@ -2686,7 +2687,7 @@ class ImportCommand(
 
             async ValueTask DetectOne(string cwd) {
                 // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
+                var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
                 repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
             }
 
@@ -3109,7 +3110,7 @@ class ImportCommand(
         if (cwd is not null) {
             // The imported session-start payload carries no PR fields (only owner/repo/branch/user),
             // so skip the PR/MR provider round-trip.
-            var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
 
             if (repo is not null || codexRepo is not null) {
                 var repoNode = new JsonObject();
@@ -3146,7 +3147,7 @@ class ImportCommand(
                 session.Vendor.VendorId,
                 session.FilePath,
                 GitRepository.FindRoot,
-                root => RepositoryDetection.DetectRepositoryAsync(config, root, detectPullRequest: false));
+                root => RepositoryDetection.DetectRepositoryAsync(router, config, root, detectPullRequest: false));
 
             if (evidenceNode is not null) startHook["repository"] = evidenceNode;
         }

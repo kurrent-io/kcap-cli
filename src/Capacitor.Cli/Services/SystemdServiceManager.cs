@@ -7,6 +7,8 @@ sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = nu
 
     public string Describe() => "systemd --user unit";
 
+    public string UnitDirectory => SystemdUnit.UserUnitDir(home);
+
     public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
         [new GeneratedFile(SystemdUnit.UnitPath(home, spec.ServiceId), SystemdUnit.Unit(spec))];
 
@@ -40,10 +42,8 @@ sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = nu
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking systemctl.</summary>
-    internal void WriteUnitFiles(ServiceSpec spec) {
-        Directory.CreateDirectory(SystemdUnit.UserUnitDir(home));
+    internal void WriteUnitFiles(ServiceSpec spec) =>
         _writeUnit(SystemdUnit.UnitPath(home, spec.ServiceId), SystemdUnit.Unit(spec), null);
-    }
 
     public void Install(ServiceSpec spec, bool startNow) {
         WriteUnitFiles(spec);

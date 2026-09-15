@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli;
 
@@ -9,7 +10,8 @@ static class RepoExclusion {
     /// Returns true if the repo is excluded (caller should skip processing).
     /// </summary>
     public static async Task<bool> IsExcludedAsync(
-            ConfigRoot config, string body, string[]? excludedRepos, TimeSpan? budget = null) {
+            GitProviderRouter router, ConfigRoot config, string body, string[]? excludedRepos,
+            TimeSpan? budget = null) {
         if (excludedRepos is null or { Length: 0 }) return false;
 
         try {
@@ -31,7 +33,7 @@ static class RepoExclusion {
             if (cwd is null) return false;
 
             // Exclusion matches on owner/repo only → skip the PR round-trip (~600ms to GitHub).
-            var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, budget, detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, budget, detectPullRequest: false);
 
             if (repo?.Owner is not null && repo.RepoName is not null) {
                 return excludedRepos.Contains($"{repo.Owner}/{repo.RepoName}", StringComparer.OrdinalIgnoreCase);

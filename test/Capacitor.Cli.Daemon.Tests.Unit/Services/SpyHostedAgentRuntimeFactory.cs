@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -33,6 +34,12 @@ sealed class SpyHostedAgentRuntimeFactory(string vendor) : IHostedAgentRuntimeFa
     /// defaults to <c>false</c> (ACP-shaped) matching this factory's original "cursor" use, but
     /// settable so a test can exercise the PTY-shaped (<c>true</c>) lifecycle branch too.</summary>
     public bool EmitsTerminalOutput { get; init; }
+
+    /// <summary>Stands in for a runtime whose attachments land outside every cwd (hosted Codex
+    /// today); defaults to the interface's worktree answer.</summary>
+    public AttachmentPlacement Placement { get; init; } = AttachmentPlacement.Worktree;
+
+    public AttachmentPlacement AttachmentPlacementFor(LaunchKind kind) => Placement;
 
     public int                  StartCalls  { get; private set; }
     public string?              LastAgentId { get; private set; }

@@ -5,6 +5,7 @@ using Capacitor.Cli.Harness.Pi;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -76,7 +77,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);
@@ -143,7 +144,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -176,7 +177,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -208,7 +209,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(

@@ -22,6 +22,8 @@ public class DaemonCommandsServiceEnsureTests {
         public ServiceQuery QueryResult { get; init; } =
             new(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
         public string Describe() => "fake";
+        // Never read: ListInstalled is empty, so doctor's directory audit is not reached.
+        public string UnitDirectory => "(fake)";
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => [];
         public ServiceStatus Status(string serviceId) => new(ServiceState.NotInstalled, null);

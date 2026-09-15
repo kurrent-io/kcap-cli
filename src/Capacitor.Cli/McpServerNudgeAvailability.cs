@@ -14,11 +14,10 @@ using Capacitor.Cli.Core.Harness.Pi;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// The SessionStart work-items nudge's availability gate: is the <c>kcap-workitems</c> MCP server
-/// actually MATERIALIZED in the invoking harness's on-disk config? The nudge tells the agent to use
-/// tools that only exist if that server is registered, so a stale install (an upgraded CLI binary
-/// whose harness config predates the workitems registration) must NOT be nudged toward a tool it
-/// lacks.
+/// Is a kcap MCP server actually MATERIALIZED in the invoking harness's on-disk config? A
+/// SessionStart nudge tells the agent to use tools that exist only if that server is registered, so
+/// a stale install (an upgraded CLI whose harness config predates the server) must not be nudged
+/// toward a tool it lacks.
 ///
 /// <para>This reads the real config entry — not an ownership marker — so it also catches a
 /// manually-removed, disabled, or malformed entry. It is a CONFIG-LEVEL check, deliberately NOT a
@@ -26,29 +25,27 @@ namespace Capacitor.Cli;
 /// materialized entry whose server nonetheless fails to launch — yields at worst a benign
 /// tool-not-found, repaired by <c>kcap setup</c>/<c>kcap doctor</c>.</para>
 ///
-/// <para>Fails CLOSED: any absent / disabled / malformed / unreadable config suppresses the nudge.
-/// Claude has always carried <c>kcap-workitems</c> (via the plugin's bundled <c>.mcp.json</c>), so it
-/// is always available there.</para>
+/// <para>Fails CLOSED: any absent / disabled / malformed / unreadable config suppresses the nudge.</para>
 /// </summary>
-static class WorkItemsNudgeAvailability {
-    const string ServerName = "kcap-workitems";
-
+static class McpServerNudgeAvailability {
+    /// <param name="serverName">The registration name, e.g. <c>kcap-plans</c>.</param>
     /// <param name="codexConfigPath">Overrides the Codex <c>config.toml</c> path (test seam); null uses the default.</param>
-    public static bool IsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) {
+    public static bool IsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string serverName, string? codexConfigPath = null) {
         try {
             return harness switch {
-                // Claude carries kcap-workitems in the plugin's bundled .mcp.json, so it is available
-                // exactly when that plugin is effectively installed (enabled + its .mcp.json present).
-                HarnessId.Claude  => ClaudePluginInstaller.IsEffectivelyInstalled(harnesses.Of<ClaudeHarness>().Paths.UserSettings),
-                HarnessId.Codex   => CodexHasWorkItems(codexConfigPath ?? harnesses.Of<CodexHarness>().Paths.ConfigToml),
-                HarnessId.Cursor  => JsonBlockHasServer(harnesses.Of<CursorHarness>().Paths.UserMcpJson, "mcpServers"),
-                HarnessId.Copilot => JsonBlockHasServer(harnesses.Of<CopilotHarness>().Paths.McpConfigJson, "mcpServers"),
-                HarnessId.Gemini  => JsonBlockHasServer(harnesses.Of<GeminiHarness>().Paths.SettingsJson, "mcpServers"),
-                HarnessId.Kiro    => JsonBlockHasServer(harnesses.Of<KiroHarness>().Paths.SettingsMcpJson, "mcpServers"),
+                // Claude loads the plugin's bundled .mcp.json, so the server is available exactly when
+                // the plugin is effectively installed AND the copy Claude loads names it.
+                HarnessId.Claude  => ClaudePluginInstaller.EffectiveMcpJsonPath(harnesses.Of<ClaudeHarness>().Paths.UserSettings) is { } mcpJson
+                                  && JsonBlockHasServer(mcpJson, "mcpServers", serverName),
+                HarnessId.Codex   => CodexHas(serverName, codexConfigPath ?? harnesses.Of<CodexHarness>().Paths.ConfigToml),
+                HarnessId.Cursor  => JsonBlockHasServer(harnesses.Of<CursorHarness>().Paths.UserMcpJson, "mcpServers", serverName),
+                HarnessId.Copilot => JsonBlockHasServer(harnesses.Of<CopilotHarness>().Paths.McpConfigJson, "mcpServers", serverName),
+                HarnessId.Gemini  => JsonBlockHasServer(harnesses.Of<GeminiHarness>().Paths.SettingsJson, "mcpServers", serverName),
+                HarnessId.Kiro    => JsonBlockHasServer(harnesses.Of<KiroHarness>().Paths.SettingsMcpJson, "mcpServers", serverName),
                 // OpenCode's block key is `mcp`, not `mcpServers`.
-                HarnessId.OpenCode    => JsonBlockHasServer(harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson, "mcp"),
-                HarnessId.Antigravity => JsonBlockHasServer(harnesses.Of<AntigravityHarness>().Paths.McpConfigJson, "mcpServers"),
-                HarnessId.Pi          => PiHasWorkItems(harnesses),
+                HarnessId.OpenCode    => JsonBlockHasServer(harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson, "mcp", serverName),
+                HarnessId.Antigravity => JsonBlockHasServer(harnesses.Of<AntigravityHarness>().Paths.McpConfigJson, "mcpServers", serverName),
+                HarnessId.Pi          => PiHas(harnesses, PiToken(serverName)),
                 _ => false
             };
         } catch {
@@ -56,25 +53,29 @@ static class WorkItemsNudgeAvailability {
         }
     }
 
-    static bool CodexHasWorkItems(string codexConfigPath) {
+    /// <summary>The Pi bridge lists servers by their <c>kcap mcp &lt;name&gt;</c> subcommand.</summary>
+    static string PiToken(string serverName) =>
+        serverName.StartsWith("kcap-", StringComparison.Ordinal) ? serverName["kcap-".Length..] : serverName;
+
+    static bool CodexHas(string serverName, string codexConfigPath) {
         try {
             // ReadMcpServerCommands requires each returned table to carry a `command` string, so a
-            // malformed/command-less [mcp_servers.kcap-workitems] table does NOT count (fail-closed).
+            // malformed/command-less [mcp_servers.<name>] table does NOT count (fail-closed).
             // Codex has no per-server enable flag, so a valid command table is a live registration.
             return CodexConfigToml.ReadMcpServerCommands(codexConfigPath)
-                .Any(s => string.Equals(s.Name, ServerName, StringComparison.OrdinalIgnoreCase));
+                .Any(s => string.Equals(s.Name, serverName, StringComparison.OrdinalIgnoreCase));
         } catch {
             return false;
         }
     }
 
-    static bool PiHasWorkItems(HarnessRegistry harnesses) {
+    static bool PiHas(HarnessRegistry harnesses, string token) {
         try {
             var path = harnesses.Of<PiHarness>().Paths.KcapMcpExtension;
             if (!File.Exists(path)) return false;
             // Strip JS comments FIRST so a commented-out `KCAP_MCP_SERVERS = [...]` before the real
             // declaration can't be matched, then find the real `KCAP_MCP_SERVERS = [ … ]` array and
-            // require "workitems" as an exact array ELEMENT — not a substring, so a token inside an
+            // require the token as an exact array ELEMENT — not a substring, so a token inside an
             // unrelated string doesn't count either.
             var content = StripJsComments(File.ReadAllText(path));
             for (var k = content.IndexOf("KCAP_MCP_SERVERS", StringComparison.Ordinal);
@@ -89,7 +90,7 @@ static class WorkItemsNudgeAvailability {
                 var elements = content.Substring(open + 1, close - open - 1)
                     .Split(',')
                     .Select(e => e.Trim());
-                return elements.Any(e => e is "\"workitems\"" or "'workitems'");
+                return elements.Any(e => e == $"\"{token}\"" || e == $"'{token}'");
             }
             return false;
         } catch {
@@ -119,23 +120,26 @@ static class WorkItemsNudgeAvailability {
         return sb.ToString();
     }
 
-    static bool JsonBlockHasServer(string path, string blockKey) {
+    static bool JsonBlockHasServer(string path, string blockKey, string serverName) {
         try {
             if (!File.Exists(path)) return false;
             if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject root) return false;
             if (root[blockKey] is not JsonObject block) return false;
 
             foreach (var (name, entry) in block) {
-                if (!string.Equals(name, ServerName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.Equals(name, serverName, StringComparison.OrdinalIgnoreCase)) continue;
                 // A materialized MCP entry is always an object (command/args or type/enabled). Anything
                 // else — null, a string, an array — is malformed and fails closed.
                 if (entry is not JsonObject o) return false;
-                // Honor an explicit enable flag STRICTLY: only a Boolean `true` counts. A `false`, a
-                // non-Boolean (e.g. "false"), or any other shape suppresses. Absent flag ⇒ enabled
-                // (the JSON harnesses other than OpenCode carry no enable flag).
-                if (o.TryGetPropertyValue("enabled", out var enNode))
-                    return enNode is JsonValue enVal && enVal.TryGetValue<bool>(out var enabled) && enabled;
-                return true;
+                // Honor the harness's own switch STRICTLY: OpenCode's `enabled` counts only as a
+                // Boolean true, Kiro's `disabled` only as a Boolean false; a non-Boolean or any other
+                // shape suppresses. An absent switch means enabled.
+                var enabled = !o.TryGetPropertyValue("enabled", out var enNode)
+                           || (enNode is JsonValue enVal && enVal.TryGetValue<bool>(out var on) && on);
+                var live    = !o.TryGetPropertyValue("disabled", out var disNode)
+                           || (disNode is JsonValue disVal && disVal.TryGetValue<bool>(out var off) && !off);
+
+                return enabled && live;
             }
             return false;
         } catch {

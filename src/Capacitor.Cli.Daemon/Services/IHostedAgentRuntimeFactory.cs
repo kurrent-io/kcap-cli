@@ -113,6 +113,12 @@ internal interface IHostedAgentRuntimeFactory {
     /// </summary>
     bool SupportsModelSelection => true;
 
+    /// <summary>Where this runtime's attachments land for a launch of <paramref name="kind"/>. The
+    /// question is whether the process can be running, write-contained, while a fetch for it happens:
+    /// protected kinds refuse follow-ups, so their only fetch precedes the process and the worktree is
+    /// safe for them.</summary>
+    AttachmentPlacement AttachmentPlacementFor(LaunchKind kind) => AttachmentPlacement.Worktree;
+
     /// <summary>
     /// Prepares and starts the hosted runtime for this launch. Throws
     /// <see cref="CodexHooksNotInstalledException"/> for the orchestrator to map to a

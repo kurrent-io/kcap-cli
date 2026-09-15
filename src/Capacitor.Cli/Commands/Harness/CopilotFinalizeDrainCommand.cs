@@ -1,8 +1,5 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Config;
-
-using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -33,8 +30,7 @@ namespace Capacitor.Cli.Commands.Harness;
 /// dropped final assistant turn when <c>session.shutdown</c> never lands
 /// (e.g. Copilot crash).
 /// </remarks>
-sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
-    readonly WatcherManager _watchers = new(config, profiles, http);
+sealed class CopilotFinalizeDrainCommand(ConfigRoot config, WatcherManager watchers) {
 
     // The hook spawns this FIRST — before its capped pre-drain and the retrying
     // session-end POST — so the budget must outlast the worst-case hook lifetime
@@ -110,7 +106,7 @@ sealed class CopilotFinalizeDrainCommand(ConfigRoot config, ProfileContext profi
 
         // Idempotent: resumes from the server watermark; deterministic event ids
         // dedupe anything the hook's inline-drain already delivered.
-        await _watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "copilot");
+        await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: "copilot");
     }
 
     /// <summary>

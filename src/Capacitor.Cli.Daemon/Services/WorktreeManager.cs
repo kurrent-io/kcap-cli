@@ -32,11 +32,12 @@ public record WorktreeInfo(
     public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false);
 }
 
-public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManager> logger) {
+public partial class WorktreeManager(
+        DaemonConfig config, ILogger<WorktreeManager> logger, ISnapshotBarrier barrier) {
     /// <summary>Excluded from a borrowed snapshot. The vendor MCP config paths are folded in from the one
-    /// list, rather than restated: this used to name <c>.mcp.json</c> and <c>.cursor/mcp.json</c> only, so
-    /// <c>.kiro/settings/mcp.json</c> — the file measured to get a command executed at session setup —
-    /// survived into a launched borrowed snapshot. Two lists of the same thing is how that happened.
+    /// list, rather than restated. A second list drifts from the first: one naming only <c>.mcp.json</c>
+    /// and <c>.cursor/mcp.json</c> lets <c>.kiro/settings/mcp.json</c> — which gets a command executed at
+    /// session setup — survive into a launched borrowed snapshot.
     ///
     /// <para><b>Known cost, and it cuts the wrong way.</b> An excluded file is not in the snapshot, so a
     /// borrowed reviewer cannot SEE it — including when the change under review is the file itself. A pull
@@ -306,10 +307,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // everywhere, so the claim file supplies the exclusion the directory create cannot.
         var claimPath = Path.Combine(worktreeRoot, ClaimPrefix + name);
 
-        // Test barrier: lets two callers rendezvous in the window where BOTH still see the destination
-        // absent. Without it a concurrency test can pass by running the callers sequentially, where the
-        // second is refused by the occupied-destination check and the claim's atomicity is never exercised.
-        SnapshotPreClaimHook?.Invoke().GetAwaiter().GetResult();
+        // A rendezvous in the window where BOTH callers still see the destination absent. Without it a
+        // concurrency test can pass by running them sequentially, where the second is refused by the
+        // occupied-destination check and the claim's atomicity is never exercised.
+        await barrier.ReachedAsync(SnapshotPoint.PreClaim);
 
         try {
             using (new FileStream(claimPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
@@ -325,11 +326,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         // closes: that method's own unwinding completes BEFORE the catch below deletes the tree, so a new
         // same-name call could claim, create, and then be deleted by this call's delayed rollback.
         try {
-            // Test barrier: holds the winner after the claim FILE exists but before the destination does,
-            // so a second caller's acquisition is decided purely by the claim's existence. Without this the
-            // handle's own FileShare.None can do the excluding instead, and a weakened FileMode goes
-            // undetected.
-            SnapshotPostClaimHook?.Invoke().GetAwaiter().GetResult();
+            // Holds the winner after the claim FILE exists but before the destination does, so a second
+            // caller's acquisition is decided purely by the claim's existence. Without this the handle's
+            // own FileShare.None can do the excluding instead, and a weakened FileMode goes undetected.
+            await barrier.ReachedAsync(SnapshotPoint.PostClaim);
 
             // Absent, not merely "not a link". An existing ordinary directory would be silently adopted:
             // the snapshot would overlay a tree we never created, the rollback would then delete it
@@ -345,9 +345,9 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             } catch {
                 // Only the successful claimant reaches here, so this delete is ownership-gated.
                 try { DeleteTreeNoFollow(worktreePath); } catch { /* keep the original failure */ }
-                // Test barrier, INSIDE the claim's protected region and after the delete: this is the exact
-                // window in which a same-name caller must still be excluded.
-                SnapshotRollbackHook?.Invoke().GetAwaiter().GetResult();
+                // INSIDE the claim's protected region and after the delete: the exact window in which a
+                // same-name caller must still be excluded.
+                await barrier.ReachedAsync(SnapshotPoint.Rollback);
                 throw;
             }
         } finally {
@@ -381,29 +381,6 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         }
     }
 
-    /// <summary>Test-only injected failure point. The claim-ownership tests need a DETERMINISTIC rollback
-    /// window: a wall-clock race would be flaky and, worse, could pass by luck.</summary>
-    internal static string? SnapshotFailurePoint;
-
-    /// <summary>Runs inside the claimant's rollback, after the tree is deleted and before the claim is
-    /// released — the window a same-name caller must still be excluded from.</summary>
-    internal static Func<Task>? SnapshotRollbackHook;
-
-    /// <summary>Runs immediately before the claim is attempted, while the destination is still absent.
-    /// Test-only, so two callers can be made to genuinely overlap.</summary>
-    internal static Func<Task>? SnapshotPreClaimHook;
-
-    /// <summary>Runs after the claim file exists but before the destination is created. Test-only: lets a
-    /// second caller attempt acquisition at the one moment when only the claim's EXISTENCE can exclude it.
-    /// </summary>
-    internal static Func<Task>? SnapshotPostClaimHook;
-
-    static void FailHereIfRequested(string point) {
-        if (SnapshotFailurePoint != point) return;
-
-        throw new InvalidOperationException("injected_standalone_failure");
-    }
-
     async Task<WorktreeInfo> BuildStandaloneSnapshotAsync(string repoPath, string worktreePath) {
         // Unique per invocation and created CreateNew, so a collision is detected rather than silently
         // shared, a hostile source cannot plant one that suppresses real content, and a marker orphaned by
@@ -416,7 +393,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             using (new FileStream(markerPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
 
             CopySnapshotTree(repoPath, worktreePath, markerName);
-            FailHereIfRequested(nameof(CopySnapshotTree));
+            await barrier.ReachedAsync(SnapshotPoint.TreeCopied);
         } finally {
             // Cleanup failure logs nothing and fails nothing: the snapshot is already built and correct.
             try { File.Delete(markerPath); } catch { /* best effort */ }
@@ -1109,7 +1086,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             protectedTarget, protectedStaging, protectedSegments, protectedIndex + 1);
     }
 
-    static void DeleteTreeNoFollow(string path) {
+    internal static void DeleteTreeNoFollow(string path) {
         // Path.Exists, not File.Exists || Directory.Exists: both of those FOLLOW, so a DANGLING symlink
         // reports absent and this returned early, leaving the link behind. Its parent then failed to
         // delete — and under the fail-closed config strip that turned a branch committing one dangling

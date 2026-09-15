@@ -38,7 +38,7 @@ public class BorrowedSnapshotExclusionScopeTests {
 
     static WorktreeManager NewManager(Fixture fixture) =>
         new(new DaemonConfig { WorktreeRoot = fixture.SnapshotRoot.Path },
-            NullLogger<WorktreeManager>.Instance);
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
 
     static async Task<WorktreeInfo> SnapshotAsync(Fixture fixture, string relativeCwd) =>
         await NewManager(fixture).CreateBorrowedSnapshotAsync(
@@ -365,7 +365,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         await Assert.That(link.StartsWith(fixture.Source, StringComparison.Ordinal)).IsFalse();
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = link }, NullLogger<WorktreeManager>.Instance);
+            new DaemonConfig { WorktreeRoot = link }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         await Assert.That(async () => await manager.CreateBorrowedSnapshotAsync(
                 fixture.Source, fixture.Source, null, CancellationToken.None))
             .Throws<InvalidOperationException>()
@@ -454,7 +454,7 @@ public class BorrowedSnapshotExclusionScopeTests {
 
         var manager = new WorktreeManager(
             new DaemonConfig { WorktreeRoot = Path.Combine(link, "existing") },
-            NullLogger<WorktreeManager>.Instance);
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
         await Assert.That(async () => await manager.CreateBorrowedSnapshotAsync(
                 fixture.Source, fixture.Source, null, CancellationToken.None))
             .Throws<InvalidOperationException>();

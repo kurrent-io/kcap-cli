@@ -950,6 +950,7 @@ public sealed record PlanArtifactsResponseDto {
     [JsonPropertyName("primary")]     public PlanArtifactDto? Primary { get; init; }
     [JsonPropertyName("artifacts")]   public List<PlanArtifactDto> Artifacts { get; init; } = [];
     [JsonPropertyName("diagnostics")] public List<string> Diagnostics { get; init; } = [];
+    [JsonPropertyName("ledger")]      public Plans.PlanLedgerDto? Ledger { get; init; }
 }
 
 public sealed record CurationApplyItem {
@@ -970,6 +971,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(RepoSessionsResponse))]
 [JsonSerializable(typeof(PlanArtifactDto))]
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
+[JsonSerializable(typeof(Plans.PlanLedgerDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]

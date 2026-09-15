@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness;
 // ReSharper disable ShortLivedHttpClient
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -39,9 +40,9 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http) {
-    readonly WatcherManager  _watchers = new(config, profiles, http);
-    readonly AgentHookPoster _poster   = new(config, profiles, http);
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -156,7 +157,7 @@ sealed class CodexHookCommand(
         // the injected client factory can throw synchronously.
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Codex, sessionId!, LifecycleInstanceId: null,
@@ -344,7 +345,7 @@ sealed class CodexHookCommand(
         }
 
         SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, node.ToJsonString());
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString());
 
         // Repo exclusion runs here (not above the event switch) so that the
         // repository block is already populated by enrichment — RepoExclusion
@@ -354,7 +355,7 @@ sealed class CodexHookCommand(
         // take the existing disabled-session fast path at the top of Handle
         // without paying any git cost.
         if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
             var excludedSessionId = TryGetString(node, "session_id");
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);
@@ -409,6 +410,7 @@ sealed class CodexHookCommand(
         // of the lease-driven memory/guidelines fragment and merged only at the output layer.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            PlansNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
 
         await RunSessionStartHandshakeForTest(
@@ -445,7 +447,7 @@ sealed class CodexHookCommand(
         var cwd        = TryGetString(enrichedNode, "cwd");
 
         return sessionId is not null && transcript is not null && !IsEnvelopeSourcedHostedSession()
-            ? _watchers.EnsureWatcherRunning(sessionId, transcript,
+            ? watchers.EnsureWatcherRunning(sessionId, transcript,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "codex")
             : Task.CompletedTask;
@@ -472,7 +474,7 @@ sealed class CodexHookCommand(
             // Guard-1: skip the watcher restart for an envelope-sourced hosted session (the daemon owns
             // its transcript); the idle-marker stop POST still fires so the "working" indicator clears.
             if (!IsEnvelopeSourcedHostedSession()) {
-                await _watchers.EnsureWatcherRunning(sessionId, transcript,
+                await watchers.EnsureWatcherRunning(sessionId, transcript,
                     agentId: null, sessionIdOverride: null, cwd: cwd,
                     skipTitle: false, vendor: "codex"
                 );

@@ -13,8 +13,6 @@ using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
 
-using Capacitor.Cli.Core.Http;
-
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
@@ -34,7 +32,8 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, ICapacitorHttpClient http) {
+        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers,
+        WorkingDirectory workdir) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
@@ -43,11 +42,11 @@ public sealed class UninstallCommand(
         string? projectRoot = null;
 
         if (includeProject) {
-            projectRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+            projectRoot = GitRepository.FindRoot(workdir.Path);
 
             if (projectRoot is null) {
                 await Console.Error.WriteLineAsync(
-                    $"--project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                    $"--project requires a git working tree, but '{workdir.Path}' is not inside one.");
                 await Console.Error.WriteLineAsync(
                     "Re-run from inside your repo, or drop --project to only remove user-level configuration.");
 
@@ -128,10 +127,10 @@ public sealed class UninstallCommand(
                 .HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
 
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
-        if (await new CleanupCommand(config, profiles, http).HandleCleanup() != 0) hadFailures = true;
+        if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
         var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses);
-        var pluginCommand = new PluginCommand(env);
+        var pluginCommand = new PluginCommand(env, workdir);
 
         // User-level agent integrations. Each remove command is idempotent and
         // no-ops if the target file doesn't exist, so it's safe to call all of

@@ -97,7 +97,7 @@ internal static partial class MemoryIndexLiveCertHarness {
         // The operator's REAL root, named rather than resolved: this assembly pins KCAP_CONFIG_DIR at
         // a throwaway directory, and a cert that resolved that would read an empty config — the same
         // 401-in-a-different-costume the child processes below strip the variable to avoid.
-        var profiles = await AppConfig.ResolveForRepo([], ConfigRoot.UnderHome(UserHome.FromEnvironment().Path), ProfileOverrides.None);
+        var profiles = await AppConfig.ResolveForRepo([], ConfigRoot.UnderHome(UserHome.FromEnvironment().Path), ProfileOverrides.None, WorkingDirectory.FromProcess());
 
         return profiles.Resolution.ServerUrl ?? RequiredServerUrl();
     }
@@ -644,7 +644,7 @@ internal static partial class MemoryIndexLiveCertHarness {
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             RedirectStandardInput  = stdin is not null,
-            WorkingDirectory       = workingDirectory ?? Environment.CurrentDirectory
+            WorkingDirectory       = workingDirectory ?? Capacitor.Cli.Core.WorkingDirectory.FromProcess().Path
         };
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 

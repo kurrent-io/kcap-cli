@@ -6,6 +6,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -42,11 +43,9 @@ namespace Capacitor.Cli.Tests.Integration;
 /// (<see cref="Reactivation_ViaNonSessionStartHook_SpawnsAFreshWatcher"/>).</item>
 /// </list>
 /// </summary>
-[NotInParallel] // shares the WatcherManager.SpawnOverrideForTesting / KCAP_WATCHER_DIR statics
-                // with WatcherLifecycleTests / WatcherHeartbeatStalenessTests (bare NotInParallel
-                // — no explicit key — puts all of them in the same implicit mutual-exclusion bucket).
+[NotInParallel] // KCAP_WATCHER_DIR is process-global, and other classes pin it too.
 public class CursorTailingWatcherTests {
-    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource());
+    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter());
 
     CursorMarkers Markers => new(Config.Root);
 
@@ -67,11 +66,6 @@ public class CursorTailingWatcherTests {
     public static void TearDown() {
         Environment.SetEnvironmentVariable("KCAP_WATCHER_DIR", _previousWatcherDir);
         Tmp.Dispose();
-    }
-
-    [After(Test)]
-    public void ResetOverridesAndConfigDir() {
-        Cli.WatcherManager.SpawnOverrideForTesting = null;
     }
 
     static string NewSessionId() => Guid.NewGuid().ToString("N");
@@ -181,8 +175,7 @@ public class CursorTailingWatcherTests {
         var transcriptPath = tmp.PathTo($"{sessionId}.jsonl");
         await File.WriteAllTextAsync(transcriptPath, """{"role":"user","message":{"content":[]}}""" + "\n");
 
-        var spawned = new List<string>();
-        Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
 
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/auth/config").UsingGet())
@@ -196,10 +189,10 @@ public class CursorTailingWatcherTests {
         var spool = new HookSpool(tmp.PathTo("spool"));
 
         var body = $$"""{"hook_event_name":"sessionStart","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath.Replace(@"\", @"\\")}}"}""";
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(client, new StringReader(body), spool);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(spawned).IsEquivalentTo([sessionId]);
+        await Assert.That(spawner.Keys).IsEquivalentTo([sessionId]);
     }
 
     /// <summary>
@@ -216,8 +209,7 @@ public class CursorTailingWatcherTests {
         var transcriptPath = tmp.PathTo($"{sessionId}.jsonl");
         await File.WriteAllTextAsync(transcriptPath, """{"role":"user","message":{"content":[]}}""" + "\n");
 
-        var spawned = new List<string>();
-        Cli.WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+        var spawner = new FakeWatcherSpawner();
 
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/auth/config").UsingGet())
@@ -231,10 +223,10 @@ public class CursorTailingWatcherTests {
         var spool = new HookSpool(tmp.PathTo("spool"));
 
         var body = $$"""{"hook_event_name":"postToolUse","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath.Replace(@"\", @"\\")}}","tool_name":"Bash"}""";
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient()).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(client, new StringReader(body), spool);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(spawned).IsEquivalentTo([sessionId]);
+        await Assert.That(spawner.Keys).IsEquivalentTo([sessionId]);
     }
 
     // ── 5. Resume at an unterminated final line, then its terminator arrives → no line drift (r6) ──

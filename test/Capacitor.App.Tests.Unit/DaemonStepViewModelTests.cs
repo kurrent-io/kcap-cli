@@ -135,6 +135,41 @@ public class DaemonStepViewModelTests {
         await Assert.That(mutations).IsEqualTo(0);
     }
 
+    /// Check again only appears when a later snapshot could change the row. Sign-in, a
+    /// missing server, and an already-running daemon cannot — those hide the button.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Check_again_is_offered_only_when_a_later_snapshot_could_change_the_row() {
+        var (blocked, missingCli, unknown, ready) = await AvaloniaSession.DispatchAsync(async () => {
+            using var blockedH = new Harness();
+            blockedH.Identity = null;
+            await blockedH.Enter();
+            var blocked = blockedH.Vm.RefreshVisible;
+
+            using var cliH = new Harness();
+            cliH.Cli.CliPath = null;
+            await cliH.Enter();
+            var missingCli = cliH.Vm.RefreshVisible;
+
+            using var unknownH = new Harness();
+            unknownH.Status(null);
+            await unknownH.Enter();
+            var unknown = unknownH.Vm.RefreshVisible;
+
+            using var readyH = new Harness();
+            readyH.Status(Snap());
+            await readyH.Enter();
+            var ready = readyH.Vm.RefreshVisible;
+
+            return (blocked, missingCli, unknown, ready);
+        });
+
+        await Assert.That(blocked).IsFalse();
+        await Assert.That(missingCli).IsTrue();
+        await Assert.That(unknown).IsTrue();
+        await Assert.That(ready).IsFalse();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Without_a_resolved_CLI_the_step_offers_nothing() {
@@ -891,8 +926,45 @@ public class DaemonStepTemplateTests {
 
         await Assert.That(actionButton).IsNotNull();
         await Assert.That(actionButton!.Content).IsEqualTo("Enable daemon");
+        await Assert.That(actionButton.IsVisible).IsTrue();
         await Assert.That(refreshButton).IsNotNull();
+        await Assert.That(refreshButton!.IsVisible).IsFalse();
         await Assert.That(messageText).IsEqualTo(DaemonStepViewModel.NotInstalledMessage);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_blocked_sign_in_hides_both_step_buttons() {
+        var (actionVisible, refreshVisible, messageText) = await AvaloniaSession.DispatchAsync(async () => {
+            using var temp = new TempClaims();
+            var step = new DaemonStepViewModel(
+                new FakeKcapCli(),
+                (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+                () => null,
+                new NeverObserved(), new ScriptedLocalControlOps(), temp.Claims,
+                () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
+                _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
+
+            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
+            await vm.PendingEnterForTesting;
+
+            var window = new OnboardingWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var action  = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonActionButton");
+            var refresh = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonRefreshButton");
+            var message = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "DaemonMessageText");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return (action?.IsVisible ?? false, refresh?.IsVisible ?? false, message?.Text);
+        });
+
+        await Assert.That(actionVisible).IsFalse();
+        await Assert.That(refreshVisible).IsFalse();
+        await Assert.That(messageText).IsEqualTo(DaemonStepViewModel.RequiresSignInMessage);
     }
 
     sealed class NeverObserved : IDaemonObservation {

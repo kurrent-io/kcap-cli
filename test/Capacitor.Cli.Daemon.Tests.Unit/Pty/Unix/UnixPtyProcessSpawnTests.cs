@@ -17,7 +17,7 @@ public class UnixPtyProcessSpawnTests {
         // test that let UnixPtyProcessFactory own an undisposed static singleton hung indefinitely).
         using var spawner = new UnixSpawnerThread();
         var       factory = new UnixPtyProcessFactory(spawner);
-        var       proc    = factory.Spawn("sleep", ["5"], Directory.GetCurrentDirectory());
+        var       proc    = factory.Spawn("sleep", ["5"], AppContext.BaseDirectory);
         try {
             await Assert.That(proc.Pid).IsGreaterThan(0);
             await Assert.That(proc.StartIdentity).IsNotNull();
@@ -64,7 +64,7 @@ public class UnixPtyProcessSpawnTests {
         // that leaks in production. Only a signal to the GROUP reaches it.
         var proc = factory.Spawn(
             "/bin/sh", ["-c", "(trap '' HUP; exec sleep 300) & echo \"CHILD:$!:DONE\"; wait"],
-            Directory.GetCurrentDirectory());
+            AppContext.BaseDirectory);
         try {
             var childPid = await ReadReportedChildPidAsync(proc);
             await Assert.That(childPid).IsGreaterThan(0);

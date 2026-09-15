@@ -89,7 +89,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             string agentId, IDaemonClientService daemon, AgentActionService actions,
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
-            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
+            IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
@@ -139,9 +139,15 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _repoLabelText = presence.Select(p => CheckoutLabelFor(p.Dto))
             .ToProperty(this, x => x.RepoLabelText, CheckoutLabelFor(null))
             .DisposeWith(_disposables);
-        _showsTerminalTab = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
+        var showsTerminal = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor));
+        _showsTerminalTab = showsTerminal
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
+        // ShowTerminalCommand is unguarded — a caller can select the tab before any dto says whether
+        // this agent has one — so presence clamps it back rather than leaving a blank pane in front.
+        showsTerminal.Subscribe(shows => {
+            if (!shows && IsTerminalActive) ActiveTab = WorkspaceTab.Chat;
+        }).DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);
@@ -153,10 +159,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 var dto = p.Dto!;
                 var (projection, note) = ChatTranscriptSource.Resolve(dto);
                 ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
-                    ? new TerminalChatInput(Terminal)
+                    ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
             })
             .DisposeWith(_disposables);
 

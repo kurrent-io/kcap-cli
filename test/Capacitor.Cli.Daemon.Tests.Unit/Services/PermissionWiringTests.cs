@@ -63,6 +63,7 @@ public class PermissionWiringTests {
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));
         services.AddSingleton<ServerConnection>();
+        services.AddSingleton<ISnapshotBarrier>(NoSnapshotBarrier.Instance);
         services.AddSingleton<WorktreeManager>();
         services.AddSingleton<RepoMatcher>();
         services.AddSingleton<IPtyProcessFactory>(new NoopPtyProcessFactory());
@@ -85,6 +86,7 @@ public class PermissionWiringTests {
         services.AddSingleton<PermissionIpc>();
         services.AddSingleton(sp => new PermissionDecisionLog(
             Tmp.Path, sp.GetRequiredService<ILogger<PermissionDecisionLog>>()));
+        services.AddSingleton<ILoopbackPortSource>(EphemeralLoopbackPortSource.Instance);
         services.AddSingleton<LocalPermissionBridge>();
         services.AddSingleton<AgentOrchestrator>();
 

@@ -18,6 +18,103 @@ Mutation paths only: a checkout the agent merely read must not have whatever PR 
 happens to carry attached. Only GitHub, because the endpoint rebuilds the remote URL from owner
 and repo on github.com, so another host would hash to the wrong repository.
 
+## Desktop prompts carry attachments
+
+The launcher's goal box and the session composer stage files and send ids, never bytes. The
+server's temp attachment store is the one byte path on every lane, because it is the only
+mechanism that already ships bytes to a daemon on another machine, its size cap is enforced
+server-side, and the bytes' lifetime there is already someone else's problem. Ids are what travel
+onward in receipts, in the pending-launch entries and in the last-sent reference, so a staged
+file's bytes live in one tray and leave with its chip.
+
+Where the daemon writes a fetched file follows the agent's containment rather than the vendor. An
+agent that can already write anywhere the daemon can gets `<worktree>/.attached/`, which is the one
+place a workspace-confined file tool is sure to read. A write-contained runtime — Codex under
+seatbelt or landlock — would instead be handed a write its own sandbox forbids, so its default-kind
+launches land in a per-agent directory under the daemon's state directory, outside every cwd, named
+absolutely in the trailer. Each runtime factory answers one question: can this process be running,
+write-contained, while a fetch for it happens? A worktree placement over a borrowed cwd is refused
+outright — the follow-up is dropped and a launch carrying ids fails — because the user's own
+checkout is never written to and no attachment is dropped without a word.
+
+A chat send that carries attachments rides a new frame, `SendTextWithAttachments` (24), behind
+`input/2`, which an older daemon's codec rejects before routing. A trailing `attachment_ids` on the
+existing text payload was rejected for the opposite behaviour: an older decoder ignores an unknown
+member, so the text would arrive, the files would vanish, and nothing would say so — and a
+capability check on the status connection does not cover the one-shot socket a send opens.
+
+A fetch is fail-closed and published atomically. Files stream into a pending directory and one
+same-filesystem rename publishes the batch, so the agent sees all of it or none of it; the batch
+stays revocable until the runtime's write commits, and every exit between the fetch and that write
+rolls it back, leaving nothing where the agent looks for attachments. A launch whose attachments
+cannot be fetched fails rather than delivering the text alone: a user who attached a file meant the
+file, and the text without it means something else.
+
+One downgrade gap is accepted. The affordance is gated before the send — `input/2` from the local
+daemon's hello, the advertised daemon version for a remote machine — so "+" disables with
+"attachments need the daemon updated" instead of failing after the fact. But the server dispatches a
+launch after that check and enforces no daemon version, so an operator who downgrades their own
+daemon inside a window of seconds gets a pre-change daemon's best-effort delivery; that is the only
+case where an attached file is dropped silently. Because a launch is merely accepted when the hub
+returns, its draft is retained for ten minutes — the server's own byte TTL — and restored when a
+delayed failure can be correlated back to it. The web path changes with all of this, deliberately:
+default-kind Codex files move to the daemon store, every fetch lands in one directory per batch, a
+missing attachment fails the send with the generic rejection the web already renders rather than
+sending text without it, and an in-place non-Codex agent is refused instead of getting `.attached/`
+inside the user's checkout.
+
+The remote workspace's composer carries text alone: its channel declares no attachment support, so
+"+" disables with "attachments to a session on another machine are not supported yet" and a send
+that somehow carries ids is refused before the hub is called. When that lane lands, its channel is
+the server's `SendUserInput(agentId, text, attachmentIds)` and the tray, uploader and Home's version
+gate apply unchanged.
+
+## Plans are declared from the CLI
+
+A plan document is read by the CLI, not sent for the server to fetch: the server keys a document
+on its repo-relative path and the workspace root exactly as discovery keys a written file, so the
+tool sends the path relative to the git top level and only attaches content at or under the
+server's 256 KB transport cap; above it the document is declared by hash alone and the tool result
+says so. A path is refused before it is read when it, or any link between the repository root and
+it, resolves outside the root: the server rejects such a path as well, but only once the content
+has reached it. `update_plan_task` resolves the session's current plan before it posts when no `plan_id` is
+given, because the update route answers with the task alone and every result has to name the plan
+it acted on. The SessionStart nudge for Claude reads the installed plugin's `.mcp.json` rather than
+assuming the bundled copy: a plugin installed before `kcap-plans` existed carries no such server,
+and a nudge toward a tool the session lacks is worse than none.
+
+## A running daemon follows repos.json
+
+`kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
+after its own launches, so a repo added from a terminal reached the launch dialog only after a daemon
+restart. The daemon now polls a content hash of the file and re-sends its repo paths through the
+existing `DaemonUpdateRepoPaths` hub method when the file differs from the one the last send read.
+Polling rather than a control-socket nudge from the CLI: the file has several writers (the CLI, the
+desktop app, the daemon's own launch path, a hand edit), and every one of them is covered without any
+of them knowing whether a daemon is running. Content rather than size and mtime, because re-adding a
+known path rewrites the file at the same length and two such writes inside the filesystem's timestamp
+resolution would read as one. The comparison is against the fingerprint recorded by the last
+successful send, not against a baseline the watcher primes at start, which closes the window between
+registration reading the file and the watcher starting, and makes a failed send retry on the next
+tick by construction. Registration and the update share one lock across snapshot-and-send: the server
+runs one client's invocations in parallel, so two overlapping sends could otherwise land in the
+opposite order to the fingerprints they record. The interval is 3 s — one hash of one small file —
+so the repo is listed by the time the user has switched from the terminal to the browser.
+
+## Work-items tools take the session from the running harness
+
+An MCP stdio server is spawned once, at harness startup, from the launching process's environment.
+`KCAP_SESSION_ID` never reaches it in Claude Code: the session-start hook exports it into the file
+Claude Code applies to Bash tool calls only, so a tool call that omits `session_id` failed in every
+hooked Claude session, with an error telling the user to do what they were already doing. And when
+the variable is present, it was exported by whichever shell launched the harness, so a session
+started from another session's shell would attach its work to the parent. The workitems server
+therefore resolves an omitted `session_id` through `HarnessRequesterContext`, as the flows server
+already did: the running harness's own `CLAUDE_CODE_SESSION_ID` wins, and the ambient
+`KCAP_SESSION_ID` / `CODEX_THREAD_ID` lookup remains the fallback for harnesses that export no
+per-process id. The tests inject the environment rather than set it, because the suite itself runs
+under a harness that exports these variables.
+
 ## A PR is found under the name its branch was pushed as
 
 An argument-free `gh pr view` looks for the branch git would push to. Under the default
@@ -319,6 +416,28 @@ every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a 
 the lane connected in a session never opened still need the server's pending-interrupts seed; until
 it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
 session discovers.
+
+## Desktop shell: remote workspace — chat and read-only terminal
+
+A session on another machine opens as a workspace: its transcript as chat, a composer, and for a
+PTY harness a read-only terminal, all over the server. Three rules hold it together.
+
+**One chat pane, two feeds.** The chat reads rows through a feed seam: locally a tail of the
+transcript file, remotely a seed from the session detail route followed by a live tail of the
+session's stream from the position the seed ended at. Every access establishment restarts the
+tail from the last position seen and the seed is fetched only until one lands, so a reconnect
+resumes rather than replays rows under the user. Server events reach the same envelope mapping
+and vendor rules the file path applies, so the two paths cannot disagree about a row.
+
+**Authorization is the server's word, never inferred from silence.** The seed fetch and the stream
+subscribe both refuse loudly; the terminal subscribe, which the server refuses with silence, is
+attempted only once the session's access lease reads Established. An empty terminal after that is
+"no output yet", and a lane loss keeps the rows it already has.
+
+**A reported viewport is released, and (0,0) is never sent.** The server folds every viewer's size
+into the PTY's clamp until told otherwise, so a viewer that stops driving releases its size, and
+each establishment subscribes onto a fresh surface so the replay never stacks on old scrollback.
+Keystrokes cross only as the daemon's seven special keys; everything else stays local.
 
 ## A vendor update under a running daemon is re-advertised
 

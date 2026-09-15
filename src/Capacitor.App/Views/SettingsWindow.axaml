@@ -3,48 +3,81 @@
         xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
-        Title="Settings"
+        Title="Kurrent Capacitor — Settings"
         Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
-        Width="540" Height="610" CanResize="False" WindowStartupLocation="CenterOwner"
+        Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="28,24" Spacing="20">
-            <StackPanel Spacing="6">
-                <TextBlock Text="Daemon" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}" />
-                <TextBlock x:Name="StatusText" Text="{Binding StatusLine}" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapMutedBrush}" />
-            </StackPanel>
-            <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                    BorderThickness="1" CornerRadius="12" Padding="20">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="Name" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}" />
-                    <TextBox x:Name="NameInput" Text="{Binding Name, Mode=TwoWay}" IsEnabled="{Binding CanEdit}" />
-                    <TextBlock Text="{Binding NameError}" TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
-                               IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <TextBlock Text="{Binding RenameHint}" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
-                    <Button x:Name="RenameButton" Content="Rename and restart daemon" Command="{Binding RenameCommand}"
-                            HorizontalAlignment="Left" />
-                </StackPanel>
-            </Border>
-            <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                    BorderThickness="1" CornerRadius="12" Padding="20">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="Capacity" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}" />
-                    <TextBlock Text="Maximum agents running at once, or 0 for unlimited. Existing agents keep running when you lower this limit."
-                               TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
-                    <Grid ColumnDefinitions="140,*,Auto">
-                        <NumericUpDown x:Name="CapacityInput" Value="{Binding Capacity, Mode=TwoWay}" Minimum="0"
-                                       Maximum="2147483647" Increment="1" FormatString="0" IsEnabled="{Binding CanEdit}" />
-                        <Button Grid.Column="2" x:Name="SaveButton" Content="Save" Classes="kcapPrimary"
-                                Command="{Binding SaveCommand}" Padding="20,8" />
-                    </Grid>
-                    <TextBlock Text="{Binding CapacityError}" TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
-                               IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                </StackPanel>
-            </Border>
-            <TextBlock x:Name="MessageText" Text="{Binding Message}" TextWrapping="Wrap"
-                       Foreground="{StaticResource KcapMutedBrush}"
-                       IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    <Grid Margin="28,24" RowDefinitions="Auto,*,Auto">
+        <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <TextBlock x:Name="DaemonTitleText" Classes="kcapTitle" Text="Daemon"
+                           VerticalAlignment="Center" LineHeight="22" />
+                <Border x:Name="StatusChip" Grid.Column="1" Padding="10,5" CornerRadius="999"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource KcapSurfaceRaisedBrush}"
+                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                        ToolTip.Tip="{Binding StatusTip}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="StatusCaptionText" Text="Agents" FontSize="11" FontWeight="Medium"
+                                   LetterSpacing="0.2" Foreground="{StaticResource KcapMutedBrush}"
+                                   VerticalAlignment="Center" IsVisible="{Binding StatusShowsAgents}" />
+                        <TextBlock x:Name="StatusText" Text="{Binding StatusLabel}" FontSize="12" FontWeight="SemiBold"
+                                   LetterSpacing="0.2" Foreground="{StaticResource KcapTextBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+            <TextBlock Classes="kcapSubtitle"
+                       Text="Hosted agents and reviews run through this daemon. Rename and capacity each save on their own."
+                       TextWrapping="Wrap" />
         </StackPanel>
-    </ScrollViewer>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
+            <StackPanel Spacing="16">
+                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                        BorderThickness="1" CornerRadius="12" Padding="20">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="kcapLabel" Text="Name" />
+                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                       Text="How this machine identifies itself to the server. Renaming restarts the daemon and relaunches this app." />
+                        </StackPanel>
+                        <TextBox x:Name="NameInput" Classes="kcapField" Text="{Binding Name, Mode=TwoWay}"
+                                 IsEnabled="{Binding CanEdit}" />
+                        <TextBlock x:Name="NameErrorText" Classes="kcapHint" Text="{Binding NameError}"
+                                   TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
+                                   IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <Button x:Name="RenameButton" Classes="kcapPrimary" Content="Rename"
+                                Command="{Binding RenameCommand}" HorizontalAlignment="Left"
+                                ToolTip.Tip="{Binding RenameHint}"
+                                ToolTip.ShowOnDisabled="True" />
+                    </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                        BorderThickness="1" CornerRadius="12" Padding="20">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="kcapLabel" Text="Capacity" />
+                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                       Text="Maximum agents running at once. 0 is unlimited. Agents already running keep going if you lower the limit." />
+                        </StackPanel>
+                        <NumericUpDown x:Name="CapacityInput" Classes="kcapField" Width="160" HorizontalAlignment="Left"
+                                       Value="{Binding Capacity, Mode=TwoWay}"
+                                       Minimum="0" Maximum="2147483647" Increment="1" FormatString="0"
+                                       IsEnabled="{Binding CanEdit}" />
+                        <TextBlock x:Name="CapacityErrorText" Classes="kcapHint" Text="{Binding CapacityError}"
+                                   TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
+                                   IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <Button x:Name="SaveButton" Classes="kcapPrimary" Content="Save" Command="{Binding SaveCommand}"
+                                HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <TextBlock Grid.Row="2" x:Name="MessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
+                   Margin="0,16,0,0"
+                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    </Grid>
 </Window>

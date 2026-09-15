@@ -4,6 +4,7 @@ using Capacitor.Cli.Harness.Claude;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -72,11 +73,11 @@ public class ImportSkipTitleTests : IDisposable {
             [.. Enumerable.Range(0, 20).Select(i =>
                 $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/skip-title-proj","message":{"content":"add a retry to the import loop {{{i}}}"}}""")]);
 
-        return new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()), new FixedCapacitorHttpClient())
+        return new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home, BinaryProbe.FromEnvironment()), new FixedCapacitorHttpClient(), router: new GitProviderRouter())
             .HandleImport(
             filterCwd:        null,
             minLines:         1,
-            sources:          [new ClaudeImportSource(Config.Root, projectsDir.Path)],
+            sources:          [new ClaudeImportSource(Config.Root, projectsDir.Path, router: new GitProviderRouter())],
             scope:            new ImportScope.All(),
             skipConfirmation: true,
             skipTitle:        skipTitle);

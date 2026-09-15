@@ -19,7 +19,7 @@ internal readonly record struct AgentRow(
 /// </summary>
 internal sealed class AgentCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries) {
+        HarnessRegistry harnesses, BinaryProbe binaries, WorkingDirectory workdir) {
     internal static readonly string[] KnownSubcommands = ["start", "ls", "stop", "attach"];
 
     /// Verbs that only ever belonged to the pre-rename `agent` daemon group, minus the
@@ -90,7 +90,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, Environment.CurrentDirectory, parsed.Passthrough, cols, rows);
+        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)

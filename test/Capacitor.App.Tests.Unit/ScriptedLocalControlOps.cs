@@ -27,6 +27,7 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public int ResolveCalls;
     public int PermissionResolveCalls;
     public int SendTextCalls;
+    public int SendTextWithAttachmentsCalls;
     public int PutSettingsCalls;
     public Action? SettingsPutStarted;
     public readonly List<ConsentPolicyDto> PutPayloads = [];
@@ -35,6 +36,7 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public readonly List<ConsentResolveDto> ResolvePayloads = [];
     public readonly List<PermissionResolveDto> PermissionResolvePayloads = [];
     public readonly List<(string AgentId, string Text)> SendTextPayloads = [];
+    public readonly List<(string AgentId, string Text, IReadOnlyList<string> Ids)> SendTextWithAttachmentsPayloads = [];
     public readonly List<DaemonSettingsPutDto> PutSettingsPayloads = [];
 
     public TaskCompletionSource<ConsentPolicyDto> ArmGet() {
@@ -173,6 +175,14 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) {
         SendTextCalls++;
         SendTextPayloads.Add((agentId, text));
+        if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
+        var tcs = _sendTexts.Count > 0 ? _sendTexts.Dequeue() : throw new InvalidOperationException("arm SendText first");
+        return tcs.Task.WaitAsync(ct);
+    }
+
+    public Task<SendTextResult> SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
+        SendTextWithAttachmentsCalls++;
+        SendTextWithAttachmentsPayloads.Add((agentId, text, attachmentIds));
         if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
         var tcs = _sendTexts.Count > 0 ? _sendTexts.Dequeue() : throw new InvalidOperationException("arm SendText first");
         return tcs.Task.WaitAsync(ct);

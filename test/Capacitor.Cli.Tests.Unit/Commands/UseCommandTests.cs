@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -20,7 +21,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root).SetProfile("contoso", repoPath: "/repos/my-project", global: false, save: false, savePath: null);
+        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("contoso", repoPath: "/repos/my-project", global: false, save: false, savePath: null);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -44,7 +45,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root).SetProfile("contoso", repoPath: null, global: true, save: false, savePath: null);
+        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("contoso", repoPath: null, global: true, save: false, savePath: null);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -68,7 +69,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root).SetProfile("contoso", repoPath: repoRoot, global: false, save: true, savePath: repoRoot);
+        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("contoso", repoPath: repoRoot, global: false, save: true, savePath: repoRoot);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -94,7 +95,7 @@ public class UseCommandTests {
         await File.WriteAllTextAsync(configPath,
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
-        var result = await new UseCommand(Config.Root).SetProfile("nonexistent", repoPath: "/repos/x", global: false, save: false, savePath: null);
+        var result = await new UseCommand(Config.Root, workdir: new WorkingDirectory(AppContext.BaseDirectory)).SetProfile("nonexistent", repoPath: "/repos/x", global: false, save: false, savePath: null);
 
         await Assert.That(result).IsEqualTo(1);
     }

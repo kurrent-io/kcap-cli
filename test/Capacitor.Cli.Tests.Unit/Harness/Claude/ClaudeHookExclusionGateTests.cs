@@ -3,6 +3,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Claude;
 
@@ -21,7 +22,11 @@ public class ClaudeHookExclusionGateTests {
     // Instance, not static: the hook writes under the config dir (the repo-detection cache,
     // the lease store), so it must be handed this test's own root — which a static helper
     // cannot see, TUnit injecting it after construction.
-    ClaudeHookCommand Hook() => new(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient());
+    ClaudeHookCommand Hook() =>
+        new(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home),
+            HostedAgent.Terminal, new FixedCapacitorHttpClient(),
+            TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()),
+            SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
 
     // The gate reads the budget only for the repo probe, which these path-exclusion payloads never
     // reach; what they vary is the profile, not the clock. Any live ceiling will do.

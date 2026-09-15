@@ -25,9 +25,10 @@ kcap validate-plan <sessionId>
 
 ## What It Returns
 
-The command outputs three sections:
+The command outputs these sections:
 
-- **`## Plan`** — the full plan text
+- **`## Plan`** — the full plan text: the document declared through the `kcap-plans` MCP tools when there is one, otherwise the server's best discovered candidate, followed by the other candidates
+- **`## Tasks`** — the task list declared through the `kcap-plans` MCP tools, one line per task as `ordinal. [status] title (source)` with a progress line above it; absent when no tasks were declared
 - **`## What's Done`** — two sub-sections:
   - **Summary** — AI-generated summary of what was accomplished (from `WhatsDoneGenerated` events, if available)
   - **Details** — list of files created (`Write`) and modified (`Edit`) during the session
@@ -36,7 +37,7 @@ The command outputs three sections:
 ## What To Do With The Output
 
 1. Read the plan carefully and identify each distinct planned item
-2. Compare each item against the summary and file list under "What's Done"
+2. Compare each item against the summary and file list under "What's Done"; when a Tasks section is present, treat it as the checklist — a task still pending or in_progress is not done
 3. If all items are complete, confirm to the user that the plan is fully implemented
 4. If there are gaps, list the missing items and complete them now
 
