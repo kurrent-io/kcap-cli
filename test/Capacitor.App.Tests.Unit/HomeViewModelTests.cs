@@ -1061,6 +1061,34 @@ public class HomeViewModelTests {
         });
     }
 
+    /// Same-id rows on different lanes are different agents, so a remote row can neither stand in
+    /// for a local launch's placeholder nor settle its failure tracking.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteRowWithTheSameIdDoesNotSettleALocalLaunch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "agent-9", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RepoOwner = "o", RepoName = "r",
+            }));
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await Assert.That(directory.Placeholders.Select(p => p.Id)).Contains("agent-9");
+
+            failures.OnNext(new LaunchFailure("agent-9", "launch_denied_by_owner: default"));
+            await Assert.That(vm.StartError).Contains("consent policy denied");
+        });
+    }
+
     /// The pending row is the launch's own stand-in, so its arrival proves nothing: a failure
     /// after it must still render, and only a real agent row settles the launch.
     [Test]

@@ -46,6 +46,9 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     readonly Func<string, string> _resolveLocalRepoRoot;
     readonly string? _localMachineId;
     readonly string? _appServerUrl;
+    readonly TimeProvider _time;
+    // Nothing else need ever change in an idle directory, so expiry is this timer's job alone.
+    readonly ITimer _placeholderExpiry;
     readonly object _lock = new();
     readonly BehaviorSubject<bool> _onAppServer = new(false);
 
@@ -62,12 +65,14 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
             RepoIdentityResolver repoIdentity, Func<string, string> resolveLocalRepoRoot,
-            string? localMachineId, string? appServerUrl) {
+            string? localMachineId, string? appServerUrl, TimeProvider? time = null) {
         _local = local;
         _repoIdentity = repoIdentity;
         _resolveLocalRepoRoot = resolveLocalRepoRoot;
         _localMachineId = localMachineId;
         _appServerUrl = appServerUrl;
+        _time = time ?? TimeProvider.System;
+        _placeholderExpiry = _time.CreateTimer(_ => Recompute(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         RemoteStale = lane.Status.Select(s => s.State != ServerLaneState.Connected).DistinctUntilChanged();
 
@@ -117,7 +122,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
 
     public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) {
-        lock (_lock) _placeholders[agentId] = AgentRow.Placeholder(agentId, vendor, repoPath, title, model, DateTime.UtcNow, RepoFor(repoPath));
+        lock (_lock) _placeholders[agentId] = AgentRow.Placeholder(agentId, vendor, repoPath, title, model, _time.GetUtcNow().UtcDateTime, RepoFor(repoPath));
         Recompute();
     }
 
@@ -199,8 +204,12 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             // vanish without a row, until the failure notice or the TTL removes it.
             var published = next.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var id in _placeholders.Keys.Where(published.Contains).ToList()) _placeholders.Remove(id);
-            var cutoff = DateTime.UtcNow - PlaceholderTtl;
-            foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt < cutoff).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
+            var now = _time.GetUtcNow().UtcDateTime;
+            foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
+            // Infinite when nothing is pending: a negative due time would fire at once and re-arm forever.
+            var remaining = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : _placeholders.Values.Min(r => r.CreatedAt) + PlaceholderTtl - now;
+            var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining;
+            _placeholderExpiry.Change(nextExpiry, Timeout.InfiniteTimeSpan);
             var pendingRows = _pendingLaunches
                 .Where(p => !published.Contains(p.Id))
                 .Select(p => AgentRow.FromPending(p, RepoFor(p.RepoPath)))
@@ -227,6 +236,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     }
 
     public void Dispose() {
+        _placeholderExpiry.Dispose();
         _subscriptions.Dispose();
         _rows.Dispose();
     }

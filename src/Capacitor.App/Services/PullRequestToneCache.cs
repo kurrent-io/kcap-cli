@@ -34,9 +34,13 @@ public sealed class PullRequestToneCache : IDisposable {
         _source = source;
         _time = time;
         _refreshEvery = refreshEvery ?? DefaultRefreshEvery;
+        // A local row's session id names a session on whatever server the daemon reports; only
+        // while that is the app's own server can it be read here (the directory's own rule).
         directory.Rows.Connect().ToCollection()
-            .Subscribe(rows => {
-                var sessions = rows.Where(r => r.SessionId is { Length: > 0 }).Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal);
+            .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => rows
+                .Where(r => r.SessionId is { Length: > 0 } && (localOnAppServer || r.Origin != AgentOrigin.Local))
+                .Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal))
+            .Subscribe(sessions => {
                 lock (_lock) _sessions = sessions;
                 Tick();
             })
@@ -67,7 +71,11 @@ public sealed class PullRequestToneCache : IDisposable {
         try {
             var ct = _cancel.Token;
             var capability = await _source.DiscoverAsync(false, ct).ConfigureAwait(false);
-            if (capability.Kind != PullRequestCapabilityKind.Supported) return;
+            if (capability.Kind != PullRequestCapabilityKind.Supported) {
+                // Signed out, or a server without overviews, is a verdict; an unreachable one is not.
+                if (capability.Kind != PullRequestCapabilityKind.Unavailable) Set(session, PullRequestTone.None);
+                return;
+            }
             var links = await _source.ListAsync(session, ct).ConfigureAwait(false);
             if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
                 if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") Set(session, PullRequestTone.None);
@@ -77,12 +85,14 @@ public sealed class PullRequestToneCache : IDisposable {
             var denied = false;
             foreach (var link in links.Data.Items) {
                 var read = await _source.OverviewAsync(session, PullRequestWire.Subject(link), ct).ConfigureAwait(false);
-                if (read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale && read.Data is not null && read.AccessFailure is null)
-                    tones.Add(PullRequestTones.From(read.Data));
+                // The same gate the reader applies: a read past its access window reveals nothing.
+                if (read.CanReveal(_time)) tones.Add(PullRequestTones.From(read.Data!));
                 else if (read.AccessFailure is "denied" or "invalid") denied = true;
             }
-            // A transient miss keeps the last tone; a denial clears it, as the card does.
-            if (tones.Count > 0 || denied || links.Data.Items.Length == 0) Set(session, PullRequestTones.Strongest(tones));
+            // A denial clears the tone, as the card does, whatever the session's other PRs read;
+            // a transient miss keeps the last one.
+            if (denied) Set(session, PullRequestTone.None);
+            else if (tones.Count > 0 || links.Data.Items.Length == 0) Set(session, PullRequestTones.Strongest(tones));
         } catch (OperationCanceledException) {
         } finally {
             lock (_lock) _inFlight.Remove(session);

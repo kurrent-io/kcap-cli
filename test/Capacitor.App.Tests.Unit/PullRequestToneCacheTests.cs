@@ -1,6 +1,7 @@
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 
@@ -116,6 +117,85 @@ public class PullRequestToneCacheTests {
 
         await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
         await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.ChecksFailed);
+    }
+
+    [Test]
+    public async Task A_denied_overview_beats_a_readable_one() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(source.Overview(subject)));
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied")));
+
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+
+        await WaitUntilAsync(() => source.Overviews == 2, what: "both overviews read");
+        await Assert.That(cache.Current.ContainsKey("s1")).IsFalse();
+    }
+
+    [Test]
+    public async Task Signing_out_clears_the_tones() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        source.Capability = PullRequestCapabilityKind.SignedOut;
+        time.Advance(TimeSpan.FromMinutes(3));
+
+        await WaitUntilAsync(() => !cache.Current.ContainsKey("s1"), what: "tone dropped");
+    }
+
+    /// A transient discovery miss is not a verdict: the last tone stands until a read says otherwise.
+    [Test]
+    public async Task A_transient_discovery_miss_keeps_the_tone() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        source.Capability = PullRequestCapabilityKind.Unavailable;
+        time.Advance(TimeSpan.FromMinutes(3));
+
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.Ready);
+    }
+
+    /// While the local daemon reports another server, its session ids name that server's sessions;
+    /// reading them against the app's server would colour a worktree from a colliding session.
+    [Test]
+    public async Task Local_rows_are_skipped_while_the_daemon_reports_another_server() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.LocalOnAppServer.OnNext(false);
+
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "b1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+            Vendor = "claude", RepoOwner = "o", RepoName = "r", SessionId = "s2",
+        }));
+
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s2"), what: "tone for the remote session");
+        await Assert.That(cache.Current.ContainsKey("s1")).IsFalse();
+        await Assert.That(source.Lists).IsEqualTo(1);
+    }
+
+    /// A read whose access window has lapsed is not revealed anywhere else, so it yields no tone either.
+    [Test]
+    public async Task An_overview_past_its_access_window_gives_no_tone() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        foreach (var _ in source.Links)
+            source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(source.Overview(subject) with { AccessValidForSeconds = 0 }));
+
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+
+        await WaitUntilAsync(() => source.Overviews == source.Links.Length, what: "overviews read");
+        await Assert.That(cache.Current.ContainsKey("s1")).IsFalse();
     }
 
     static Task WaitUntilAsync(Func<bool> condition, string what) => WorkspaceFixtures.WaitUntilAsync(condition, what: what);

@@ -20,6 +20,15 @@ public class PullRequestStatusTests {
         await Assert.That(status.IsPulsing).IsFalse();
     }
 
+    /// A required review waits on people, not a pipeline, so it keeps the warning colour and does not pulse.
+    [Test]
+    public async Task A_required_review_is_the_warning_colour_and_still() {
+        var status = new PullRequestStatus("Review required", "warning");
+        await Assert.That(status.IsWarning).IsTrue();
+        await Assert.That(status.IsPulsing).IsFalse();
+        await Assert.That(status.IsMuted).IsFalse();
+    }
+
     [Test]
     public async Task A_draft_is_muted_and_still() {
         var status = new PullRequestStatus("Draft", "draft");

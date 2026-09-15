@@ -42,6 +42,7 @@ public static class PullRequestTones {
     public static PullRequestStatus LifecycleStatus(PullRequestOverviewDto? overview) => overview is null ? new("Unknown") : overview.Lifecycle switch {
         "open" when overview.Mergeable == false => new("Merge conflicts", "conflict"),
         "draft" => new("Draft", "draft"),
+        "open" when overview.IsDraft == true => new("Draft", "draft"),
         "open" => new("Open", "open"),
         "merged" => new("Merged", "merged"),
         "closed" => new("Closed", "closed"),

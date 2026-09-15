@@ -13,13 +13,6 @@ public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> 
     List<PendingLaunchDto>? Pending = null);
 
 /// <summary>
-/// One in-flight launch: its identity as the launch request named it, and the runtime's latest
-/// handshake stage (an open vocabulary stamped by the runtime, null before the first stage).
-/// </summary>
-public sealed record PendingLaunchDto(
-    string Id, string Vendor, string? RepoPath, string? Title, DateTime CreatedAt, string? Stage);
-
-/// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).
 /// <see cref="ActiveAgents"/> is derived from the SAME materialized agents array it ships
 /// with (Status is "Starting" or "Running"), so count and array can never disagree within

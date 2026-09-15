@@ -1,17 +1,18 @@
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
 /// A launch the daemon is still starting, or one the app has only had accepted, renders as a row
 /// of its own until a real agent row for the same id arrives.
 public class PendingLaunchRowsTests {
-    static (FakeDaemonClientService Local, AgentDirectory Dir) Build() {
+    static (FakeDaemonClientService Local, AgentDirectory Dir) Build(TimeProvider? time = null) {
         var local = new FakeDaemonClientService();
         var dir = new AgentDirectory(
             local, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p,
-            "m1", "http://localhost:9999");
+            "m1", "http://localhost:9999", time);
         return (local, dir);
     }
 
@@ -77,6 +78,22 @@ public class PendingLaunchRowsTests {
         dir.RemovePlaceholder("p3");
 
         await Assert.That(dir.Rows.Lookup("pending:p3").HasValue).IsFalse();
+    }
+
+    /// Nothing else may ever change in an idle directory, so the expiry has to be the directory's
+    /// own timer rather than a check folded into the next recompute.
+    [Test]
+    public async Task A_placeholder_expires_on_its_own_after_ten_minutes() {
+        var time = new FakeTimeProvider();
+        var (_, dir) = Build(time);
+        using var _d = dir;
+        dir.AddPlaceholder("p5", "claude", "/r", null, null);
+        time.Advance(TimeSpan.FromMinutes(9));
+        await Assert.That(dir.Rows.Lookup("pending:p5").HasValue).IsTrue();
+
+        time.Advance(TimeSpan.FromMinutes(1) + TimeSpan.FromSeconds(1));
+
+        await Assert.That(dir.Rows.Lookup("pending:p5").HasValue).IsFalse();
     }
 
     [Test]

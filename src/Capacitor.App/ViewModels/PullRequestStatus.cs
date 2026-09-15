@@ -2,7 +2,7 @@ namespace Capacitor.App.ViewModels;
 
 public sealed record PullRequestStatus(string Text, string Kind = "neutral", string? Detail = null) {
     public bool IsSuccess => Kind is "success" or "open";
-    public bool IsWarning => Kind == "conflict";
+    public bool IsWarning => Kind is "conflict" or "warning";
     public bool IsDanger => Kind is "failure" or "closed";
     public bool IsPurple => Kind == "merged";
     /// A running check and a draft share the muted colour; only the check pulses.

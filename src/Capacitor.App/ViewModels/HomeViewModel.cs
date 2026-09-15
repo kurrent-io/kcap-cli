@@ -272,7 +272,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     // the id here (id -> recorded-at UTC) until one of those settles it; one lock covers both maps
     // since StartAsync, the failure subscription and the rows subscription all touch them.
     readonly object _launchTrackingLock = new();
-    readonly Dictionary<string, DateTime> _pendingLaunches = new(StringComparer.Ordinal);
+    // Keyed by the normalized agent id; the lane says which directory rows can settle the launch,
+    // since a same-id row on the other lane is a different agent.
+    readonly Dictionary<string, (DateTime At, AgentOrigin Lane)> _pendingLaunches = new(StringComparer.Ordinal);
     readonly Dictionary<string, (string Reason, DateTime At)> _recentFailures = new(StringComparer.Ordinal);
     static readonly TimeSpan PendingLaunchTtl = TimeSpan.FromMinutes(10);
     static readonly TimeSpan RecentFailureTtl = TimeSpan.FromSeconds(30);
@@ -906,7 +908,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         // The accepted id is request-accepted, not success — track it until a LaunchFailed or a
         // directory row settles it. RecordPendingLaunch also resolves the race where the failure
         // already arrived (and was buffered) while the invoke above was still in flight.
-        var tracked = RecordPendingLaunch(agentId);
+        var tracked = RecordPendingLaunch(agentId, launchedRemote ? AgentOrigin.Remote : AgentOrigin.Local);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
         // an agent that isn't there — auto-open and the placeholder row only ever apply to a
         // local target.
@@ -916,21 +918,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     }
 
     /// False when a row or a buffered failure has already settled the launch.
-    bool RecordPendingLaunch(string agentId) {
+    bool RecordPendingLaunch(string agentId, AgentOrigin lane) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
         // and clears nothing. So the row is checked twice, and a buffered failure only ever renders
         // when neither check found one. Both checks are outside _launchTrackingLock (RowExists
         // takes no lock of its own), keeping the cache→tracking lock order intact.
-        if (RowExists(agentId)) {
+        if (RowExists(agentId, lane)) {
             ForgetLaunch(agentId);
             return false;
         }
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = DateTime.UtcNow;
+            _pendingLaunches[agentId] = (DateTime.UtcNow, lane);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (DateTime.UtcNow - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -939,7 +941,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
                 _recentFailures.Remove(agentId);
             }
         }
-        if (RowExists(agentId)) {
+        if (RowExists(agentId, lane)) {
             ForgetLaunch(agentId);
             return false;
         }
@@ -957,9 +959,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     // Directory keys preserve the row's incoming id spelling (e.g. a dashed Guid never becomes
     // "local:{N-form}"), so a lookup by the "N"-normalized pending id would miss it — scan and
     // compare under NormalizeAgentId instead, the same comparison ConfirmPendingRows uses.
-    bool RowExists(string agentId) =>
+    bool RowExists(string agentId, AgentOrigin lane) =>
         _directory is { } directory
-        && directory.Rows.Items.Any(r => r.Origin != AgentOrigin.Pending && NormalizeAgentId(r.Id) == agentId);
+        && directory.Rows.Items.Any(r => r.Origin == lane && NormalizeAgentId(r.Id) == agentId);
 
     void RecordRecentFailure(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
@@ -979,8 +981,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
         bool applies;
         lock (_launchTrackingLock) {
-            applies = _pendingLaunches.TryGetValue(agentId, out var recordedAt)
-                && DateTime.UtcNow - recordedAt <= PendingLaunchTtl;
+            applies = _pendingLaunches.TryGetValue(agentId, out var pending)
+                && DateTime.UtcNow - pending.At <= PendingLaunchTtl;
             _pendingLaunches.Remove(agentId);
         }
         if (!applies) return;
@@ -993,10 +995,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
         lock (_launchTrackingLock) {
-            // A pending row is the launch's own stand-in, so only a published one settles it.
+            // A pending row is the launch's own stand-in, so only a published one on the launch's
+            // own lane settles it.
             foreach (var change in changes)
-                if (change.Reason == ChangeReason.Add && change.Current.Origin != AgentOrigin.Pending
-                    && NormalizeAgentId(change.Current.Id) is { } agentId) {
+                if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId
+                    && _pendingLaunches.TryGetValue(agentId, out var pending) && pending.Lane == change.Current.Origin) {
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
                 }

@@ -72,6 +72,7 @@ public class PullRequestTonesTests {
         await Assert.That(draft.Text).IsEqualTo("Draft");
         await Assert.That(draft.IsMuted).IsTrue();
         await Assert.That(draft.IsSuccess).IsFalse();
+        await Assert.That(PullRequestTones.LifecycleStatus(Overview("open", draft: true)).Text).IsEqualTo("Draft");
 
         var open = PullRequestTones.LifecycleStatus(Overview("open"));
         await Assert.That(open.Text).IsEqualTo("Open");
