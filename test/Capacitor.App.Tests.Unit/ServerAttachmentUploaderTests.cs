@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using TUnit.Assertions.Enums;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -36,7 +37,7 @@ public class ServerAttachmentUploaderTests {
         var outcome = await uploader.UploadAsync(TwoFiles(), CancellationToken.None);
 
         await Assert.That(outcome.Kind).IsEqualTo(UploadKind.Uploaded);
-        await Assert.That(outcome.Ids).IsEquivalentTo([IdA, IdB]);
+        await Assert.That(outcome.Ids).IsEquivalentTo([IdA, IdB], CollectionOrdering.Matching);
 
         var request = server.LogEntries.Single(e => e.RequestMessage.Path == "/api/attachments/upload").RequestMessage;
         await Assert.That(request.Headers!["Content-Type"].Single()).StartsWith("multipart/form-data");
