@@ -15,6 +15,10 @@ public interface IDaemonClientService {
     /// Keyed by Id. Retained across disconnects — staleness is a presentation concern.
     SourceCache<AgentStatusDto, string> Agents { get; }
 
+    /// Launches the daemon is still starting, keyed by the agent id they will publish under.
+    /// Empty under an older daemon, which reports none.
+    SourceCache<PendingLaunchDto, string> Pending { get; }
+
     /// Single-flight: cancels any in-flight enumeration, awaits its completion, then starts the
     /// next one. Concurrent calls coalesce onto the in-flight restart. No-op after shutdown.
     Task RestartLoopAsync();

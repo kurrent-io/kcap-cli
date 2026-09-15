@@ -906,13 +906,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         // The accepted id is request-accepted, not success — track it until a LaunchFailed or a
         // directory row settles it. RecordPendingLaunch also resolves the race where the failure
         // already arrived (and was buffered) while the invoke above was still in flight.
-        RecordPendingLaunch(agentId);
+        var tracked = RecordPendingLaunch(agentId);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
-        // an agent that isn't there — auto-open only ever applies to a local target.
+        // an agent that isn't there — auto-open and the placeholder row only ever apply to a
+        // local target.
+        if (tracked && !launchedRemote)
+            _directory?.AddPlaceholder(agentId, request.Vendor, request.RepoPath, AgentRow.TitleFromPrompt(request.Prompt), request.Model);
         if (!launchedRemote) _openSessionIfCurrent?.Invoke(agentId, generation);
     }
 
-    void RecordPendingLaunch(string agentId) {
+    /// False when a row or a buffered failure has already settled the launch.
+    bool RecordPendingLaunch(string agentId) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -921,7 +925,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         // takes no lock of its own), keeping the cache→tracking lock order intact.
         if (RowExists(agentId)) {
             ForgetLaunch(agentId);
-            return;
+            return false;
         }
 
         string? bufferedReason = null;
@@ -937,9 +941,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
         }
         if (RowExists(agentId)) {
             ForgetLaunch(agentId);
-            return;
+            return false;
         }
         if (bufferedReason is not null) StartError = FriendlyLaunchFailure(bufferedReason);
+        return bufferedReason is null;
     }
 
     void ForgetLaunch(string agentId) {
@@ -954,7 +959,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     // compare under NormalizeAgentId instead, the same comparison ConfirmPendingRows uses.
     bool RowExists(string agentId) =>
         _directory is { } directory
-        && directory.Rows.Items.Any(r => NormalizeAgentId(r.Id) == agentId);
+        && directory.Rows.Items.Any(r => r.Origin != AgentOrigin.Pending && NormalizeAgentId(r.Id) == agentId);
 
     void RecordRecentFailure(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
@@ -978,7 +983,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
                 && DateTime.UtcNow - recordedAt <= PendingLaunchTtl;
             _pendingLaunches.Remove(agentId);
         }
-        if (applies) StartError = FriendlyLaunchFailure(failure.Reason);
+        if (!applies) return;
+        StartError = FriendlyLaunchFailure(failure.Reason);
+        _directory?.RemovePlaceholder(agentId);
     }
 
     /// A row for a tracked id is success confirmation: drop the pending entry and any buffered
@@ -986,8 +993,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
         lock (_launchTrackingLock) {
+            // A pending row is the launch's own stand-in, so only a published one settles it.
             foreach (var change in changes)
-                if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId) {
+                if (change.Reason == ChangeReason.Add && change.Current.Origin != AgentOrigin.Pending
+                    && NormalizeAgentId(change.Current.Id) is { } agentId) {
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
                 }

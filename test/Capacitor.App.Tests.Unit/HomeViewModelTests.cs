@@ -991,6 +991,101 @@ public class HomeViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALocalLaunchAddsAPlaceholderRowForTheAcceptedId() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient();
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), launch, Known(), directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            vm.Goal = "Fix the flaky test\nand more";
+            await vm.StartCommand.Execute();
+
+            await Assert.That(directory.Placeholders).Count().IsEqualTo(1);
+            var placeholder = directory.Placeholders[0];
+            await Assert.That(placeholder.Id).IsEqualTo(LaunchedId);
+            await Assert.That(placeholder.Vendor).IsEqualTo(vm.SelectedVendor);
+            await Assert.That(placeholder.RepoPath).IsEqualTo("/repo/a");
+            await Assert.That(placeholder.Title).IsEqualTo("Fix the flaky test");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteLaunchAddsNoPlaceholder() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            var launch = new RecordingLaunchClient();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
+            ]);
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(),
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status, directory: directory);
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+
+            await Assert.That(directory.Placeholders).IsEmpty();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALaunchFailureRemovesThePlaceholder() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            failures.OnNext(new LaunchFailure("agent-9", "boom"));
+
+            await Assert.That(directory.RemovedPlaceholders).Contains("agent-9");
+        });
+    }
+
+    /// The pending row is the launch's own stand-in, so its arrival proves nothing: a failure
+    /// after it must still render, and only a real agent row settles the launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task APendingRowDoesNotConfirmTheLaunch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures, directory: directory);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("agent-9", "claude", "/repo/a", null, DateTime.UtcNow, "spawned"), new RepoIdentity("path:/repo/a", "a")));
+            failures.OnNext(new LaunchFailure("agent-9", "launch_denied_by_owner: default"));
+
+            await Assert.That(vm.StartError).Contains("consent policy denied");
+        });
+    }
+
     /// The owned-remote list can legitimately empty out from under an already-selected remote
     /// machine (a registry blip) — the picker must stay reachable so the user can switch back to
     /// local, rather than hiding itself with no way to change the selection.
@@ -1437,6 +1532,8 @@ public class HomeViewModelTests {
             Observable.Return((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
         public string? VendorOfSession(string sessionId) => null;
         public bool IsProvenLocalTwin(string agentId) => false;
+        public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) { }
+        public void RemovePlaceholder(string agentId) { }
 
         public void Add(string agentId) => _source.AddOrUpdate(
             AgentRow.FromLocal(Agent(agentId, "/repo/a"), new RepoIdentity("path:/repo/a", "repo")));

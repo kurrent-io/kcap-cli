@@ -605,7 +605,7 @@ public partial class App : Application {
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             },
-            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer);
+            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -627,7 +627,7 @@ public partial class App : Application {
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
                 // workspace, and the directory only keeps both rows when the twin is unproven.
-                originOf: id => directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                originOf: id => directory.Rows.Lookup($"local:{id}").HasValue || directory.Rows.Lookup($"pending:{id}").HasValue ? AgentOrigin.Local
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
