@@ -12,14 +12,16 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>--permission-mode bypassPermissions</c>), so no dialog an Enter could accept can appear. It
 /// gates the submit strategy — see <see cref="SubmitAsync"/>. Defaults to <c>false</c> (assume a
 /// prompt could be present), the fail-safe choice for interactive/local launches.
+///
+/// Every write takes the input lane, so a paste and its submit are never interleaved by another
+/// writer.
 /// </summary>
-internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool approvalsDisabled = false) : IHostedAgentRuntime {
+internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool approvalsDisabled = false, TimeProvider? time = null) : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
     /// fixed window after ingesting a paste (its <c>PASTE_ENTER_SUPPRESS_WINDOW</c> = 120ms,
     /// timer-driven), treating a CR inside it as a newline. The later CRs here land past the window.
-    /// See GitHub #349.
     /// </summary>
     internal static readonly TimeSpan[] SubmitCarriageReturnSchedule = [
         TimeSpan.FromMilliseconds(120),
@@ -28,7 +30,11 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool
         TimeSpan.FromMilliseconds(1200),
     ];
 
-    static readonly TimeSpan SingleSubmitDelay = TimeSpan.FromMilliseconds(50);
+    /// Past codex's 120ms post-paste Enter-suppression window, so the one CR still submits.
+    static readonly TimeSpan SingleSubmitDelay = TimeSpan.FromMilliseconds(150);
+
+    readonly TimeProvider   _time = time ?? TimeProvider.System;
+    readonly SemaphoreSlim  _lane = new(1, 1);
 
     public string  Vendor              => vendor;
     public int     Pid                 => pty.Pid;
@@ -44,45 +50,72 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty, bool
     /// it as one block, then submits it (see <see cref="SubmitAsync"/>).
     /// </summary>
     public async Task SendUserInputAsync(string text) {
-        await pty.WriteAsync($"\x1b[200~{text}\x1b[201~");
-        await SubmitAsync();
+        await _lane.WaitAsync();
+
+        try {
+            await pty.WriteAsync($"\x1b[200~{text}\x1b[201~");
+            await SubmitAsync();
+        } finally {
+            _lane.Release();
+        }
     }
 
-    public Task SendSpecialKeyAsync(string key) {
+    public async Task SendSpecialKeyAsync(string key) {
         var bytes = SpecialKeyMap.ToBytes(key);
+        if (bytes.Length == 0) return;
 
-        return bytes.Length > 0 ? pty.WriteAsync(bytes) : Task.CompletedTask;
+        await _lane.WaitAsync();
+
+        try {
+            await pty.WriteAsync(bytes);
+        } finally {
+            _lane.Release();
+        }
     }
 
-    public Task SendRawInputAsync(byte[] data) => pty.WriteAsync(data);
+    public async Task SendRawInputAsync(byte[] data) {
+        await _lane.WaitAsync();
+
+        try {
+            await pty.WriteAsync(data);
+        } finally {
+            _lane.Release();
+        }
+    }
 
     public void Resize(ushort cols, ushort rows) => pty.Resize(cols, rows);
 
     public async Task RequestGracefulStopAsync() {
-        await pty.WriteAsync("/exit");
-        await SubmitAsync();
+        await _lane.WaitAsync();
+
+        try {
+            await pty.WriteAsync("/exit");
+            await SubmitAsync();
+        } finally {
+            _lane.Release();
+        }
     }
 
     /// <summary>
     /// Submits the composer. When <c>approvalsDisabled</c> (no dialog an Enter could accept),
     /// sprays carriage returns on <see cref="SubmitCarriageReturnSchedule"/> so at least one lands
-    /// past codex's post-paste Enter-suppression window (GitHub #349); the extra CRs are then
-    /// empty-composer no-ops. Otherwise sends a single CR — in an interactive session a stray Enter
-    /// must not answer a live approval prompt (Qodo review). Shared by
+    /// past codex's post-paste Enter-suppression window; the extra CRs are then empty-composer
+    /// no-ops. Otherwise sends a single CR — in an interactive session a stray Enter must not
+    /// answer a live approval prompt. Called holding the input lane, by
     /// <see cref="SendUserInputAsync"/> and <see cref="RequestGracefulStopAsync"/>.
     /// </summary>
     async Task SubmitAsync() {
         if (approvalsDisabled) {
             foreach (var delay in SubmitCarriageReturnSchedule) {
                 if (pty.HasExited) return;
-                await Task.Delay(delay);
+                await Task.Delay(delay, _time);
                 if (!await WriteSubmitCarriageReturnAsync()) return; // stop once the reviewer is gone
             }
 
             return;
         }
 
-        await Task.Delay(SingleSubmitDelay);
+        await Task.Delay(SingleSubmitDelay, _time);
         await WriteSubmitCarriageReturnAsync();
     }
 
