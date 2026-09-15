@@ -22,6 +22,60 @@ shown, while Documentation stays reachable without a server; on Windows and Linu
 flyout is the only entry, since those builds draw no menu bar. `context.source = "desktop"` reaches
 the tenant server and stops there; the trailer is what support reads.
 
+## A PR opened from another checkout is linked to the session
+
+The session's PR list is fed by one probe, `gh pr view` in the launch cwd, which can only ever
+see the PR of that checkout's branch. An agent that makes its own worktree — of another
+repository or of the same one — and opens a PR there left the list empty. The Claude session
+watcher now collects the roots of every checkout the agent *mutated* outside its launch cwd,
+probes each on the 60s refresh and once more on the final drain, and posts any GitHub PR it finds
+to the session's pull-requests endpoint, which dedupes and never repoints the primary repository.
+Mutation paths only: a checkout the agent merely read must not have whatever PR its branch
+happens to carry attached. The collector reads raw transcript lines ahead of the threshold
+buffer, so a mutation in a session's first lines registers and an oversized Write is not lost to
+redaction. The PR is linked under the repository its URL names rather than the checkout's origin,
+because in a fork checkout `gh pr view` resolves the base repository's PR while origin names the
+fork. Only GitHub, because the endpoint rebuilds the remote URL from owner and repo on github.com,
+so another host would hash to the wrong repository. Each pass runs under one budget that bounds
+every probe and post, abandoning a probe still running when the pass is cancelled; it touches the
+watcher heartbeat before each probe and is capped at half the staleness threshold, since the loop
+awaits it inline and a stale heartbeat gets a healthy watcher reaped by the next hook. Passes
+rotate their starting root so a slow checkout cannot shadow the ones behind it every minute. The
+final pass shares the shutdown deadline, measured from the stop request rather than from the loop
+noticing it, with the final-line wait and drain, since the watcher is killed five seconds after it
+is told to stop. A session that never crosses the transcript threshold is still discarded whole,
+PR links included: it sends no transcript and no session-end either.
+
+## A launch shows in the rail before the daemon publishes it
+
+A hosted runtime's agent instance exists only once its handshake ends, which for an ACP vendor can
+take many seconds per stage, and the workspace the launch auto-opened was a blank shell until then.
+The daemon now lists its in-flight launches, with the runtime's latest stage, in the local status
+snapshot it already pushes, and the app adds its own placeholder row the moment the server accepts
+the request, so the gap is covered from both ends. Both render as one pending row keyed by the
+agent id: the daemon's entry hides the placeholder, and a published row on the local lane retires
+both — a same-id row on the remote lane is a different agent. A pending row never settles the launch — only a published row clears the failure tracking,
+or a late `LaunchFailed` would be lost — and a launch failure removes the placeholder, with a
+ten-minute expiry behind it for a failure notice that never arrives.
+
+## The rail colours a worktree's branch glyph by its pull request
+
+The rail knows nothing of pull requests on its own: PR state was read only for the open workspace,
+per session, behind the access window that masks the reader. A tone cache reads every listed
+session's links and overviews on a slow cadence and reduces each to one tone, keeping the
+overview's own denial semantics — a denied read clears the tone, a transient miss keeps the last
+one. A worktree shows the strongest tone across its sessions, ordered by how much the state needs
+the user, and the card's lifecycle and checks labels share the same vocabulary so the two never
+disagree. "Merge conflicts" waits on the server: the overview carries no mergeability field yet,
+so the client reads an optional `mergeable` that is null until the server sends it.
+
+## A triple click selects the line, not the whole box
+
+Avalonia's `TextBox` and `SelectableTextBlock` answer the third click with `SelectAll` in their own
+class handler on the bubbling route. One application-wide handler on the tunnel route selects the
+logical line under the pointer and marks the press handled before that handler runs. Markdown
+bodies are outside its reach: MarkView's selection layer is internal and takes no click count.
+
 ## Desktop prompts carry attachments
 
 The launcher's goal box and the session composer stage files and send ids, never bytes. The

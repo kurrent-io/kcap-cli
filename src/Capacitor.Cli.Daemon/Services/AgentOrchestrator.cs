@@ -1725,7 +1725,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         DateTime           CreatedAt,
         string?            FlowRunId,
         string?            FlowRole,
-        AgentActivityClock ActivityClock);
+        AgentActivityClock ActivityClock,
+        string?            Vendor,
+        string?            RepoPath,
+        string?            Title);
 
     readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
 
@@ -1736,14 +1739,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// leaves no window: <see cref="BuildLiveAgents"/> suppresses a pending entry already in
     /// <c>_agents</c>.</summary>
     internal IDisposable TrackPendingLaunch(
-            string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock) {
-        _pendingLaunches[agentId] = new PendingLaunch(agentId, kind, DateTime.UtcNow, flowRunId, flowRole, clock);
+            string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
+            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
+        _pendingLaunches[agentId] = new PendingLaunch(
+            agentId, kind, createdAt ?? DateTime.UtcNow, flowRunId, flowRole, clock, vendor, repoPath, title);
+        _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
     }
 
     sealed class PendingLaunchScope(AgentOrchestrator owner, string agentId) : IDisposable {
-        public void Dispose() => owner._pendingLaunches.TryRemove(agentId, out _);
+        public void Dispose() {
+            if (owner._pendingLaunches.TryRemove(agentId, out _)) owner._statusNotifier.Pulse();
+        }
     }
 
     /// <summary>One activity clock per launch, wired so a genuine
@@ -1753,7 +1761,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
     AgentActivityClock CreateActivityClock() =>
         new(TimeProvider.System) {
-            OnLaunchStageChanged   = () => _ = SendStatusReportNowAsync(),
+            OnLaunchStageChanged   = () => { _statusNotifier.Pulse(); _ = SendStatusReportNowAsync(); },
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
             // this fires, so the pulse's snapshot reads it (mutation first, pulse second).
@@ -2372,7 +2380,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
             using var pendingLaunch = TrackPendingLaunch(
-                agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock);
+                agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
+                vendor: cmd.Vendor, repoPath: repoPath, title: AgentInstance.TitleFromPrompt(prompt));
 
             try {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);

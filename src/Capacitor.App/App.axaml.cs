@@ -133,6 +133,7 @@ public partial class App : Application {
     ServerPermissionFeed? _permissionFeed;
     SessionAttentionTracker? _attention;
     SessionAccessService? _sessionAccess;
+    PullRequestToneCache? _pullRequestTones;
     ConsentPromptCoordinator? _promptCoordinator;
     // Disposed with the other UI services below: it holds a constructor-scoped subscription to
     // the shared ticker, which is RefCount'd — an undisposed subscriber keeps the Interval (and
@@ -211,6 +212,7 @@ public partial class App : Application {
 
     public override void Initialize() {
         AvaloniaXamlLoader.Load(this);
+        LineSelection.Install();
         // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
         // "About Avalonia" when there is none.
         NativeMenu.SetMenu(this, _appMenu.Menu);
@@ -303,7 +305,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _permissionFeed, _attention, _permissions, _sessionAccess,
-                    _activity, _home, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -321,6 +323,7 @@ public partial class App : Application {
             _attention = null;
             _permissions = null;
             _sessionAccess = null;
+            _pullRequestTones = null;
             _pause = null;
             _activity = null;
             _home = null;
@@ -566,6 +569,8 @@ public partial class App : Application {
             serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, TimeProvider.System);
         var attention = new SessionAttentionTracker(serverLane, readDetail, TimeProvider.System);
         _sessionAccess = sessionAccess;
+        var pullRequestTones = new PullRequestToneCache(directory, readers, TimeProvider.System);
+        _pullRequestTones = pullRequestTones;
         _permissionFeed = permissionFeed;
         _attention = attention;
 
@@ -624,7 +629,7 @@ public partial class App : Application {
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             },
-            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer);
+            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -642,12 +647,12 @@ public partial class App : Application {
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
                 requestSignIn: requestSignIn,
-                lifecycleAttention: lifecycleAttention,
+                lifecycleAttention: lifecycleAttention, pullRequestTones: pullRequestTones.Tones,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
                 // workspace, and the directory only keeps both rows when the twin is unproven.
-                originOf: id => directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                originOf: id => directory.Rows.Lookup($"local:{id}").HasValue || directory.Rows.Lookup($"pending:{id}").HasValue ? AgentOrigin.Local
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
@@ -1149,6 +1154,7 @@ public partial class App : Application {
             Func<string, WorkspaceViewModel>? workspaceFactory = null, string? tenantName = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null, Action? requestSignIn = null,
             IObservable<string?>? lifecycleAttention = null,
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
@@ -1195,7 +1201,8 @@ public partial class App : Application {
         // own lookup would open the local one for both.
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
-            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), agentsWithPending: agentsWithPending);
+            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), agentsWithPending: agentsWithPending,
+            pullRequestTones: pullRequestTones);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
@@ -1722,7 +1729,7 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _permissionFeed, _attention, _permissions, _sessionAccess,
-                    _activity, _home, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => _updates?.ApplyPendingOnExit());
         } else {

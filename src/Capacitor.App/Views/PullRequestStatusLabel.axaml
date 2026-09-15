@@ -13,7 +13,7 @@
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
         <Style Selector="TextBlock.statusText.purple"><Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" /></Style>
     </UserControl.Styles>
-    <Grid ColumnDefinitions="16,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}">
+    <Grid ColumnDefinitions="16,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
         <Path Width="14" Height="14" Stretch="Uniform" Data="{Binding IconData}"
               Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
               VerticalAlignment="Center" />

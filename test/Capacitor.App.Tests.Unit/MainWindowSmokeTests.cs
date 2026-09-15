@@ -503,6 +503,43 @@ public class MainWindowSmokeTests {
         });
     }
 
+    /// A shown MainWindow on the Sessions surface whose rail holds two rows, "Fix the flaky test"
+    /// and "Leave this one alone", under one worktree named feature-x.
+    static (MainWindowViewModel Vm, MainWindow Window) RailWindow() {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        service.Agents.AddOrUpdate(new AgentStatusDto(
+            "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
+            null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test"));
+        service.Agents.AddOrUpdate(new AgentStatusDto(
+            "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
+            null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
+
+        var (actions, _) = NewActions(service);
+        MainWindowViewModel? vm = null;
+        Func<string, string> resolveRepoRoot = p => p.Contains("/wt/", StringComparison.Ordinal)
+            ? p[..p.IndexOf("/wt/", StringComparison.Ordinal)]
+            : p;
+        var directory = new AgentDirectory(
+            service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
+            resolveRepoRoot, null, null);
+        var rail = new SessionRailViewModel(
+            directory, id => vm!.OpenSession(id), _ => { }, resolveRepoRoot);
+        vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(),
+            workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        vm.ShowSessionsCommand.Execute().Subscribe();
+        Dispatcher.UIThread.RunJobs();
+        return (vm, window);
+    }
+
+    static Button RailRow(MainWindow window, string text) => window.GetVisualDescendants().OfType<Button>()
+        .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
+
     /// The rail's own click path (spec §3): a session row rendered by SessionRailView carries the
     /// VM's OpenCommand, and executing it opens that agent's workspace on the Sessions surface.
     ///
@@ -517,37 +554,8 @@ public class MainWindowSmokeTests {
     public async Task Rail_click_opens_the_workspace_and_highlights_the_open_row() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var opened = await AvaloniaSession.DispatchAsync(() => {
-                var service = new FakeDaemonClientService();
-                service.SnapshotsSubject.OnNext(Snap());
-                service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-                service.Agents.AddOrUpdate(new AgentStatusDto(
-                    "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-                    null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test"));
-                service.Agents.AddOrUpdate(new AgentStatusDto(
-                    "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-                    null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
-
-                var (actions, _) = NewActions(service);
-                MainWindowViewModel? vm = null;
-                Func<string, string> resolveRepoRoot = p => p.Contains("/wt/", StringComparison.Ordinal)
-                    ? p[..p.IndexOf("/wt/", StringComparison.Ordinal)]
-                    : p;
-                var directory = new AgentDirectory(
-                    service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                    resolveRepoRoot, null, null);
-                var rail = new SessionRailViewModel(
-                    directory, id => vm!.OpenSession(id), _ => { }, resolveRepoRoot);
-                vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(),
-                    workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
-                var window = new MainWindow { DataContext = vm };
-                window.Show();
-                Dispatcher.UIThread.RunJobs();
-
-                vm.ShowSessionsCommand.Execute().Subscribe();
-                Dispatcher.UIThread.RunJobs();
-
-                Button Row(string text) => window.GetVisualDescendants().OfType<Button>()
-                    .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
+                var (vm, window) = RailWindow();
+                Button Row(string text) => RailRow(window, text);
                 byte Alpha(Button b) => (b.Background as ISolidColorBrush)?.Color.A ?? 0;
 
                 Row("Fix the flaky test").Command!.Execute(null);
@@ -569,6 +577,41 @@ public class MainWindowSmokeTests {
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
             await Assert.That(opened.WorktreeAlpha).IsGreaterThan((byte)0);
+        });
+    }
+
+    /// A selected row must read as selected next to a hovered one: hover paints the raised surface
+    /// brush, so the selection needs its own background, an accent edge and a heavier title.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selected_row_is_distinct_from_a_hovered_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow();
+                RailRow(window, "Fix the flaky test").Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+
+                var selected = RailRow(window, "Fix the flaky test");
+                var sibling = RailRow(window, "Leave this one alone");
+                var hover = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapSurfaceRaisedBrush")!).Color;
+                static TextBlock Title(Button row) => row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("rowTitle"));
+                var result = (
+                    SelectedBackground: (selected.Background as ISolidColorBrush)?.Color,
+                    Hover: hover,
+                    SelectedEdge: selected.BorderThickness.Left,
+                    SiblingEdge: sibling.BorderThickness.Left,
+                    SelectedWeight: Title(selected).FontWeight,
+                    SiblingWeight: Title(sibling).FontWeight);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.SelectedBackground).IsNotNull();
+            await Assert.That(seen.SelectedBackground).IsNotEqualTo(seen.Hover);
+            await Assert.That(seen.SelectedEdge).IsGreaterThanOrEqualTo(3);
+            await Assert.That(seen.SiblingEdge).IsEqualTo(0);
+            await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
+            await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
         });
     }
 

@@ -45,6 +45,17 @@ internal partial class AgentOrchestrator {
     /// already). Order is a wire contract: created_at ascending, id-ordinal tie-break —
     /// ConcurrentDictionary enumeration order must never leak into the payload.
     /// </summary>
+    /// Launches still in their runtime handshake, so a client can show an agent the daemon has
+    /// not published yet. One the publish has overtaken is left out: the published row is the
+    /// authoritative one and a client must never list an id twice.
+    internal List<PendingLaunchDto> SnapshotPendingForStatus() =>
+        [.. _pendingLaunches.Values
+            .Where(p => !_agents.ContainsKey(p.Id))
+            .OrderBy(p => p.CreatedAt)
+            .ThenBy(p => p.Id, StringComparer.Ordinal)
+            .Select(p => new PendingLaunchDto(
+                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage))];
+
     internal List<AgentStatusDto> SnapshotAgentsForStatus() =>
         [.. _agents.Values
             .OrderBy(a => a.CreatedAt)

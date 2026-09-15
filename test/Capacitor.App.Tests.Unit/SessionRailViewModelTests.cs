@@ -171,6 +171,24 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// The launch auto-open lands while the row is still the daemon's pending entry.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task NotifySessionOpened_expands_the_worktree_of_a_pending_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, _, rail) = Build();
+            using (rail) {
+                service.Pending.AddOrUpdate(new PendingLaunchDto("p1", "claude", "/dev/alpha", null, DateTime.UtcNow, null));
+                rail.Repos[0].Worktrees[0].ToggleCommand.Execute().Subscribe();
+                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsFalse();
+
+                rail.NotifySessionOpened("p1");
+
+                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsTrue();
+            }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Dispose_stops_tracking() {

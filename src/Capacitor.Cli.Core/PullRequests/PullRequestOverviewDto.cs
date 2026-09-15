@@ -11,6 +11,9 @@ public sealed record PullRequestOverviewDto {
     public string? Lifecycle { get; init; }
     [JsonPropertyName("is_draft")]
     public bool? IsDraft { get; init; }
+    // False when the head cannot merge into the base (conflicts); null when the server does not report it.
+    [JsonPropertyName("mergeable")]
+    public bool? Mergeable { get; init; }
     [JsonPropertyName("head_ref")]
     public string? HeadRef { get; init; }
     [JsonPropertyName("base_ref")]
