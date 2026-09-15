@@ -2059,6 +2059,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // be able to complete it, and remove a file no other incarnation has written to.
         TranscriptJournal? journal = null;
 
+        // Hoisted so the finally below can drop a store batch no launch completed. Disposing after
+        // Keep() is a no-op, so the success path and the post-publish cleanup path both stay correct.
+        AttachmentStoreLease? storeLease = null;
+
         // Set the instant PublishAgent makes _agents[agentId] THIS launch's own instance. Without
         // it, the catch below can't tell "_agents already holds agentId" apart from "a different,
         // already-live incarnation holds it" — a pre-publish failure on the latter would route
@@ -2186,23 +2190,38 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _ = _server.AppendAgentRunEventAsync(agentId, PolicyWire.ToUpload(agentId, uploadable));
             }
 
-            if (work == WorkLocation.OwnedWorktree) {
-                // Download attachments into worktree (best-effort)
-                if (attachmentIds is { Length: > 0 }) {
-                    try {
-                        var fetch = await _attachmentFetcher.FetchAsync(
-                            Path.Combine(worktree.Path, ".attached"), AttachmentPlacement.Worktree,
-                            attachmentIds, _shutdownCts.Token);
-                        var paths = fetch.Batch?.Paths;
+            // Fails the launch rather than starting an agent whose prompt talks about files it has
+            // not got. The refusal is keyed to the RESOLVED work location: a borrowed request that
+            // materialised into an independent snapshot owns that snapshot and can be written to.
+            var placement = runtimeFactory.AttachmentPlacementFor(cmd.Kind);
 
-                        if (paths is { Count: > 0 }) {
-                            var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
-                            prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
-                        }
-                    } catch (Exception ex) {
-                        LogAttachmentDownloadFailed(ex, agentId);
-                    }
+            if (attachmentIds is { Length: > 0 }) {
+                if (AttachmentIds.Validate(attachmentIds) is { } invalid)
+                    throw new InvalidOperationException($"attachments_refused: {invalid}");
+
+                if (placement == AttachmentPlacement.Worktree && work == WorkLocation.BorrowedCwd)
+                    throw new InvalidOperationException(
+                        "attachments_refused: attachments need a daemon-owned worktree");
+
+                var root = placement == AttachmentPlacement.DaemonStore
+                    ? _attachmentStore.DirectoryFor(agentId)
+                    : Path.Combine(worktree.Path, ".attached");
+
+                // Taken BEFORE the fetch: every exit between here and registration disposes it, and
+                // only a published agent keeps the directory.
+                if (placement == AttachmentPlacement.DaemonStore) storeLease = _attachmentStore.Lease(agentId);
+
+                var fetch = await _attachmentFetcher.FetchAsync(root, placement, attachmentIds, _shutdownCts.Token);
+
+                if (fetch.Batch is null) {
+                    LogAttachmentFetchFailed(agentId, fetch.FailedId, fetch.Error);
+
+                    throw new InvalidOperationException(
+                        $"attachment_unavailable: {fetch.FailedId}: {fetch.Error}");
                 }
+
+                var suffix = AttachmentTrailer.For(fetch.Batch.Paths);
+                prompt = string.IsNullOrEmpty(prompt) ? suffix : $"{prompt}\n\n{suffix}";
             }
 
             // An unattended review-flow reviewer must auto-approve its kcap tool calls (no human is
@@ -2452,7 +2471,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 PolicySnapshot      = policySnapshot,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,
-                Placement           = runtimeFactory.AttachmentPlacementFor(cmd.Kind),
+                Placement           = placement,
                 Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
                 FlowRunId           = cmd.FlowRunId,
                 FlowRole            = cmd.FlowRole,
@@ -2462,6 +2481,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             };
             PublishAgent(agent);
             published = true;
+            storeLease?.Keep();
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after
@@ -2646,6 +2666,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Phase B2-b (sequenced-settlement design §4.2.2): a pre-insert failure — the worktree (if any)
             // was torn down and no agent was ever registered; terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+        } finally {
+            storeLease?.Dispose();
         }
     }
 
@@ -5312,9 +5334,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not build the explicit reviewer-model resolved report for agent {AgentId} (vendor {Vendor}, launch model {LaunchModel}) — no resolver or model no longer resolves; skipping the report (the server will fail the attempt closed)")]
     partial void LogExplicitReviewerModelUnreportable(string agentId, string vendor, string launchModel);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download launch attachments for agent {AgentId} (continuing)")]
-    partial void LogAttachmentDownloadFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to build the approval-policy snapshot for agent {AgentId}; launching without one (permissions fall back to prompting)")]
     partial void LogPolicySnapshotBuildFailed(Exception ex, string agentId);

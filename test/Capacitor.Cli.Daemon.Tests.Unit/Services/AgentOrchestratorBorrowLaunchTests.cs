@@ -560,7 +560,9 @@ public class AgentOrchestratorBorrowLaunchTests {
             Effort: null,
             RepoPath: cwd,
             Tools: null,
-            AttachmentIds: ["would-be-attachment"], // set so we prove the attachment download-into-cwd is skipped
+            // A borrowed cwd with attachments is refused outright (LaunchAttachmentsTests); this
+            // launch is the one that proceeds, so it carries none.
+            AttachmentIds: null,
             Vendor: "claude",
             Borrowed: true,
             BorrowCwd: cwd
@@ -572,10 +574,7 @@ public class AgentOrchestratorBorrowLaunchTests {
 
         // No daemon-owned worktree was created under the user's checkout...
         await Assert.That(Directory.Exists(Path.Combine(cwd, ".capacitor", "worktrees"))).IsFalse();
-        // ...no attachments were downloaded into it...
-        await Assert.That(Directory.Exists(Path.Combine(cwd, ".attached"))).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(canonicalCwd, ".attached"))).IsFalse();
-        // ...and the cwd tree is byte-identical (no worktree add, no launch-time mirror, no attachment).
+        // ...and the cwd tree is byte-identical (no worktree add, no launch-time mirror).
         await Assert.That(SnapshotTree(cwd)).IsEquivalentTo(before);
 
         // The agent runs in the user's real (canonicalized) checkout, marked as a borrowed cwd.
