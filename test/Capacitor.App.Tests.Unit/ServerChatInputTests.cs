@@ -71,9 +71,36 @@ public class ServerChatInputTests {
     }
 
     [Test]
+    public async Task Cancellation_before_send_does_not_attempt_delivery() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Ready();
+            await Assert.That(await h.Input.SendAsync("hello", new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(h.Lane.UserInputs).IsEmpty();
+            h.Input.Dispose();
+        });
+    }
+
+    [Test]
+    public async Task A_transport_exception_is_unconfirmed_until_delivery_is_confirmed() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Ready();
+            h.Lane.UserInputHandler = _ => Task.FromException<HubCallOutcome>(new IOException("socket"));
+            await Assert.That(await h.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
+            await Assert.That(h.Input.Hint).Contains("delivery unconfirmed");
+            await Assert.That(h.Input.Availability).IsEqualTo(SendAvailability.Ready);
+            h.Input.ConfirmLastSend();
+            await Assert.That(h.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+            h.Input.Dispose();
+        });
+    }
+
+    [Test]
     public async Task Interrupt_sends_escape_only_for_a_terminal_harness() {
         await RunOnUiAsync(async () => {
             var pty = new Harness(hasTerminal: true);
+            await Assert.That(pty.Input.CanInterrupt).IsFalse();
             pty.Ready();
             await Assert.That(pty.Input.CanInterrupt).IsTrue();
             await pty.Input.InterruptAsync(CancellationToken.None);
