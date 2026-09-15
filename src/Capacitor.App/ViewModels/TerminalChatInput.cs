@@ -67,7 +67,10 @@ internal sealed class TerminalChatInput : ChatInput {
         if (_disposed || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
         if (attachmentIds.Count == 0)
             return CanAcceptText && _terminal.TrySendText(text) ? ChatSendOutcome.Accepted : ChatSendOutcome.Rejected;
-        if (!CanAttach) return ChatSendOutcome.Rejected;
+        // The capability can go while the upload runs, and a bare rejection leaves the chips sitting
+        // in the composer with nothing said about them.
+        if (!CanAttach)
+            return Settle(ChatSendOutcome.Rejected, AttachHint ?? LocalFrameChatInput.AttachmentsRefused);
         _sending = true; _notice = null; Raise();
         SendTextResult result;
         try {

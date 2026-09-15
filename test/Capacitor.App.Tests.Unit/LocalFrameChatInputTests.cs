@@ -233,22 +233,26 @@ public class LocalFrameChatInputTests {
         });
     }
 
-    /// The gate refuses before the wire, not after: a daemon without input/2 never sees the ids.
+    /// The gate refuses before the wire, not after: a daemon without input/2 never sees the ids. The
+    /// ids reach it only from a composer that has already uploaded them, so the refusal has to say
+    /// what happened — the chips are still staged and nothing else will explain them.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_shut_gate_refuses_ids_without_sending_anything() {
+    public async Task A_shut_gate_refuses_ids_without_sending_anything_and_says_why() {
         await RunOnUiAsync(async () => {
             var rig = new Rig();
             rig.Connected("status/1", "input/1");
             rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "owned") with { Status = "Running" }, false));
             await Assert.That(rig.Input.CanAcceptText).IsTrue();
             await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Input.Hint).IsEqualTo("attachments need the daemon updated");
             await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
 
             rig.Connected("status/1", "input/1", "input/2");
             rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "borrowed") with { Status = "Running" }, false));
             await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Input.Hint).IsEqualTo("attachments aren't available for an in-place session");
             await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
             await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
         });

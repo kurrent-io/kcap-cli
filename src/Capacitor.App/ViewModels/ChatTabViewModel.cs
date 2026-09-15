@@ -402,6 +402,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     return;
                 }
                 ids = upload.Ids;
+                // Re-asked after the upload: the window is long enough for the session to end or the
+                // daemon to drop the capability, and the channel would otherwise refuse the send with
+                // the chips still staged and nothing said about them.
+                if (!Attachments.CanAttach) {
+                    Notice(Attachments.AttachHint ?? LocalFrameChatInput.AttachmentsRefused);
+
+                    return;
+                }
             }
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, TranscriptLength(_path), chipIds);

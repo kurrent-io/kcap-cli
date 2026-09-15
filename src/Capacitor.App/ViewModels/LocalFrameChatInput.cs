@@ -12,6 +12,7 @@ internal sealed class LocalFrameChatInput : ChatInput {
     const string InputCapability = "input/1";
     const string AttachCapability = "input/2";
     internal const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
+    internal const string AttachmentsRefused = "attachments were refused";
 
     readonly string _agentId;
     readonly ILocalControlOps _ops;
@@ -84,7 +85,10 @@ internal sealed class LocalFrameChatInput : ChatInput {
 
     public override async Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
         if (_disposed || !CanAcceptText || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
-        if (attachmentIds.Count > 0 && !CanAttach) return ChatSendOutcome.Rejected;
+        // The capability can go while the upload runs, and a bare rejection leaves the chips sitting
+        // in the composer with nothing said about them.
+        if (attachmentIds.Count > 0 && !CanAttach)
+            return Settle(ChatSendOutcome.Rejected, AttachHint ?? AttachmentsRefused);
         _sending = true; _notice = null; Raise();
         SendTextResult result;
         try {
@@ -111,7 +115,7 @@ internal sealed class LocalFrameChatInput : ChatInput {
         SendTextReasons.ReaperClaimed or SendTextReasons.ReaperClaimedLate => "the agent is being stopped",
         SendTextReasons.TooLarge            => result.Error ?? "message is too large",
         SendTextReasons.DeliveryFailed      => result.Error ?? "delivery failed",
-        SendTextReasons.AttachmentsRefused  => result.Error ?? "attachments were refused",
+        SendTextReasons.AttachmentsRefused  => result.Error ?? AttachmentsRefused,
         // A reason this build has no wording for is still not composer text: the raw wire token
         // would read as a bug report to the user.
         _                                   => "delivery failed",

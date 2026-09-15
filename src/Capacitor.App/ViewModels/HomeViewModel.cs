@@ -174,7 +174,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         private set {
             if (_uploading == value) return;
             this.RaiseAndSetIfChanged(ref _uploading, value);
-            _uploadingChanges.OnNext(value);
+            // A window closing mid-upload disposes this object while StartAsync is still inside its
+            // try, and the finally that clears the flag would then publish onto a disposed subject.
+            if (!_disposed) _uploadingChanges.OnNext(value);
         }
     }
 
@@ -307,6 +309,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A launch must be cancellable: the app disposes the launch client (and its HubConnection) on
     /// shutdown, so an in-flight hub invoke holding no token races that teardown.
     readonly CancellationToken _shutdown;
+    volatile bool _disposed;
 
     // The id RequestLaunchAgentV2 hands back is request-accepted, not success: failure arrives
     // later as a LaunchFailed broadcast, success as the agent's row appearing. StartAsync tracks
@@ -712,6 +715,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // Constructor-scoped (like TrayViewModel/ActivityViewModel), not WhenActivated — the OAPH and
     // the Agents subscription above run for this object's whole lifetime, not a window's.
     public void Dispose() {
+        _disposed = true;
         _disposables.Dispose();
         _daemonStartMessageFeed.Dispose();
         _uploadingChanges.Dispose();
@@ -1039,7 +1043,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (draft.Files.Count > 0) {
             Uploading = true;
             UploadOutcome upload;
-            try { upload = await _uploader.UploadAsync(draft.Files, _shutdown); } finally { Uploading = false; }
+            // The app closing mid-upload is not a launch failure, and the command's only subscriber
+            // is the Enter key: a fault here would surface as an unhandled command exception.
+            try { upload = await _uploader.UploadAsync(draft.Files, _shutdown); }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { return; }
+            finally { Uploading = false; }
             if (upload.Kind == UploadKind.Unauthorized) {
                 _signInRequired.OnNext(true);
                 StartError = SignInToAttach;

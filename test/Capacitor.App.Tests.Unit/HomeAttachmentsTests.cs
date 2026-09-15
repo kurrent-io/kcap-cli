@@ -72,6 +72,7 @@ public class HomeAttachmentsTests {
         public BehaviorSubject<IReadOnlyList<DaemonInfo>> Daemons { get; } = new([]);
         public FakeAgentDirectory Directory { get; } = new();
         public string? ViewerId { get; set; } = "viewer-1";
+        public CancellationTokenSource Shutdown { get; } = new();
         public HomeViewModel Vm { get; private set; } = null!;
 
         public HomeViewModel Start(string statePath, IReadOnlyList<string>? capabilities = null, ILaunchClient? launch = null) {
@@ -80,6 +81,7 @@ public class HomeAttachmentsTests {
                 AttachState.Connected, null, capabilities ?? ["input/1", "input/2"]));
             Vm = new HomeViewModel(
                 Daemon, new AppStateStore(statePath), launch ?? Launch, () => Task.FromResult<string[]>([]),
+                shutdown: Shutdown.Token,
                 daemons: Daemons, viewerId: _ => Task.FromResult(ViewerId), laneStatus: Lane,
                 launchFailures: Failures, directory: Directory, uploader: Uploader, time: Time);
             return Vm;
@@ -87,6 +89,7 @@ public class HomeAttachmentsTests {
 
         public void Dispose() {
             Vm?.Dispose();
+            Shutdown.Dispose();
             Directory.Dispose();
             Failures.Dispose();
             Lane.Dispose();
@@ -312,6 +315,58 @@ public class HomeAttachmentsTests {
         });
     }
 
+    /// <summary>Closing the app mid-upload disposes the view model and cancels its token while
+    /// StartAsync is still awaiting the uploader. The flag it clears on the way out must not reach a
+    /// disposed subject, and the cancellation is a close rather than a launch failure — the command's
+    /// only subscriber is the Enter key, which has no error handler.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_close_during_the_upload_neither_throws_nor_launches() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = new TempDir();
+
+            using (var rig = new Rig()) {
+                var vm = await StagedAsync(rig, tmp.PathTo("disposed.json"));
+                var gate = new TaskCompletionSource<UploadOutcome>();
+                rig.Uploader.Pending = gate;
+                var run = vm.StartCommand.Execute().ToTask();
+
+                vm.Dispose();
+                gate.SetResult(new UploadOutcome(UploadKind.Unreachable, [], "offline"));
+
+                await run;
+                await Assert.That(vm.Uploading).IsFalse();
+                await Assert.That(rig.Launch.Last).IsNull();
+            }
+
+            using (var rig = new Rig()) {
+                var vm = await StagedAsync(rig, tmp.PathTo("cancelled.json"));
+                var gate = new TaskCompletionSource<UploadOutcome>();
+                rig.Uploader.Pending = gate;
+                var run = vm.StartCommand.Execute().ToTask();
+
+                await rig.Shutdown.CancelAsync();
+                gate.SetCanceled(rig.Shutdown.Token);
+
+                await run;
+                await Assert.That(vm.Uploading).IsFalse();
+                await Assert.That(vm.StartError).IsNull();
+                await Assert.That(rig.Launch.Last).IsNull();
+            }
+        });
+    }
+
+    /// <summary>A launcher pointed at a repository with one chip and a goal staged.</summary>
+    static async Task<HomeViewModel> StagedAsync(Rig rig, string statePath) {
+        var vm = rig.Start(statePath);
+
+        await vm.SelectRepositoryAsync("/repo/a");
+        vm.Attachments.Accept(new IntakeResult([Chip("a.png")], []));
+        vm.Goal = "g";
+
+        return vm;
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Delayed_failure_does_not_restore_over_user_edits_or_a_changed_target() {
@@ -319,7 +374,6 @@ public class HomeAttachmentsTests {
             using var tmp = new TempDir();
             const string ReAttach = "boom — re-attach the files to send them again";
 
-            // (a) the user typed a new goal after the launch was accepted
             using (var rig = new Rig()) {
                 await LaunchWithDraftAsync(rig, tmp.PathTo("a.json"));
                 rig.Vm.Goal = "new";
@@ -330,7 +384,7 @@ public class HomeAttachmentsTests {
                 await Assert.That(rig.Vm.Tray.Count).IsEqualTo(0);
             }
 
-            // (b) the user blanked the goal themselves while the request was in flight
+            // Blanking the goal is an edit like any other: an empty goal is not an untouched one.
             using (var rig = new Rig()) {
                 await LaunchWithDraftAsync(rig, tmp.PathTo("b.json"), vm => { vm.Goal = ""; return Task.CompletedTask; });
                 rig.Failures.OnNext(new LaunchFailure(LaunchedId, "boom"));
@@ -339,7 +393,7 @@ public class HomeAttachmentsTests {
                 await Assert.That(rig.Vm.Goal).IsEqualTo("");
             }
 
-            // (c) a chip added and removed again during the request — the tray moved under the draft
+            // Added and removed again: the count is back where it started, the tray generation is not.
             using (var rig = new Rig()) {
                 await LaunchWithDraftAsync(rig, tmp.PathTo("c.json"), vm => {
                     var extra = Chip("b.png");
@@ -353,7 +407,6 @@ public class HomeAttachmentsTests {
                 await Assert.That(rig.Vm.Tray.Count).IsEqualTo(0);
             }
 
-            // (d) a chip added during the request is still staged at failure time
             using (var rig = new Rig()) {
                 await LaunchWithDraftAsync(rig, tmp.PathTo("d.json"), vm => {
                     vm.Attachments.Accept(new IntakeResult([Chip("b.png")], []));
@@ -365,7 +418,6 @@ public class HomeAttachmentsTests {
                 await Assert.That(rig.Vm.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(new[] { "b.png" });
             }
 
-            // (e) the launcher is pointed at a different repository by the time the failure lands
             using (var rig = new Rig()) {
                 await LaunchWithDraftAsync(rig, tmp.PathTo("e.json"));
                 await rig.Vm.SelectRepositoryAsync("/repo/elsewhere");

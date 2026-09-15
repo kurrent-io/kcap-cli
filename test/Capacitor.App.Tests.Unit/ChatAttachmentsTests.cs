@@ -182,6 +182,30 @@ public class ChatAttachmentsTests {
         });
     }
 
+    /// <summary>The capability can go while the bytes are going up — the session ends, the daemon
+    /// reconnects without input/2. The channel refuses such a send from its own gate, so the composer
+    /// asks again after the upload: the draft stays put and the notice says what happened.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Can_attach_lost_during_the_upload_keeps_the_draft_and_says_so() {
+        await RunOnUiAsync(async () => {
+            var h = Hosted();
+            await RunningAsync(h);
+
+            var send = h.Begin("hi", "a.png");
+            h.Input.CanAttachValue = false;
+            h.Release(new UploadOutcome(UploadKind.Uploaded, ["A"], null));
+            await send;
+
+            await Assert.That(h.Input.Sends).IsEmpty();
+            await Assert.That(h.Chat.Uploading).IsFalse();
+            await Assert.That(h.Chat.ComposerHint).IsEqualTo("attachments need the daemon updated");
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("hi");
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rejected_and_unconfirmed_keep_everything() {
