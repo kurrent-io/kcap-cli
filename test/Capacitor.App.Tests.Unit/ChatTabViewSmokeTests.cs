@@ -1,12 +1,14 @@
 using System.Collections.Specialized;
 using System.Globalization;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -14,6 +16,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
@@ -85,6 +88,7 @@ public class ChatTabViewSmokeTests {
 
     sealed class Host {
         bool _shown;
+        readonly ReplaySubject<AgentPresence> _presence = new(1);
 
         public FakeDaemonClientService Daemon { get; } = new();
         public FakeTimeProvider Time { get; } = new();
@@ -105,7 +109,7 @@ public class ChatTabViewSmokeTests {
         public Host(bool show = true) {
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions);
+                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions);
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -122,6 +126,14 @@ public class ChatTabViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             if (_shown) Window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
+        }
+
+        /// The rest of what the composer needs before it takes attachments: a daemon advertising
+        /// the capability, over a session working in its own worktree.
+        public void AllowAttachments() {
+            Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/2"]));
+            _presence.OnNext(new AgentPresence(Agent("a1", "claude", hasTerminal: true, workLocation: WorkLocationText.Owned), false));
+            Settle();
         }
 
         /// A loaded transcript over a read-write attached terminal — the one state in which the
@@ -1113,6 +1125,74 @@ public class ChatTabViewSmokeTests {
             host.Settle();
 
             await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
+    /// The chip strip's whole wiring: it is collapsed with an empty tray, a staged file renders a
+    /// chip carrying its name and size, and the chip's own button takes that file back out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Staged_chips_render_and_a_chip_removes_its_own_file() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("chips.jsonl", UserLine));
+            var strip = host.View.FindControl<AttachmentChipStrip>("ChipStrip")!;
+            await Assert.That(strip.IsVisible).IsFalse();
+
+            host.Chat.Tray.AddAll([
+                new StagedAttachment("a.png", "image/png", new byte[] { 1, 2, 3 }),
+                new StagedAttachment("notes.txt", "text/plain", new byte[2048])]);
+            host.Settle();
+
+            await Assert.That(strip.IsVisible).IsTrue();
+            await Assert.That(Chips(host).Select(c => c.FileName)).IsEquivalentTo(["a.png", "notes.txt"], CollectionOrdering.Matching);
+            await Assert.That(Chips(host).Select(c => c.SizeLabel)).IsEquivalentTo(["3 B", "2 KB"], CollectionOrdering.Matching);
+
+            var remove = strip.GetVisualDescendants().OfType<Button>().First(b => b.Name == "ChipRemove");
+            Click(host, remove);
+
+            await Assert.That(host.Chat.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["notes.txt"]);
+            await Assert.That(Chips(host).Select(c => c.FileName)).IsEquivalentTo(["notes.txt"]);
+            await host.CloseAsync();
+        });
+    }
+
+    static List<StagedAttachmentViewModel> Chips(Host host) => host.View.GetVisualDescendants()
+        .OfType<TextBlock>().Where(t => t.Name == "ChipName").Select(t => (StagedAttachmentViewModel)t.DataContext!).ToList();
+
+    /// The view's half of the intake: a file dropped on the composer card reaches the tab's tray,
+    /// and a text paste goes in through the TextBox exactly once.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_drop_on_the_composer_stages_the_file_and_a_text_paste_lands_once() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("intake.jsonl", UserLine));
+            host.AllowAttachments();
+            await Assert.That(host.Chat.Attachments.CanAttach).IsTrue();
+
+            var card = host.View.FindControl<Border>("ComposerCard")!;
+            var transfer = new DataTransfer();
+            var item = new DataTransferItem();
+            item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
+            transfer.Add(item);
+            card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            await (host.View.PendingIntakeForTesting ?? Task.CompletedTask);
+            host.Settle();
+
+            await Assert.That(host.Chat.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+
+            await TopLevel.GetTopLevel(host.Composer)!.Clipboard!.SetDataAsync(new FakeAsyncDataTransfer(text: "pasted text"));
+            host.Composer.Focus();
+            Dispatcher.UIThread.RunJobs();
+            host.Composer.RaiseEvent(new RoutedEventArgs(TextBox.PastingFromClipboardEvent));
+            await (host.View.PendingIntakeForTesting ?? Task.CompletedTask);
+            host.Settle();
+
+            await Assert.That(host.Composer.Text).IsEqualTo("pasted text");
+            await Assert.That(host.Chat.ComposerText).IsEqualTo("pasted text");
+            await Assert.That(host.Chat.Tray.Count).IsEqualTo(1);
             await host.CloseAsync();
         });
     }
