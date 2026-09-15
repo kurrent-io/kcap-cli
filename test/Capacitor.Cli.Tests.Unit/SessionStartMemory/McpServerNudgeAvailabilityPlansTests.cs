@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Pi;
 
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
@@ -21,6 +22,20 @@ public class McpServerNudgeAvailabilityPlansTests {
         Home.CreateFile(extension, """const KCAP_MCP_SERVERS = ["review", "workitems"];""");
         await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-plans")).IsFalse();
         await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-workitems")).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_honors_the_disabled_flag() {
+        var settings = Path.GetRelativePath(Home.Path, Harnesses.Of<KiroHarness>().Paths.SettingsMcpJson);
+
+        Home.CreateFile(settings, """{"mcpServers":{"kcap-plans":{"command":"kcap","args":["mcp","plans"],"disabled":true}}}""");
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Kiro, Harnesses, "kcap-plans")).IsFalse();
+
+        Home.CreateFile(settings, """{"mcpServers":{"kcap-plans":{"command":"kcap","args":["mcp","plans"],"disabled":"true"}}}""");
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Kiro, Harnesses, "kcap-plans")).IsFalse();
+
+        Home.CreateFile(settings, """{"mcpServers":{"kcap-plans":{"command":"kcap","args":["mcp","plans"],"disabled":false}}}""");
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Kiro, Harnesses, "kcap-plans")).IsTrue();
     }
 
     /// <summary>An enabled plugin whose materialized .mcp.json predates kcap-plans must not nudge

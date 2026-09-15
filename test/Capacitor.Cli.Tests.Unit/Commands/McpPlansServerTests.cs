@@ -187,6 +187,35 @@ public class McpPlansServerTests {
     }
 
     [Test]
+    public async Task Declaration_refuses_a_file_link_whose_target_sits_under_a_linked_directory() {
+        if (OperatingSystem.IsWindows()) return;
+
+        // docs/plan.md -> linked/secret.txt, and linked/ -> an outside directory: the file link's
+        // resolved target is lexically inside the repo, but the directory it names is not.
+        var (root, _) = SeedRepo();
+        var outside = Tmp.CreateDir("outside");
+        outside.CreateFile("secret.txt", "hunter2");
+        Directory.CreateSymbolicLink(root.PathTo("linked"), outside.Path);
+        File.CreateSymbolicLink(root.PathTo("docs", "plan.md.link"), root.PathTo("linked", "secret.txt"));
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md.link"}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("links outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_accepts_a_link_that_stays_inside_the_project() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var (root, _) = SeedRepo("# Plan\n");
+        File.CreateSymbolicLink(root.PathTo("docs", "alias.md"), root.PathTo("docs", "plan.md"));
+
+        var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/alias.md"}"""), root, root);
+
+        await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo("docs/alias.md");
+        await Assert.That(d.Body["content"]!.GetValue<string>()).IsEqualTo("# Plan\n");
+    }
+
+    [Test]
     public async Task Declaration_without_a_repo_is_bounded_by_the_project_directory() {
         var dir    = Tmp.CreateDir("loose");
         var secret = Tmp.CreateFile("secret.txt", "hunter2");

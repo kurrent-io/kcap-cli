@@ -131,12 +131,15 @@ static class McpServerNudgeAvailability {
                 // A materialized MCP entry is always an object (command/args or type/enabled). Anything
                 // else — null, a string, an array — is malformed and fails closed.
                 if (entry is not JsonObject o) return false;
-                // Honor an explicit enable flag STRICTLY: only a Boolean `true` counts. A `false`, a
-                // non-Boolean (e.g. "false"), or any other shape suppresses. Absent flag ⇒ enabled
-                // (the JSON harnesses other than OpenCode carry no enable flag).
-                if (o.TryGetPropertyValue("enabled", out var enNode))
-                    return enNode is JsonValue enVal && enVal.TryGetValue<bool>(out var enabled) && enabled;
-                return true;
+                // Honor the harness's own switch STRICTLY: OpenCode's `enabled` counts only as a
+                // Boolean true, Kiro's `disabled` only as a Boolean false; a non-Boolean or any other
+                // shape suppresses. An absent switch means enabled.
+                var enabled = !o.TryGetPropertyValue("enabled", out var enNode)
+                           || (enNode is JsonValue enVal && enVal.TryGetValue<bool>(out var on) && on);
+                var live    = !o.TryGetPropertyValue("disabled", out var disNode)
+                           || (disNode is JsonValue disVal && disVal.TryGetValue<bool>(out var off) && !off);
+
+                return enabled && live;
             }
             return false;
         } catch {
