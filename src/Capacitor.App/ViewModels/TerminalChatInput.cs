@@ -16,6 +16,7 @@ internal sealed class TerminalChatInput : ChatInput {
     readonly CompositeDisposable _subscriptions = new();
     AttachStatus _status = new(AttachState.Connecting, null, null);
     AgentPresence _presence = new(null, false);
+    SendAvailability _terminalAvailability;
     bool _sending;
     bool _disposed;
     string? _notice;
@@ -26,13 +27,24 @@ internal sealed class TerminalChatInput : ChatInput {
         _terminal = terminal;
         _agentId = agentId;
         _ops = ops;
+        _terminalAvailability = terminal.SendAvailability;
         _subscriptions.Add(terminal.WhenAnyValue(t => t.SendAvailability, t => t.State, t => t.CanAcceptText)
             .Skip(1)
-            .Subscribe(_ => Raise()));
+            .Subscribe(_ => ApplyTerminal()));
         // Status comes off the daemon client's worker thread; presence is already marshalled by the
         // workspace that publishes it.
         _subscriptions.Add(daemon.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(s => { _status = s; Raise(); }));
         _subscriptions.Add(presence.Subscribe(p => { _presence = p; Raise(); }));
+    }
+
+    /// A refusal notice describes the send that earned it; a terminal that detached, reattached or
+    /// ended since has made it stale, so it goes with the availability that produced it.
+    void ApplyTerminal() {
+        if (_terminal.SendAvailability != _terminalAvailability) {
+            _terminalAvailability = _terminal.SendAvailability;
+            _notice = null;
+        }
+        Raise();
     }
 
     public override SendAvailability Availability =>
@@ -54,7 +66,7 @@ internal sealed class TerminalChatInput : ChatInput {
     public override async Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
         if (_disposed || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
         if (attachmentIds.Count == 0)
-            return _terminal.TrySendText(text) ? ChatSendOutcome.Accepted : ChatSendOutcome.Rejected;
+            return CanAcceptText && _terminal.TrySendText(text) ? ChatSendOutcome.Accepted : ChatSendOutcome.Rejected;
         if (!CanAttach) return ChatSendOutcome.Rejected;
         _sending = true; _notice = null; Raise();
         SendTextResult result;

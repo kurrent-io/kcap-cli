@@ -214,7 +214,11 @@ public class LocalFrameChatInputTests {
     public async Task Can_attach_needs_input_2_and_an_owned_worktree() {
         await RunOnUiAsync(async () => {
             var rig = new Rig();
-            rig.Connected("status/1", "input/1"); rig.Running();
+            rig.Running();
+            await Assert.That(rig.Input.CanAttach).IsFalse();
+            await Assert.That(rig.Input.AttachHint).IsNull(); // no capability list yet: nothing to blame
+
+            rig.Connected("status/1", "input/1");
             await Assert.That(rig.Input.CanAttach).IsFalse();
             await Assert.That(rig.Input.AttachHint).IsEqualTo("attachments need the daemon updated");
 
@@ -226,9 +230,27 @@ public class LocalFrameChatInputTests {
             rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "owned") with { Status = "Running" }, false));
             await Assert.That(rig.Input.CanAttach).IsTrue();
             await Assert.That(rig.Input.AttachHint).IsNull();
+        });
+    }
 
-            await Assert.That(await rig.Input.SendAsync("hi", [Id], new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+    /// The gate refuses before the wire, not after: a daemon without input/2 never sees the ids.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_shut_gate_refuses_ids_without_sending_anything() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig();
+            rig.Connected("status/1", "input/1");
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "owned") with { Status = "Running" }, false));
+            await Assert.That(rig.Input.CanAcceptText).IsTrue();
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
+            await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
+
+            rig.Connected("status/1", "input/1", "input/2");
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false, workLocation: "borrowed") with { Status = "Running" }, false));
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
+            await Assert.That(rig.Ops.SendTextCalls).IsEqualTo(0);
         });
     }
 

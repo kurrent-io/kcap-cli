@@ -161,8 +161,11 @@ public class TerminalChatInputTests {
     public async Task Can_attach_follows_input_2_and_work_location() {
         await RunOnUiAsync(async () => {
             var rig = await BuildAttachedAsync();
-            rig.Connected("status/1", "input/1");
             rig.RunningAt(WorkLocationText.Owned);
+            await Assert.That(rig.Input.CanAttach).IsFalse();
+            await Assert.That(rig.Input.AttachHint).IsNull(); // no capability list yet: nothing to blame
+
+            rig.Connected("status/1", "input/1");
             await Assert.That(rig.Input.CanAttach).IsFalse();
             await Assert.That(rig.Input.AttachHint).IsEqualTo("attachments need the daemon updated");
 
@@ -174,9 +177,98 @@ public class TerminalChatInputTests {
             rig.RunningAt(WorkLocationText.Owned);
             await Assert.That(rig.Input.CanAttach).IsTrue();
             await Assert.That(rig.Input.AttachHint).IsNull();
+            rig.Input.Dispose();
+            await rig.Terminal.TeardownAsync();
+        });
+    }
 
-            await Assert.That(await rig.Input.SendAsync("hi", [Id], new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+    /// The gate refuses before the wire and before the PTY: neither half of the prompt moves.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_shut_gate_refuses_ids_without_sending_anything() {
+        await RunOnUiAsync(async () => {
+            var rig = await BuildAttachedAsync();
+            rig.Connected("status/1", "input/1");
+            rig.RunningAt(WorkLocationText.Owned);
+            await Assert.That(rig.Input.CanAcceptText).IsTrue();
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
+            await Assert.That(rig.Client.SentInput).Count().IsEqualTo(0);
+
+            rig.Connected("status/1", "input/1", "input/2");
+            rig.RunningAt(WorkLocationText.Borrowed);
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Ops.SendTextWithAttachmentsCalls).IsEqualTo(0);
+            await Assert.That(rig.Client.SentInput).Count().IsEqualTo(0);
+            rig.Input.Dispose();
+            await rig.Terminal.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_text_send_while_an_attachment_send_is_in_flight_is_refused_and_never_pasted() {
+        await RunOnUiAsync(async () => {
+            var rig = await BuildAttachedAsync();
+            rig.Connected("input/1", "input/2");
+            rig.RunningAt(WorkLocationText.Owned);
+            var gate = rig.Ops.ArmSendText();
+            var send = rig.Input.SendAsync("hi", [Id], CancellationToken.None);
+
+            await Assert.That(await rig.Input.SendAsync("typed", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Client.SentInput).Count().IsEqualTo(0);
+
+            gate.SetResult(new SendTextResult(true, null, null, SendTextOutcomes.Delivered));
+            await Assert.That(await send).IsEqualTo(ChatSendOutcome.Accepted);
+            rig.Input.Dispose();
+            await rig.Terminal.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_lost_ack_is_unconfirmed_and_only_that_notice_is_cleared_by_a_receipt() {
+        await RunOnUiAsync(async () => {
+            var rig = await BuildAttachedAsync();
+            rig.Connected("input/1", "input/2");
+            rig.RunningAt(WorkLocationText.Owned);
+
+            rig.Ops.QueueSendText(new SendTextResult(false, SendTextReasons.Transport, "eof", null));
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
+            await Assert.That(rig.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
+            rig.Input.ConfirmLastSend();
+            await Assert.That(rig.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+
+            var gate = rig.Ops.ArmSendText();
+            var send = rig.Input.SendAsync("hi", [Id], CancellationToken.None);
+            gate.SetException(new IOException("connection closed"));
+            await Assert.That(await send).IsEqualTo(ChatSendOutcome.Unconfirmed);
+            await Assert.That(rig.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
+
+            rig.Ops.QueueSendText(new SendTextResult(false, SendTextReasons.QueueFull, null, null));
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            rig.Input.ConfirmLastSend();
+            await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
+            rig.Input.Dispose();
+            await rig.Terminal.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Session_ending_after_a_refusal_clears_the_notice() {
+        await RunOnUiAsync(async () => {
+            var rig = await BuildAttachedAsync();
+            rig.Connected("input/1", "input/2");
+            rig.RunningAt(WorkLocationText.Owned);
+            rig.Ops.QueueSendText(new SendTextResult(false, SendTextReasons.QueueFull, null, null));
+            await Assert.That(await rig.Input.SendAsync("hi", [Id], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(rig.Input.Hint).IsEqualTo("the agent's input queue is full, try again shortly");
+
+            rig.Client.Result.SetResult(new AttachOutcome.Exited(0));
+            await rig.Terminal.CurrentRunForTesting!;
+            await Assert.That(rig.Input.Availability).IsEqualTo(SendAvailability.Ended);
+            await Assert.That(rig.Input.Hint).IsEqualTo("This session has ended");
             rig.Input.Dispose();
             await rig.Terminal.TeardownAsync();
         });

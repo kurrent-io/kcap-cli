@@ -74,8 +74,11 @@ internal sealed class LocalFrameChatInput : ChatInput {
     internal static bool IsOwnedWorktree(AgentPresence presence) =>
         string.Equals(presence.Dto?.WorkLocation, WorkLocationText.Owned, StringComparison.Ordinal);
 
-    internal static string AttachHintFor(AttachStatus status, AgentPresence presence, string fallback) =>
-        !HasAttachCapability(status) ? "attachments need the daemon updated"
+    /// Null until a capability list has arrived: a connecting daemon has not yet said whether it
+    /// takes attachments, and blaming its version for that would be a guess.
+    internal static string? AttachHintFor(AttachStatus status, AgentPresence presence, string fallback) =>
+        status.Capabilities is null ? null
+        : !HasAttachCapability(status) ? "attachments need the daemon updated"
         : !IsOwnedWorktree(presence) ? "attachments aren't available for an in-place session"
         : fallback;
 
