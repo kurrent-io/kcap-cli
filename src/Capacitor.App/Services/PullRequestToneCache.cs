@@ -54,8 +54,11 @@ public sealed class PullRequestToneCache : IDisposable {
 
     void Tick() {
         List<string> due;
+        CancellationToken ct;
         lock (_lock) {
             if (_disposed) return;
+            // Taken under the lock: a dispose racing the reads below would otherwise hand them a disposed source.
+            ct = _cancel.Token;
             foreach (var session in _readAt.Keys.Where(s => !_sessions.Contains(s)).ToList()) _readAt.Remove(session);
             var gone = _tones.Keys.Where(s => !_sessions.Contains(s)).ToList();
             foreach (var session in gone) _tones.Remove(session);
@@ -65,12 +68,11 @@ public sealed class PullRequestToneCache : IDisposable {
                 .ToList();
             foreach (var session in due) { _inFlight.Add(session); _readAt[session] = _time.GetTimestamp(); }
         }
-        foreach (var session in due) _ = ReadAsync(session);
+        foreach (var session in due) _ = ReadAsync(session, ct);
     }
 
-    async Task ReadAsync(string session) {
+    async Task ReadAsync(string session, CancellationToken ct) {
         try {
-            var ct = _cancel.Token;
             var capability = await _source.DiscoverAsync(false, ct).ConfigureAwait(false);
             if (capability.Kind != PullRequestCapabilityKind.Supported) {
                 // Signed out, or a server without overviews, is a verdict; an unreachable one is not.
@@ -123,8 +125,7 @@ public sealed class PullRequestToneCache : IDisposable {
     }
 
     public void Dispose() {
-        lock (_lock) _disposed = true;
-        _cancel.Cancel();
+        lock (_lock) { _disposed = true; _cancel.Cancel(); }
         _timer.Dispose();
         _subscriptions.Dispose();
         _published.OnCompleted();
