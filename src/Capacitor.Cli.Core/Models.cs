@@ -140,6 +140,7 @@ class WatchState {
     public SecondaryRepoRoots?                                  SecondaryRoots     { get; set; }
     public HashSet<(string Owner, string RepoName, int Number)> LinkedPullRequests { get; } = [];
     public DateTimeOffset                                       LastSecondaryProbe { get; set; }
+    public string?                                              NextSecondaryRoot  { get; set; }
 
     public bool               InitialTitleSent   { get; set; }
     public bool               TitleGenerated     { get; set; }

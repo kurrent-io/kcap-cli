@@ -1,20 +1,27 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.RepoEvidence;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 public class WatchSecondaryPullRequestTests {
-    const string CliRoot = "/h/dev/cli-wt";
+    const string CliRoot   = "/h/dev/cli-wt";
+    const string OtherRoot = "/h/dev/other";
 
     static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
 
-    static string? FakeFindRoot(string dir) => dir.StartsWith(CliRoot, StringComparison.Ordinal) ? CliRoot : null;
+    static string? FakeFindRoot(string dir) =>
+        dir.StartsWith(CliRoot, StringComparison.Ordinal)   ? CliRoot
+      : dir.StartsWith(OtherRoot, StringComparison.Ordinal) ? OtherRoot
+      : null;
 
-    static WatchState StateWithSecondaryRoot() {
+    static WatchState StateWithSecondaryRoot(params string[] moreRoots) {
         var state = new WatchState { SecondaryRoots = new SecondaryRepoRoots(FakeFindRoot, "/h/dev/server") };
-        state.SecondaryRoots.OnLine("claude",
-            """{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/h/dev/cli-wt/src/x.cs"}}]}}""");
+        foreach (var root in new[] { CliRoot }.Concat(moreRoots)) {
+            state.SecondaryRoots.OnLine("claude",
+                $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"{{{root}}}/src/x.cs"}}]}}""");
+        }
         return state;
     }
 
@@ -25,8 +32,48 @@ public class WatchSecondaryPullRequestTests {
     static Func<string, TimeSpan, Task<RepositoryPayload?>> Detects(RepositoryPayload? repo) => (_, _) => Task.FromResult(repo);
 
     static Task Link(WatchState state, Func<string, TimeSpan, Task<RepositoryPayload?>> detect, Func<RepositoryPayload, CancellationToken, Task<bool>> post,
-        TimeSpan? budget = null, CancellationToken ct = default) =>
-        WatchCommand.LinkSecondaryPullRequestsAsync(state, detect, post, budget ?? Budget, ct);
+        TimeSpan? budget = null, CancellationToken ct = default, Action? beat = null) =>
+        WatchCommand.LinkSecondaryPullRequestsAsync(state, detect, post, budget ?? Budget, ct, beat ?? (() => { }));
+
+    // A root whose probe eats the whole pass must not shadow the roots after it every time.
+    [Test]
+    public async Task A_pass_that_runs_out_resumes_at_the_next_root() {
+        var state  = StateWithSecondaryRoot(OtherRoot);
+        var probed = new List<string>();
+        var never  = new TaskCompletionSource<RepositoryPayload?>();
+
+        Task<RepositoryPayload?> Detect(string root, TimeSpan _) {
+            probed.Add(root);
+            return probed.Count == 1 ? never.Task : Task.FromResult<RepositoryPayload?>(null);
+        }
+
+        await Link(state, Detect, (_, _) => Task.FromResult(true), budget: TimeSpan.FromMilliseconds(50));
+        await Link(state, Detect, (_, _) => Task.FromResult(true));
+
+        await Assert.That(probed).IsEquivalentTo([CliRoot, OtherRoot, CliRoot], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_completed_pass_wraps_around_to_the_first_root() {
+        var state  = StateWithSecondaryRoot(OtherRoot);
+        var probed = new List<string>();
+
+        for (var pass = 0; pass < 2; pass++) {
+            await Link(state, (root, _) => { probed.Add(root); return Task.FromResult<RepositoryPayload?>(null); }, (_, _) => Task.FromResult(true));
+        }
+
+        await Assert.That(probed).IsEquivalentTo([CliRoot, OtherRoot, CliRoot, OtherRoot], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task The_heartbeat_is_touched_before_every_probe() {
+        var state = StateWithSecondaryRoot(OtherRoot);
+        var beats = 0;
+
+        await Link(state, Detects(null), (_, _) => Task.FromResult(true), beat: () => beats++);
+
+        await Assert.That(beats).IsEqualTo(2);
+    }
 
     [Test]
     public async Task A_detected_pr_is_posted_once() {

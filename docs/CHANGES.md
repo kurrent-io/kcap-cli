@@ -21,10 +21,14 @@ redaction. The PR is linked under the repository its URL names rather than the c
 because in a fork checkout `gh pr view` resolves the base repository's PR while origin names the
 fork. Only GitHub, because the endpoint rebuilds the remote URL from owner and repo on github.com,
 so another host would hash to the wrong repository. Each pass runs under one budget that bounds
-every probe and post, abandoning a probe still running when the pass is cancelled, and the final
-pass shares the shutdown deadline with the final-line wait and drain, since the watcher is killed
-five seconds after it is told to stop. A session that never crosses the transcript threshold is
-still discarded whole, PR links included: it sends no transcript and no session-end either.
+every probe and post, abandoning a probe still running when the pass is cancelled; it touches the
+watcher heartbeat before each probe and is capped at half the staleness threshold, since the loop
+awaits it inline and a stale heartbeat gets a healthy watcher reaped by the next hook. Passes
+rotate their starting root so a slow checkout cannot shadow the ones behind it every minute. The
+final pass shares the shutdown deadline, measured from the stop request rather than from the loop
+noticing it, with the final-line wait and drain, since the watcher is killed five seconds after it
+is told to stop. A session that never crosses the transcript threshold is still discarded whole,
+PR links included: it sends no transcript and no session-end either.
 
 ## A launch shows in the rail before the daemon publishes it
 
