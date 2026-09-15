@@ -272,6 +272,7 @@ sealed class KiroHookCommand(
         // session. The emitters run at most once per firing: the harness nudge stamps a ledger.
         string? ResolveNudges() => HarnessNudgeEmitter.Combine(
             WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            PlansNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
         var nudgeDecided = nudgeClaim.IsCompleted;
         var workItemsNudge = nudgeDecided && await nudgeClaim ? ResolveNudges() : null;

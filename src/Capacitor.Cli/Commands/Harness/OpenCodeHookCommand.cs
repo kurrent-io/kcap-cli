@@ -173,7 +173,9 @@ sealed class OpenCodeHookCommand(
         // stdout regardless of what the watcher did.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
-            ? WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses)
+            ? HarnessNudgeEmitter.Combine(
+                WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+                PlansNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisablePlansNudge is true, harnesses))
             : null;
         // The harness nudge is independent of the once-per-session memory lease — it has its own
         // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.

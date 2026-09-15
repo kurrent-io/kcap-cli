@@ -103,12 +103,16 @@ public static class ClaudePluginInstaller {
     /// marketplace's <c>installLocation</c> in <c>known_marketplaces.json</c> is consulted.
     /// Anything unresolvable → not effective (fail closed: no destructive action).</para>
     /// </summary>
-    public static bool IsEffectivelyInstalled(string settingsPath) {
+    public static bool IsEffectivelyInstalled(string settingsPath) => EffectiveMcpJsonPath(settingsPath) is not null;
+
+    /// <summary>The <c>.mcp.json</c> Claude actually loads for the enabled kcap plugin, or null when
+    /// the plugin is not effective (see <see cref="IsEffectivelyInstalled"/>).</summary>
+    public static string? EffectiveMcpJsonPath(string settingsPath) {
         var enabledKey = EnabledKcapPluginKey(settingsPath);
-        if (enabledKey is null) return false;
+        if (enabledKey is null) return null;
 
         var claudeHome = Path.GetDirectoryName(settingsPath);
-        if (string.IsNullOrEmpty(claudeHome)) return false;
+        if (string.IsNullOrEmpty(claudeHome)) return null;
         var pluginsDir = Path.Combine(claudeHome, "plugins");
 
         try {
@@ -117,7 +121,7 @@ public static class ClaudePluginInstaller {
                     is not JsonObject installedRoot ||
                 installedRoot["plugins"] is not JsonObject plugins ||
                 plugins[enabledKey] is not { } entryNode)
-                return false;
+                return null;
 
             // v2 records an array of per-scope installs. Both callers gate on the USER-scope
             // settings.json enabled flag, so only a "user"-scoped install proves that flag's
@@ -135,12 +139,12 @@ public static class ClaudePluginInstaller {
             // unrecognized shape) → not effective, and the directory-marketplace fallback
             // below must not run either: it only excuses a PHANTOM cache path on an
             // otherwise-eligible record, never the absence of an eligible record.
-            if (entries.Count == 0) return false;
+            if (entries.Count == 0) return null;
             foreach (var entry in entries) {
                 if (entry["installPath"] is JsonValue v && v.TryGetValue<string>(out var installPath) &&
                     !string.IsNullOrWhiteSpace(installPath) &&
-                    File.Exists(Path.Combine(installPath, ".mcp.json")))
-                    return true;
+                    Path.Combine(installPath, ".mcp.json") is { } cached && File.Exists(cached))
+                    return cached;
             }
 
             // Directory-sourced marketplace: loaded live from installLocation, never cached.
@@ -149,18 +153,21 @@ public static class ClaudePluginInstaller {
             // installLocation proves nothing once the installed cache is gone; accepting it
             // would let doctor delete the only working registrations.
             var marketplaceName = enabledKey[(enabledKey.IndexOf('@') + 1)..];
-            return JsonNode.Parse(File.ReadAllText(Path.Combine(pluginsDir, "known_marketplaces.json")))
-                       is JsonObject markets &&
-                   markets[marketplaceName] is JsonObject market &&
-                   market["source"]?["source"] is JsonValue srcType &&
-                   srcType.TryGetValue<string>(out var sourceType) &&
-                   string.Equals(sourceType, "directory", StringComparison.Ordinal) &&
-                   market["installLocation"] is JsonValue loc &&
-                   loc.TryGetValue<string>(out var installLocation) &&
-                   !string.IsNullOrWhiteSpace(installLocation) &&
-                   File.Exists(Path.Combine(installLocation, ".mcp.json"));
+            if (JsonNode.Parse(File.ReadAllText(Path.Combine(pluginsDir, "known_marketplaces.json")))
+                    is JsonObject markets &&
+                markets[marketplaceName] is JsonObject market &&
+                market["source"]?["source"] is JsonValue srcType &&
+                srcType.TryGetValue<string>(out var sourceType) &&
+                string.Equals(sourceType, "directory", StringComparison.Ordinal) &&
+                market["installLocation"] is JsonValue loc &&
+                loc.TryGetValue<string>(out var installLocation) &&
+                !string.IsNullOrWhiteSpace(installLocation) &&
+                Path.Combine(installLocation, ".mcp.json") is { } live && File.Exists(live))
+                return live;
+
+            return null;
         } catch {
-            return false; // missing/malformed plugin records → fail closed
+            return null; // missing/malformed plugin records → fail closed
         }
     }
 

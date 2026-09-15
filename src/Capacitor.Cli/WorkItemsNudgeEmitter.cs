@@ -32,7 +32,7 @@ static class WorkItemsNudgeEmitter {
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
                                   HarnessRegistry harnesses, string? codexConfigPath = null) {
         if (optedOut) return null;
-        if (!WorkItemsNudgeAvailability.IsRegisteredFor(harness, harnesses, codexConfigPath)) return null;
+        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath)) return null;
         return Build(sessionId);
     }
 
