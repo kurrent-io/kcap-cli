@@ -725,6 +725,10 @@ public partial class App : Application {
     internal static IObservable<string> FeedbackTrailerFeed(
             IDaemonClientService service, string appVersion, Func<string?> cliVersion) =>
         Observable.Defer(() => service.Snapshots
+            // Snapshots arrive on the daemon client's pump thread and the trailer drives a bound
+            // hint. BEFORE StartWith, so the seed still arrives synchronously on subscribe — the
+            // hint would otherwise render an empty trailer for a beat.
+            .ObserveOn(ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler)
             .Select(s => FeedbackTrailer.Build(appVersion, service.DaemonName,
                 MainWindowViewModel.StripBuildMetadata(s.Daemon.Version), cliVersion()))
             .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, cliVersion())));
@@ -1646,9 +1650,16 @@ public partial class App : Application {
 
         e.Cancel = true;
         _shutdown.Cancel();
-        if (_shutdownStarted) return; // e.g. a rapid double Cmd+Q — disposal is already in flight
+        _ = StartShutdownAsync();
+    }
+
+    // The flag is raised BEFORE the disposal runs, and that ordering is what lets the pass close a
+    // dialog that cancels its own close while busy (settings, feedback). A second call — a rapid
+    // double Cmd+Q — finds disposal already in flight and does nothing.
+    internal Task StartShutdownAsync() {
+        if (_shutdownStarted) return Task.CompletedTask;
         _shutdownStarted = true;
-        _ = DisposeAndShutdownAsync();
+        return DisposeAndShutdownAsync();
     }
 
     // Split out of OnShutdownRequested so a test can drive BOTH passes (the event itself needs a

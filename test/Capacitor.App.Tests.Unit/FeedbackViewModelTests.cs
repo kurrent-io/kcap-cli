@@ -271,6 +271,28 @@ public class FeedbackViewModelTests {
     }
 
     [Test]
+    public async Task An_edit_that_fires_mid_send_leaves_the_snapshot_alone() {
+        var api     = new BlockingFeedbackApi();
+        var trailer = new BehaviorSubject<string>(TrailerA);
+        var vm      = new FeedbackViewModel(api, FeedbackCategory.Bug, trailer, "macOS 15.6", null);
+        vm.Message = "It broke.";
+        var send = vm.SendCommand.Execute().ToTask();
+        await api.Started.Task;
+        var bound = vm.CurrentId;
+
+        vm.Message = "It broke twice.";
+
+        await Assert.That(vm.Message).IsEqualTo("It broke.");
+        await Assert.That(vm.CurrentId).IsEqualTo(bound);
+
+        api.Release(new FeedbackResult.Sent("a@b.c"));
+        await send;
+        await Assert.That(api.Sent).Count().IsEqualTo(1);
+        await Assert.That(api.Sent[0].Message).IsEqualTo("It broke.\n\n" + TrailerA);
+        await Assert.That(api.Sent[0].ClientRequestId).IsEqualTo(bound);
+    }
+
+    [Test]
     public async Task Disposing_twice_is_a_no_op() {
         var (vm, _, _, _) = New();
         vm.Dispose();

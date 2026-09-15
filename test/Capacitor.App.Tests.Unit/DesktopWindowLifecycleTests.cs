@@ -184,7 +184,7 @@ public class DesktopWindowLifecycleTests {
         });
 
     [Test]
-    public Task Shutdown_closes_the_feedback_window() =>
+    public Task Shutdown_closes_an_idle_feedback_window() =>
         AvaloniaSession.RunOnUiAsync(async () => {
             var app = new Capacitor.App.App();
             app.OpenFeedback(new SilentFeedbackApi(), Trailer, null, FeedbackCategory.Bug);
@@ -206,28 +206,76 @@ public class DesktopWindowLifecycleTests {
             var vm = (FeedbackViewModel)window.DataContext!;
             vm.Message = "It broke.";
 
-            _ = vm.SendCommand.Execute().ToTask();
+            var send = vm.SendCommand.Execute().ToTask();
+            try {
+                await api.Started.Task;
+
+                window.Close();
+
+                await Assert.That(app.FeedbackWindowForTests).IsSameReferenceAs(window);
+                await Assert.That(window.IsVisible).IsTrue();
+            } finally {
+                api.Release(new FeedbackResult.Sent("a@b.c"));
+                await send;
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+
+    /// A quit must close a busy feedback window: left open it cancels its own close, the shutdown
+    /// aborts with windows up, and every later quit early-returns — an app only force-quit ends.
+    [Test]
+    public Task Shutdown_closes_a_feedback_window_that_is_mid_send() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var app = new Capacitor.App.App();
+            var api = new BlockingFeedbackApi();
+            app.OpenFeedback(api, Trailer, null, FeedbackCategory.Bug);
+            var window = app.FeedbackWindowForTests!;
+            var vm = (FeedbackViewModel)window.DataContext!;
+            vm.Message = "It broke.";
+
+            var send = vm.SendCommand.Execute().ToTask();
             await api.Started.Task;
+            // Otherwise the close below would prove nothing: an idle window closes either way.
+            await Assert.That(vm.IsBusy).IsTrue();
 
-            window.Close();
+            await app.StartShutdownAsync();
 
-            await Assert.That(app.FeedbackWindowForTests).IsSameReferenceAs(window);
-            await Assert.That(window.IsVisible).IsTrue();
+            await Assert.That(app.FeedbackWindowForTests).IsNull();
+            await Assert.That(window.IsVisible).IsFalse();
+
+            api.Release(new FeedbackResult.Sent("a@b.c"));
+            await send;
         });
 
     /// The trailer carries the daemon version the status line shows, so a report and the version
-    /// chip in the window it was sent from can never disagree.
+    /// chip in the window it was sent from can never disagree. Snapshots reach the feed on the
+    /// daemon client's pump thread, and the trailer drives a bound hint, so the feed marshals.
     [Test]
-    public async Task Feedback_trailer_strips_the_daemon_build_metadata() {
-        var service = new FakeDaemonClientService { DaemonName = "daemon-a" };
-        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", version: "1.0.3+abc123"));
+    public Task Feedback_trailer_strips_the_daemon_build_metadata_and_lands_on_the_ui_thread() =>
+        AvaloniaSession.DispatchAsync(async () => {
+            var service = new FakeDaemonClientService { DaemonName = "daemon-a" };
+            var ui      = Environment.CurrentManagedThreadId;
+            var emitted = new List<string>();
+            var threads = new List<int>();
 
-        var emitted = new List<string>();
-        using (Capacitor.App.App.FeedbackTrailerFeed(service, "9.9.9", () => "0.0.1").Subscribe(emitted.Add)) { }
+            using var feed = Capacitor.App.App.FeedbackTrailerFeed(service, "9.9.9", () => "0.0.1")
+                .Subscribe(t => { emitted.Add(t); threads.Add(Environment.CurrentManagedThreadId); });
+            // The seed is synchronous, so a window never opens on an empty trailer.
+            await Assert.That(emitted).Count().IsEqualTo(1);
 
-        await Assert.That(emitted[^1]).IsEqualTo("Sent from Kurrent Capacitor Desktop 9.9.9 · daemon daemon-a 1.0.3");
-        await Assert.That(emitted[^1]).DoesNotContain("abc123");
-    }
+            var pump = new Thread(() => service.SnapshotsSubject.OnNext(
+                FakeDaemonClientService.Snap(daemon: "daemon-a", version: "1.0.3+abc123")));
+            pump.Start();
+            pump.Join();
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(emitted).Count().IsEqualTo(2);
+            await Assert.That(threads[^1]).IsEqualTo(ui);
+            await Assert.That(emitted[^1]).IsEqualTo("Sent from Kurrent Capacitor Desktop 9.9.9 · daemon daemon-a 1.0.3");
+            await Assert.That(emitted[^1]).DoesNotContain("abc123");
+            return true;
+        });
 
     static IObservable<string> Trailer =>
         Observable.Return("Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3");
@@ -238,10 +286,12 @@ public class DesktopWindowLifecycleTests {
     }
 
     sealed class BlockingFeedbackApi : IFeedbackApi {
+        readonly TaskCompletionSource<FeedbackResult> _gate = new();
         public TaskCompletionSource Started { get; } = new();
-        public Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) {
+        public void Release(FeedbackResult result) => _gate.TrySetResult(result);
+        public async Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) {
             Started.TrySetResult();
-            return new TaskCompletionSource<FeedbackResult>().Task;
+            return await _gate.Task;
         }
     }
 

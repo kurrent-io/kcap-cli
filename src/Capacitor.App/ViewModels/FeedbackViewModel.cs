@@ -67,6 +67,9 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     public string Message {
         get => _message;
         set {
+            // The text box is disabled mid-send, but the guard belongs with the snapshot it
+            // protects: an edit that reached here would release the report already in flight.
+            if (IsBusy) { this.RaisePropertyChanged(nameof(Message)); return; }
             if (_message == value) return;
             Release();
             _message = value;
