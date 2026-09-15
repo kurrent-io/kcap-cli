@@ -1021,16 +1021,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
             ? mode
             : null;
 
-    /// Id shapes differ across the stack and across daemon versions: the server hub has returned
-    /// DASHED Guids while a production daemon keys its status cache on SHORT (8-hex) ids — so a
-    /// Guid in any format is normalized to "N" (the Guid-keyed daemons' cache shape), and any
-    /// other non-empty id passes through VERBATIM to match whatever the daemon actually sent.
-    /// Only a null/blank id is unusable; an id that matches nothing degrades gracefully in the
-    /// workspace ("session not found" with retry), which beats a red error under a live card.
-    internal static string? NormalizeAgentId(string? agentId) =>
-        Guid.TryParse(agentId, out var parsed) ? parsed.ToString("N")
-        : string.IsNullOrWhiteSpace(agentId) ? null
-        : agentId;
+    /// An id that matches nothing degrades gracefully in the workspace ("session not found" with
+    /// retry), which beats a red error under a live card.
+    internal static string? NormalizeAgentId(string? agentId) => AgentIds.Normalize(agentId);
 
     /// Applied on READ because System.Text.Json rebuilds the dictionary with a default (ordinal)
     /// comparer on load — a comparer set only at write time would not survive the round-trip.

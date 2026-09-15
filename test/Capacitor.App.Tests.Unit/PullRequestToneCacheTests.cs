@@ -198,5 +198,45 @@ public class PullRequestToneCacheTests {
         await Assert.That(cache.Current.ContainsKey("s1")).IsFalse();
     }
 
+    /// The readable remainder of a partly-missed refresh could only understate the session, so
+    /// the whole last tone stands until every PR reads again.
+    [Test]
+    public async Task A_partial_transient_miss_keeps_the_last_tone_whole() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        PullRequestRead<PullRequestOverviewDto> Failing(PullRequestSubjectDto subject) => source.Overview(subject) with {
+            Data = new PullRequestOverviewDto { Lifecycle = "open", Checks = new() { Availability = new() { Status = "ready" }, Rollup = "failure" } } };
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(Failing(subject)));
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(source.Overview(subject)));
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.GetValueOrDefault("s1") == PullRequestTone.ChecksFailed, what: "failed tone");
+
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "transient", Reason: "timeout")));
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(source.Overview(subject)));
+        time.Advance(TimeSpan.FromMinutes(3));
+
+        await WaitUntilAsync(() => source.Overviews == 4, what: "second refresh");
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.ChecksFailed);
+    }
+
+    /// A session that leaves and returns is a new listing, read at once rather than on the old
+    /// session's refresh clock.
+    [Test]
+    public async Task A_returning_session_is_read_again_at_once() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.Links = [];
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        directory.Rows.Remove(Row("a1", "s1").Key);
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+
+        await WaitUntilAsync(() => source.Lists == 2, what: "read on return");
+    }
+
     static Task WaitUntilAsync(Func<bool> condition, string what) => WorkspaceFixtures.WaitUntilAsync(condition, what: what);
 }

@@ -121,13 +121,17 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
 
     public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
 
+    // Placeholders are keyed by the normalized id: the server accepts a launch under one spelling
+    // and the daemon can publish it under another.
     public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) {
-        lock (_lock) _placeholders[agentId] = AgentRow.Placeholder(agentId, vendor, repoPath, title, model, _time.GetUtcNow().UtcDateTime, RepoFor(repoPath));
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) _placeholders[key] = AgentRow.Placeholder(key, vendor, repoPath, title, model, _time.GetUtcNow().UtcDateTime, RepoFor(repoPath));
         Recompute();
     }
 
     public void RemovePlaceholder(string agentId) {
-        lock (_lock) _placeholders.Remove(agentId);
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) _placeholders.Remove(key);
         Recompute();
     }
 
@@ -199,10 +203,12 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 .Select(ProjectLocal);
             var next = localRows.Concat(remote.Select(AgentRow.FromRemote)).ToList();
 
-            // A published row on either lane retires the launch's stand-ins for good; the daemon's
-            // own pending entry only hides the app's placeholder, which returns should the entry
-            // vanish without a row, until the failure notice or the TTL removes it.
-            var published = next.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+            // A published local row retires the launch's stand-ins for good; the daemon's own
+            // pending entry only hides the app's placeholder, which returns should the entry vanish
+            // without a row, until the failure notice or the TTL removes it. Only the local lane
+            // counts: a same-id row on the remote lane is a different agent, and ids compare in
+            // their normalized form because the two lanes spell a Guid differently.
+            var published = next.Where(r => r.Origin == AgentOrigin.Local).Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
             foreach (var id in _placeholders.Keys.Where(published.Contains).ToList()) _placeholders.Remove(id);
             var now = _time.GetUtcNow().UtcDateTime;
             foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
@@ -211,10 +217,10 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining;
             _placeholderExpiry.Change(nextExpiry, Timeout.InfiniteTimeSpan);
             var pendingRows = _pendingLaunches
-                .Where(p => !published.Contains(p.Id))
+                .Where(p => AgentIds.Normalize(p.Id) is { } id && !published.Contains(id))
                 .Select(p => AgentRow.FromPending(p, RepoFor(p.RepoPath)))
                 .ToList();
-            var starting = pendingRows.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+            var starting = pendingRows.Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
             next.AddRange(pendingRows);
             next.AddRange(_placeholders.Values.Where(r => !starting.Contains(r.Id)));
 

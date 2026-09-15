@@ -56,8 +56,9 @@ public sealed class PullRequestToneCache : IDisposable {
         List<string> due;
         lock (_lock) {
             if (_disposed) return;
+            foreach (var session in _readAt.Keys.Where(s => !_sessions.Contains(s)).ToList()) _readAt.Remove(session);
             var gone = _tones.Keys.Where(s => !_sessions.Contains(s)).ToList();
-            foreach (var session in gone) { _tones.Remove(session); _readAt.Remove(session); }
+            foreach (var session in gone) _tones.Remove(session);
             if (gone.Count > 0) Publish();
             due = _sessions
                 .Where(s => !_inFlight.Contains(s) && (!_readAt.TryGetValue(s, out var at) || _time.GetElapsedTime(at) >= _refreshEvery))
@@ -83,16 +84,19 @@ public sealed class PullRequestToneCache : IDisposable {
             }
             var tones = new List<PullRequestTone>();
             var denied = false;
+            var missed = false;
             foreach (var link in links.Data.Items) {
                 var read = await _source.OverviewAsync(session, PullRequestWire.Subject(link), ct).ConfigureAwait(false);
                 // The same gate the reader applies: a read past its access window reveals nothing.
                 if (read.CanReveal(_time)) tones.Add(PullRequestTones.From(read.Data!));
                 else if (read.AccessFailure is "denied" or "invalid") denied = true;
+                else missed = true;
             }
-            // A denial clears the tone, as the card does, whatever the session's other PRs read;
-            // a transient miss keeps the last one.
+            // A denial clears the tone, as the card does, whatever the session's other PRs read. A
+            // miss on any PR keeps the last tone whole: the readable remainder alone could only
+            // understate it.
             if (denied) Set(session, PullRequestTone.None);
-            else if (tones.Count > 0 || links.Data.Items.Length == 0) Set(session, PullRequestTones.Strongest(tones));
+            else if (!missed) Set(session, PullRequestTones.Strongest(tones));
         } catch (OperationCanceledException) {
         } finally {
             lock (_lock) _inFlight.Remove(session);

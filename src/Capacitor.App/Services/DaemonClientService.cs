@@ -200,5 +200,6 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
         _status.Dispose();
         _snapshots.Dispose();
         Agents.Dispose();
+        Pending.Dispose();
     }
 }
