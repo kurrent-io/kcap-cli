@@ -371,7 +371,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     /// Null for a payload that is not a readable queue — never an empty one, which a consumer
     /// would read as the server having dropped every prompt it holds.
     static IReadOnlyList<QueuedInputItem>? ParseQueue(JsonElement? items) {
-        if (items is not { ValueKind: JsonValueKind.Array } array) return null;
+        if (items is not { } array || !array.IsArray) return null;
         try { return array.Deserialize(RemoteModelsJsonContext.Default.QueuedInputItemArray); }
         catch (JsonException) { return null; }
     }
