@@ -340,7 +340,9 @@ public class RemoteSessionViewModelTests {
 
             h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Offline, what: "offline");
-            await Assert.That(vm.ShowsChatPane).IsFalse();
+            // The banner has its own row above the panes: it reads over the retained rows rather
+            // than replacing them, so a dropped lane does not blank the transcript.
+            await Assert.That(vm.ShowsChatPane).IsTrue();
             await Assert.That(vm.AccessNote).IsEqualTo("Not connected to the server");
             await vm.TeardownAsync();
         });

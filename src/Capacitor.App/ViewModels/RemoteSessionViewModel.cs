@@ -115,9 +115,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
 
-    /// The tabs' content lives while the lease's last verdict stands; an ended session keeps
-    /// its transcript, an agent that moved to this machine shows the note instead.
-    public bool ShowsPanes => Access == RemoteSessionAccess.Ready && !OriginChangedToLocal;
+    /// The tabs' content lives while the lease's last verdict stands; an ended session keeps its
+    /// transcript, and so does a dropped lane — the access banner has its own row above the panes,
+    /// so it reads over the retained rows. A refusal is different: Denied, a session that has not
+    /// started and an agent that moved to this machine show the note instead of a pane.
+    public bool ShowsPanes =>
+        Access is RemoteSessionAccess.Ready or RemoteSessionAccess.Offline && !OriginChangedToLocal;
+
     public bool ShowsChatPane => ShowsPanes && IsChatActive;
     public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
 
