@@ -88,7 +88,7 @@ two — that records structure that isn't there. Merge instead:
 
 | Tool | Required args | Purpose |
 |---|---|---|
-| `declare_work_item` | exactly one of `issue_key` \| `pr_number` \| `work_item_id` \| `new_title` | Attach the session to a work item (or create one). `session_id` defaults to `KCAP_SESSION_ID`. |
+| `declare_work_item` | exactly one of `issue_key` \| `pr_number` \| `work_item_id` \| `new_title` | Attach the session to a work item (or create one). `session_id` defaults to the current session. |
 | `get_session_work_items` | — | List what the current session is attached to. |
 | `declare_work_breakdown` | `parent_id`, `part_ids` | Declare parent → parts. |
 | `retract_work_breakdown` | `parent_id`, `part_ids` | Detach parts from the parent. |
@@ -96,7 +96,7 @@ two — that records structure that isn't there. Merge instead:
 | `retract_work_relation` | `from_id`, `to_id`, `relation_kind` | Retract a dependency. |
 | `get_work_item_topology` | `work_item_id` | Read parent, parts, and dependencies (visibility-scoped). |
 | `merge_work_item` | `work_item_id`, `into_work_item_id` | Merge a duplicate into the survivor (prefer the keyed item as survivor). |
-| `detach_work_item` | `work_item_id` | Detach the session from a wrongly attached item. `session_id` defaults to `KCAP_SESSION_ID`. |
+| `detach_work_item` | `work_item_id` | Detach the session from a wrongly attached item. `session_id` defaults to the current session. |
 
 ## Requirements
 

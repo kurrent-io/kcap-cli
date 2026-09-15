@@ -6,6 +6,20 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## Work-items tools take the session from the running harness
+
+An MCP stdio server is spawned once, at harness startup, from the launching process's environment.
+`KCAP_SESSION_ID` never reaches it in Claude Code: the session-start hook exports it into the file
+Claude Code applies to Bash tool calls only, so a tool call that omits `session_id` failed in every
+hooked Claude session, with an error telling the user to do what they were already doing. And when
+the variable is present, it was exported by whichever shell launched the harness, so a session
+started from another session's shell would attach its work to the parent. The workitems server
+therefore resolves an omitted `session_id` through `HarnessRequesterContext`, as the flows server
+already did: the running harness's own `CLAUDE_CODE_SESSION_ID` wins, and the ambient
+`KCAP_SESSION_ID` / `CODEX_THREAD_ID` lookup remains the fallback for harnesses that export no
+per-process id. The tests inject the environment rather than set it, because the suite itself runs
+under a harness that exports these variables.
+
 ## A PR is found under the name its branch was pushed as
 
 An argument-free `gh pr view` looks for the branch git would push to. Under the default

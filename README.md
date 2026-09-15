@@ -677,7 +677,7 @@ It provides nine tools:
 - **`merge_work_item`** — merge a duplicate item into another (`work_item_id` → `into_work_item_id`): its sessions and links move to the survivor. Refused when a user marked either item standalone, rejected the pairing, or the items sit in different tracker hierarchies.
 - **`detach_work_item`** — detach a session from a work item it was wrongly attached to; durable against automated re-attach, and unable to remove a user-pinned attachment.
 
-`declare_work_item` / `get_session_work_items` / `detach_work_item` default `session_id` to the current kcap-hooked session (`KCAP_SESSION_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
+`declare_work_item` / `get_session_work_items` / `detach_work_item` default `session_id` to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
 
 ### Analytics MCP server (for agents)
 
