@@ -28,6 +28,11 @@ public class AttachmentFetcherTests : IDisposable {
         public HttpClient CreateClient(string name) => new() { BaseAddress = new Uri(baseUrl) };
     }
 
+    sealed class ThrowingHandler(Func<CancellationToken, Exception> fail) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw fail(ct);
+    }
+
     static Task<TokenResolution> NoTokens() =>
         Task.FromResult(new TokenResolution(null, AuthStatus.NotAuthenticated, null, "default"));
 
@@ -91,6 +96,8 @@ public class AttachmentFetcherTests : IDisposable {
         var fetcher = new AttachmentFetcher(new HandlerFactory(counting), NoTokens, NullLogger.Instance);
         var byBody = await fetcher.FetchAsync(Tmp.PathTo("b"), AttachmentPlacement.Worktree, [Id(0)], CancellationToken.None);
         await Assert.That(byBody.Batch).IsNull();
+        await Assert.That(byBody.FailedId).IsEqualTo(Id(0));
+        await Assert.That(byBody.Error).Contains("over");
         await Assert.That(counting.BytesRead).IsLessThanOrEqualTo(InputWire.MaxAttachmentBytes + 1 + 65536);
         await Assert.That(Directory.GetDirectories(Tmp.PathTo("b"))).IsEmpty();
         await Assert.That(Directory.GetFiles(Tmp.PathTo("b"), "*", SearchOption.AllDirectories)
@@ -106,6 +113,39 @@ public class AttachmentFetcherTests : IDisposable {
         Serve(Id(3), [1], "..");
         var bad = await Fetcher().FetchAsync(Tmp.PathTo("e"), AttachmentPlacement.Worktree, [Id(3)], CancellationToken.None);
         await Assert.That(bad.Batch).IsNull();
+        await Assert.That(bad.FailedId).IsEqualTo(Id(3));
+
+        Serve(Id(4), [1], "foo/");
+        var trailing = await Fetcher().FetchAsync(Tmp.PathTo("f"), AttachmentPlacement.Worktree, [Id(4)], CancellationToken.None);
+        await Assert.That(trailing.Batch).IsNull();
+        await Assert.That(trailing.FailedId).IsEqualTo(Id(4));
+    }
+
+    [Test]
+    public async Task A_transport_timeout_fails_the_fetch_and_only_the_callers_cancellation_propagates() {
+        var timedOut = new AttachmentFetcher(
+            new HandlerFactory(new ThrowingHandler(_ => new TaskCanceledException("HttpClient.Timeout elapsing"))),
+            NoTokens, NullLogger.Instance);
+        var root = Tmp.PathTo("timeout");
+        var fetch = await timedOut.FetchAsync(root, AttachmentPlacement.Worktree, [Id(0)], CancellationToken.None);
+        await Assert.That(fetch.Batch).IsNull();
+        await Assert.That(fetch.FailedId).IsEqualTo(Id(0));
+        await Assert.That(fetch.Error).IsNotNull();
+        await Assert.That(Directory.GetDirectories(root, ".pending-*")).IsEmpty();
+
+        using var cts = new CancellationTokenSource();
+        var cancelled = new AttachmentFetcher(
+            new HandlerFactory(new ThrowingHandler(_ => {
+                cts.Cancel();
+
+                return new OperationCanceledException(cts.Token);
+            })),
+            NoTokens, NullLogger.Instance);
+        var cancelledRoot = Tmp.PathTo("cancelled");
+        await Assert.That(async () => await cancelled.FetchAsync(
+                cancelledRoot, AttachmentPlacement.Worktree, [Id(0)], cts.Token))
+            .Throws<OperationCanceledException>();
+        await Assert.That(Directory.GetDirectories(cancelledRoot, ".pending-*")).IsEmpty();
     }
 
     [Test]

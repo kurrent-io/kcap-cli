@@ -26,12 +26,15 @@ internal sealed class AttachmentFetcher(
             if (!File.Exists(gitignore)) await File.WriteAllTextAsync(gitignore, "*\n", ct);
         }
 
-        foreach (var stale in Directory.EnumerateDirectories(destinationRoot, ".pending-*")) {
-            try {
+        // Sweeping every staging directory here is only safe because one fetch runs per destination
+        // root at a time — callers serialise deliveries per agent. The enumeration is inside the try:
+        // its MoveNext is where a vanishing or unreadable directory throws, and a failed sweep must
+        // not fail the fetch.
+        try {
+            foreach (var stale in Directory.EnumerateDirectories(destinationRoot, ".pending-*"))
                 WorktreeManager.DeleteTreeNoFollow(stale);
-            } catch (Exception ex) {
-                logger.LogWarning(ex, "Attachment staging cleanup skipped {Dir}", stale);
-            }
+        } catch (Exception ex) {
+            logger.LogWarning(ex, "Attachment staging cleanup skipped under {Dir}", destinationRoot);
         }
 
         var batchId   = Guid.NewGuid().ToString("N");
@@ -44,8 +47,10 @@ internal sealed class AttachmentFetcher(
         var batch = new AttachmentBatch(staging, published, paths);
 
         try {
+            var resolution = await tokens();
+
             foreach (var id in ids) {
-                var (fileName, error) = await FetchOneAsync(id, staging, ct);
+                var (fileName, error) = await FetchOneAsync(id, staging, resolution, ct);
 
                 if (error is not null) {
                     batch.Dispose();
@@ -61,7 +66,7 @@ internal sealed class AttachmentFetcher(
             batch.Publish();
 
             return new(batch, null, null);
-        } catch (OperationCanceledException) {
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             batch.Dispose();
 
             throw;
@@ -72,9 +77,9 @@ internal sealed class AttachmentFetcher(
         }
     }
 
-    async Task<(string? FileName, string? Error)> FetchOneAsync(string id, string staging, CancellationToken ct) {
+    async Task<(string? FileName, string? Error)> FetchOneAsync(
+            string id, string staging, TokenResolution resolution, CancellationToken ct) {
         using var client = http.CreateClient("Attachments");
-        var resolution = await tokens();
 
         if (resolution.Tokens is not null)
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resolution.Tokens.AccessToken);

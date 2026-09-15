@@ -25,7 +25,11 @@ internal sealed class AttachmentBatch(
         _gone = true;
         var dir = _published ? publishedDirectory : stagingDirectory;
 
-        if (System.IO.Directory.Exists(dir)) WorktreeManager.DeleteTreeNoFollow(dir);
+        // A rollback that cannot delete must not replace the failure that prompted it: what is left
+        // behind is collected by the next fetch's sweep and by the store's startup sweep.
+        try {
+            if (System.IO.Directory.Exists(dir)) WorktreeManager.DeleteTreeNoFollow(dir);
+        } catch { /* swept later */ }
     }
 
     public void Dispose() {
