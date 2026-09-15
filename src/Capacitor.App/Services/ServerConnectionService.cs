@@ -5,6 +5,8 @@ using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
+using Eventuous.SignalR.Client;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +35,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Subject<ServerPermissionRequest> _permissionRequests = new();
     readonly Subject<ServerElicitationRequest> _elicitations = new();
     readonly Subject<string> _sessionAccessChanged = new();
+    readonly Subject<TerminalOutputFrame> _terminalOutput = new();
+    readonly Subject<TerminalSize> _terminalDimensions = new();
+    // The subscription client of the live hub, replaced with it: it registers the StreamEvent
+    // handler on the hub it wraps, so one per connection generation.
+    volatile SignalRSubscriptionClient? _streams;
     readonly SemaphoreSlim _restartGate = new(1, 1);
     // One lock owns the whole lane lifecycle: the generation, the current loop's cancellation
     // source, and EVERY status publish. A generation names one admitted connect loop; a park, a
@@ -73,6 +80,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
     public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
     public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
+    public IObservable<TerminalOutputFrame> TerminalOutput => _terminalOutput.AsObservable();
+    public IObservable<TerminalSize> TerminalDimensions => _terminalDimensions.AsObservable();
 
     public void Start() {
         if (_serverUrl is null) return;
@@ -149,9 +158,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             // down — and has nothing left to dial for.
             if (!Publish(generation, new(ServerLaneState.Connecting))) return;
             HubConnection? hub = null;
+            SignalRSubscriptionClient? streams = null;
             try {
                 hub = Build();
                 var capturedHub = hub;
+                streams = new SignalRSubscriptionClient(hub);
 
                 // Registered before StartAsync (SignalR supports that), so a close during the
                 // DiagnoseAsync token read below — or during StartAsync itself — is still
@@ -169,6 +180,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
 
                 await hub.StartAsync(ct).ConfigureAwait(false);
                 _hub = hub;
+                _streams = streams;
                 attempt = 0;
                 var (connectedDiagnostic, connectedSubject) = await DiagnoseAsync().ConfigureAwait(false);
                 PublishConnected(generation, capturedHub, connectedDiagnostic, connectedSubject);
@@ -191,6 +203,12 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             } catch (Exception ex) {
                 Publish(generation, new(ServerLaneState.Retrying, ex.Message));
             } finally {
+                _streams = null;
+                // Its dispose unsubscribes over a hub that is closing or closed; that call cannot
+                // matter and must not turn a loop exit into a fault.
+                if (streams is not null) {
+                    try { await streams.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
+                }
                 _hub = null;
                 if (hub is not null) await hub.DisposeAsync().ConfigureAwait(false);
             }
@@ -231,6 +249,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
             (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
+        hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
+        hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
         return hub;
     }
 
@@ -271,6 +291,20 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToChat, ct, sessionId);
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
     public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.RegisterSessionAccessWatch, ct, sessionId);
+
+    public IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, CancellationToken ct) =>
+        _streams is { } streams && _hub is { State: HubConnectionState.Connected }
+            ? streams.SubscribeAsync(stream, fromPosition, ct)
+            : AsyncEnumerable.Empty<StreamEventEnvelope>();
+
+    public Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToTerminal, ct, agentId);
+    public Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromTerminal, ct, agentId);
+    public Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct) => InvokeAsync(HubMethods.RequestResizeTerminal, ct, agentId, cols, rows);
+    public Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.ReleaseResizeTerminal, ct, agentId);
+    // Three arguments always: the method's arity is frozen and SignalR does not backfill a
+    // missing trailing one.
+    public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => InvokeAsync(HubMethods.SendUserInput, ct, agentId, text, null);
+    public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => InvokeAsync(HubMethods.SendSpecialKey, ct, agentId, key);
 
     /// Denied is the server's session-visibility refusal (HubException carrying WireTokens.
     /// SessionNotVisible); every other exception is Failed with its message, and a lane with no

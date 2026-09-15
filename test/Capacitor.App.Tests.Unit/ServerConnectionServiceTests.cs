@@ -1,7 +1,11 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
+using Microsoft.AspNetCore.SignalR;
+using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -424,4 +428,71 @@ public class ServerConnectionServiceTests {
         lane.Start();
         await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.NotConnected);
     }
+
+    [Test]
+    public async Task StreamTailYieldsPushedEventsInOrderAndADeniedStreamThrows() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.StreamHandler = stream => stream != "AgentSession-hidden";
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var received = new List<StreamEventEnvelope>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var tail = Task.Run(async () => {
+            await foreach (var envelope in lane.TailStreamAsync("AgentSession-s1", 4, cts.Token)) {
+                received.Add(envelope);
+                if (received.Count == 2) break;
+            }
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Contains(("AgentSession-s1", (ulong?)4)), what: "the subscribe");
+        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "hello"));
+        // At or before the last seen position: the client drops it.
+        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "duplicate"));
+        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 6, "world"));
+        await tail.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Select(e => e.StreamPosition)).IsEquivalentTo(new ulong[] { 5, 6 });
+        await Assert.That(received[0].JsonPayload).Contains("hello");
+
+        var denied = lane.TailStreamAsync("AgentSession-hidden", null, cts.Token).GetAsyncEnumerator(cts.Token);
+        HubException? error = null;
+        try { await denied.MoveNextAsync(); } catch (HubException ex) { error = ex; }
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!.Message).Contains(WireTokens.StreamNotAuthorized);
+    }
+
+    [Test]
+    public async Task TerminalSubscribeReplaysDimensionsAndBufferThenTheInvokesRecordViewportAndInput() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.TerminalDims = (120, 40);
+        HubTestHost.TerminalReplay.Add("hel"u8.ToArray());
+        HubTestHost.TerminalReplay.Add("lo"u8.ToArray());
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var dims = lane.TerminalDimensions.Take(1).ToTask();
+        var frames = lane.TerminalOutput.Take(2).ToList().ToTask();
+        await Assert.That((await lane.SubscribeToTerminalAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await Assert.That(await dims.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(new TerminalSize("a1", 120, 40));
+        var received = await frames.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Select(f => Encoding.UTF8.GetString(Convert.FromBase64String(f.Base64)))).IsEquivalentTo(new[] { "hel", "lo" });
+
+        await lane.RequestResizeTerminalAsync("a1", 100, 30, CancellationToken.None);
+        await lane.ReleaseResizeTerminalAsync("a1", CancellationToken.None);
+        await lane.SendUserInputAsync("a1", "fix it", CancellationToken.None);
+        await lane.SendSpecialKeyAsync("a1", SpecialKeys.Escape, CancellationToken.None);
+        await lane.UnsubscribeFromTerminalAsync("a1", CancellationToken.None);
+        await Assert.That(HubTestHost.Resizes).Contains(("a1", 100, 30));
+        await Assert.That(HubTestHost.ResizeReleases).Contains("a1");
+        await Assert.That(HubTestHost.UserInputs).Contains(("a1", "fix it"));
+        await Assert.That(HubTestHost.SpecialKeys).Contains(("a1", "Escape"));
+        await Assert.That(HubTestHost.TerminalUnsubscribes).Contains("a1");
+    }
+
+    static StreamEventEnvelope Envelope(string stream, ulong position, string content) => new() {
+        EventId = Guid.NewGuid(), Stream = stream, EventType = CanonicalEventTypes.UserMessageReceived,
+        StreamPosition = position, GlobalPosition = position, Timestamp = DateTime.UtcNow,
+        JsonPayload = $$"""{"content":"{{content}}"}""",
+    };
 }
