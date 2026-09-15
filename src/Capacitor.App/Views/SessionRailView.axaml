@@ -7,32 +7,45 @@
     <!-- DataContext is INHERITED from the window (never assigned here), so Rail is null on any
          window built without one — every Rail.* binding below carries a fallback for that. -->
     <UserControl.Styles>
-        <!-- A row's resting Background MUST come from this class style, never a local attribute on
-             the Button: a local value outranks a style trigger, which would leave the two
-             highlight styles below permanently inert (and suppress the theme's hover/pressed
-             feedback). Same reason HomeView's Button.sessionCard neutralizes its chrome in a
-             style. Order matters — Avalonia has no CSS specificity, so the highlights must be
-             declared AFTER this base to win the tie. -->
+        <!-- A row's resting Background and BorderThickness MUST come from this class style, never a
+             local attribute on the Button: a local value outranks a style trigger, which would leave
+             the highlight styles below permanently inert (and suppress the theme's hover/pressed
+             feedback). Avalonia has no CSS specificity, so the highlights are declared AFTER this
+             base to win the tie. -->
         <Style Selector="Button.railRow">
             <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="7" />
         </Style>
-        <Style Selector="Button.selected, Button.holdsSelected">
+        <Style Selector="Button.holdsSelected">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        </Style>
+        <!-- Hover paints the raised surface, so the open row needs its own background plus an
+             accent edge and a heavier title to read as selected beside a hovered sibling. -->
+        <Style Selector="Button.selected">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="BorderThickness" Value="3,0,0,0" />
+        </Style>
+        <Style Selector="Button.selected TextBlock.rowTitle">
+            <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style Selector="Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
-        <Style Selector="Button.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.holdsSelected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.selected:pressed /template/ ContentPresenter#PART_ContentPresenter,
+        <Style Selector="Button.holdsSelected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.holdsSelected:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
-
+        <Style Selector="Button.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
     </UserControl.Styles>
 
     <Border Background="{StaticResource KcapSurfaceBrush}"
@@ -126,7 +139,7 @@
                                                 <StackPanel>
                                                     <Button Command="{Binding ToggleCommand}" IsVisible="{Binding ShowHeader}"
                                                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                                                            BorderThickness="0" Padding="8,5" Margin="0,2,0,0"
+                                                            Padding="8,5" Margin="0,2,0,0"
                                                             ToolTip.Tip="{Binding Path}"
                                                             Classes="railRow" Classes.holdsSelected="{Binding HoldsSelected}">
                                                         <DockPanel>
@@ -169,7 +182,7 @@
                                                                 <DataTemplate x:DataType="vm:RailSessionViewModel">
                                                                     <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
                                                                             HorizontalContentAlignment="Stretch"
-                                                                            BorderThickness="0" Padding="8,6" Margin="0,2,0,0"
+                                                                            Padding="8,6" Margin="0,2,0,0"
                                                                             ToolTip.Tip="{Binding Tooltip}"
                                                                             Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}"
                                                                             Classes="railRow" Classes.selected="{Binding IsSelected}">
@@ -188,7 +201,7 @@
                                                                                          StackPanel is width-bounded, so CharacterEllipsis engages. When the
                                                                                          row has no title the chips line below is the row's identity. -->
                                                                                     <TextBlock Text="{Binding Primary}" FontSize="13" LineHeight="18"
-                                                                                               IsVisible="{Binding HasTitle}"
+                                                                                               Classes="rowTitle" IsVisible="{Binding HasTitle}"
                                                                                                Foreground="{StaticResource KcapTextBrush}"
                                                                                                TextTrimming="CharacterEllipsis" />
                                                                                     <!-- WrapPanel, not a fixed row: chips + meta wrap to a second line rather
