@@ -140,4 +140,42 @@ public class RemoteTerminalViewModelTests {
             await h.Vm.TeardownAsync();
         });
     }
+
+    [Test]
+    public async Task Replay_frames_that_arrive_while_the_subscribe_is_in_flight_are_shown() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var subscribeSource = new TaskCompletionSource<HubCallOutcome>();
+            h.Lane.TerminalSubscribeHandler = _ => subscribeSource.Task;
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Contains("a1"), what: "the subscribe call");
+
+            h.Lane.TerminalDimensionsSubject.OnNext(new TerminalSize("a1", 120, 40));
+            h.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1", Harness.B64("hel")));
+            h.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1", Harness.B64("lo")));
+
+            subscribeSource.SetResult(HubCallOutcome.Ok);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+
+            var surface = h.Surfaces.Single();
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "hel", "lo" });
+            await Assert.That(surface.Resizes).Contains((120, 40));
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_refused_subscribe_drops_later_frames() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Lane.TerminalSubscribeHandler = _ => Task.FromResult(HubCallOutcome.Denied("x"));
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Offline, what: "offline");
+
+            h.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1", Harness.B64("hel")));
+            var surface = h.Surfaces.Single();
+            await Assert.That(surface.Fed).IsEmpty();
+            await h.Vm.TeardownAsync();
+        });
+    }
 }

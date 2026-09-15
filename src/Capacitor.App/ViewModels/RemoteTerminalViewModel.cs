@@ -26,6 +26,11 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     int _generation;
     Utf8StreamDecoder? _decoder;
     bool _subscribed;
+    // The hub delivers the replay (TerminalDimensions and buffered TerminalOutput) INSIDE the
+    // SubscribeToTerminal invocation, before it returns -- so frames arrive before _subscribed is
+    // ever set. This tracks "attached and expecting output" instead, true from the moment Attach
+    // starts the subscribe call, not from the moment it resolves.
+    bool _receiving;
     bool _ended;
     (int Cols, int Rows)? _sourceSize;
 
@@ -75,7 +80,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             Detach(state == SessionAccessState.Establishing ? RemoteTerminalPhase.Waiting : RemoteTerminalPhase.Offline);
         }).DisposeWith(_disposables);
         lane.TerminalOutput.Where(f => f.AgentId == agentId).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(f => {
-            if (!_subscribed || Surface is not { } surface || _decoder is not { } decoder) return;
+            if (!_receiving || Surface is not { } surface || _decoder is not { } decoder) return;
             byte[] bytes;
             try { bytes = Convert.FromBase64String(f.Base64); } catch (FormatException) { return; }
             surface.Feed(decoder.Decode(bytes));
@@ -103,6 +108,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _decoder = decoder;
         Surface = surface;
         Phase = RemoteTerminalPhase.Connecting;
+        _receiving = true;
         _ = SubscribeAsync(generation, surface);
     }
 
@@ -120,7 +126,8 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         }
         await Dispatcher.UIThread.InvokeAsync(() => {
             if (generation != _generation) { _ = ReleaseAsync(); return; }
-            if (outcome.Result != HubCallResult.Ok) { Phase = RemoteTerminalPhase.Offline; return; }
+            // A refused subscribe must not render frames meant for another viewer on the connection.
+            if (outcome.Result != HubCallResult.Ok) { _receiving = false; Phase = RemoteTerminalPhase.Offline; return; }
             _subscribed = true;
             Phase = RemoteTerminalPhase.Live;
             var (cols, rows) = surface.CurrentSize;
@@ -130,6 +137,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
 
     void Detach(RemoteTerminalPhase phase) {
         _generation++;
+        _receiving = false;
         Phase = phase;
         if (!_subscribed) return;
         _subscribed = false;
@@ -161,6 +169,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
 
     public async Task TeardownAsync() {
         _generation++;
+        _receiving = false;
         _disposables.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         if (_subscribed) {
