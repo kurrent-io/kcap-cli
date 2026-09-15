@@ -55,6 +55,26 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(h.Feed.ReadAppended().Lines).IsEmpty();
     }
 
+    /// The seed's boundary is where its replayed history ends. An event that beats the drain is
+    /// not part of that history — folded into the Reset, it could no longer acknowledge a send.
+    [Test]
+    public async Task A_live_event_that_lands_before_the_seed_is_drained_follows_it_in_the_next_read() {
+        using var h = new Harness();
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.AssistantTextGenerated, """{"content":"more"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        var seed = h.Feed.ReadAppended();
+        await Assert.That(seed.Status).IsEqualTo(FeedStatus.Reset);
+        await Assert.That(seed.Lines.Select(l => l.Offset)).IsEquivalentTo(new long[] { 0, 1 });
+        await Assert.That(seed.SnapshotOffset).IsEqualTo(2);
+
+        var live = h.Feed.ReadAppended();
+        await Assert.That(live.Status).IsEqualTo(FeedStatus.Ok);
+        await Assert.That(live.Lines.Single().Offset).IsEqualTo(2);
+    }
+
     [Test]
     public async Task An_event_the_chat_does_not_render_moves_the_position_without_a_row() {
         using var h = new Harness();

@@ -9,9 +9,9 @@ public enum FeedStatus { Ok, Reset, Missing, Failed }
 /// be acknowledged by a line that landed after it.
 public readonly record struct ProjectedLine(ChatProjectionResult Projection, long Offset);
 
-/// What one poll drained. A Reset carries every line of the rebuilt source; SnapshotOffset is
-/// where the source stood as the read began, so a send made against the previous source is
-/// rebased past everything the new one replays.
+/// What one poll drained. A Reset carries the rebuilt source's replayed lines and SnapshotOffset
+/// names where that history ends, so a send is rebased past the replay yet can still be
+/// acknowledged by anything that arrived after it.
 public sealed record FeedRead(FeedStatus Status, IReadOnlyList<ProjectedLine> Lines, long? SnapshotOffset = null, string? Failure = null);
 
 /// The chat pane's source of rows, drained from a worker thread on every poll. Dispose may run

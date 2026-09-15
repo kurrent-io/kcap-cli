@@ -489,9 +489,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 LogOnce(read.Failure ?? "read failed");
                 return;
             case FeedStatus.Reset:
-                // Skip everything already present in the new file, including appends that landed
-                // while this read was being projected. They may be replayed history, not receipts.
-                RebaseQueuedMessages(Math.Max(read.SnapshotOffset ?? 0, CurrentOffset ?? 0));
+                // Skip everything the new source replays: it may be history, not receipts. The feed
+                // names where that history ends — anything past it arrived after and can acknowledge.
+                RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
                 _items.Clear();
                 _pendingTools.Clear();
                 _settledTools.Clear();
@@ -504,7 +504,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
         foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline))
-            queued.Rebase(_inputGeneration, Math.Max(read.SnapshotOffset ?? 0, CurrentOffset ?? 0));
+            queued.Rebase(_inputGeneration, read.SnapshotOffset ?? CurrentOffset ?? 0);
         RefreshQueue();
         if (read.Lines.Count == 0) {
             RefreshActivityNote();

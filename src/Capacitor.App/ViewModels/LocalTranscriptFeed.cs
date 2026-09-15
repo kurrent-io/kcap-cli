@@ -46,7 +46,12 @@ internal sealed class LocalTranscriptFeed(
             TailStatus.Failed => FeedStatus.Failed,
             _ => FeedStatus.Ok,
         };
-        return new(status, lines, result.SnapshotLength, result.Failure);
+        // A reset's boundary is the file as it stands once projection is done, so an append that
+        // landed during the read counts as replayed history rather than a receipt.
+        var snapshot = status == FeedStatus.Reset
+            ? Math.Max(result.SnapshotLength ?? 0, CurrentOffset ?? 0)
+            : result.SnapshotLength;
+        return new(status, lines, snapshot, result.Failure);
     }
 
     public void Dispose() { }

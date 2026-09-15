@@ -32,6 +32,11 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     (FeedStatus Status, string? Failure)? _pendingFailure;
     /// The last event number applied; null until the seed lands.
     long? _position;
+    /// How many pending lines the seed committed, and the position it ended at. A live event that
+    /// lands before the pane drains the seed follows it in the next read: folding it into the Reset
+    /// would place it inside the replayed history, where it can no longer acknowledge a send.
+    int _resetCount;
+    long? _seedBoundary;
     int _attempt;
     CancellationTokenSource? _tailCts;
     volatile bool _waitingToRetry;
@@ -61,12 +66,19 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
 
     public FeedRead ReadAppended() {
         lock (_lock) {
-            if (_pendingStatus == FeedStatus.Reset || _pending.Count > 0) {
-                var status = _pendingStatus;
-                var lines = _pending.Count == 0 ? [] : _pending.ToArray();
-                _pending.Clear();
+            if (_pendingStatus == FeedStatus.Reset) {
+                var seed = _pending.GetRange(0, _resetCount);
+                _pending.RemoveRange(0, _resetCount);
+                var boundary = _seedBoundary;
+                _resetCount = 0;
+                _seedBoundary = null;
                 _pendingStatus = FeedStatus.Ok;
-                return new(status, lines, status == FeedStatus.Reset ? CurrentOffsetLocked() : null);
+                return new(FeedStatus.Reset, seed, boundary);
+            }
+            if (_pending.Count > 0) {
+                var lines = _pending.ToArray();
+                _pending.Clear();
+                return new(FeedStatus.Ok, lines);
             }
             if (_pendingFailure is { } pending) {
                 _pendingFailure = null;
@@ -148,6 +160,8 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
             _pending.Clear();
             _pending.AddRange(lines);
             _pendingStatus = FeedStatus.Reset;
+            _resetCount = lines.Count;
+            _seedBoundary = CurrentOffsetLocked();
         }
         return true;
     }

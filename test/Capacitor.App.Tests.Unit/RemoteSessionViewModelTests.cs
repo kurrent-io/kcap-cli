@@ -312,12 +312,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            // The seed has to be drained before the send: a prompt sent while the Reset is still
-            // pending is rebased past its own echo and would never leave the queue. The first tick
-            // retires whatever read was in flight, the second drains the seed itself.
-            await h.TickAsync(vm);
-            await h.TickAsync(vm);
-            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Reading, "the empty seed");
             await WaitUntilAsync(() => vm.Chat.ShowsComposer && vm.Chat.ComposerHint.StartsWith("Enter sends", StringComparison.Ordinal), what: "the composer");
 
             vm.Chat.ComposerText = "do it";
