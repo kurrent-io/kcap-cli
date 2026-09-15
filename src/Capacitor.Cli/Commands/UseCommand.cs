@@ -15,7 +15,9 @@ public sealed class UseCommand(ConfigRoot config, WorkingDirectory workdir) {
         var name = args[1];
         var global = args.Contains("--global");
         var save = args.Contains("--save");
-        var repoRoot = AppConfig.RepoRootOf(workdir);
+        // Resolved at most once, and not at all for a global selection that saves nothing:
+        // RepoRootOf shells out to git, which a change needing no repository must not wait on.
+        var repoRoot = !global || save ? AppConfig.RepoRootOf(workdir) : null;
         var repoPath = global ? null : repoRoot;
 
         return await SetProfile(name, repoPath, global, save, save ? repoRoot : null);
