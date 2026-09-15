@@ -90,6 +90,12 @@ public record Profile {
     [JsonPropertyName("disable_workitems_nudge")]
     public bool? DisableWorkItemsNudge { get; init; }
 
+    /// <summary>when true, kcap skips injecting the SessionStart plans nudge (the guidance to declare
+    /// the plan document and task list through the kcap-plans MCP tools). Independent of the other
+    /// SessionStart opt-outs.</summary>
+    [JsonPropertyName("disable_plans_nudge")]
+    public bool? DisablePlansNudge { get; init; }
+
     /// <summary>
     /// when true, kcap does not advertise the coordination-notices capability at SessionStart, so the
     /// server injects no coordination notices (heads-up about others' in-flight work that may overlap

@@ -770,14 +770,15 @@ public sealed class ClaudeHookCommand(
                     var coordinationFragment = CoordinationNoticesEmitter.BuildFragment(
                         responseNode, coordinationNoticesDisabled);
 
-                    // The static work-items nudge. Claude has always carried kcap-workitems, so
-                    // the availability gate is always satisfied here; only the opt-out can suppress it.
+                    // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
                     var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
                         HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses);
+                    var plansNudge = PlansNudgeEmitter.Resolve(
+                        HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, harnessNudge);
+                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }

@@ -30,6 +30,8 @@ public static class KcapMcpServers {
             "Team memory — search, read, and save durable learnings."),
         new("kcap-workitems", ["mcp", "workitems"], NeedsProjectCwd: true,
             "Attach the current session to a work item (issue, PR, or a brand-new item), and list what a session is attached to."),
+        new("kcap-plans", ["mcp", "plans"], NeedsProjectCwd: true,
+            "Declare the plan, spec or design document a session works from and the plan's task list; update task status and read the plan back after compaction."),
         new("kcap-analytics", ["mcp", "analytics"], NeedsProjectCwd: true,
             "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with read-only SQL. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide.", ReadOnly: true),
     ];

@@ -23,9 +23,6 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         TelemetryStartup startup) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
-    internal const string NoSessionIdMessage =
-        "No session id: pass session_id explicitly or run inside a harness session kcap can identify (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
-
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
@@ -225,31 +222,6 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
-    /// <summary>
-    /// An explicit <c>session_id</c> argument wins; otherwise the session is the one the running
-    /// harness reports (<see cref="HarnessRequesterContext"/>), not a bare inherited env var: a
-    /// Claude Code MCP server never sees <c>KCAP_SESSION_ID</c>, and one launched from another
-    /// session's shell inherits the parent's. Throws rather than sending a blank id, so the tool
-    /// answers with a clean error. Both sources canonicalize alike (a GUID to its 32-hex form).
-    /// </summary>
-    internal static string ResolveSessionId(JsonObject? args) =>
-        ResolveSessionId(args, Environment.GetEnvironmentVariable);
-
-    internal static string ResolveSessionId(JsonObject? args, Func<string, string?> getEnv) {
-        if (args?["session_id"] is { } node) {
-            // Shape-tested like RequireString: a number or object here must answer as a field error,
-            // not fall out of the dispatcher as a generic internal failure.
-            if (node is not JsonValue value || !value.TryGetValue<string>(out var explicitId))
-                throw new ArgumentException("'session_id' must be a string.");
-            if (explicitId.Length > 0)
-                return WorkContextIds.CanonicalSessionId(explicitId) ?? throw new ArgumentException(NoSessionIdMessage);
-        }
-        var ambient = HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId;
-        if (WorkContextIds.CanonicalSessionId(ambient) is { } fromEnv) return fromEnv;
-
-        throw new ArgumentException(NoSessionIdMessage);
-    }
-
     // NOTE: request bodies use snake_case keys — the server's global JSON policy is
     // JsonNamingPolicy.SnakeCaseLower. Responses are passed through as raw
     // text, so only this request-body builder is affected. The server enforces "exactly one of
@@ -258,22 +230,22 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     // error via the 4xx-body mapping in HandleToolCallAsync, rather than duplicating the rule
     // client-side.
     internal static JsonObject BuildDeclareBody(JsonObject? args) {
-        var body = new JsonObject { ["session_id"] = ResolveSessionId(args) };
+        var body = new JsonObject { ["session_id"] = McpSessionId.Resolve(args) };
 
         if (args?["issue_key"]?.GetValue<string>() is { Length: > 0 } issueKey) body["issue_key"] = issueKey;
         if (args?["work_item_id"]?.GetValue<string>() is { Length: > 0 } workItemId) body["work_item_id"] = workItemId;
         if (args?["new_title"]?.GetValue<string>() is { Length: > 0 } newTitle) body["new_title"] = newTitle;
-        if (TryReadInt(args, "pr_number", out var prNumber)) body["pr_number"] = prNumber;
+        if (McpToolArguments.TryReadInt(args, "pr_number", out var prNumber)) body["pr_number"] = prNumber;
 
         return body;
     }
 
     internal static string BuildSessionUrl(string baseUrl, JsonObject? args) =>
-        $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(ResolveSessionId(args))}";
+        $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(McpSessionId.Resolve(args))}";
 
     /// <summary>
     /// Builds a work-item-scoped URL, reading a REQUIRED id from <paramref name="idKey"/>.
-    /// Required with no fallback, deliberately: <see cref="ResolveSessionId(JsonObject?)"/> can default to the
+    /// Required with no fallback, deliberately: <see cref="McpSessionId.Resolve(JsonObject?)"/> can default to the
     /// ambient session because "the session I am running in" is unambiguous, whereas there is no
     /// ambient work item — a default here would silently attach the wrong edge of the graph.
     /// Escaped, so an id containing a slash or a percent cannot walk out of its path segment and hit
@@ -282,28 +254,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static string ItemUrl(string baseUrl, JsonObject? args, string idKey, string suffix) {
         // Validation before escaping, and the dot-segment refusal, are WorkContextIds' — escaping
         // alone leaves "." and ".." to walk out of the route.
-        var id = WorkContextIds.ValidWorkItemId(RequireString(args, idKey))
+        var id = WorkContextIds.ValidWorkItemId(McpToolArguments.RequireString(args, idKey))
               ?? throw new ArgumentException($"'{idKey}' is not a valid work item id.");
 
         return $"{baseUrl}/api/work-items/{Uri.EscapeDataString(id)}/{suffix}";
-    }
-
-    /// <summary>Reads a required non-blank string argument, throwing the clean tool-error shape when
-    /// it is absent, null, blank, or the wrong JSON type. A whitespace-only id is rejected here
-    /// rather than escaped into a URL that would 404 for an unrelated-looking reason.</summary>
-    internal static string RequireString(JsonObject? args, string key) {
-        var node = args?[key];
-
-        if (node is null) throw new ArgumentException($"'{key}' is required.");
-
-        // Shape-tested rather than try/catch (review finding): a bare catch would report an
-        // unrelated failure as a type error.
-        if (node is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var value))
-            throw new ArgumentException($"'{key}' must be a string.");
-
-        if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException($"'{key}' must not be blank.");
-
-        return value;
     }
 
     // Server-side validation is NOT duplicated here — same reasoning as BuildDeclareBody's note. The
@@ -352,10 +306,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// names it <c>into_work_item_id</c> so the direction reads unambiguously beside
     /// <c>work_item_id</c>.</summary>
     internal static JsonObject BuildMergeBody(JsonObject? args) =>
-        new() { ["target_id"] = RequireString(args, "into_work_item_id") };
+        new() { ["target_id"] = McpToolArguments.RequireString(args, "into_work_item_id") };
 
     internal static JsonObject BuildDetachBody(JsonObject? args) =>
-        new() { ["session_id"] = ResolveSessionId(args) };
+        new() { ["session_id"] = McpSessionId.Resolve(args) };
 
     static void CopySuppliedString(JsonObject? args, string key, JsonObject body) {
         if (args is null || !args.TryGetPropertyValue(key, out var node)) return;
@@ -399,44 +353,6 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         } catch {
             return null;
         }
-    }
-
-    /// <summary>
-    /// Reads a numeric field as int. Returns false ONLY when the key is absent (or JSON null) —
-    /// any PRESENT non-integer shape (string, object, array, fractional or out-of-range number)
-    /// throws <see cref="ArgumentException"/> so the caller surfaces a validation error instead
-    /// of silently dropping the selector: a malformed two-selector declare (e.g. issue_key plus
-    /// a string pr_number) must fail, not degrade into a "valid" single-selector attach. Wire
-    /// JSON (JsonElement-backed) is validated against the RAW token via TryGetInt32 — exact, no
-    /// lossy double round-trip, so a fractional part below double precision still rejects;
-    /// int/long branches cover programmatically constructed nodes.
-    /// </summary>
-    internal static bool TryReadInt(JsonObject? args, string key, out int value) {
-        value = 0;
-        var node = args?[key];
-
-        if (node is null) return false;
-
-        if (node is JsonValue v) {
-            if (v.TryGetValue<JsonElement>(out var el)) {
-                if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out value)) return true;
-
-                throw new ArgumentException($"'{key}' must be an integer within int range.");
-            }
-
-            if (v.TryGetValue(out value)) return true;
-
-            if (v.TryGetValue<long>(out var lv)) {
-                if (lv is < int.MinValue or > int.MaxValue)
-                    throw new ArgumentException($"'{key}' value {lv} is out of range for int.");
-
-                value = (int)lv;
-
-                return true;
-            }
-        }
-
-        throw new ArgumentException($"'{key}' must be an integer.");
     }
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
