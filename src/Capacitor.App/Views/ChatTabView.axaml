@@ -4,16 +4,6 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
-    <UserControl.Styles>
-        <!-- The card's resting border is a style, not a local value: a local value outranks every
-             style, and the drag-over brush below would never reach the screen. -->
-        <Style Selector="Border#ComposerCard">
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-        </Style>
-        <Style Selector="Border#ComposerCard.dragOver">
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
-        </Style>
-    </UserControl.Styles>
     <Grid RowDefinitions="*,Auto,Auto,Auto,Auto">
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An
              ItemsControl inside an external ScrollViewer is measured at infinite height. -->
@@ -188,7 +178,7 @@
             </StackPanel>
         </Border>
 
-        <Border x:Name="ComposerCard" Grid.Row="4" Margin="22,8,22,18"
+        <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="4" Margin="22,8,22,18"
                 Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">

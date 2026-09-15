@@ -603,8 +603,8 @@ public class HomeViewSmokeTests {
         });
     }
 
-    /// The view's half of the intake: a file dropped anywhere on the goal card reaches the
-    /// launcher's tray.
+    /// The view's half of the intake: dragging over the goal card rings it, and dropping there
+    /// reaches the launcher's tray and puts the ring back.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_drop_on_the_goal_card_stages_the_file() {
@@ -618,15 +618,28 @@ public class HomeViewSmokeTests {
             await Assert.That(vm.CanAttach).IsTrue();
 
             var card = Find<Border>(window, "GoalCard")!;
+            var resting = card.BorderBrush;
+            await Assert.That(resting).IsNotNull();
+
             var transfer = new DataTransfer();
             var item = new DataTransferItem();
             item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
             transfer.Add(item);
+
+            card.RaiseEvent(new DragEventArgs(DragDrop.DragOverEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            Settle(window);
+            // The highlight is a class the card's own style answers; a local brush on the card
+            // would outrank it and the drag would look the same as no drag.
+            await Assert.That(card.Classes.Contains("dragOver")).IsTrue();
+            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(resting);
+
             card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
             await (view.PendingIntakeForTesting ?? Task.CompletedTask);
             Settle(window);
 
             await Assert.That(vm.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+            await Assert.That(card.Classes.Contains("dragOver")).IsFalse();
+            await Assert.That(card.BorderBrush).IsSameReferenceAs(resting);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();

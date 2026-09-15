@@ -4,11 +4,6 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.LauncherPaneView"
              x:DataType="vm:HomeViewModel">
-    <UserControl.Styles>
-        <Style Selector="Border.dragOver">
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
-        </Style>
-    </UserControl.Styles>
     <!-- The Sessions surface's empty state: launching IS the pane — a fixed question over an
          optional repo subtitle, then one big composer. DataContext is a HomeViewModel supplied
          externally (MainWindow binds Home), same contract as HomeView. Connection / sign-in
@@ -63,7 +58,7 @@
                            IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
 
-            <Border x:Name="GoalCard" Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+            <Border x:Name="GoalCard" Classes="attachTarget" Background="{StaticResource KcapSurfaceBrush}"
                     BorderThickness="1" CornerRadius="12" Padding="14">
                 <StackPanel Spacing="12">
                     <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
