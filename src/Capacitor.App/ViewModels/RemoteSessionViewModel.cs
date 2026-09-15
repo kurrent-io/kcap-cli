@@ -11,26 +11,36 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 public enum RemoteSessionAccess { Connecting, Ready, Denied, Offline, NoSession }
+public enum RemoteTab { Chat, Terminal }
 
-/// The workspace for a row the app has no socket to: the header, the NEEDS YOU cards, Stop and
-/// Open in web. Access is the server's explicit signal — Ready only after the watch and the chat
-/// join both succeeded — so an empty pane is "no cards", never "not allowed".
+/// The workspace for a row the app has no socket to: the header, the chat pane over the server's
+/// stream — its cards included — Stop and Open in web. Access is the server's explicit signal,
+/// Ready only after the watch and the chat join both succeeded, so an empty pane is "no rows
+/// yet", never "not allowed". An ended session keeps its transcript while the lease's last
+/// verdict stands.
 public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     internal const string OriginChangedNote = "This agent is now hosted locally — open it from the rail";
+    internal const string MissingNote = "The transcript is not available";
 
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _lease = new();
-    // Same reason as _sessionEndedChanges below: never disposed, so a row revision landing after
-    // teardown cannot throw. Cards unsubscribes from it when the pane is torn down.
+    // Never disposed, so a row revision landing after teardown cannot throw; the chat and its
+    // cards unsubscribe from these when the pane is torn down.
     readonly BehaviorSubject<string?> _sessionIds;
+    readonly BehaviorSubject<ChatSessionInfo> _session;
+    /// The current lease's verdict, re-pointed whenever the lease moves; Unavailable in between.
+    readonly BehaviorSubject<SessionAccessState> _accessStates = new(SessionAccessState.Unavailable);
     string? _leasedSession;
     AgentRow _row;
 
     public string AgentId { get; }
-    public PendingCardsViewModel Cards { get; }
+    public ChatTabViewModel Chat { get; }
+    public PendingCardsViewModel Cards => Chat.Cards;
+    public IObservable<SessionAccessState> AccessStates => _accessStates.AsObservable();
     public ReactiveCommand<Unit, Unit> OpenInWebCommand { get; }
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
+    public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
@@ -43,6 +53,16 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     IBrush _statusDot = SessionStatusDots.For("");
     public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
+
+    RemoteTab _activeTab = RemoteTab.Chat;
+    public RemoteTab ActiveTab {
+        get => _activeTab;
+        private set {
+            this.RaiseAndSetIfChanged(ref _activeTab, value);
+            RaiseTabProjections();
+        }
+    }
+    public bool IsChatActive => ActiveTab == RemoteTab.Chat;
 
     // Stop's canExecute reads the ended flag here, not through this.WhenAnyValue: that call routes
     // through ReactiveUI's ObservableForProperty/RxAppBuilder global init, which only some other
@@ -62,6 +82,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     // Same reason as _sessionEndedChanges above: Stop's canExecute reads the flag through a subject.
     readonly BehaviorSubject<bool> _originChangedChanges = new(false);
+    public IObservable<bool> OriginChangedChanges => _originChangedChanges.AsObservable();
 
     bool _originChangedToLocal;
     /// The local daemon has proven this row is its twin: the remote row is gone but the agent is
@@ -72,6 +93,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             if (_originChangedToLocal == value) return;
             this.RaiseAndSetIfChanged(ref _originChangedToLocal, value);
             this.RaisePropertyChanged(nameof(AccessNote));
+            RaiseTabProjections();
             _originChangedChanges.OnNext(value);
         }
     }
@@ -82,13 +104,23 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             this.RaiseAndSetIfChanged(ref _accessState, value);
             this.RaisePropertyChanged(nameof(AccessNote));
-            this.RaisePropertyChanged(nameof(ShowsCards));
+            RaiseTabProjections();
         }
     }
 
-    /// An ended session's last Ready still stands until the lease is released, and its cards are
-    /// unanswerable — nobody is waiting on them any more.
-    public bool ShowsCards => Access == RemoteSessionAccess.Ready && !SessionEnded;
+    /// The tabs' content lives while the lease's last verdict stands; an ended session keeps
+    /// its transcript, an agent that moved to this machine shows the note instead.
+    public bool ShowsPanes => Access == RemoteSessionAccess.Ready && !OriginChangedToLocal;
+    public bool ShowsChatPane => ShowsPanes && IsChatActive;
+    /// An ended session's cards are unanswerable — nobody is waiting on them any more.
+    public bool ShowsCards => ShowsPanes && !SessionEnded;
+
+    void RaiseTabProjections() {
+        this.RaisePropertyChanged(nameof(IsChatActive));
+        this.RaisePropertyChanged(nameof(ShowsPanes));
+        this.RaisePropertyChanged(nameof(ShowsChatPane));
+        this.RaisePropertyChanged(nameof(ShowsCards));
+    }
 
     public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
@@ -100,12 +132,18 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
-            AgentActionService actions) {
+            AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time) {
         _row = row;
         _access = access;
         AgentId = row.Id;
         _sessionIds = new BehaviorSubject<string?>(row.SessionId);
-        Cards = new PendingCardsViewModel(row.Id, AgentOrigin.Remote, _sessionIds, permissions, Observable.Return<string?>(null));
+        _session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(row, ended: false));
+
+        var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
+        Chat = new ChatTabViewModel(
+            row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input,
+            key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
+            opener, time, permissions, missingNote: MissingNote, sessionId: _sessionIds);
         Apply(row);
 
         directory.Rows.Connect()
@@ -134,6 +172,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                             Access = RemoteSessionAccess.NoSession;
                         } else {
                             SessionEnded = true;
+                            PublishSession(ended: true);
                         }
                         Release();
                         continue;
@@ -151,8 +190,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);
+        ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = RemoteTab.Chat; });
         _disposables.Add(OpenInWebCommand);
         _disposables.Add(StopCommand);
+        _disposables.Add(ShowChatCommand);
         _disposables.Add(_lease);
     }
 
@@ -163,12 +204,18 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
         StatusText = row.Status;
         StatusDot = SessionStatusDots.For(row.Status);
-        if (SessionStatusDots.IsTerminal(row.Status)) { SessionEnded = true; Release(); return; }
+        if (SessionStatusDots.IsTerminal(row.Status)) {
+            SessionEnded = true;
+            PublishSession(ended: true);
+            Release();
+            return;
+        }
         // The row can come back: a transient empty registry snapshot removes it and the refresh
         // that follows re-adds the same live session, which must not stay hidden behind the
         // removal's verdict. Release() cleared the leased id, so the lease is re-acquired below.
         SessionEnded = false;
         OriginChangedToLocal = false;
+        PublishSession(ended: false);
 
         var sessionId = row.SessionId;
         if (sessionId == _leasedSession) return;
@@ -180,23 +227,30 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         // session's verdict until it does.
         Access = RemoteSessionAccess.Connecting;
         var lease = _access.Acquire(sessionId);
-        var states = lease.State.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(s => Access = s switch {
-            SessionAccessState.Established => RemoteSessionAccess.Ready,
-            SessionAccessState.Denied => RemoteSessionAccess.Denied,
-            SessionAccessState.Unavailable => RemoteSessionAccess.Offline,
-            _ => RemoteSessionAccess.Connecting,
+        var states = lease.State.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(s => {
+            _accessStates.OnNext(s);
+            Access = s switch {
+                SessionAccessState.Established => RemoteSessionAccess.Ready,
+                SessionAccessState.Denied => RemoteSessionAccess.Denied,
+                SessionAccessState.Unavailable => RemoteSessionAccess.Offline,
+                _ => RemoteSessionAccess.Connecting,
+            };
         });
         _lease.Disposable = new CompositeDisposable(states, lease);
     }
 
+    void PublishSession(bool ended) => _session.OnNext(ChatSessionInfo.FromRemote(_row, ended));
+
     void Release() {
         _leasedSession = null;
         _lease.Disposable = Disposable.Empty;
+        _accessStates.OnNext(SessionAccessState.Unavailable);
     }
 
-    public Task TeardownAsync() {
+    static void Log(string note) => Console.Error.WriteLine($"kcap: remote chat: {note}");
+
+    public async Task TeardownAsync() {
         _disposables.Dispose();
-        Cards.Dispose();
-        return Task.CompletedTask;
+        await Chat.TeardownAsync();
     }
 }

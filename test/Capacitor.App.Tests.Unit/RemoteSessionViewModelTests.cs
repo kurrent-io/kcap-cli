@@ -5,6 +5,7 @@ using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
+using static Capacitor.App.Tests.Unit.RemoteFixtures;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
@@ -19,21 +20,39 @@ public class RemoteSessionViewModelTests {
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
         public readonly AgentActionService Actions = NewActions();
+        public readonly FakeTimeProvider Time = new();
+        public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
-            Access = new SessionAccessService(Lane, new FakeTimeProvider());
+            Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
 
-        public static AgentRow Row(string id = "a1", string? sessionId = "s1", string status = "Running") =>
+        public static AgentRow Row(string id = "a1", string? sessionId = "s1", string status = "Running", string vendor = "gemini") =>
             AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = id, SessionId = sessionId, Status = status, DaemonName = "work-mac",
-                Vendor = "gemini", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
+                Vendor = vendor, OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
 
         public RemoteSessionViewModel Build(AgentRow row) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time);
+        }
+
+        /// One chat poll: the pane reads its feed on the timer this harness owns.
+        public async Task TickAsync(RemoteSessionViewModel vm) {
+            Time.Advance(ChatTabViewModel.PollInterval);
+            await (vm.Chat.PendingReadForTesting ?? Task.CompletedTask);
+        }
+
+        /// Polls the condition, ticking the chat between checks, since rows land on the poll.
+        public async Task UntilAsync(RemoteSessionViewModel vm, Func<bool> condition, string what) {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!condition()) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for: {what}");
+                await TickAsync(vm);
+                await Task.Delay(10);
+            }
         }
 
         public void Dispose() {
@@ -259,6 +278,74 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.SessionEnded).IsTrue();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "released on the removed row");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task The_chat_seeds_from_the_session_detail_and_follows_the_stream() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.UserMessageReceived, Hello),
+                Event(1, CanonicalEventTypes.AssistantTextGenerated, HiThere)));
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            await h.UntilAsync(vm, () => vm.Chat.Items.Count == 2, "the seeded rows");
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await Assert.That(vm.Chat.Items[0]).IsTypeOf<UserTurnItem>();
+            await Assert.That(vm.Chat.Items[1]).IsTypeOf<AssistantTextItem>();
+
+            h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.AssistantToolCallsGenerated, LsCall));
+            await h.UntilAsync(vm, () => vm.Chat.Items.Count == 3, "the live row");
+            await Assert.That(vm.Chat.Items[2]).IsTypeOf<ToolGroupItem>();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_sent_prompt_waits_in_the_queue_until_the_stream_echoes_it() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+            // The seed has to be drained before the send: a prompt sent while the Reset is still
+            // pending is rebased past its own echo and would never leave the queue. The first tick
+            // retires whatever read was in flight, the second drains the seed itself.
+            await h.TickAsync(vm);
+            await h.TickAsync(vm);
+            await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
+            await WaitUntilAsync(() => vm.Chat.ShowsComposer && vm.Chat.ComposerHint.StartsWith("Enter sends", StringComparison.Ordinal), what: "the composer");
+
+            vm.Chat.ComposerText = "do it";
+            await vm.Chat.SendCommand.Execute();
+            await Assert.That(h.Lane.UserInputs).Contains(("a1", "do it"));
+            await Assert.That(vm.Chat.QueuedMessages.Count).IsEqualTo(1);
+            await Assert.That(vm.Chat.ComposerText).IsEqualTo("");
+
+            h.Lane.PushStreamEvent(Envelope("s1", 0, CanonicalEventTypes.UserMessageReceived, """{"content":"do it"}"""));
+            await h.UntilAsync(vm, () => vm.Chat.QueuedMessages.Count == 0, "the echo");
+            await Assert.That(vm.Chat.Items.Single()).IsTypeOf<UserTurnItem>();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_hidden_transcript_reads_as_not_available_and_a_lost_lane_keeps_the_rows() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness { Detail = new(null, NotFound: true) };
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Missing, "missing");
+            await Assert.That(vm.Chat.PhaseNote).IsEqualTo(RemoteSessionViewModel.MissingNote);
+
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Offline, what: "offline");
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("Not connected to the server");
             await vm.TeardownAsync();
         });
     }

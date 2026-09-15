@@ -1,12 +1,44 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.RemoteSessionView"
              x:DataType="vm:RemoteSessionViewModel"
              Background="{StaticResource KcapCanvasBrush}">
-    <!-- No chat, no terminal: this session's process lives on another machine, so the pane is the
-         header, whatever needs answering, and the two actions that reach across. -->
-    <Grid RowDefinitions="56,Auto,*">
+    <UserControl.Styles>
+        <Style Selector="Button.tab">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Padding" Value="3,9" />
+            <Setter Property="Margin" Value="0,0,16,0" />
+        </Style>
+        <Style Selector="Button.tab.active">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <!-- Fluent hover paints PART_ContentPresenter; keep tab chrome on our tokens. -->
+        <Style Selector="Button.tab:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.tab:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.tab.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.tab.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+    </UserControl.Styles>
+
+    <!-- The session's process lives on another machine: the header, the tabs over the server's
+         streams, and the two actions that reach across. -->
+    <Grid RowDefinitions="56,42,Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,0,16,0">
             <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,16,0">
                 <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
@@ -28,7 +60,14 @@
                     Foreground="{StaticResource KcapDangerBrush}" Padding="10,5" FontSize="12.5" />
         </Grid>
 
-        <Border x:Name="AccessBanner" Grid.Row="1" Margin="20,0,20,10"
+        <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,1">
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="20,0" HorizontalAlignment="Left" VerticalAlignment="Center">
+                <Button x:Name="ChatTabButton" Content="Chat" Classes="tab" Classes.active="{Binding IsChatActive}"
+                        Command="{Binding ShowChatCommand}" />
+            </StackPanel>
+        </Border>
+
+        <Border x:Name="AccessBanner" Grid.Row="2" Margin="20,10,20,0"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,10"
                 IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
@@ -36,21 +75,10 @@
                        FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" />
         </Border>
 
-        <Border x:Name="NeedsYouPane" Grid.Row="2" Margin="20,0,20,18" IsVisible="{Binding ShowsCards}">
-            <StackPanel Spacing="6" VerticalAlignment="Top">
-                <TextBlock Text="NEEDS YOU" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource KcapMutedBrush}" />
-                <TextBlock x:Name="NoCardsNote" Text="Nothing needs you right now" FontSize="12.5"
-                           Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding !Cards.HasPendingCards}" />
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding Cards.PendingCards}">
-                        <ItemsControl.DataTemplates>
-                            <StaticResource ResourceKey="PermissionCardTemplate" />
-                            <StaticResource ResourceKey="QuestionCardTemplate" />
-                            <StaticResource ResourceKey="AcpQuestionCardTemplate" />
-                        </ItemsControl.DataTemplates>
-                    </ItemsControl>
-                </ScrollViewer>
-            </StackPanel>
-        </Border>
+        <Grid Grid.Row="3">
+            <!-- The active-tab flag lives on this VM, which is not the pane's DataContext. -->
+            <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
+                               IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsChatPane}" />
+        </Grid>
     </Grid>
 </UserControl>

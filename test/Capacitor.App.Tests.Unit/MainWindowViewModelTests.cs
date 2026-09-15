@@ -63,7 +63,8 @@ public class MainWindowViewModelTests {
                 Vendor = "claude", RegisteredAt = DateTime.UtcNow,
             });
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions());
+            return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
+                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider());
         }
 
         public void Dispose() {
