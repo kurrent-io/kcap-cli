@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Http;
 
@@ -47,7 +46,7 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi) {
             return 1;
         }
 
-        var category   = isBug ? "bug" : "feedback";
+        var category   = isBug ? FeedbackCategory.Bug : FeedbackCategory.Feedback;
         var rawMessage = GetMessageArg(args);
 
         if (rawMessage is null) {
@@ -73,16 +72,11 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi) {
         return await HandleCore(feedbackApi, category, message);
     }
 
-    /// <summary>Test-friendly core: caller owns the <see cref="IFeedbackApi"/>. <paramref name="category"/>
-    /// is already "bug"/"feedback" and <paramref name="message"/> is already trimmed and non-empty.</summary>
-    internal static async Task<int> HandleCore(IFeedbackApi feedbackApi, string category, string message) {
+    /// <summary>Test-friendly core: caller owns the <see cref="IFeedbackApi"/>. <paramref name="message"/>
+    /// is already trimmed and non-empty.</summary>
+    internal static async Task<int> HandleCore(IFeedbackApi feedbackApi, FeedbackCategory category, string message) {
         try {
-            var submission = new FeedbackSubmission(
-                category == "bug" ? FeedbackCategory.Bug : FeedbackCategory.Feedback,
-                message,
-                Guid.NewGuid(),
-                FeedbackSource.Cli
-            );
+            var submission = new FeedbackSubmission(category, message, Guid.NewGuid(), FeedbackSource.Cli);
 
             return await ReportResultAsync(await feedbackApi.SubmitAsync(submission));
         } catch (CapacitorApiException ex) {
@@ -93,49 +87,15 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi) {
     }
 
     static async Task<int> ReportResultAsync(FeedbackResult result) {
-        switch (result) {
-            case FeedbackResult.Sent(var reporterEmail):
-                await Console.Out.WriteLineAsync($"{SuccessPrefix}{reporterEmail} — replies will reach you by email.");
+        if (result is FeedbackResult.Sent(var reporterEmail)) {
+            await Console.Out.WriteLineAsync($"{SuccessPrefix}{reporterEmail} — replies will reach you by email.");
 
-                return 0;
-
-            case FeedbackResult.NotConfigured:
-                await Console.Error.WriteLineAsync("This server doesn't have support intake enabled.");
-
-                return 1;
-
-            case FeedbackResult.Unavailable:
-                await Console.Error.WriteLineAsync("Support intake isn't configured on this server — ask your admin.");
-
-                return 1;
-
-            case FeedbackResult.NoEmailOnFile:
-                await Console.Error.WriteLineAsync(
-                    "Your account has no email on file — sign in to the web app once, then retry.");
-
-                return 1;
-
-            case FeedbackResult.RateLimited:
-                await Console.Error.WriteLineAsync("You've sent several reports recently — try again in a few minutes.");
-
-                return 1;
-
-            case FeedbackResult.TemporarilyUnavailable(var retryAfter):
-                var suffix = retryAfter is { } delta
-                    ? $" in {(int)Math.Ceiling(delta.TotalSeconds)}s."
-                    : ".";
-                await Console.Error.WriteLineAsync($"Couldn't reach Kurrent support (temporary) — try again{suffix}");
-
-                return 1;
-
-            case FeedbackResult.Invalid(var invalidMessage):
-                await Console.Error.WriteLineAsync(invalidMessage);
-
-                return 1;
-
-            default:
-                throw new UnreachableException();
+            return 0;
         }
+
+        await Console.Error.WriteLineAsync(FeedbackResultMessages.ForRefusal(result));
+
+        return 1;
     }
 
     static string? GetMessageArg(string[] args) {
