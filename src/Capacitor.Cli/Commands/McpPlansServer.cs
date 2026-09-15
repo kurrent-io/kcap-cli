@@ -398,9 +398,16 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
             if (++hops > MaxLinkHops)
                 throw new ArgumentException($"'{rawPath}' links too deeply to resolve.");
 
-            if (Path.IsPathRooted(target)) {
+            if (Path.IsPathFullyQualified(target)) {
                 current = Path.GetPathRoot(target)!;
                 target  = target[current.Length..];
+            } else if (Path.IsPathRooted(target)) {
+                // Windows only: `\x\y` stays on the volume the link sits on, and `D:x` (relative to
+                // another drive's current directory) has no resolution worth trusting.
+                if (Path.GetPathRoot(target)!.Length > 1)
+                    throw new ArgumentException($"'{rawPath}' links through a drive-relative target, which cannot be resolved safely.");
+
+                current = Path.GetPathRoot(current)!;
             }
 
             pending = new Queue<string>(RawComponents(target).Concat(pending));
