@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
+using Capacitor.Remote.Models;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -150,7 +151,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input,
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
-            opener, time, permissions, missingNote: MissingNote, sessionId: _sessionIds);
+            opener, time, permissions, missingNote: MissingNote, sessionId: _sessionIds,
+            serverQueue: _sessionIds
+                .Select(sid => sid is null
+                    ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
+                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))
+                .Switch());
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, surfaceFactory)
             : null;

@@ -36,6 +36,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Subject<ServerPermissionRequest> _permissionRequests = new();
     readonly Subject<ServerElicitationRequest> _elicitations = new();
     readonly Subject<string> _sessionAccessChanged = new();
+    readonly Subject<PendingInputUpdate> _pendingInput = new();
     readonly Subject<TerminalOutputFrame> _terminalOutput = new();
     readonly Subject<TerminalSize> _terminalDimensions = new();
     // The subscription client of the live hub, replaced with it: it registers the StreamEvent
@@ -81,6 +82,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
     public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
     public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
+    public IObservable<PendingInputUpdate> PendingInputChanged => _pendingInput.AsObservable();
     public IObservable<TerminalOutputFrame> TerminalOutput => _terminalOutput.AsObservable();
     public IObservable<TerminalSize> TerminalDimensions => _terminalDimensions.AsObservable();
 
@@ -252,6 +254,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
             (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
+        hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => _pendingInput.OnNext(new(sessionId, ParseQueue(items))));
         hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
         hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
         return hub;
@@ -291,7 +294,6 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     }
 
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.RequestStopAgent, ct, agentId);
-    public Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToChat, ct, sessionId);
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
     public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.RegisterSessionAccessWatch, ct, sessionId);
 
@@ -352,6 +354,36 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         }
     }
 
+    /// The join answers with the session's queue; it rides the same stream as the pushes so a
+    /// consumer sees one shape.
+    public async Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) {
+        var (outcome, snapshot) = await InvokeAsync<JsonElement?>(HubMethods.SubscribeToChat, ct, sessionId).ConfigureAwait(false);
+        if (outcome.Result == HubCallResult.Ok) _pendingInput.OnNext(new(sessionId, ParseQueue(snapshot)));
+        return outcome;
+    }
+
+    // Lenient on purpose: binding the push to the typed array would drop the whole push over one
+    // item that does not read as one.
+    static IReadOnlyList<QueuedInputItem> ParseQueue(JsonElement? items) {
+        if (items is not { ValueKind: JsonValueKind.Array } array) return [];
+        try { return array.Deserialize(RemoteModelsJsonContext.Default.QueuedInputItemArray) ?? []; }
+        catch (JsonException) { return []; }
+    }
+
+    async Task<(HubCallOutcome Outcome, T? Result)> InvokeAsync<T>(string method, CancellationToken ct, params object?[] args) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return (HubCallOutcome.NotConnected, default);
+        try {
+            return (HubCallOutcome.Ok, await hub.InvokeCoreAsync<T>(method, args, ct).ConfigureAwait(false));
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (HubException ex) when (ex.Message.Contains(WireTokens.SessionNotVisible, StringComparison.Ordinal)) {
+            return (HubCallOutcome.Denied(ex.Message), default);
+        } catch (Exception ex) {
+            return (HubCallOutcome.Failed(ex.Message), default);
+        }
+    }
+
     public async Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
         if (_status.Value.State == ServerLaneState.SignedOut)
             return new LaunchOutcome(false, null, "Not signed in to the server.", Unauthorized: true);
@@ -405,6 +437,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _permissionRequests.Dispose();
         _elicitations.Dispose();
         _sessionAccessChanged.Dispose();
+        _pendingInput.Dispose();
         _terminalOutput.Dispose();
         _terminalDimensions.Dispose();
     }

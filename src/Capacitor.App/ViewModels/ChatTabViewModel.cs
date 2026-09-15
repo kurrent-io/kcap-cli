@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Remote.Models;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -284,7 +285,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
             ChatInput input, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
             IPermissionService permissions, string? unavailableNote = null, string? missingNote = null,
-            IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null) {
+            IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
+            IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null) {
         _input = input;
         _disposables.Add(input);
         _openFeed = openFeed;
@@ -400,6 +402,25 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
         _disposables.Add(OpenLinkCommand);
+
+        serverQueue?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(ApplyServerQueue).DisposeWith(_disposables);
+    }
+
+    /// The server's queue for this session, whoever queued it. An own send it lists is queued
+    /// for certain; a prompt of nobody's here is another client's; a prompt it no longer lists
+    /// was delivered or withdrawn. Own sends still leave with the transcript's echo.
+    void ApplyServerQueue(IReadOnlyList<QueuedInputItem> items) {
+        var listed = new HashSet<Guid>();
+        foreach (var item in items) {
+            if (!listed.Add(item.DispatchId)) continue;
+            if (_queuedMessages.Any(q => q.DispatchId == item.DispatchId)) continue;
+            var own = _queuedMessages.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
+            if (own is not null) own.MarkQueued(item.DispatchId);
+            else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
+        }
+        foreach (var gone in _queuedMessages.Where(q => q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)).ToList())
+            _queuedMessages.Remove(gone);
+        RefreshQueue();
     }
 
     void OnSession(ChatSessionInfo info) {
@@ -414,7 +435,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         StatusDot = SessionStatusDots.For(info.Status);
         _status = info.Status;
         if (info.Ended)
-            foreach (var queued in _queuedMessages) queued.MarkUnconfirmed();
+            foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         if (_openFeed is { } open && info.FeedKey is { } key && key != _feedKey) SwitchFeed(key, open);
         RefreshActivityNote();
@@ -442,7 +463,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
     void RebaseQueuedMessages(long? offset) {
         _inputGeneration++;
-        foreach (var queued in _queuedMessages) queued.Rebase(_inputGeneration, offset);
+        foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
         RefreshQueue();
     }
 
@@ -503,7 +524,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
-        foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline))
+        foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline && !q.IsForeign))
             queued.Rebase(_inputGeneration, read.SnapshotOffset ?? CurrentOffset ?? 0);
         RefreshQueue();
         if (read.Lines.Count == 0) {

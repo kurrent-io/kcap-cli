@@ -30,6 +30,8 @@ public sealed class HubTestHost : IAsyncDisposable {
     public static List<string> ChatSubscribes { get; } = [];
     public static List<string> ChatUnsubscribes { get; } = [];
     public static List<string> AccessWatches { get; } = [];
+    /// What a chat join answers with: the session's queue.
+    public static List<QueuedInputItem> ChatSnapshot { get; } = [];
 
     public static Func<string, bool> StreamHandler { get; set; } = _ => true;
     public static List<(string Stream, ulong? From)> StreamSubscribes { get; } = [];
@@ -54,6 +56,7 @@ public sealed class HubTestHost : IAsyncDisposable {
         ChatSubscribes.Clear();
         ChatUnsubscribes.Clear();
         AccessWatches.Clear();
+        ChatSnapshot.Clear();
         StreamHandler = _ => true;
         StreamSubscribes.Clear();
         StreamUnsubscribes.Clear();
@@ -120,10 +123,10 @@ public sealed class HubTestHost : IAsyncDisposable {
 
         public Task RequestStopAgent(string agentId) { StopCalls.Add(agentId); return Task.CompletedTask; }
 
-        public JsonElement[] SubscribeToChat(string sessionId) {
+        public QueuedInputItem[] SubscribeToChat(string sessionId) {
             if (!ChatSubscribeHandler(sessionId)) throw new HubException(WireTokens.SessionNotVisible);
             ChatSubscribes.Add(sessionId);
-            return [];
+            return ChatSnapshot.ToArray();
         }
 
         public Task UnsubscribeFromChat(string sessionId) { ChatUnsubscribes.Add(sessionId); return Task.CompletedTask; }

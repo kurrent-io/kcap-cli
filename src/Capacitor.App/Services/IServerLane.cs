@@ -26,6 +26,7 @@ public interface IServerLane {
     IObservable<ServerPermissionRequest> PermissionRequests { get; }
     IObservable<ServerElicitationRequest> ElicitationRequests { get; }
     IObservable<string> SessionAccessChanged { get; }
+    IObservable<PendingInputUpdate> PendingInputChanged { get; }
     /// Null when the lane has no live connection right now.
     Task<IReadOnlyList<Capacitor.Remote.Models.DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct);
     Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct);

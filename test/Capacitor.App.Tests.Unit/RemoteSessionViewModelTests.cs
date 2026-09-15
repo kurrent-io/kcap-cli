@@ -370,4 +370,19 @@ public class RemoteSessionViewModelTests {
             await frame.TeardownAsync();
         });
     }
+
+    [Test]
+    public async Task A_prompt_queued_by_another_client_shows_in_the_chats_queue() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            h.Lane.PendingInputSubject.OnNext(new("s1", [new QueuedInputItem { DispatchId = Guid.NewGuid(), SenderUserId = "u2", Text = "after this one" }]));
+            await WaitUntilAsync(() => vm.Chat.QueuedMessages.Count == 1, what: "the foreign row");
+            await Assert.That(vm.Chat.QueuedMessages[0].IsForeign).IsTrue();
+            h.Lane.PendingInputSubject.OnNext(new("other-session", []));
+            await Assert.That(vm.Chat.QueuedMessages.Count).IsEqualTo(1);
+            await vm.TeardownAsync();
+        });
+    }
 }

@@ -525,6 +525,24 @@ public class ServerConnectionServiceTests {
         await Assert.That(HubTestHost.TerminalUnsubscribes).Contains("a1");
     }
 
+    [Test]
+    public async Task TheChatJoinSnapshotAndPendingInputPushesSurfaceAsQueueUpdates() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.ChatSnapshot.Add(new QueuedInputItem { DispatchId = Guid.NewGuid(), SenderUserId = "u2", Text = "queued one" });
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var updates = lane.PendingInputChanged.Take(2).ToList().ToTask();
+        await Assert.That((await lane.SubscribeToChatAsync("s1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
+        await host.BroadcastAsync(HubBroadcasts.PendingInputChanged, "a1", "s1",
+            new[] { new QueuedInputItem { DispatchId = Guid.NewGuid(), Text = "queued two" } });
+        var received = await updates.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received[0].SessionId).IsEqualTo("s1");
+        await Assert.That(received[0].Items.Single().Text).IsEqualTo("queued one");
+        await Assert.That(received[1].Items.Single().Text).IsEqualTo("queued two");
+    }
+
     static StreamEventEnvelope Envelope(string stream, ulong position, string content) => new() {
         EventId = Guid.NewGuid(), Stream = stream, EventType = CanonicalEventTypes.UserMessageReceived,
         StreamPosition = position, GlobalPosition = position, Timestamp = DateTime.UtcNow,

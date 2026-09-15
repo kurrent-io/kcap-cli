@@ -102,4 +102,14 @@ public class WireShapeTests {
         var older = JsonSerializer.Deserialize("""{"event_type":"SessionEnded"}""", RemoteModelsJsonContext.Default.SessionEventDto)!;
         await Assert.That(older.Timestamp).IsNull();
     }
+
+    [Test]
+    public async Task QueuedInputRoundTripsSnakeCaseAndTolerantlyReadsAThinItem() {
+        const string json = """[{"dispatch_id":"3f2c1b1e-1111-4a2b-9c3d-000000000001","sender_user_id":"u2","text":"next","attachments":[],"dispatched_at":"2026-09-14T10:00:00Z"},{"text":"bare"}]""";
+        var items = JsonSerializer.Deserialize(json, RemoteModelsJsonContext.Default.QueuedInputItemArray)!;
+        await Assert.That(items[0].DispatchId).IsEqualTo(Guid.Parse("3f2c1b1e-1111-4a2b-9c3d-000000000001"));
+        await Assert.That(items[0].SenderUserId).IsEqualTo("u2");
+        await Assert.That(items[1].Text).IsEqualTo("bare");
+        await Assert.That(items[1].DispatchId).IsEqualTo(Guid.Empty);
+    }
 }
