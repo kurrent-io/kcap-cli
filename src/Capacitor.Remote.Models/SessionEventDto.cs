@@ -9,8 +9,8 @@ namespace Capacitor.Remote.Models;
 public sealed record SessionEventDto {
     [JsonPropertyName("event_type")]   public required string EventType { get; init; }
     [JsonPropertyName("event_number")] public long EventNumber { get; init; } = -1;
-    [JsonPropertyName("timestamp")]    public DateTimeOffset? Timestamp { get; init; }
     [JsonPropertyName("payload")]      public JsonElement? Payload { get; init; }
     [JsonPropertyName("data")]         public JsonElement? Data { get; init; }
+    [JsonPropertyName("timestamp")]    public DateTimeOffset? Timestamp { get; init; }
     [JsonIgnore] public JsonElement? Body => Payload is { ValueKind: JsonValueKind.Object } p ? p : Data;
 }
