@@ -119,9 +119,9 @@ partial class WatchCommand(
             TimeSpan        noProgressElapsed,
             TimeSpan        ceiling
         ) =>
-        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
-        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
-        :                                          ParentDeadRecovery.KeepWaiting;
+        reResolvedPid is { } pid && pid > 1 && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling                        ? ParentDeadRecovery.EndTerminal
+        :                                                      ParentDeadRecovery.KeepWaiting;
 
     /// <summary>
     /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
@@ -432,7 +432,9 @@ partial class WatchCommand(
                                 return;
                             }
 
-                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
+                            // No fallback: this watcher has been reparented, so the heuristic here
+                            // resolves systemd/init rather than the agent.
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false);
                             var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
 
                             switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
