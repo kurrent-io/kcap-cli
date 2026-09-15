@@ -100,6 +100,27 @@ public sealed class PendingPermissionRequest {
     internal long LiveSequence { get; set; }
     public bool IsQuestion => Questions is not null || AcpQuestion is not null;
 
+    /// Local AskUserQuestion and the hub elicitation share no id until the daemon maps them;
+    /// same session plus overlapping question text is the join. Permission prompts never match.
+    internal bool SameQuestionAs(PendingPermissionRequest other) {
+        if (!IsQuestion || !other.IsQuestion) return false;
+        if (!string.Equals(SessionId, other.SessionId, StringComparison.Ordinal)) return false;
+        return QuestionFingerprints().ToHashSet(StringComparer.Ordinal).Overlaps(other.QuestionFingerprints());
+    }
+
+    IEnumerable<string> QuestionFingerprints() {
+        if (AcpQuestion?.Prompt?.Trim() is { Length: > 0 } prompt)
+            yield return prompt;
+        if (Questions is not { Questions.Length: > 0 } parsed) yield break;
+        var question = parsed.Questions[0].Question.Trim();
+        if (question.Length == 0) yield break;
+        yield return question;
+        if (parsed.Questions[0].Header is { Length: > 0 } header) {
+            yield return $"{header}\n{question}";
+            yield return $"{header}\n\n{question}";
+        }
+    }
+
     static DateTimeOffset ParseTime(string s) =>
         DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : DateTimeOffset.MinValue;
 }

@@ -124,7 +124,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
-    public string PhaseNote => Phase switch {
+    public string PhaseNote => _items.Count > 0 ? "" : Phase switch {
         ChatTabPhase.Waiting     => "Waiting for the transcript…",
         ChatTabPhase.Missing     => "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
@@ -293,6 +293,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
                     }
                 }
                 Reconcile();
+                SyncPendingCardItems();
             })
             .DisposeWith(_disposables);
 
@@ -426,6 +427,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         // The rows are gone, so the view has to re-read what stands in for them even when the phase
         // is unchanged — and only then, since the setter itself raises the note on a real change.
         if (wasWaiting) this.RaisePropertyChanged(nameof(PhaseNote));
+        SyncPendingCardItems();
         OnTick();
     }
 
@@ -522,6 +524,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
             queued.Rebase(_inputGeneration, Math.Max(read.SnapshotLength ?? 0, TranscriptLength(_path) ?? 0));
         RefreshQueue();
         if (lines.Count == 0) {
+            SyncPendingCardItems();
             RefreshActivityNote();
             return;
         }
@@ -572,7 +575,42 @@ public sealed class ChatTabViewModel : ReactiveObject {
         if (fresh.Count > 0) _items.AddRange(fresh);
         RefreshQueue();
         Reconcile();
+        SyncPendingCardItems();
         RefreshActivityNote();
+    }
+
+    /// Cards ride the same virtualizing list as the thread, always last, so a path switch or a
+    /// transcript reset cannot bury them in the middle of replayed rows.
+    void SyncPendingCardItems() {
+        var cards = PendingCards;
+        var start = _items.Count;
+        while (start > 0 && _items[start - 1] is PendingCardItem) start--;
+        if (TrailingCardsMatch(start, cards)) return;
+
+        foreach (var item in _items)
+            if (item is ToolGroupItem { PacksWithCard: true } packed)
+                packed.PacksWithCard = false;
+
+        var wasEmpty = _items.Count == 0;
+        for (var i = _items.Count - 1; i >= 0; i--)
+            if (_items[i] is PendingCardItem) _items.RemoveAt(i);
+
+        var packs = cards.Count > 0 && _items.Count > 0 && _items[^1] is ToolGroupItem;
+        if (packs) ((ToolGroupItem)_items[^1]).PacksWithCard = true;
+        var first = true;
+        foreach (var card in cards) {
+            _items.Add(new PendingCardItem(card, packsWithPrevious: first && packs));
+            first = false;
+        }
+        if (wasEmpty != (_items.Count == 0))
+            this.RaisePropertyChanged(nameof(PhaseNote));
+    }
+
+    bool TrailingCardsMatch(int start, ReadOnlyObservableCollection<PendingCardViewModel> cards) {
+        if (_items.Count - start != cards.Count) return false;
+        for (var i = 0; i < cards.Count; i++)
+            if (!ReferenceEquals(((PendingCardItem)_items[start + i]).Card, cards[i])) return false;
+        return true;
     }
 
     /// A row is marked iff some pending request targets it: by tool-use id when the request has
