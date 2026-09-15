@@ -10,8 +10,8 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The remote card host over a scripted lane: access is the server's verdict, and the cards are
-/// only ever shown once it says the session is readable.
+/// The remote chat host over a scripted lane: the pane follows the lease, which follows the row's
+/// session id, and the chat is shown only while the lease's verdict says the session is readable.
 [NotInParallel(nameof(AvaloniaSession))]
 public class RemoteSessionViewModelTests {
     sealed class Harness : IDisposable {
@@ -69,7 +69,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await Assert.That(h.Lane.ChatSubscribes).Contains("s1");
-            await Assert.That(vm.ShowsCards).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
             await Assert.That(vm.AccessNote).IsEqualTo("");
 
             var card = PendingPermissionRequest.FromServer(new ServerElicitationRequest("s1", "q1", "Pick", [], false), DateTimeOffset.UtcNow);
@@ -93,7 +93,7 @@ public class RemoteSessionViewModelTests {
             h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
             h.Lane.SessionAccessChangedSubject.OnNext("s1");
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Denied, what: "denied");
-            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.AccessNote).IsEqualTo("You no longer have access to this session");
 
             h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
@@ -111,7 +111,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(id: "a2", sessionId: null));
             await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.NoSession);
             await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
-            await Assert.That(vm.ShowsCards).IsFalse();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(h.Lane.AccessWatches).IsEmpty();
 
             h.Directory.Rows.Remove("remote:a2");
@@ -139,8 +139,9 @@ public class RemoteSessionViewModelTests {
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3", status: "Completed"));
             await Assert.That(vm.SessionEnded).IsTrue();
-            // The last access verdict is still Ready — the cards go with the session, not the lease.
-            await Assert.That(vm.ShowsCards).IsFalse();
+            // The transcript stays while the lease's last verdict stands: an ended session is still
+            // readable, and giving the lease back is what stops new rows arriving.
+            await Assert.That(vm.ShowsChatPane).IsTrue();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s3"), what: "released on the terminal status");
             await vm.TeardownAsync();
         });
@@ -162,7 +163,7 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.SessionEnded).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count == 2, what: "the lease re-acquired");
-            await WaitUntilAsync(() => vm.ShowsCards, what: "the cards back");
+            await WaitUntilAsync(() => vm.ShowsChatPane, what: "the pane back");
             await vm.TeardownAsync();
         });
     }
@@ -184,8 +185,8 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.SessionEnded).IsFalse();
-            // Nothing is answerable or stoppable through the released lease.
-            await Assert.That(vm.ShowsCards).IsFalse();
+            // Nothing is readable or stoppable through the released lease.
+            await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.AccessNote).IsEqualTo(RemoteSessionViewModel.OriginChangedNote);
             await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s1"), what: "the lease released");

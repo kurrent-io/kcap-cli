@@ -75,7 +75,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             if (_sessionEnded == value) return;
             this.RaiseAndSetIfChanged(ref _sessionEnded, value);
-            this.RaisePropertyChanged(nameof(ShowsCards));
             _sessionEndedChanges.OnNext(value);
         }
     }
@@ -112,14 +111,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// its transcript, an agent that moved to this machine shows the note instead.
     public bool ShowsPanes => Access == RemoteSessionAccess.Ready && !OriginChangedToLocal;
     public bool ShowsChatPane => ShowsPanes && IsChatActive;
-    /// An ended session's cards are unanswerable — nobody is waiting on them any more.
-    public bool ShowsCards => ShowsPanes && !SessionEnded;
 
     void RaiseTabProjections() {
         this.RaisePropertyChanged(nameof(IsChatActive));
         this.RaisePropertyChanged(nameof(ShowsPanes));
         this.RaisePropertyChanged(nameof(ShowsChatPane));
-        this.RaisePropertyChanged(nameof(ShowsCards));
     }
 
     public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
@@ -215,13 +211,20 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         // removal's verdict. Release() cleared the leased id, so the lease is re-acquired below.
         SessionEnded = false;
         OriginChangedToLocal = false;
-        PublishSession(ended: false);
 
         var sessionId = row.SessionId;
-        if (sessionId == _leasedSession) return;
-        Release();
-        if (sessionId is null) { Access = RemoteSessionAccess.NoSession; return; }
+        if (sessionId != _leasedSession) {
+            Release();
+            if (sessionId is null) Access = RemoteSessionAccess.NoSession;
+            else AcquireLease(sessionId);
+        }
+        // After the lease moved: a new session id rebuilds the chat's feed, and one constructed
+        // while the previous lease's Established still stood would seed and tail under a lease this
+        // row no longer holds.
+        PublishSession(ended: false);
+    }
 
+    void AcquireLease(string sessionId) {
         _leasedSession = sessionId;
         // The lease's first state arrives asynchronously; without this the pane keeps the previous
         // session's verdict until it does.
