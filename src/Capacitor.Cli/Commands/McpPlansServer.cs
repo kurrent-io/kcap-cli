@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Commands;
 /// its hash and snapshot are the CLI's; the server keys it off the path and the workspace root the
 /// same way discovery keys a repo file. Same stdio JSON-RPC loop as <see cref="McpWorkItemsServer"/>.</summary>
 sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup) {
+        TelemetryStartup startup, WorkingDirectory workdir) {
     /// <summary>The server's per-artifact transport cap; a larger document is declared by hash only.</summary>
     internal const int MaxSnapshotBytes = 256 * 1024;
 
@@ -33,7 +33,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         // HarnessRequesterContext): a relative document path is resolved against the directory the
         // harness is working in, and the repo root is what the path is keyed against.
         var requester = HarnessRequesterContext.Resolve();
-        var cwd       = requester.ProjectDir ?? Directory.GetCurrentDirectory();
+        var cwd       = requester.ProjectDir ?? workdir.Path;
         var repoRoot  = GitRepository.FindRoot(cwd);
 
         var tools = BuildToolsList();
