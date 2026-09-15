@@ -43,4 +43,24 @@ public class AttachmentStoreTests {
         using (var lease = store.Lease("b")) { Directory.CreateDirectory(store.DirectoryFor("b")); lease.Keep(); }
         await Assert.That(Directory.Exists(store.DirectoryFor("b"))).IsTrue();
     }
+
+    [Test]
+    public async Task Sweep_survives_a_faulting_enumeration_and_logs_a_warning() {
+        if (OperatingSystem.IsWindows()) return; // Unix permission model only
+
+        var store = new AttachmentStore(Tmp.Path);
+        Directory.CreateDirectory(store.Root);
+        var logger = new CapturingLogger();
+
+        try {
+            // No read/execute: Directory.Exists(Root) still succeeds (it only needs the parent's
+            // search permission), but EnumerateDirectories's MoveNext throws — the fault this guards.
+            File.SetUnixFileMode(store.Root, UnixFileMode.None);
+            store.SweepOrphans(_ => true, logger);
+        } finally {
+            File.SetUnixFileMode(store.Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(logger.Warnings.Any(w => w.Contains("enumeration failed"))).IsTrue();
+    }
 }

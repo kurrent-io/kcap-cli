@@ -18,17 +18,26 @@ internal sealed class AttachmentStore(string stateDir) {
     public AttachmentStoreLease Lease(string agentId) => new(this, agentId);
 
     /// Startup only: a directory whose agent is not live, and any staging directory left by a crash.
+    /// The enumeration itself is guarded too — a lazy <see cref="Directory.EnumerateDirectories(string)"/>
+    /// throws from MoveNext, not from the loop body, so a fault reading Root (permissions, or Root
+    /// removed concurrently) must not escape and abort daemon startup.
     public void SweepOrphans(Func<string, bool> isLive, ILogger logger) {
-        if (!Directory.Exists(Root)) return;
-        foreach (var dir in Directory.EnumerateDirectories(Root)) {
-            try {
-                var stem = Path.GetFileName(dir);
-                if (!isLive(stem)) { WorktreeManager.DeleteTreeNoFollow(dir); continue; }
-                foreach (var pending in Directory.EnumerateDirectories(dir, ".pending-*"))
-                    WorktreeManager.DeleteTreeNoFollow(pending);
-            } catch (Exception ex) {
-                logger.LogWarning(ex, "Attachment store sweep: skipped {Dir}", dir);
-            }
+        try {
+            if (!Directory.Exists(Root)) return;
+            foreach (var dir in Directory.EnumerateDirectories(Root)) SweepOne(dir, isLive, logger);
+        } catch (Exception ex) {
+            logger.LogWarning(ex, "Attachment store sweep: enumeration failed");
+        }
+    }
+
+    static void SweepOne(string dir, Func<string, bool> isLive, ILogger logger) {
+        try {
+            var stem = Path.GetFileName(dir);
+            if (!isLive(stem)) { WorktreeManager.DeleteTreeNoFollow(dir); return; }
+            foreach (var pending in Directory.EnumerateDirectories(dir, ".pending-*"))
+                WorktreeManager.DeleteTreeNoFollow(pending);
+        } catch (Exception ex) {
+            logger.LogWarning(ex, "Attachment store sweep: skipped {Dir}", dir);
         }
     }
 }
