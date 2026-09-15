@@ -427,6 +427,10 @@ public class ServerConnectionServiceTests {
         await using var lane = new ServerConnectionService(serverUrl: null, () => Task.FromResult<string?>(null));
         lane.Start();
         await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.NotConnected);
+
+        var tailed = new List<StreamEventEnvelope>();
+        await foreach (var envelope in lane.TailStreamAsync("AgentSession-s1", null, CancellationToken.None)) tailed.Add(envelope);
+        await Assert.That(tailed).IsEmpty();
     }
 
     [Test]
@@ -446,19 +450,50 @@ public class ServerConnectionServiceTests {
             }
         });
         await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Contains(("AgentSession-s1", (ulong?)4)), what: "the subscribe");
-        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "hello"));
+        var hello = Envelope("AgentSession-s1", 5, "hello");
+        var world = Envelope("AgentSession-s1", 6, "world");
+        await host.PushStreamEventAsync(hello);
         // At or before the last seen position: the client drops it.
         await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "duplicate"));
-        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 6, "world"));
+        await host.PushStreamEventAsync(world);
         await tail.WaitAsync(TimeSpan.FromSeconds(10));
         await Assert.That(received.Select(e => e.StreamPosition)).IsEquivalentTo(new ulong[] { 5, 6 });
         await Assert.That(received[0].JsonPayload).Contains("hello");
+        await Assert.That(received[0].EventId).IsEqualTo(hello.EventId);
+        await Assert.That(received[0].EventType).IsEqualTo(hello.EventType);
+        await Assert.That(received[0].GlobalPosition).IsEqualTo(hello.GlobalPosition);
+        await Assert.That(received[0].Timestamp).IsEqualTo(hello.Timestamp);
+        await Assert.That(received[1].EventId).IsEqualTo(world.EventId);
+        await Assert.That(received[1].EventType).IsEqualTo(world.EventType);
+        await Assert.That(received[1].GlobalPosition).IsEqualTo(world.GlobalPosition);
+        await Assert.That(received[1].Timestamp).IsEqualTo(world.Timestamp);
 
-        var denied = lane.TailStreamAsync("AgentSession-hidden", null, cts.Token).GetAsyncEnumerator(cts.Token);
+        await using var denied = lane.TailStreamAsync("AgentSession-hidden", null, cts.Token).GetAsyncEnumerator(cts.Token);
         HubException? error = null;
         try { await denied.MoveNextAsync(); } catch (HubException ex) { error = ex; }
         await Assert.That(error).IsNotNull();
         await Assert.That(error!.Message).Contains(WireTokens.StreamNotAuthorized);
+    }
+
+    // SignalR's own automatic reconnect (0/2/10/30s delays, ~42s worst case before it gives up
+    // and fires Closed) sits between the host stopping and the tail actually ending — pinned via
+    // Microsoft.AspNetCore.SignalR.Client.Internal.DefaultRetryPolicy — so the bound here is that
+    // ladder plus margin, not an arbitrary "shouldn't hang" timeout.
+    [Test]
+    public async Task StreamTailEndsCleanlyWhenTheHostStops() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(55));
+        var tail = Task.Run(async () => {
+            await foreach (var _ in lane.TailStreamAsync("AgentSession-s1", null, cts.Token)) { }
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Contains(("AgentSession-s1", (ulong?)null)), what: "the subscribe");
+
+        await host.StopAsync();
+        await tail.WaitAsync(TimeSpan.FromSeconds(50));
     }
 
     [Test]

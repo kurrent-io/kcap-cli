@@ -23,18 +23,39 @@ sealed class FakeServerLane : IServerLane {
     public readonly Subject<ServerPermissionRequest> PermissionRequestsSubject = new();
     public readonly Subject<ServerElicitationRequest> ElicitationsSubject = new();
     public readonly Subject<string> SessionAccessChangedSubject = new();
+    public readonly Subject<TerminalOutputFrame> TerminalOutputSubject = new();
+    public readonly Subject<TerminalSize> TerminalDimensionsSubject = new();
     public Func<Task<IReadOnlyList<DaemonInfo>?>> DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>([]);
     public Func<string, Task<HubCallOutcome>> StopHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> UnsubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+    /// Returns the exception a tail throws at its first MoveNextAsync, or null to tail normally.
+    public Func<string, ulong?, Exception?> TailHandler = (_, _) => null;
+    public Func<string, Task<HubCallOutcome>> TerminalSubscribeHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+    public Func<string, Task<HubCallOutcome>> UserInputHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+    public Func<string, Task<HubCallOutcome>> SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     ImmutableList<string> _stops = [], _chatSubscribes = [], _chatUnsubscribes = [], _accessWatches = [], _calls = [];
+    ImmutableList<(string Stream, ulong? From)> _tails = [];
+    ImmutableList<string> _terminalSubscribes = [], _terminalUnsubscribes = [], _resizeReleases = [];
+    ImmutableList<(string AgentId, int Cols, int Rows)> _resizes = [];
+    ImmutableList<(string AgentId, string Text)> _userInputs = [];
+    ImmutableList<(string AgentId, string Key)> _specialKeys = [];
+    readonly Dictionary<string, Channel<StreamEventEnvelope>> _tailChannels = new(StringComparer.Ordinal);
+    readonly Lock _tailLock = new();
 
     public ImmutableList<string> Stops => Volatile.Read(ref _stops);
     public ImmutableList<string> ChatSubscribes => Volatile.Read(ref _chatSubscribes);
     public ImmutableList<string> ChatUnsubscribes => Volatile.Read(ref _chatUnsubscribes);
     public ImmutableList<string> AccessWatches => Volatile.Read(ref _accessWatches);
     public ImmutableList<string> Calls => Volatile.Read(ref _calls);
+    public ImmutableList<(string Stream, ulong? From)> Tails => Volatile.Read(ref _tails);
+    public ImmutableList<string> TerminalSubscribes => Volatile.Read(ref _terminalSubscribes);
+    public ImmutableList<string> TerminalUnsubscribes => Volatile.Read(ref _terminalUnsubscribes);
+    public ImmutableList<(string AgentId, int Cols, int Rows)> Resizes => Volatile.Read(ref _resizes);
+    public ImmutableList<string> ResizeReleases => Volatile.Read(ref _resizeReleases);
+    public ImmutableList<(string AgentId, string Text)> UserInputs => Volatile.Read(ref _userInputs);
+    public ImmutableList<(string AgentId, string Key)> SpecialKeys => Volatile.Read(ref _specialKeys);
 
     static void Append<T>(ref ImmutableList<T> list, T item) => ImmutableInterlocked.Update(ref list, static (l, i) => l.Add(i), item);
 
@@ -47,6 +68,8 @@ sealed class FakeServerLane : IServerLane {
     public IObservable<ServerPermissionRequest> PermissionRequests => PermissionRequestsSubject;
     public IObservable<ServerElicitationRequest> ElicitationRequests => ElicitationsSubject;
     public IObservable<string> SessionAccessChanged => SessionAccessChangedSubject;
+    public IObservable<TerminalOutputFrame> TerminalOutput => TerminalOutputSubject;
+    public IObservable<TerminalSize> TerminalDimensions => TerminalDimensionsSubject;
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) => DaemonsHandler();
 
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) {
@@ -72,33 +95,6 @@ sealed class FakeServerLane : IServerLane {
         Append(ref _accessWatches, sessionId);
         return AccessWatchHandler(sessionId);
     }
-
-    public readonly Subject<TerminalOutputFrame> TerminalOutputSubject = new();
-    public readonly Subject<TerminalSize> TerminalDimensionsSubject = new();
-    /// Returns the exception a tail throws at its first MoveNextAsync, or null to tail normally.
-    public Func<string, ulong?, Exception?> TailHandler = (_, _) => null;
-    public Func<string, Task<HubCallOutcome>> TerminalSubscribeHandler = _ => Task.FromResult(HubCallOutcome.Ok);
-    public Func<string, Task<HubCallOutcome>> UserInputHandler = _ => Task.FromResult(HubCallOutcome.Ok);
-    public Func<string, Task<HubCallOutcome>> SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.Ok);
-
-    readonly Dictionary<string, Channel<StreamEventEnvelope>> _tailChannels = new(StringComparer.Ordinal);
-    readonly Lock _tailLock = new();
-    ImmutableList<(string Stream, ulong? From)> _tails = [];
-    ImmutableList<string> _terminalSubscribes = [], _terminalUnsubscribes = [], _resizeReleases = [];
-    ImmutableList<(string AgentId, int Cols, int Rows)> _resizes = [];
-    ImmutableList<(string AgentId, string Text)> _userInputs = [];
-    ImmutableList<(string AgentId, string Key)> _specialKeys = [];
-
-    public ImmutableList<(string Stream, ulong? From)> Tails => Volatile.Read(ref _tails);
-    public ImmutableList<string> TerminalSubscribes => Volatile.Read(ref _terminalSubscribes);
-    public ImmutableList<string> TerminalUnsubscribes => Volatile.Read(ref _terminalUnsubscribes);
-    public ImmutableList<(string AgentId, int Cols, int Rows)> Resizes => Volatile.Read(ref _resizes);
-    public ImmutableList<string> ResizeReleases => Volatile.Read(ref _resizeReleases);
-    public ImmutableList<(string AgentId, string Text)> UserInputs => Volatile.Read(ref _userInputs);
-    public ImmutableList<(string AgentId, string Key)> SpecialKeys => Volatile.Read(ref _specialKeys);
-
-    public IObservable<TerminalOutputFrame> TerminalOutput => TerminalOutputSubject;
-    public IObservable<TerminalSize> TerminalDimensions => TerminalDimensionsSubject;
 
     public async IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, [EnumeratorCancellation] CancellationToken ct) {
         Append(ref _tails, (stream, fromPosition));

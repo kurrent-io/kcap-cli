@@ -1,6 +1,7 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -204,13 +205,15 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                 Publish(generation, new(ServerLaneState.Retrying, ex.Message));
             } finally {
                 _streams = null;
-                // Its dispose unsubscribes over a hub that is closing or closed; that call cannot
-                // matter and must not turn a loop exit into a fault.
+                _hub = null;
+                if (hub is not null) await hub.DisposeAsync().ConfigureAwait(false);
+                // The hub goes first: disposed, the client's courtesy unsubscribe finds a dead
+                // connection and skips it (the library itself catches ObjectDisposedException),
+                // so it never makes a server round-trip on the shutdown path. A failure here still
+                // must not turn a loop exit into a fault.
                 if (streams is not null) {
                     try { await streams.DisposeAsync().ConfigureAwait(false); } catch (Exception) { }
                 }
-                _hub = null;
-                if (hub is not null) await hub.DisposeAsync().ConfigureAwait(false);
             }
 
             if (ct.IsCancellationRequested) break;
@@ -292,10 +295,35 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
     public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.RegisterSessionAccessWatch, ct, sessionId);
 
-    public IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, CancellationToken ct) =>
-        _streams is { } streams && _hub is { State: HubConnectionState.Connected }
-            ? streams.SubscribeAsync(stream, fromPosition, ct)
-            : AsyncEnumerable.Empty<StreamEventEnvelope>();
+    public async IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(
+            string stream, ulong? fromPosition, [EnumeratorCancellation] CancellationToken ct) {
+        var streams = _streams;
+        if (streams is null || _hub is not { State: HubConnectionState.Connected }) yield break;
+        var source = streams.SubscribeAsync(stream, fromPosition, ct).GetAsyncEnumerator(ct);
+        try {
+            while (true) {
+                bool more;
+                try {
+                    more = await source.MoveNextAsync().ConfigureAwait(false);
+                } catch (HubException) {
+                    throw;
+                } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                    throw;
+                } catch (Exception) {
+                    // Lane loss is data, not an error: the next Connected re-tails from the last
+                    // position, so the consumer sees an ended tail, never a transport fault. This
+                    // also catches the library's own reconnect-exhausted close, which completes the
+                    // channel with an OperationCanceledException carrying ITS OWN internal token —
+                    // indistinguishable from ours by type, so only our own `ct` firing re-throws.
+                    more = false;
+                }
+                if (!more) yield break;
+                yield return source.Current;
+            }
+        } finally {
+            await source.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     public Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToTerminal, ct, agentId);
     public Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromTerminal, ct, agentId);
@@ -377,5 +405,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _permissionRequests.Dispose();
         _elicitations.Dispose();
         _sessionAccessChanged.Dispose();
+        _terminalOutput.Dispose();
+        _terminalDimensions.Dispose();
     }
 }

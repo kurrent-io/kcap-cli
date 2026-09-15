@@ -35,8 +35,8 @@ public interface IServerLane {
     IObservable<TerminalOutputFrame> TerminalOutput { get; }
     IObservable<TerminalSize> TerminalDimensions { get; }
     /// A live tail from the position after `fromPosition` (null: the start). Completes when the
-    /// connection closes or the stream is subscribed again; throws HubException on denial at the
-    /// first MoveNextAsync; yields nothing while the lane has no live hub.
+    /// lane has no live hub, when the connection goes away, or when the stream is subscribed
+    /// again; throws HubException on a refused subscribe at the first MoveNextAsync.
     IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, CancellationToken ct);
     Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct);
     Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct);
