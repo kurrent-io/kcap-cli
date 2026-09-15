@@ -769,6 +769,36 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A lane change is background-triggered: only the user's own click navigates. A shell yanked
+    /// to Sessions by a row moving machines takes the surface they were reading with it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_rebind_swaps_the_workspace_without_moving_the_shell_off_the_view_in_use() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+
+            vm.OpenSession("r1");
+            await vm.ShowHomeCommand.Execute().ToTask();
+            await Assert.That(vm.CurrentView).IsEqualTo(ShellView.Home);
+
+            host.Directory.ProvenTwins.Add("r1");
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            host.Directory.Rows.Remove("remote:r1");
+
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
+            await Assert.That(vm.CurrentView).IsEqualTo(ShellView.Home);
+        });
+    }
+
     /// The carried-over tab is only ever one this agent has: the remote row guesses the terminal
     /// from the vendor family, while the local dto carries the daemon's own answer — and a blank
     /// pane is what that disagreement would otherwise leave in front.

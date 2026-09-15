@@ -506,7 +506,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
     /// Nothing here ends a session — the row that wins says whether it did.
     void WatchOrigin(ISessionWorkspace? workspace) {
-        _rebind.Disposable = workspace switch {
+        var watch = workspace switch {
             RemoteSessionViewModel remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
@@ -522,6 +522,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
             _ => Disposable.Empty,
         };
+        // A watch that fired while it was still being armed has already swapped the workspace and
+        // armed the next one: keeping this subscription would retire that one unwatched.
+        if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;
+        else watch.Dispose();
     }
 
     /// The dropped row's own session, still live on the server lane. A shared agent id proves
@@ -536,7 +540,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
+        // The row moved machines on its own; only a click of the user's own navigates, so the
+        // surface they are reading survives the swap underneath it.
+        var view = CurrentView;
         OpenSession(open.AgentId, origin);
+        CurrentView = view;
         if (!terminal || ReferenceEquals(CurrentWorkspace, open)) return;
         switch (CurrentWorkspace) {
             case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
