@@ -38,7 +38,10 @@ internal static class AgentOrchestratorHarness {
             IHostApplicationLifetime?                           lifetime               = null,
             // §3.3: leaves the sequenced processor unpublished, so a test can drive the pre-settlement
             // inline arm and the publication barrier. Production never has that window.
-            bool                                                deferProcessorPublication = false
+            bool                                                deferProcessorPublication = false,
+            // Defaults to the no-network stub. A test that exercises attachment downloads passes a
+            // factory pointed at its own stub server.
+            IHttpClientFactory?                                 httpClientFactory      = null
         ) {
         var daemonStore    = new TempDaemonStore();
         var configRoot   = new TempConfigRoot();
@@ -52,7 +55,10 @@ internal static class AgentOrchestratorHarness {
             // Phase B (D4): the PID-record store, consent policy and decision log all hang off this
             // directory, so each harness gets its own and nothing reaches the real daemons dir.
             Store               = daemonStore.Store,
-            ConfigRoot          = configRoot.Root
+            ConfigRoot          = configRoot.Root,
+            // Set like the entry point sets it: the orchestrator's own token reads name a profile,
+            // and an unset one throws rather than reporting "not authenticated".
+            Profiles            = Resolutions.None(configRoot.Root)
         };
 
         if (allowedRepoPath is not null) {
@@ -63,7 +69,7 @@ internal static class AgentOrchestratorHarness {
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var httpFactory      = new StubHttpClientFactory();
+        var httpFactory      = httpClientFactory ?? new StubHttpClientFactory();
         var http             = new FixedCapacitorHttpClient();
         var tokens           = AuthFixtures.NewTokenStore(configRoot.Root);
         var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
@@ -212,17 +218,21 @@ internal static class AgentOrchestratorHarness {
     internal static AgentInstance SeedAcpAgent(
             AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
             AgentActivityClock? activityClock = null, LaunchKind kind = LaunchKind.Default, bool isPrivate = false,
-            TranscriptJournal? journal = null) {
+            TranscriptJournal? journal = null, AttachmentPlacement placement = AttachmentPlacement.Worktree,
+            // A delivery that fetches attachments writes under the worktree, so a test that lets one
+            // run hands it a scratch path instead of the fixed "/repo" every other caller is happy with.
+            string? worktreePath = null) {
         var agent = new AgentInstance(
             agentId, "review this", "default", null, "/repo", "cursor",
             runtime,
-            new WorktreeInfo("/repo", "b", "/repo"),
+            new WorktreeInfo(worktreePath ?? "/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Status = status,
             ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System),
             Kind = kind,
             IsPrivate = isPrivate,
-            Journal = journal
+            Journal = journal,
+            Placement = placement
         };
 
         orch.RegisterAgentForTest(agent);
@@ -239,7 +249,7 @@ internal static class AgentOrchestratorHarness {
     /// refresh a snapshot that no daemon-owned worktree exists to receive.</summary>
     internal static AgentInstance SeedBorrowedAcpAgent(
             AgentOrchestrator orch, string agentId, IHostedAgentRuntime runtime, string status = "Running",
-            AgentActivityClock? activityClock = null) {
+            AgentActivityClock? activityClock = null, AttachmentPlacement placement = AttachmentPlacement.Worktree) {
         var agent = new AgentInstance(
             agentId, "review this", "default", null, "/repo", "cursor",
             runtime,
@@ -248,7 +258,8 @@ internal static class AgentOrchestratorHarness {
             Status                 = status,
             ActivityClock          = activityClock ?? new AgentActivityClock(TimeProvider.System),
             Work                   = WorkLocation.BorrowedCwd,
-            BorrowedSnapshotSource = "/repo"
+            BorrowedSnapshotSource = "/repo",
+            Placement              = placement
         };
 
         orch.RegisterAgentForTest(agent);

@@ -3832,6 +3832,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// checks that decide whether a condemned agent may still be written to — happens inside the
     /// agent's own delivery section.</summary>
     internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds) {
+        // Refused before the section, so nothing is downloaded for a message that was never going to
+        // be delivered. The ids are re-validated here whichever lane they arrived on: the local frame
+        // checks them too, but a server dispatch reaches this method directly. A borrowed cwd is the
+        // user's own checkout — a vendor whose files would land there gets none — and a TUI-less
+        // runtime's quit command never reaches a model, so files fetched for it would be orphaned.
+        if (attachmentIds is { Length: > 0 }) {
+            if (AttachmentIds.Validate(attachmentIds) is { } invalid)
+                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, invalid);
+
+            if (agent.Kind != LaunchKind.Default)
+                return InputDeliveryOutcome.Drop(
+                    SendInputDropReason.DeliveryFailed, "attachments are not accepted by a review participant");
+
+            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
+                return InputDeliveryOutcome.Drop(
+                    SendInputDropReason.DeliveryFailed, "attachments need a daemon-owned worktree");
+
+            if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+                return InputDeliveryOutcome.Drop(
+                    SendInputDropReason.DeliveryFailed, "a quit command takes no attachments");
+        }
+
         // A quit command typed into chat: a runtime with no TUI has nothing that interprets it, so
         // forwarding would hand the text to the model as an ordinary prompt — at best role-played
         // ("Quitting"), never a stop. PTY runtimes keep receiving the text verbatim: their TUI owns
@@ -3881,84 +3903,107 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!await TryRefreshBorrowedSnapshotAsync(agent))
                 return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, "borrowed snapshot refresh failed");
 
-            var message = text;
+            AttachmentBatch? batch   = null;
+            var              message = text;
 
+            // Inside the section, so the fetcher's sweep of its own stale staging directories can
+            // never run beside another fetch for this agent.
             if (attachmentIds is { Length: > 0 }) {
-                var fetch = await _attachmentFetcher.FetchAsync(
-                    Path.Combine(agent.Worktree.Path, ".attached"), AttachmentPlacement.Worktree,
-                    attachmentIds, _shutdownCts.Token);
-                var paths = fetch.Batch?.Paths;
+                var root = agent.Placement == AttachmentPlacement.DaemonStore
+                    ? _attachmentStore.DirectoryFor(agent.Id)
+                    : Path.Combine(agent.Worktree.Path, ".attached");
+                var fetch = await _attachmentFetcher.FetchAsync(root, agent.Placement, attachmentIds, _shutdownCts.Token);
 
-                if (paths is { Count: > 0 }) {
-                    message = $"{text}\n\n[Attached files: {string.Join(", ", paths)}]";
+                // Fails the whole message rather than delivering a prompt that talks about files the
+                // agent has not got.
+                if (fetch.Batch is null) {
+                    LogAttachmentFetchFailed(agent.Id, fetch.FailedId, fetch.Error);
+
+                    return InputDeliveryOutcome.Drop(
+                        SendInputDropReason.DeliveryFailed, $"attachment {fetch.FailedId} unavailable: {fetch.Error}");
                 }
+
+                batch   = fetch.Batch;
+                message = $"{text}\n\n{AttachmentTrailer.For(batch.Paths)}";
             }
 
-            if (SendInputBeforeWriteHookForTest is { } beforeWrite) await beforeWrite();
-
-            // Re-read HERE, not only on entry: the borrowed-snapshot refresh budget
-            // (BorrowedSnapshotRefreshTimeout) plus any downloads routinely exceed the reap claim's
-            // own gate wait (ReapClaimGateWait), so an unfenced claim can land mid-section. The latch
-            // is monotonic 0→1 via Volatile.Read, so this re-read can never false-positive.
-            if (agent.IsReapClaimed) {
-                LogSendInputReapClaimedLate(agent.Id);
-
-                return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimedLate);
-            }
-
-            // Codex turn diagnostic: bump the round generation and sample the rollout length BEFORE
-            // delivering, while the gate is held so it is ordered per agent. Bumping first instantly
-            // invalidates any prior round's still-running probe (it emits a verdict only while its
-            // generation is the latest), so a fast Codex append caused by THIS input can never be
-            // credited to the previous round. Sampling after the bump but before the send keeps the
-            // baseline honest — the append lands strictly after it. A null here (path not cached yet,
-            // or the stat failed) is handled in ArmCodexTurnProbe.
-            if (isCodex) {
-                codexGen = Interlocked.Increment(ref agent.CodexTurnProbeGen);
-                if (agent.TranscriptPath is { } rolloutPath) codexBaseline = TryFileLength(rolloutPath);
-            }
-
-            // Sampled before the write: a turn can end while the delivery is still in flight, and
-            // that wait is newer than the one this input answers.
-            var waitGeneration = agent.ActivityClock.WaitGeneration;
-
+            // The files become the agent's only once the prompt naming them has landed: every refusal
+            // and every fault from here on takes the batch back with it, so a delivery nobody accepted
+            // leaves nothing in the worktree.
             try {
-                // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
-                if (agent.BorrowedSnapshotSource is not null)
-                    await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
-                else
-                    await agent.Runtime.SendUserInputAsync(message);
-            } catch (InputNotAdmittedException ex) {
-                LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.QueueFull);
+                if (SendInputBeforeWriteHookForTest is { } beforeWrite) await beforeWrite();
 
-                return InputDeliveryOutcome.Drop(SendInputDropReason.QueueFull, ex.Message);
-            } catch (Exception ex) {
-                LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.DeliveryFailed);
+                // Re-read HERE, not only on entry: the borrowed-snapshot refresh budget
+                // (BorrowedSnapshotRefreshTimeout) plus any downloads routinely exceed the reap claim's
+                // own gate wait (ReapClaimGateWait), so an unfenced claim can land mid-section. The latch
+                // is monotonic 0→1 via Volatile.Read, so this re-read can never false-positive.
+                if (agent.IsReapClaimed) {
+                    LogSendInputReapClaimedLate(agent.Id);
+                    batch?.Rollback();
 
-                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, ex.Message);
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimedLate);
+                }
+
+                // Codex turn diagnostic: bump the round generation and sample the rollout length BEFORE
+                // delivering, while the gate is held so it is ordered per agent. Bumping first instantly
+                // invalidates any prior round's still-running probe (it emits a verdict only while its
+                // generation is the latest), so a fast Codex append caused by THIS input can never be
+                // credited to the previous round. Sampling after the bump but before the send keeps the
+                // baseline honest — the append lands strictly after it. A null here (path not cached yet,
+                // or the stat failed) is handled in ArmCodexTurnProbe.
+                if (isCodex) {
+                    codexGen = Interlocked.Increment(ref agent.CodexTurnProbeGen);
+                    if (agent.TranscriptPath is { } rolloutPath) codexBaseline = TryFileLength(rolloutPath);
+                }
+
+                // Sampled before the write: a turn can end while the delivery is still in flight, and
+                // that wait is newer than the one this input answers.
+                var waitGeneration = agent.ActivityClock.WaitGeneration;
+
+                try {
+                    // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
+                    if (agent.BorrowedSnapshotSource is not null)
+                        await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
+                    else
+                        await agent.Runtime.SendUserInputAsync(message);
+                } catch (InputNotAdmittedException ex) {
+                    LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.QueueFull);
+                    batch?.Rollback();
+
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.QueueFull, ex.Message);
+                } catch (Exception ex) {
+                    LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.DeliveryFailed);
+                    batch?.Rollback();
+
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, ex.Message);
+                }
+
+                // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
+                // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
+                agent.ActivityClock.Advance();
+                agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+
+                // One report per successfully handled invocation (SendInputCommand carries no round
+                // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,
+                // one-way. Captured strictly after Advance() above, so it can never carry a pre-delivery
+                // seq — monotonicity comes from _statusReportOrderingGate's acquisition order, never from
+                // the order these Task.Run calls happen to be scheduled in.
+                //
+                // MUST offload rather than await here (lock order): _statusReportOrderingGate must never
+                // be acquired while this agent's BorrowedSnapshotGate is held (see the gate's own doc).
+                // Task.Run, not a bare discard — WaitAsync can complete synchronously on an uncontended
+                // gate, which would otherwise run BuildStatusReport() (disk I/O) inline on this receive
+                // loop while still holding BorrowedSnapshotGate.
+                _ = Task.Run(() => SendDaemonStatusReportOnceAsync());
+
+                LogSendInputDelivered(agent.Id, agent.Runtime.Vendor, message.Length);
+
+                return InputDeliveryOutcome.Delivered;
+            } catch {
+                batch?.Rollback();
+
+                throw;
             }
-
-            // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
-            // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
-            agent.ActivityClock.Advance();
-            agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
-
-            // One report per successfully handled invocation (SendInputCommand carries no round
-            // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,
-            // one-way. Captured strictly after Advance() above, so it can never carry a pre-delivery
-            // seq — monotonicity comes from _statusReportOrderingGate's acquisition order, never from
-            // the order these Task.Run calls happen to be scheduled in.
-            //
-            // MUST offload rather than await here (lock order): _statusReportOrderingGate must never
-            // be acquired while this agent's BorrowedSnapshotGate is held (see the gate's own doc).
-            // Task.Run, not a bare discard — WaitAsync can complete synchronously on an uncontended
-            // gate, which would otherwise run BuildStatusReport() (disk I/O) inline on this receive
-            // loop while still holding BorrowedSnapshotGate.
-            _ = Task.Run(() => SendDaemonStatusReportOnceAsync());
-
-            LogSendInputDelivered(agent.Id, agent.Runtime.Vendor, message.Length);
-
-            return InputDeliveryOutcome.Delivered;
         }
     }
 
@@ -5291,6 +5336,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Could not report the dropped input for agent {AgentId} ({Reason})")]
     partial void LogSendInputRejectReportFailed(Exception ex, string agentId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment {AttachmentId} for agent {AgentId} unavailable: {Error}")]
+    partial void LogAttachmentFetchFailed(string agentId, string? attachmentId, string? error);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
     partial void LogSendInputUnknownAgent(string agentId, int knownAgents);

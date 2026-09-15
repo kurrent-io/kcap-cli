@@ -154,8 +154,17 @@ internal partial class AgentOrchestrator {
     /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can
     /// word — never an Error frame, never an escaped exception — and it is written only once the
     /// delivery core has settled, so an ack can never describe a write still in flight.</summary>
-    public async Task HandleLocalSendTextAsync(string payload, Stream stream, CancellationToken ct) {
-        var ack = await AnswerSendTextAsync(payload);
+    public Task HandleLocalSendTextAsync(string payload, Stream stream, CancellationToken ct) =>
+        WriteSendTextAckAsync(AnswerSendTextAsync(payload), stream, ct);
+
+    /// <summary>The same composer input, carrying the ids of files the server holds. Its own frame
+    /// rather than a member on the plain one: a daemon that predates it must refuse the message
+    /// rather than deliver the text and silently drop the files.</summary>
+    public Task HandleLocalSendTextWithAttachmentsAsync(string payload, Stream stream, CancellationToken ct) =>
+        WriteSendTextAckAsync(AnswerSendTextWithAttachmentsAsync(payload), stream, ct);
+
+    async Task WriteSendTextAckAsync(Task<SendTextAckDto> answering, Stream stream, CancellationToken ct) {
+        var ack = await answering;
 
         try {
             var json = JsonSerializer.Serialize(ack, InputIpcJsonContext.Default.SendTextAckDto);
@@ -167,27 +176,61 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    /// <summary>A protected kind and a non-running agent are refused BEFORE the delivery core: one is
-    /// addressed through the flow protocol rather than typed at, the other has nothing to accept the
-    /// text. A quit rides <see cref="StopAgentCoreAsync"/> rather than the server-origin stop handler,
-    /// which refuses a private agent — a composer typing at its own local agent would otherwise be
-    /// acked for a stop that never happened.</summary>
     async Task<SendTextAckDto> AnswerSendTextAsync(string payload) {
         SendTextDto? dto;
         try { dto = JsonSerializer.Deserialize(payload, InputIpcJsonContext.Default.SendTextDto); }
         catch (JsonException) { dto = null; }
 
         if (!InputWire.IsStructurallyValid(dto)) return Refuse(SendTextReasons.Malformed, "expected {\"agent_id\",\"text\"}");
-        if (string.IsNullOrWhiteSpace(dto!.Text)) return Refuse(SendTextReasons.TextEmpty, "text is empty");
-        if (Encoding.UTF8.GetByteCount(dto.Text) > InputWire.MaxTextBytes)
+
+        return await AnswerSendTextCoreAsync(dto!.AgentId, dto.Text, null);
+    }
+
+    /// <summary>The attachment-bearing frame's own decode. An empty list is malformed rather than a
+    /// text-only delivery: this frame exists to carry files, so an empty one is a client that meant
+    /// to send the plain frame and a silent downgrade would hide the bug from both ends.</summary>
+    async Task<SendTextAckDto> AnswerSendTextWithAttachmentsAsync(string payload) {
+        SendTextWithAttachmentsDto? dto;
+        try { dto = JsonSerializer.Deserialize(payload, InputIpcJsonContext.Default.SendTextWithAttachmentsDto); }
+        catch (JsonException) { dto = null; }
+
+        if (!InputWire.IsStructurallyValid(dto))
+            return Refuse(SendTextReasons.Malformed, "expected {\"agent_id\",\"text\",\"attachment_ids\"}");
+        if (dto!.AttachmentIds.Length == 0) return Refuse(SendTextReasons.Malformed, "send_text carries no attachments");
+
+        return await AnswerSendTextCoreAsync(dto.AgentId, dto.Text, dto.AttachmentIds);
+    }
+
+    /// <summary>What both composer frames share once decoded. A protected kind and a non-running
+    /// agent are refused BEFORE the delivery core: one is addressed through the flow protocol rather
+    /// than typed at, the other has nothing to accept the text. A quit rides
+    /// <see cref="StopAgentCoreAsync"/> rather than the server-origin stop handler, which refuses a
+    /// private agent — a composer typing at its own local agent would otherwise be acked for a stop
+    /// that never happened.</summary>
+    async Task<SendTextAckDto> AnswerSendTextCoreAsync(string agentId, string text, string[]? attachmentIds) {
+        if (string.IsNullOrWhiteSpace(text)) return Refuse(SendTextReasons.TextEmpty, "text is empty");
+        if (Encoding.UTF8.GetByteCount(text) > InputWire.MaxTextBytes)
             return Refuse(SendTextReasons.TooLarge, $"text exceeds {InputWire.MaxTextBytes} bytes");
-        if (!_agents.TryGetValue(dto.AgentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {dto.AgentId}");
+        if (!_agents.TryGetValue(agentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {agentId}");
         if (agent.Kind != LaunchKind.Default) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
         if (agent.Status is "Starting" or "Completed" or "Failed") return Refuse(SendTextReasons.NotRunning, $"agent is {agent.Status}");
 
+        // Named refusals rather than the delivery core's one drop token: the composer shows the
+        // wording to the person who picked the files, and can keep their text to retry without them.
+        // The core refuses the same cases again for the server-dispatched lane, which never gets here.
+        if (attachmentIds is { Length: > 0 }) {
+            if (AttachmentIds.Validate(attachmentIds) is { } invalid) return Refuse(SendTextReasons.AttachmentsRefused, invalid);
+
+            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
+                return Refuse(SendTextReasons.AttachmentsRefused, "attachments need a daemon-owned worktree");
+
+            if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+                return Refuse(SendTextReasons.AttachmentsRefused, "a quit command takes no attachments");
+        }
+
         InputDeliveryOutcome outcome;
 
-        try { outcome = await DeliverInputAsync(agent, dto.Text, null); }
+        try { outcome = await DeliverInputAsync(agent, text, attachmentIds); }
         catch (Exception ex) when (ex is not OperationCanceledException) { return Refuse(SendTextReasons.DeliveryFailed, ex.Message); }
 
         switch (outcome.Kind) {
