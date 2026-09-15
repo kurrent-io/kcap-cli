@@ -14,11 +14,11 @@ public class McpPlansServerTests {
 
     /// <summary>A throwaway repo: a `.git` directory at the root so FindRoot recognises it, and a
     /// document under docs/.</summary>
-    (string Root, string DocPath) SeedRepo(string content = "# Plan\n\n1. do it\n") {
+    (TempDirHandle Root, string DocPath) SeedRepo(string content = "# Plan\n\n1. do it\n") {
         var root = Tmp.CreateDir("repo");
         root.CreateDir(".git");
         var doc = root.CreateDir("docs").CreateFile("plan.md", content);
-        return (root.Path, doc);
+        return (root, doc);
     }
 
     // ── tool schema ──────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ public class McpPlansServerTests {
         await Assert.That(d.Body["session_id"]!.GetValue<string>()).IsEqualTo("s1");
         await Assert.That(d.Body["kind"]!.GetValue<string>()).IsEqualTo("plan");
         await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
-        await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(root);
+        await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(root.Path);
         await Assert.That(d.Body["content"]!.GetValue<string>()).IsEqualTo("# Plan\n");
         await Assert.That(d.Body["content_hash"]!.GetValue<string>())
             .IsEqualTo(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("# Plan\n"))));
@@ -150,6 +150,64 @@ public class McpPlansServerTests {
             .Throws<ArgumentException>().WithMessageContaining("kind");
         await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan"}"""), root, root))
             .Throws<ArgumentException>().WithMessageContaining("path");
+    }
+
+    [Test]
+    public async Task Declaration_refuses_a_path_outside_the_project_before_reading_it() {
+        var (root, _) = SeedRepo();
+        var secret = Tmp.CreateFile("secret.txt", "hunter2");
+
+        var absolute = new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = secret };
+        await Assert.That(() => McpPlansServer.BuildDeclaration(absolute, root, root))
+            .Throws<ArgumentException>().WithMessageContaining("outside the project root");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"../secret.txt"}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_refuses_a_symlink_that_leaves_the_project() {
+        // Creating a symlink needs a privilege the Windows CI runner lacks.
+        if (OperatingSystem.IsWindows()) return;
+
+        var (root, _) = SeedRepo();
+        var secret = Tmp.CreateFile("secret.txt", "hunter2");
+        File.CreateSymbolicLink(root.PathTo("docs", "link.md"), secret);
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/link.md"}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("links outside the project root");
+
+        // A linked directory between the root and the file is caught the same way.
+        var elsewhere = Tmp.CreateDir("elsewhere");
+        elsewhere.CreateFile("plan.md", "x");
+        Directory.CreateSymbolicLink(root.PathTo("linked"), elsewhere.Path);
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"linked/plan.md"}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("links outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_without_a_repo_is_bounded_by_the_project_directory() {
+        var dir    = Tmp.CreateDir("loose");
+        var secret = Tmp.CreateFile("secret.txt", "hunter2");
+        var args   = new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = secret };
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(args, dir.Path, repoRoot: null))
+            .Throws<ArgumentException>().WithMessageContaining("outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_of_invalid_utf8_goes_by_hash_only() {
+        var (root, doc) = SeedRepo();
+        byte[] bytes = [0xff, 0xfe, (byte)'a'];
+        await File.WriteAllBytesAsync(doc, bytes);
+
+        var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md"}"""), root, root);
+
+        await Assert.That(d.Body.ContainsKey("content")).IsFalse();
+        await Assert.That(d.SnapshotAttached).IsFalse();
+        await Assert.That(d.SnapshotOmitted!).Contains("UTF-8");
+        await Assert.That(d.Body["content_hash"]!.GetValue<string>()).IsEqualTo(Convert.ToHexStringLower(SHA256.HashData(bytes)));
     }
 
     [Test]
@@ -285,7 +343,7 @@ public class McpPlansServerTests {
         await Assert.That(h.Calls[0].Url).IsEqualTo("http://x/api/plans/documents");
         var sent = JsonNode.Parse(h.Calls[0].Body!)!.AsObject();
         await Assert.That(sent["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
-        await Assert.That(sent["workspace_root"]!.GetValue<string>()).IsEqualTo(root);
+        await Assert.That(sent["workspace_root"]!.GetValue<string>()).IsEqualTo(root.Path);
 
         await Assert.That(IsError(response)).IsFalse();
         var result = JsonNode.Parse(ResultText(response))!.AsObject();

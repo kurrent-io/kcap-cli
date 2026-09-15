@@ -282,8 +282,8 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         result["workspace_root"]    = declaration.WorkspaceRoot;
         result["content_bytes"]     = declaration.ContentBytes;
         result["snapshot_attached"] = declaration.SnapshotAttached;
-        if (!declaration.SnapshotAttached)
-            result["message"] = $"Content exceeds {MaxSnapshotBytes} bytes: declared by hash only.";
+        if (declaration.SnapshotOmitted is { } reason)
+            result["message"] = $"{reason}: declared by hash only.";
 
         return result.ToJsonString();
     }
@@ -301,19 +301,21 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
-    // ── builders ──────────────────────────────────────────────────────────────
+    // Content is declared verbatim, so a snapshot must hash to what the server stores: a file that
+    // is not valid UTF-8 goes by hash alone rather than as a replacement-character rendering.
+    static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     internal static PlanDocumentDeclaration BuildDeclaration(JsonObject? args, string cwd, string? repoRoot) {
         var sessionId = McpSessionId.Resolve(args);
         var kind      = McpToolArguments.RequireString(args, "kind");
         var rawPath   = McpToolArguments.RequireString(args, "path");
-        var fullPath  = Path.GetFullPath(rawPath, cwd);
+        var boundary  = repoRoot ?? cwd;
+        var fullPath  = ContainedPath(rawPath, cwd, boundary);
 
         if (!File.Exists(fullPath))
             throw new ArgumentException($"'{rawPath}' does not exist (resolved against {cwd}).");
 
-        var bytes    = ReadShared(fullPath);
-        var attach   = bytes.Length <= MaxSnapshotBytes;
+        var (hash, snapshot, length) = ReadDocument(fullPath);
         var wirePath = WirePath(fullPath, repoRoot);
 
         var body = new JsonObject {
@@ -321,10 +323,20 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
             ["kind"]           = kind,
             ["path"]           = wirePath,
             ["workspace_root"] = repoRoot,
-            ["content_hash"]   = Convert.ToHexStringLower(SHA256.HashData(bytes))
+            ["content_hash"]   = hash
         };
 
-        if (attach) body["content"] = Encoding.UTF8.GetString(bytes);
+        string? omitted = null;
+
+        if (snapshot is null) {
+            omitted = $"Content exceeds {MaxSnapshotBytes} bytes";
+        } else {
+            try {
+                body["content"] = StrictUtf8.GetString(snapshot);
+            } catch (DecoderFallbackException) {
+                omitted = "Content is not valid UTF-8";
+            }
+        }
 
         if (McpToolArguments.OptionalString(args, "argues_from") is { } arguesFrom)
             body["argues_from"] = WirePath(Path.GetFullPath(arguesFrom, cwd), repoRoot);
@@ -332,31 +344,66 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         if (McpToolArguments.OptionalString(args, "work_item_id") is { } workItemId)
             body["work_item_id"] = workItemId;
 
-        return new(body, wirePath, repoRoot, bytes.Length, attach);
+        return new(body, wirePath, repoRoot, length, omitted);
+    }
+
+    /// <summary>Resolves the declared path and refuses one that leaves the project — by an absolute
+    /// path, a <c>..</c> segment, or a symlink anywhere below the boundary — before a byte of it is
+    /// read: the server rejects such a path too, but only after the content has reached it.</summary>
+    internal static string ContainedPath(string rawPath, string cwd, string boundary) {
+        var fullPath = Path.GetFullPath(rawPath, cwd);
+
+        if (!IsInside(fullPath, boundary))
+            throw new ArgumentException($"'{rawPath}' is outside the project root ({boundary}); only files under it can be declared.");
+
+        // Each link between the boundary and the file is resolved to its final target: a linked
+        // directory or file inside the repo can point anywhere.
+        for (FileSystemInfo? node = new FileInfo(fullPath); node is not null && IsInside(node.FullName, boundary) && node.FullName != boundary;
+             node = Directory.GetParent(node.FullName)) {
+            if (node.LinkTarget is null) continue;
+
+            var target = node.ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+
+            if (target is null || !IsInside(target, boundary))
+                throw new ArgumentException($"'{rawPath}' links outside the project root ({boundary}); only files under it can be declared.");
+        }
+
+        return fullPath;
+    }
+
+    static bool IsInside(string path, string root) {
+        var relative = Path.GetRelativePath(root, path);
+
+        return relative != ".." && !Path.IsPathRooted(relative)
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && !relative.StartsWith("../", StringComparison.Ordinal);
     }
 
     /// <summary>Root-relative with forward slashes when the file is inside the repo, so the server
     /// keys it exactly as discovery keys the same file; the absolute path otherwise, which the
     /// server accepts only when its own captured root contains it.</summary>
     internal static string WirePath(string fullPath, string? repoRoot) {
-        if (repoRoot is null) return fullPath;
+        if (repoRoot is null || !IsInside(fullPath, repoRoot)) return fullPath;
 
         var relative = Path.GetRelativePath(repoRoot, fullPath);
 
-        if (relative == "." || relative == ".." || Path.IsPathRooted(relative)
-         || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-         || relative.StartsWith("../", StringComparison.Ordinal))
-            return fullPath;
-
-        return relative.Replace('\\', '/');
+        return relative == "." ? fullPath : relative.Replace('\\', '/');
     }
 
-    // Shared-read so the agent that just wrote the document is never denied its own write handle.
-    static byte[] ReadShared(string path) {
+    /// <summary>The hash of the whole file and, only when it fits the cap, its bytes: a large file
+    /// is hashed from the stream so the long-lived server never holds more than the cap. Shared-read
+    /// so the agent that just wrote the document is never denied its own write handle.</summary>
+    static (string Hash, byte[]? Snapshot, long Length) ReadDocument(string path) {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        return buffer.ToArray();
+        var length = stream.Length;
+
+        if (length > MaxSnapshotBytes)
+            return (Convert.ToHexStringLower(SHA256.HashData(stream)), null, length);
+
+        var bytes = new byte[length];
+        stream.ReadExactly(bytes);
+
+        return (Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes, length);
     }
 
     internal static JsonObject BuildSetTasksBody(JsonObject? args) {
