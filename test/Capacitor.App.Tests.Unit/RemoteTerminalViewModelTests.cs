@@ -299,4 +299,25 @@ public class RemoteTerminalViewModelTests {
             await Assert.That(h.Lane.ResizeReleases.Count).IsEqualTo(2);
         });
     }
+
+    /// A transient registry snapshot drops the row and the next refresh restores the same live
+    /// session; the host withdraws its ended verdict then, and the terminal follows it back.
+    [Test]
+    public async Task A_session_that_returns_after_reading_as_ended_attaches_again() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+
+            h.Ended.OnNext(true);
+            await Assert.That(h.Vm.Phase).IsEqualTo(RemoteTerminalPhase.Ended);
+            await WaitUntilAsync(() => h.Lane.TerminalUnsubscribes.Count == 1, what: "the unsubscribe");
+
+            h.Ended.OnNext(false);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 2, what: "the second subscribe");
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live again");
+            await Assert.That(h.Surfaces.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
 }

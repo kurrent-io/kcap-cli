@@ -41,6 +41,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     // starts the subscribe call, not from the moment it resolves.
     bool _receiving;
     bool _ended;
+    SessionAccessState? _access;
     bool _visible;
     /// Whether a viewport of ours stands in the server's aggregate: it holds a viewer's size until
     /// told otherwise, so a reported one must always be given back and an unreported one never.
@@ -89,15 +90,21 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             if (!shown) { _ = ReleaseViewportAsync(); return; }
             if (Surface is { } surface) ReportViewport(surface.CurrentSize);
         }).DisposeWith(_disposables);
-        sessionEnded.Where(ended => ended).Take(1).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
-            _ended = true;
-            Detach(RemoteTerminalPhase.Ended);
+        // The host's verdict can be withdrawn: a transient registry snapshot drops the row and the
+        // next refresh restores the same live session, so the pane follows the lease again then.
+        sessionEnded.DistinctUntilChanged().ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(ended => {
+            if (ended) {
+                _ended = true;
+                Detach(RemoteTerminalPhase.Ended);
+                return;
+            }
+            if (!_ended) return;
+            _ended = false;
+            Follow(_access);
         }).DisposeWith(_disposables);
-        // Establishing is the pre-verdict handshake, not a refusal.
         access.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(state => {
-            if (_ended) return;
-            if (state == SessionAccessState.Established) { Attach(); return; }
-            Detach(state == SessionAccessState.Establishing ? RemoteTerminalPhase.Waiting : RemoteTerminalPhase.Offline);
+            _access = state;
+            if (!_ended) Follow(state);
         }).DisposeWith(_disposables);
         lane.TerminalOutput.Where(f => f.AgentId == agentId).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(f => {
             if (!_receiving || Surface is not { } surface || _decoder is not { } decoder) return;
@@ -110,6 +117,12 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             Surface?.Resize(d.Cols, d.Rows);
             this.RaisePropertyChanged(nameof(SizeNote));
         }).DisposeWith(_disposables);
+    }
+
+    /// Establishing is the pre-verdict handshake, not a refusal.
+    void Follow(SessionAccessState? state) {
+        if (state == SessionAccessState.Established) { Attach(); return; }
+        Detach(state is null or SessionAccessState.Establishing ? RemoteTerminalPhase.Waiting : RemoteTerminalPhase.Offline);
     }
 
     void Attach() {
