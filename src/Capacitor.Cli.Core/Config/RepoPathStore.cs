@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Config;
@@ -109,12 +110,15 @@ public sealed class RepoPathStore(ConfigRoot config) {
         return entries.OrderByDescending(e => e.LastUsed).Select(e => e.Path).ToArray();
     }
 
-    /// <summary>Null when the file does not exist. Saves rename a complete file into place, so a
-    /// fingerprint never describes a partial write.</summary>
+    /// <summary>Null when the file does not exist. Content rather than size and mtime: re-adding a
+    /// known path rewrites the file at the same length, and two such writes inside the filesystem's
+    /// timestamp resolution would otherwise read as one. Saves rename a complete file into place, so
+    /// a fingerprint never describes a partial write.</summary>
     public RepoStoreFingerprint? Fingerprint() {
         try {
-            var info = new FileInfo(StorePath);
-            return info.Exists ? new RepoStoreFingerprint(info.Length, info.LastWriteTimeUtc.Ticks) : null;
+            // Shares delete so a save in another process can rename over the file mid-read.
+            using var stream = new FileStream(StorePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return new RepoStoreFingerprint(Convert.ToHexStringLower(SHA256.HashData(stream)));
         } catch {
             return null;
         }

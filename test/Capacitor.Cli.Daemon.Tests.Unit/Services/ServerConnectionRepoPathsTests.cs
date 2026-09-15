@@ -13,15 +13,19 @@ public class ServerConnectionRepoPathsTests {
 
     sealed class RepoPathsServerConnection(DaemonConfig config) : ServerConnection(
         config, UnusedTokenStore.Create(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance) {
-        public readonly List<string[]> Sent = [];
-        public          Exception?     SendThrow;
-        public          bool           Ready = true;
+        public readonly List<string[]>       Sent        = [];
+        public readonly TaskCompletionSource SendEntered = new();
+        public          TaskCompletionSource? SendGate;
+        public          Exception?            SendThrow;
+        public          bool                  Ready = true;
 
         internal override bool IsReady => Ready;
 
-        internal override Task SendRepoPathsAsync(string[] repoPaths) {
+        internal override async Task SendRepoPathsAsync(string[] repoPaths) {
             Sent.Add(repoPaths);
-            return SendThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
+            SendEntered.TrySetResult();
+            if (Interlocked.Exchange(ref SendGate, null) is { } gate) await gate.Task;
+            if (SendThrow is { } ex) throw ex;
         }
     }
 
@@ -48,6 +52,33 @@ public class ServerConnectionRepoPathsTests {
         await conn.UpdateRepoPathsAsync();
 
         await Assert.That(conn.AdvertisedRepoStore).IsNull();
+    }
+
+    /// The daemon's own launch path and the watcher can send at the same time, and the server runs
+    /// one client's invocations in parallel: an older list processed after a newer one, with the
+    /// newer fingerprint recorded last, would leave the server stale with nothing left to repair it.
+    [Test]
+    public async Task Overlapping_sends_run_one_at_a_time() {
+        var store = new RepoPathStore(Config.Root);
+        await store.AddAsync("/tmp/project-a");
+        var gate = new TaskCompletionSource();
+        await using var conn = new RepoPathsServerConnection(NewConfig()) { SendGate = gate };
+
+        var first = conn.UpdateRepoPathsAsync();
+        await conn.SendEntered.Task;
+        await store.AddAsync("/tmp/project-b");
+        var second = conn.UpdateRepoPathsAsync();
+        // Waiting for a negative: the second send must not start while the first is held open.
+        await Task.Delay(100);
+        await Assert.That(conn.Sent.Count).IsEqualTo(1);
+
+        gate.SetResult();
+        await first;
+        await second;
+
+        await Assert.That(conn.Sent.Count).IsEqualTo(2);
+        await Assert.That(conn.Sent[1]).IsEquivalentTo(new[] { Path.GetFullPath("/tmp/project-a"), Path.GetFullPath("/tmp/project-b") });
+        await Assert.That(conn.AdvertisedRepoStore).IsEqualTo(store.Fingerprint());
     }
 
     /// The watcher as DI builds it reads the file the connection advertises: a write from

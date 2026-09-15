@@ -626,15 +626,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         await ReBindAcpSessionsAsync();
     }
 
-    /// <summary>Serialises DTO construction AND invocation. Two registrations can otherwise each
-    /// capture their own <c>_config</c> snapshot and land in either order: the heartbeat's
-    /// slot-displaced re-registration can capture the OLD capabilities, the certification self-heal
-    /// can then publish the NEW ones, and if the heartbeat's frame is processed last the server ends
-    /// up advertising the stale set while the daemon's local config says otherwise. That silently
-    /// undoes the self-heal — which this area now depends on to restore a missing advertisement, so
-    /// it is not a harmless duplicate registration.
-    /// <para>Held across the hub invoke, not just the construction: releasing early would let a
-    /// second DTO built from fresher config overtake an in-flight older one.</para></summary>
+    /// <summary>Serialises every send that pairs server state with a local snapshot — registration
+    /// and the repo-path update — across the whole snapshot-and-invoke. The server runs one client's
+    /// invocations in parallel, so without it an older snapshot can land after a newer one while the
+    /// newer bookkeeping is recorded last, leaving the server with state nothing will repair.</summary>
     readonly SemaphoreSlim _registerLock = new(1, 1);
 
     async Task DaemonConnectAsync() {
@@ -847,12 +842,20 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public virtual async Task UpdateRepoPathsAsync() {
         try {
+            await _registerLock.WaitAsync(_ct).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            return;
+        }
+
+        try {
             var repoStore = FingerprintRepoStore();
             var repoPaths = await MergeRepoPathsAsync();
             await SendRepoPathsAsync(repoPaths);
             _advertisedRepoStore = repoStore;
         } catch (Exception ex) {
             LogRepoPathUpdateFailed(ex);
+        } finally {
+            _registerLock.Release();
         }
     }
 

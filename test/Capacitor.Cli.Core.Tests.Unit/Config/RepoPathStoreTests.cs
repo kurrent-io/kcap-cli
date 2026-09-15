@@ -306,4 +306,29 @@ public class RepoPathStoreTests {
 
         await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
     }
+
+    // Re-adding a known path rewrites the file at the same length, and on a filesystem with coarse
+    // timestamps the second write can carry the first one's mtime.
+    [Test]
+    public async Task Fingerprint_TellsApartSameLengthWritesWithTheSameTimestamp() {
+        var stamp = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        await File.WriteAllTextAsync(ReposJsonPath, "[a]");
+        File.SetLastWriteTimeUtc(ReposJsonPath, stamp);
+        var before = Repos.Fingerprint();
+
+        await File.WriteAllTextAsync(ReposJsonPath, "[b]");
+        File.SetLastWriteTimeUtc(ReposJsonPath, stamp);
+
+        await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
+    }
+
+    [Test]
+    public async Task Fingerprint_IgnoresATouchThatLeavesTheContentAlone() {
+        await Repos.AddAsync("/tmp/project-a");
+        var before = Repos.Fingerprint();
+
+        File.SetLastWriteTimeUtc(ReposJsonPath, DateTime.UtcNow.AddMinutes(1));
+
+        await Assert.That(Repos.Fingerprint()).IsEqualTo(before);
+    }
 }

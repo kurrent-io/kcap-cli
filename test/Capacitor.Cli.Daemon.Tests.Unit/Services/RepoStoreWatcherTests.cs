@@ -8,8 +8,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// repo paths, so a repo added from another process reaches the launch dialog without a restart.
 /// </summary>
 public class RepoStoreWatcherTests {
-    static readonly RepoStoreFingerprint Before = new(100, 1);
-    static readonly RepoStoreFingerprint After  = new(120, 2);
+    static readonly RepoStoreFingerprint Before = new("a");
+    static readonly RepoStoreFingerprint After  = new("b");
 
     sealed class Harness {
         public RepoStoreFingerprint? File;
