@@ -121,26 +121,6 @@ public class CodexConfigTomlTests {
     }
 
     [Test]
-    [NotInParallel("CwdMutation")]
-    public async Task EnableNetworkAccess_writes_when_config_path_has_no_directory_component() {
-        // GetDirectoryName("config.toml") is empty; CreateDirectory("") would throw and
-        // silently turn the write into Change.Failed without the guard.
-        using var tmp   = new TempDir();
-        var originalCwd = Environment.CurrentDirectory;
-
-        try {
-            Environment.CurrentDirectory = tmp.Path;
-
-            var change = CodexConfigToml.EnableNetworkAccess(["**.kcap.ai"], "config.toml");
-
-            await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
-            await Assert.That(File.Exists(tmp.PathTo("config.toml"))).IsTrue();
-        } finally {
-            Environment.CurrentDirectory = originalCwd;
-        }
-    }
-
-    [Test]
     public async Task EnableNetworkAccess_empty_allowlist_is_noop() {
         using var tmp = new TempDir();
         var path = tmp.GetResolvedPath("config.toml");

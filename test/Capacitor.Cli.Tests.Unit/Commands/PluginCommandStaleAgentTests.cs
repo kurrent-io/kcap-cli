@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -32,7 +33,7 @@ public sealed class PluginCommandStaleAgentTests {
         var env = Env(home.Path, pipe, found: [Running]);
         SeedAgent(env, installed: false);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(pipe.ToString()).Contains("4821");
@@ -46,7 +47,7 @@ public sealed class PluginCommandStaleAgentTests {
         var env = Env(home.Path, pipe, found: [Running]);
         SeedAgent(env, installed: true);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(pipe.ToString())
@@ -64,7 +65,7 @@ public sealed class PluginCommandStaleAgentTests {
         var env = Env(home.Path, pipe, found: []);
         SeedAgent(env, installed: false);
 
-        await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(pipe.ToString()).DoesNotContain("already running");
     }
@@ -81,7 +82,7 @@ public sealed class PluginCommandStaleAgentTests {
         // captured" would be true but useless, and blaming this install for it would be a lie.
         Directory.CreateDirectory(env.Harnesses.Of<KiroHarness>().Paths.KcapAgentJson);
 
-        var exit = await new PluginCommand(env).HandleAsync(["plugin", "install", "--kiro"]);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(["plugin", "install", "--kiro"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(pipe.ToString()).DoesNotContain("4821");

@@ -35,6 +35,25 @@ Avalonia's `TextBox` and `SelectableTextBlock` answer the third click with `Sele
 class handler on the bubbling route. One application-wide handler on the tunnel route selects the
 logical line under the pointer and marks the press handled before that handler runs. Markdown
 bodies are outside its reach: MarkView's selection layer is internal and takes no click count.
+
+## A running daemon follows repos.json
+
+`kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
+after its own launches, so a repo added from a terminal reached the launch dialog only after a daemon
+restart. The daemon now polls a content hash of the file and re-sends its repo paths through the
+existing `DaemonUpdateRepoPaths` hub method when the file differs from the one the last send read.
+Polling rather than a control-socket nudge from the CLI: the file has several writers (the CLI, the
+desktop app, the daemon's own launch path, a hand edit), and every one of them is covered without any
+of them knowing whether a daemon is running. Content rather than size and mtime, because re-adding a
+known path rewrites the file at the same length and two such writes inside the filesystem's timestamp
+resolution would read as one. The comparison is against the fingerprint recorded by the last
+successful send, not against a baseline the watcher primes at start, which closes the window between
+registration reading the file and the watcher starting, and makes a failed send retry on the next
+tick by construction. Registration and the update share one lock across snapshot-and-send: the server
+runs one client's invocations in parallel, so two overlapping sends could otherwise land in the
+opposite order to the fingerprints they record. The interval is 3 s — one hash of one small file —
+so the repo is listed by the time the user has switched from the terminal to the browser.
+
 ## Work-items tools take the session from the running harness
 
 An MCP stdio server is spawned once, at harness startup, from the launching process's environment.
@@ -350,6 +369,28 @@ every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a 
 the lane connected in a session never opened still need the server's pending-interrupts seed; until
 it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
 session discovers.
+
+## Desktop shell: remote workspace — chat and read-only terminal
+
+A session on another machine opens as a workspace: its transcript as chat, a composer, and for a
+PTY harness a read-only terminal, all over the server. Three rules hold it together.
+
+**One chat pane, two feeds.** The chat reads rows through a feed seam: locally a tail of the
+transcript file, remotely a seed from the session detail route followed by a live tail of the
+session's stream from the position the seed ended at. Every access establishment restarts the
+tail from the last position seen and the seed is fetched only until one lands, so a reconnect
+resumes rather than replays rows under the user. Server events reach the same envelope mapping
+and vendor rules the file path applies, so the two paths cannot disagree about a row.
+
+**Authorization is the server's word, never inferred from silence.** The seed fetch and the stream
+subscribe both refuse loudly; the terminal subscribe, which the server refuses with silence, is
+attempted only once the session's access lease reads Established. An empty terminal after that is
+"no output yet", and a lane loss keeps the rows it already has.
+
+**A reported viewport is released, and (0,0) is never sent.** The server folds every viewer's size
+into the PTY's clamp until told otherwise, so a viewer that stops driving releases its size, and
+each establishment subscribes onto a fresh surface so the replay never stacks on old scrollback.
+Keystrokes cross only as the daemon's seven special keys; everything else stays local.
 
 ## A vendor update under a running daemon is re-advertised
 

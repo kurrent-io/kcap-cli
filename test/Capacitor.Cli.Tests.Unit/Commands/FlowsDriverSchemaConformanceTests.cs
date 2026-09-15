@@ -314,7 +314,7 @@ public class FlowsDriverSchemaConformanceTests {
             // rewriting the profile's network-access config.
             ? ["plugin", "install", arm.Flag, "--skip-codex-network-access"]
             : ["plugin", "install", arm.Flag, "--if-installed"];
-        var exit = await new PluginCommand(env).HandleAsync(argv);
+        var exit = await new PluginCommand(env, workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(argv);
         if (exit != 0) throw new InvalidOperationException($"{arm.Name}: installer exited {exit}");
 
         var path = arm.ConfigPath(env);

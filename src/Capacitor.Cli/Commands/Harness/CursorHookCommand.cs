@@ -10,6 +10,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -23,7 +24,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
     readonly CursorMarkers  _markers  = new(config);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -378,7 +380,7 @@ public sealed class CursorHookCommand(
                     var remaining = budget.Remaining;
                     if (remaining > TimeSpan.Zero) {
                         node = JsonNode.Parse(
-                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(config, node.ToJsonString(), workspaceRoot, remaining)
+                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(router, config, node.ToJsonString(), workspaceRoot, remaining)
                         ) ?? node;
                     }
                 }
@@ -557,8 +559,8 @@ public sealed class CursorHookCommand(
         if (sessionId is null) return null;
 
         // An absent/blank Cursor workspace root must NOT fall through to the scope resolver's
-        // Directory.GetCurrentDirectory() fallback: that would derive a repo scope from the hook
-        // PROCESS's cwd and could inject an UNRELATED repository's memories into this session.
+        // working-directory fallback: that would derive a repo scope from the hook PROCESS's
+        // directory and could inject an UNRELATED repository's memories into this session.
         // With no authoritative workspace root there is no safe scope, so skip injection entirely.
         if (string.IsNullOrWhiteSpace(workspaceRoot)) return null;
 
@@ -583,7 +585,7 @@ public sealed class CursorHookCommand(
 
             var store = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             // Both lanes send on the hook's own client, which stays this method's caller's to dispose.
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, _ => Task.FromResult(client), clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, _ => Task.FromResult(client), clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 // ClassificationAuthoritative is hardcoded true, and this is VALID UNDER THE

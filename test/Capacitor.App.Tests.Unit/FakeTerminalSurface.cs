@@ -13,4 +13,6 @@ sealed class FakeTerminalSurface : ITerminalSurface {
     public void RaiseInput(byte[] bytes) => InputProduced?.Invoke(bytes);
     public void RaiseResize(int cols, int rows) => Resized?.Invoke(cols, rows);
     public (int Cols, int Rows) CurrentSize { get; set; } = (80, 24);
+    public List<(int Cols, int Rows)> Resizes { get; } = [];
+    public void Resize(int cols, int rows) { Resizes.Add((cols, rows)); CurrentSize = (cols, rows); }
 }

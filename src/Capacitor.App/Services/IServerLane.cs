@@ -1,3 +1,5 @@
+using Eventuous.SignalR;
+
 namespace Capacitor.App.Services;
 
 public enum ServerLaneState { Dormant, Connecting, Connected, Retrying, SignedOut }
@@ -24,10 +26,23 @@ public interface IServerLane {
     IObservable<ServerPermissionRequest> PermissionRequests { get; }
     IObservable<ServerElicitationRequest> ElicitationRequests { get; }
     IObservable<string> SessionAccessChanged { get; }
+    IObservable<PendingInputUpdate> PendingInputChanged { get; }
     /// Null when the lane has no live connection right now.
     Task<IReadOnlyList<Capacitor.Remote.Models.DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct);
     Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct);
     Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct);
     Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct);
     Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct);
+    IObservable<TerminalOutputFrame> TerminalOutput { get; }
+    IObservable<TerminalSize> TerminalDimensions { get; }
+    /// A live tail from the position after `fromPosition` (null: the start). Completes when the
+    /// lane has no live hub, when the connection goes away, or when the stream is subscribed
+    /// again; throws HubException on a refused subscribe at the first MoveNextAsync.
+    IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, CancellationToken ct);
+    Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct);
+    Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct);
+    Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct);
+    Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct);
+    Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct);
+    Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct);
 }

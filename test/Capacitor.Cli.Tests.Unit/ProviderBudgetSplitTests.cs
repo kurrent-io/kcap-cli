@@ -4,15 +4,11 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Guards the effective-provider-budget split added in #229: the probe (GitProviderRouter) and the
-/// PR/MR detector share one ceiling, and the detector must run within the budget the probe LEFT
-/// BEHIND — not the full cap. This is timing-dependent in production; an injected timestamp makes
-/// it deterministic so a regression (handing the detector the full cap) is caught in CI.
+/// The probe and the PR/MR detector share one ceiling: the detector runs within what the probe LEFT
+/// BEHIND, not the full cap. Real time decides that split in production, so the timestamp is
+/// injected here — otherwise handing the detector the full cap reads as a fast machine.
 /// </summary>
 public class ProviderBudgetSplitTests {
-    [Before(Test)]
-    public void Reset() => GitProviderRouter.ResetMemoForTests();
-
     [Test]
     public async Task Detector_gets_the_budget_the_probe_left_behind() {
         var providerCap = TimeSpan.FromSeconds(2);
@@ -29,6 +25,7 @@ public class ProviderBudgetSplitTests {
 
         // Custom host → the router probes (consuming the injected time); GitLab detector then runs.
         await RepositoryDetection.ResolveAndDetectPrAsync(
+            new GitProviderRouter(),
             "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
 
         await Assert.That(detectorCap).IsNotNull();
@@ -52,6 +49,7 @@ public class ProviderBudgetSplitTests {
         };
 
         var pr = await RepositoryDetection.ResolveAndDetectPrAsync(
+            new GitProviderRouter(),
             "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
 
         await Assert.That(detectorRan).IsFalse();
@@ -75,6 +73,7 @@ public class ProviderBudgetSplitTests {
         };
 
         await RepositoryDetection.ResolveAndDetectPrAsync(
+            new GitProviderRouter(),
             "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
 
         await Assert.That(detectorCap).IsNotNull();
@@ -111,6 +110,7 @@ public class ProviderBudgetSplitTests {
         var run   = TrackedBranchRunner(() => now, t => now = t, TimeSpan.FromSeconds(1.5), calls);
 
         await RepositoryDetection.ResolveAndDetectPrAsync(
+            new GitProviderRouter(),
             "github.com", "acme", "widget", "local-name", "/cwd", TimeSpan.FromSeconds(2), run, () => now);
 
         var tracked = calls.Single(c => c.Args.StartsWith("gh pr view remote-name", StringComparison.Ordinal));
@@ -125,6 +125,7 @@ public class ProviderBudgetSplitTests {
         var run   = TrackedBranchRunner(() => now, t => now = t, TimeSpan.FromSeconds(2), calls);
 
         var pr = await RepositoryDetection.ResolveAndDetectPrAsync(
+            new GitProviderRouter(),
             "github.com", "acme", "widget", "local-name", "/cwd", TimeSpan.FromSeconds(2), run, () => now);
 
         await Assert.That(pr).IsNull();

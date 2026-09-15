@@ -165,9 +165,15 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _startingText = header.Select(h => h.Row is { } row ? LaunchStages.StartingText(row.Vendor, row.LaunchStage) : "")
             .ToProperty(this, x => x.StartingText, initialValue: "")
             .DisposeWith(_disposables);
-        _showsTerminalTab = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
+        var showsTerminal = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor));
+        _showsTerminalTab = showsTerminal
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
+        // ShowTerminalCommand is unguarded — a caller can select the tab before any dto says whether
+        // this agent has one — so presence clamps it back rather than leaving a blank pane in front.
+        showsTerminal.Subscribe(shows => {
+            if (!shows && IsTerminalActive) ActiveTab = WorkspaceTab.Chat;
+        }).DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);

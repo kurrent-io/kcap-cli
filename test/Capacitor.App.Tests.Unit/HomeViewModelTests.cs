@@ -15,6 +15,8 @@ namespace Capacitor.App.Tests.Unit;
 /// here runs inside AvaloniaSession.WithImmediateRxScheduler and carries
 /// [NotInParallel("AvaloniaSession")] — see MainWindowViewModelTests' identical header comment.
 public class HomeViewModelTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     /// The daemon mints agent ids as Guid("N") — 32 hex digits — and a Started outcome carrying
     /// anything else is the "launched but unopenable" case (spec §3), so every launch fixture here
     /// uses real-shaped ids.
@@ -616,32 +618,182 @@ public class HomeViewModelTests {
         });
     }
 
-    /// Local availability alone can never settle "awaiting" when the local daemon sits behind a
-    /// DIFFERENT server than this app's own lane — only a terminal lane outcome can, here forced
-    /// by keeping local availability pinned at ServerDisconnected for the whole test.
+    /// The app lane can report Connected while the daemon's connection word is still
+    /// "disconnected" — tokens landed, the daemon has not caught up. That is still sign-in
+    /// catch-up: Sign in would restart a flow that already succeeded. Only a SignedOut park
+    /// (or the daemon becoming Ready / down) settles the finishing notice.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task LaneOutcomeSettlesAwaitingWhenLocalAvailabilityNeverRecovers() {
+    public async Task LaneConnectedDoesNotAskToSignInWhileDaemonIsStillCatchingUp() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), laneStatus: lane.Status);
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             vm.NotifySignInCompleted();
             await Assert.That(vm.SignInVisible).IsFalse();
             await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            // Local availability never recovered (still "disconnected") — only the lane's own
-            // Connected outcome could have cleared awaiting, which the notice now reflects.
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected"));
+            await Assert.That(vm.ConnectionNotice).IsNull();
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task LaneSignedOutAfterSignInShowsSignInAgain() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            vm.NotifySignInCompleted();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+
             await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
+            await Assert.That(vm.BannerBusy).IsFalse();
+        });
+    }
+
+    /// First paint after wizard auth never calls NotifySignInCompleted — Home is constructed
+    /// afterwards. A live app lane plus a daemon still saying "disconnected" is catch-up, not
+    /// "sign in again".
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALiveAppLaneTreatsDaemonDisconnectAsConnecting() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "HTTP://LOCALHOST:9999/");
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+                serverUrl: "https://other.example", connection: "disconnected"));
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
+        });
+    }
+
+    [Test]
+    [Arguments(ServerLaneState.Connecting, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Retrying, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Connected, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Connected, null, "https://other.example")]
+    [Arguments(ServerLaneState.Connected, "https://app.example", "")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task AnUnrelatedAppLaneDoesNotMaskTheLocalServerDisconnection(
+            ServerLaneState laneState, string? appServerUrl, string daemonServerUrl) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: appServerUrl);
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
+                serverUrl: daemonServerUrl, connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(laneState));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            vm.NotifySignInCompleted();
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.BannerBusy).IsFalse();
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BannerBusyFollowsTheVisibleMessageAndSelectedMachine(bool afterSignIn) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(),
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            Connect(daemon, "disconnected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+            if (afterSignIn) vm.NotifySignInCompleted();
+
+            using var startMessage = new BehaviorSubject<string?>(null);
+            using var start = ReactiveCommand.Create(() => { });
+            using var retry = ReactiveCommand.Create(() => { });
+            vm.AttachDaemonRecovery(start, retry, Observable.Return(false), Observable.Return(true), startMessage);
+            await Assert.That(vm.BannerBusy).IsTrue();
+
+            const string failure = "Daemon start did not finish. Press Retry.";
+            startMessage.OnNext(failure);
+            await Assert.That(vm.BannerMessage).IsEqualTo(failure);
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await Assert.That(vm.BannerMessage).IsEqualTo(
+                afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.BannerMessage).IsNull();
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
+            await Assert.That(vm.BannerMessage).IsEqualTo(failure);
+            await Assert.That(vm.BannerBusy).IsFalse();
+
+            startMessage.OnNext(null);
+            await Assert.That(vm.BannerMessage).IsEqualTo(
+                afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
         });
     }
 
@@ -694,10 +846,13 @@ public class HomeViewModelTests {
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
             await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
@@ -755,9 +910,10 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task After_sign_in_a_disconnected_server_shows_finishing_not_sign_in_again() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
@@ -1167,6 +1323,9 @@ public class HomeViewModelTests {
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();

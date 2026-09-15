@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -204,7 +205,7 @@ public class UnusableUrlGuardTests : IDisposable {
         // normalization, so passing the raw payload id straight through would miss it entirely.
         var body = $$"""{"session_id":"{{dashed}}","hook_event_name":"SessionStart"}""";
 
-        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance).ShouldSuppressCaptureAsync(
+        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).ShouldSuppressCaptureAsync(
             dashless, body, "session-start", activeProfile: null, _clock.Budget(Ceiling))).IsTrue();
     }
 
@@ -215,7 +216,7 @@ public class UnusableUrlGuardTests : IDisposable {
 
         var body = $$"""{"session_id":"{{sid}}","hook_event_name":"SessionEnd"}""";
 
-        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance).ShouldSuppressCaptureAsync(
+        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).ShouldSuppressCaptureAsync(
             sid, body, "session-end", activeProfile: null, _clock.Budget(Ceiling))).IsTrue();
 
         // Collapsing the gate into a plain boolean would have dropped this cleanup.
@@ -228,7 +229,7 @@ public class UnusableUrlGuardTests : IDisposable {
         var sid  = Guid.NewGuid().ToString("N");
         var body = $$"""{"session_id":"{{sid}}","hook_event_name":"SessionStart"}""";
 
-        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance).ShouldSuppressCaptureAsync(
+        await Assert.That(await new ClaudeHookCommand(Config.Root, Resolutions.None(Config.Root), _clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).ShouldSuppressCaptureAsync(
             sid, body, "session-start", activeProfile: null, _clock.Budget(Ceiling))).IsFalse();
     }
 
@@ -237,7 +238,7 @@ public class UnusableUrlGuardTests : IDisposable {
     public async Task Cursor_never_builds_a_client_for_an_unusable_url() {
         var entered = false;
 
-        var exit = await new CursorHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient())).HandleWithDeps(
+        var exit = await new CursorHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"""),
             _ => {
                 entered = true;
@@ -257,7 +258,7 @@ public class UnusableUrlGuardTests : IDisposable {
     public async Task Claude_never_builds_a_client_for_an_unusable_url() {
         var entered = false;
 
-        var exit = await new ClaudeHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), SystemProcessStarter.Instance).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Bad, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Bad, new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             new HookSpool(_dir),
             stdin: new StringReader($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}"}"""),
             clientFactory: () => {

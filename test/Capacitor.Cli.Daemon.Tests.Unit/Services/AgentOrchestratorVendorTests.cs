@@ -63,13 +63,14 @@ public class AgentOrchestratorVendorTests {
     [Test]
     public async Task ReRegister_retries_a_transient_per_agent_failure_then_succeeds() {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection { AgentRegisteredFailTimes = 1 };
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance(
-            "agent-rereg", null, "", null, worktree.Path, "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
+            "agent-rereg", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         ));
 
         // The orchestrator wires ReRegisterAgentsHook in its ctor; invoking it runs the same
@@ -85,13 +86,14 @@ public class AgentOrchestratorVendorTests {
     [Test]
     public async Task ReRegister_reports_pty_transport_for_a_pty_codex_runtime() {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection();
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance(
-            "agent-codex-pty", null, "", null, worktree.Path, "codex",
-            new PtyHostedAgentRuntime("codex", new StubPtyProcess()), new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
+            "agent-codex-pty", null, "", null, worktreePath, "codex",
+            new PtyHostedAgentRuntime("codex", new StubPtyProcess()), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         ));
 
         await server.ReRegisterAgentsHook!();
@@ -544,6 +546,7 @@ public class AgentOrchestratorVendorTests {
     [Test]
     public async Task Reregistration_resends_the_same_applied_posture() {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         // A server restart wipes the in-memory echo; the reconnect path rebuilds it from the
         // AgentInstance, so the pair must survive rather than silently becoming null.
         var server     = new CaptureServerConnection();
@@ -552,9 +555,9 @@ public class AgentOrchestratorVendorTests {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance(
-            "agent-rereg-posture", null, "", null, worktree.Path, "codex",
+            "agent-rereg-posture", null, "", null, worktreePath, "codex",
             new PtyHostedAgentRuntime("codex", new StubPtyProcess()),
-            new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
+            new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         ) {
             SandboxPolicy = "danger-full-access", ApprovalPolicy = "never"
         });

@@ -5,24 +5,24 @@ using SvcSystems.UI.Terminal;
 
 /// Production ITerminalSurface wrapping SvcSystems.UI.Terminal's TerminalControlModel.
 ///
-/// InputProduced fans in TWO distinct sources, both discovered in Task 8 and neither
-/// re-exposing the other: TerminalControlModel.UserInput (keyboard/mouse-originated bytes,
-/// ReadOnlyMemory&lt;byte&gt; already) and Terminal.Engine.DataReceived (terminal-originated
-/// protocol replies, e.g. a DSR/CPR answer — only reachable via the raw XTerm.NET engine
-/// object, which neither the SvcSystems Terminal wrapper nor the model re-expose; its payload
-/// is a string that must be UTF-8 encoded before it can join the same byte[] event). Both are
-/// needed for a correct PTY round trip: dropping either one silently breaks either keystrokes
-/// or terminal-side query/response protocols (cursor position reports, etc.).
+/// InputProduced fans in TWO distinct sources, neither re-exposing the other:
+/// TerminalControlModel.UserInput (keyboard/mouse-originated bytes, ReadOnlyMemory&lt;byte&gt;
+/// already) and Terminal.Engine.DataReceived (terminal-originated protocol replies, e.g. a
+/// DSR/CPR answer — only reachable via the raw XTerm.NET engine object, which neither the
+/// SvcSystems Terminal wrapper nor the model re-expose; its payload is a string that must be
+/// UTF-8 encoded before it can join the same byte[] event). Both are needed for a correct PTY
+/// round trip: dropping either one silently breaks either keystrokes or terminal-side
+/// query/response protocols (cursor position reports, etc.).
 public sealed class XtermTerminalSurface : ITerminalSurface {
-    /// The VM-owned model handle the view binds (Task 12).
+    /// The VM-owned model handle the view binds.
     public TerminalControlModel Model { get; }
 
     public event Action<byte[]>? InputProduced;
     public event Action<int, int>? Resized;
 
-    // Terminal (the SvcSystems wrapper), not the model itself — the model has no direct Cols/Rows
-    // of its own (Task 8 discovery); Terminal.Cols/Rows are live, tracking every resize applied
-    // via Model.Terminal.Resize(cols, rows).
+    // Terminal (the SvcSystems wrapper), not the model itself — the model exposes no Cols/Rows of
+    // its own, while Terminal.Cols/Rows are live, tracking every resize applied via
+    // Model.Terminal.Resize(cols, rows).
     public (int Cols, int Rows) CurrentSize => (Model.Terminal.Cols, Model.Terminal.Rows);
 
     readonly TerminalFeedSanitizer _sanitizer = new();
@@ -59,4 +59,6 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
 
     void OnSizeChanged(object? sender, TerminalSizeChangedEventArgs e) =>
         Resized?.Invoke(e.Cols, e.Rows);
+
+    public void Resize(int cols, int rows) => Model.Terminal.Resize(cols, rows);
 }
