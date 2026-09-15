@@ -160,6 +160,22 @@
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).IsChatActive}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
+
+            <!-- Over the (still empty) chat host while the daemon is starting the runtime: the
+                 stage line is the only sign the launch is alive during a handshake that can run
+                 for many seconds. -->
+            <Border x:Name="StartingPanel" IsVisible="{Binding IsStarting}"
+                    Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                    CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="6" HorizontalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                        <Ellipse Width="8" Height="8" Fill="{StaticResource KcapWarningBrush}" Classes="pulsing" VerticalAlignment="Center" />
+                        <TextBlock x:Name="StartingText" Text="{Binding StartingText}" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock Text="The agent appears in the rail as soon as it registers." FontSize="11.5"
+                               Foreground="{StaticResource KcapMutedBrush}" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
     <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}" />

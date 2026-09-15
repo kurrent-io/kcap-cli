@@ -26,6 +26,11 @@ public interface IAgentDirectory {
     /// Whether the local daemon has proven it hosts this agent — the daemon proved to be its
     /// server twin registers it. A shared agent id proves nothing: the dedup fails open.
     bool IsProvenLocalTwin(string agentId);
+    /// A row for a launch the server accepted, standing until the local lane publishes the id;
+    /// a same-id row on the remote lane is a different agent and leaves it in place. It is
+    /// dropped by the caller on a launch failure, and expires on its own after ten minutes.
+    void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model);
+    void RemovePlaceholder(string agentId);
 }
 
 /// Merges the local daemon's agents with the server registry's into source-scoped rows.
@@ -42,6 +47,9 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     readonly Func<string, string> _resolveLocalRepoRoot;
     readonly string? _localMachineId;
     readonly string? _appServerUrl;
+    readonly TimeProvider _time;
+    // Nothing else need ever change in an idle directory, so expiry is this timer's job alone.
+    readonly ITimer _placeholderExpiry;
     readonly object _lock = new();
     readonly BehaviorSubject<bool> _onAppServer = new(false);
 
@@ -50,17 +58,23 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     string? _localServerUrl;
     List<AgentInstanceDto> _remoteAgents = [];
     List<AgentStatusDto> _localAgents = [];
+    List<PendingLaunchDto> _pendingLaunches = [];
+    readonly Dictionary<string, AgentRow> _placeholders = new(StringComparer.Ordinal);
+    static readonly TimeSpan PlaceholderTtl = TimeSpan.FromMinutes(10);
     FrozenSet<string> _twinAgents = FrozenSet<string>.Empty;
+    bool _disposed;
 
     public AgentDirectory(
             IDaemonClientService local, IRemoteAgentsService remote, IServerLane lane,
             RepoIdentityResolver repoIdentity, Func<string, string> resolveLocalRepoRoot,
-            string? localMachineId, string? appServerUrl) {
+            string? localMachineId, string? appServerUrl, TimeProvider? time = null) {
         _local = local;
         _repoIdentity = repoIdentity;
         _resolveLocalRepoRoot = resolveLocalRepoRoot;
         _localMachineId = localMachineId;
         _appServerUrl = appServerUrl;
+        _time = time ?? TimeProvider.System;
+        _placeholderExpiry = _time.CreateTimer(_ => Recompute(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
 
         RemoteStale = lane.Status.Select(s => s.State != ServerLaneState.Connected).DistinctUntilChanged();
 
@@ -69,6 +83,10 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         // every change — an incremental Add/Update/Remove-per-key handler can't express that.
         local.Agents.Connect().ToCollection()
             .Subscribe(items => { lock (_lock) _localAgents = [.. items]; Recompute(); })
+            .DisposeWith(_subscriptions);
+
+        local.Pending.Connect().ToCollection()
+            .Subscribe(items => { lock (_lock) _pendingLaunches = [.. items]; Recompute(); })
             .DisposeWith(_subscriptions);
 
         remote.Agents.Connect().ToCollection()
@@ -105,6 +123,20 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
 
     public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
 
+    // Placeholders are keyed by the normalized id: the server accepts a launch under one spelling
+    // and the daemon can publish it under another.
+    public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) {
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) _placeholders[key] = AgentRow.Placeholder(key, vendor, repoPath, title, model, _time.GetUtcNow().UtcDateTime, RepoFor(repoPath));
+        Recompute();
+    }
+
+    public void RemovePlaceholder(string agentId) {
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) _placeholders.Remove(key);
+        Recompute();
+    }
+
     /// Both session lookups answer for a server-lane session id. While the local daemon reports
     /// another server, its rows carry that server's ids and a match here is coincidence: the id
     /// names a different session, whose agent is not the local one.
@@ -127,12 +159,11 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         public int GetHashCode(IReadOnlyDictionary<string, string> obj) => obj.Count;
     }
 
-    AgentRow ProjectLocal(AgentStatusDto dto) {
-        var repo = dto.RepoPath is { Length: > 0 } path
-            ? _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)))
-            : new RepoIdentity("path:", "No repository");
-        return AgentRow.FromLocal(dto, repo);
-    }
+    RepoIdentity RepoFor(string? repoPath) => repoPath is { Length: > 0 } path
+        ? _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)))
+        : new RepoIdentity("path:", "No repository");
+
+    AgentRow ProjectLocal(AgentStatusDto dto) => AgentRow.FromLocal(dto, RepoFor(dto.RepoPath));
 
     // The compute-then-edit pair must be one atomic unit under _lock: two triggers (e.g. a
     // socket-thread Status flip racing a SignalR-thread Daemons refresh) that read-then-edit as
@@ -145,6 +176,9 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     // seed gap after every connect), so an unpaired local row stands as display-only history.
     void Recompute() {
         lock (_lock) {
+            // The expiry timer's callback can land after Dispose ran; the lock serialises the two
+            // and the flag turns the late callback into a no-op instead of an edit of a disposed cache.
+            if (_disposed) return;
             var twin = LocalDaemonTwin.Find(_daemons, _localMachineId, _local.DaemonName, _localServerUrl, _appServerUrl);
             var twinProven = twin is not null;
             bool OnTwin(AgentInstanceDto a) =>
@@ -174,6 +208,27 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 .Select(ProjectLocal);
             var next = localRows.Concat(remote.Select(AgentRow.FromRemote)).ToList();
 
+            // A published local row retires the launch's stand-ins for good; the daemon's own
+            // pending entry only hides the app's placeholder, which returns should the entry vanish
+            // without a row, until the failure notice or the TTL removes it. Only the local lane
+            // counts: a same-id row on the remote lane is a different agent, and ids compare in
+            // their normalized form because the two lanes spell a Guid differently.
+            var published = next.Where(r => r.Origin == AgentOrigin.Local).Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            foreach (var id in _placeholders.Keys.Where(published.Contains).ToList()) _placeholders.Remove(id);
+            var now = _time.GetUtcNow().UtcDateTime;
+            foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
+            // Infinite when nothing is pending: a negative due time would fire at once and re-arm forever.
+            var remaining = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : _placeholders.Values.Min(r => r.CreatedAt) + PlaceholderTtl - now;
+            var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : remaining < TimeSpan.Zero ? TimeSpan.Zero : remaining;
+            _placeholderExpiry.Change(nextExpiry, Timeout.InfiniteTimeSpan);
+            var pendingRows = _pendingLaunches
+                .Where(p => AgentIds.Normalize(p.Id) is { } id && !published.Contains(id))
+                .Select(p => AgentRow.FromPending(p, RepoFor(p.RepoPath)))
+                .ToList();
+            var starting = pendingRows.Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            next.AddRange(pendingRows);
+            next.AddRange(_placeholders.Values.Where(r => !starting.Contains(r.Id)));
+
             _rows.Edit(cache => {
                 foreach (var key in cache.Keys.Where(k => !next.Any(r => r.Key == k)).ToList())
                     cache.RemoveKey(key);
@@ -192,6 +247,11 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     }
 
     public void Dispose() {
+        lock (_lock) {
+            if (_disposed) return;
+            _disposed = true;
+            _placeholderExpiry.Dispose();
+        }
         _subscriptions.Dispose();
         _rows.Dispose();
     }
