@@ -13,6 +13,7 @@
         <PackageReference Include="Avalonia.Headless" />
         <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
         <PackageReference Include="WireMock.Net" />
+        <PackageReference Include="NSubstitute" />
     </ItemGroup>
     <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App" />

@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using DynamicData;
@@ -23,7 +24,7 @@ public class PullRequestViewSmokeTests {
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time);
         var vm = new WorkspaceViewModel("agent", daemon, NewActions(), attach.Factory, () => new FakeTerminalSurface(), time,
-            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source);
+            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: source);
         var view = new WorkspaceView { DataContext = vm };
         var window = new Window { Content = view, Width = 1200, Height = 800 };
         window.Show();
@@ -65,7 +66,7 @@ public class PullRequestViewSmokeTests {
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time) { Links = [] };
         var vm = new WorkspaceViewModel("agent", daemon, NewActions(), new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), time,
-            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source);
+            new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: source);
         var view = new WorkspaceView { DataContext = vm };
         var window = new Window { Content = view, Width = 1200, Height = 800 };
         window.Show();

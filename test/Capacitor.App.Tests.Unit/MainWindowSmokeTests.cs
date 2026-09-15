@@ -39,7 +39,7 @@ public class MainWindowSmokeTests {
     static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, AgentActionService actions, string agentId) =>
         new(agentId, service, actions, new FakeTerminalAttachClientFactory().Factory,
             () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
-            new FakeWorkContextSource(), new ScriptedLocalControlOps());
+            new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -302,7 +302,7 @@ public class MainWindowSmokeTests {
                 service, CancellationToken.None, activity,
                 workspaceFactory: agentId => new WorkspaceViewModel(
                     agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps()));
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -400,7 +400,7 @@ public class MainWindowSmokeTests {
                 service, CancellationToken.None, TestActivity.New(),
                 workspaceFactory: agentId => new WorkspaceViewModel(
                     agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
-                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source));
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: source));
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -454,7 +454,7 @@ public class MainWindowSmokeTests {
                     service, CancellationToken.None, TestActivity.New(),
                     workspaceFactory: agentId => new WorkspaceViewModel(
                         agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-                        new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps()));
+                        new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();

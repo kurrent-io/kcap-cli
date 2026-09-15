@@ -52,7 +52,7 @@ public class ChatTabViewModelTests {
             seed?.Invoke(Permissions);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal), projection, Opener, Time, Permissions, unavailableNote);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), projection, Opener, Time, Permissions, unavailableNote);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -677,12 +677,15 @@ public class ChatTabViewModelTests {
     sealed class ScriptedInput : ChatInput {
         public TaskCompletionSource<ChatSendOutcome>? Pending;
         public int Disposals;
-        public List<(string Text, CancellationToken Ct)> Sends { get; } = [];
+        public bool CanAttachValue = true;
+        public List<(string Text, IReadOnlyList<string> Ids, CancellationToken Ct)> Sends { get; } = [];
         public override SendAvailability Availability => Pending is null ? SendAvailability.Ready : SendAvailability.Sending;
         public override bool CanAcceptText => Pending is null;
         public override string Hint => "scripted";
-        public override Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) {
-            Sends.Add((text, ct));
+        public override bool CanAttach => CanAttachValue;
+        public override string? AttachHint => CanAttachValue ? null : "attachments need the daemon updated";
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
+            Sends.Add((text, attachmentIds, ct));
             Pending = new TaskCompletionSource<ChatSendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             this.RaisePropertyChanged(nameof(CanAcceptText));
             return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -1316,7 +1319,9 @@ public class ChatTabViewModelTests {
         public override SendAvailability Availability => SendAvailability.Ready;
         public override bool CanAcceptText => true;
         public override string Hint => "";
-        public override Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) => Task.FromResult(ChatSendOutcome.Accepted);
+        public override bool CanAttach => true;
+        public override string? AttachHint => null;
+        public override Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) => Task.FromResult(ChatSendOutcome.Accepted);
         public override void Dispose() { }
     }
 
@@ -1357,7 +1362,7 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), serverQueue: queue);
 
             chat.ComposerText = "do it";
@@ -1400,7 +1405,7 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), serverQueue: queue);
 
             chat.ComposerText = "do it";
@@ -1430,7 +1435,7 @@ public class ChatTabViewModelTests {
             var feed = new ScriptedFeed();
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => feed,
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
                 new RecordingOpener(), time, new FakePermissionService(), serverQueue: queue);
 
             chat.ComposerText = "do it";
@@ -1463,7 +1468,7 @@ public class ChatTabViewModelTests {
             var feed = new ScriptedFeed { FailNext = "not signed in" };
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => feed,
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
                 new RecordingOpener(), time, new FakePermissionService());
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Failed);

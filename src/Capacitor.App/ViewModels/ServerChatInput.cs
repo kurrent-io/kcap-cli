@@ -58,8 +58,13 @@ internal sealed class ServerChatInput : ChatInput {
         _                        => "Connecting to the session…",
     };
 
-    public override async Task<ChatSendOutcome> SendAsync(string text, CancellationToken ct) {
+    /// A session on another machine has no attachment lane yet: the hub call carries text alone.
+    public override bool CanAttach => false;
+    public override string? AttachHint => "attachments to a session on another machine are not supported yet";
+
+    public override async Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
         if (_disposed || !CanAcceptText || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
+        if (attachmentIds.Count > 0) return Settle(ChatSendOutcome.Rejected, AttachHint);
         _sending = true; _notice = null; Raise();
         HubCallOutcome outcome;
         try {

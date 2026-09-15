@@ -708,4 +708,37 @@ public class LocalControlOpsTests {
             await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         });
     }
+
+    // ---- SendTextWithAttachmentsAsync ----
+
+    static ConnScript SendTextWithAttachmentsAckThen(string json, Action<string>? capture = null) => async (_, s, ct) => {
+        var f = await FrameCodec.ReadAsync(s, ct);
+        if (f?.Type == FrameType.SendTextWithAttachments) {
+            capture?.Invoke(f.Text);
+            await FrameCodec.WriteAsync(s, LocalFrame.InputJson(FrameType.SendTextAck, json), ct);
+        }
+    };
+
+    [Test]
+    public async Task Send_text_with_attachments_sends_frame_24_with_ids_and_reads_the_ack() {
+        if (OperatingSystem.IsWindows()) return;
+        string? sent = null;
+        await WithOpsAsync([SendTextWithAttachmentsAckThen("""{"ok":true,"reason":null,"error":null,"outcome":"delivered"}""", j => sent = j)], async ops => {
+            var result = await ops.SendTextWithAttachmentsAsync("a1", "hi", ["0123456789abcdef0123456789abcdef"], CancellationToken.None);
+            await Assert.That(result.Ok).IsTrue();
+            await Assert.That(result.Outcome).IsEqualTo(SendTextOutcomes.Delivered);
+            await Assert.That(sent).IsEqualTo("""{"agent_id":"a1","text":"hi","attachment_ids":["0123456789abcdef0123456789abcdef"]}""");
+        });
+    }
+
+    [Test]
+    public async Task Send_text_with_attachments_maps_eof_to_transport() {
+        if (OperatingSystem.IsWindows()) return;
+        await WithOpsAsync([Eof()], async ops => {
+            var result = await ops.SendTextWithAttachmentsAsync("a1", "hi", ["0123456789abcdef0123456789abcdef"], CancellationToken.None);
+            await Assert.That(result.Ok).IsFalse();
+            await Assert.That(result.Reason).IsEqualTo(SendTextReasons.Transport);
+            await Assert.That(result.Outcome).IsNull();
+        });
+    }
 }

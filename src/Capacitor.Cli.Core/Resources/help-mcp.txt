@@ -14,8 +14,9 @@ Subcommands:
   memory                  Start the MCP memory server (stdio) — team memory
                           tools (search, get, save, update, rescope, archive).
   workitems               Start the MCP workitems server (stdio) — declare and
-                          list a session's work-item attachments. Claude Code
-                          only.
+                          list a session's work-item attachments and structure.
+  plans                   Start the MCP plans server (stdio) — declare the plan
+                          document and task list a session executes.
 
 Options for review:
   --owner <owner>         Repository owner (session default)
@@ -127,8 +128,33 @@ mcp workitems:
       get_work_item_topology   Read a work item's parent, parts, and
                                 dependencies (scoped to what the caller sees).
 
-  Claude Code auto-registers `kcap-workitems` via the plugin's `.mcp.json`
-  (installed by `kcap setup`); it is not offered for Cursor or Codex.
+  Registered for every supported harness by `kcap setup` / `kcap plugin
+  install` (Claude Code reads it from the plugin's `.mcp.json`).
+
+mcp plans:
+  Exposes four tools for agents to keep Capacitor's record of the plan a
+  session executes — the document it works from, its ordered task list and
+  each task's status. Nothing is inferred: the agent declares it, and the
+  session view, the eval judge and `kcap validate-plan` read it back.
+  Requires `kcap login`.
+
+    Tools:
+      declare_plan_document    Declare the plan, spec or design document
+                                (kind + path; optional argues_from and
+                                work_item_id). The file is read locally,
+                                hashed, snapshotted up to 256 KB and keyed
+                                against the git repository root.
+      set_plan_tasks           Declare the task list as a full ordered
+                                snapshot; entries with a known task_id keep it.
+      update_plan_task         Record one status transition by task_id or
+                                1-based ordinal (pending, in_progress,
+                                completed, skipped), with an optional note.
+      get_plan                 Read the plan back — documents, tasks with
+                                status and source, progress.
+
+  Without plan_id each tool acts on the session's current plan; session_id
+  defaults to the session the server runs in. Registered for every supported
+  harness by `kcap setup` / `kcap plugin install`, like `kcap-workitems`.
 
 mcp analytics:
   Exposes two read-only tools — get_analytics_schema, query_analytics — for
@@ -157,7 +183,7 @@ mcp analytics:
 INSTALL
 
   `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`,
-  `kcap-flows`, and `kcap-analytics`
+  `kcap-flows`, `kcap-workitems`, `kcap-plans`, and `kcap-analytics`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap

@@ -1190,6 +1190,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     [Arguments("KCAP-FLOWS")]
     [Arguments("kcap-memory")]
     [Arguments("kcap-workitems")]
+    [Arguments("kcap-plans")]
     [Arguments("kcap-analytics")]
     [Arguments("totally-unknown")]
     public async Task ReviewFlow_NonAutoApprovableAllowlistEntry_ThrowsBeforeSpawn(string entry) {

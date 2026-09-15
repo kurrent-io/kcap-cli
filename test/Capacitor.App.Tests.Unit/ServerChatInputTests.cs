@@ -53,19 +53,33 @@ public class ServerChatInputTests {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Ready();
-            await Assert.That(await h.Input.SendAsync("fix it", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
+            await Assert.That(await h.Input.SendAsync("fix it", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
             await Assert.That(h.Lane.UserInputs).Contains(("a1", "fix it"));
             await Assert.That(h.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");
 
             h.Lane.UserInputHandler = _ => Task.FromResult(HubCallOutcome.NotConnected);
-            await Assert.That(await h.Input.SendAsync("again", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
+            await Assert.That(await h.Input.SendAsync("again", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
             await Assert.That(h.Input.Hint).Contains("delivery unconfirmed");
             h.Input.ConfirmLastSend();
             await Assert.That(h.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");
 
             h.Lane.UserInputHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
-            await Assert.That(await h.Input.SendAsync("nope", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await h.Input.SendAsync("nope", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(h.Input.Hint).IsEqualTo("you cannot message this session");
+            h.Input.Dispose();
+        });
+    }
+
+    [Test]
+    public async Task A_send_with_attachments_is_refused_before_the_hub_is_called() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Ready();
+            await Assert.That(h.Input.CanAttach).IsFalse();
+            await Assert.That(await h.Input.SendAsync("see this", ["0123456789abcdef0123456789abcdef"], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(h.Lane.UserInputs).IsEmpty();
+            await Assert.That(h.Input.Hint).IsEqualTo(h.Input.AttachHint);
+            await Assert.That(h.Input.Availability).IsEqualTo(SendAvailability.Ready);
             h.Input.Dispose();
         });
     }
@@ -75,7 +89,7 @@ public class ServerChatInputTests {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Ready();
-            await Assert.That(await h.Input.SendAsync("hello", new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await h.Input.SendAsync("hello", [], new CancellationToken(true))).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(h.Lane.UserInputs).IsEmpty();
             h.Input.Dispose();
         });
@@ -87,7 +101,7 @@ public class ServerChatInputTests {
             var h = new Harness();
             h.Ready();
             h.Lane.UserInputHandler = _ => Task.FromException<HubCallOutcome>(new IOException("socket"));
-            await Assert.That(await h.Input.SendAsync("hello", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
+            await Assert.That(await h.Input.SendAsync("hello", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
             await Assert.That(h.Input.Hint).Contains("delivery unconfirmed");
             await Assert.That(h.Input.Availability).IsEqualTo(SendAvailability.Ready);
             h.Input.ConfirmLastSend();
@@ -120,7 +134,7 @@ public class ServerChatInputTests {
     public async Task A_send_while_not_ready_is_rejected_before_it_reaches_the_lane() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(await h.Input.SendAsync("early", CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
+            await Assert.That(await h.Input.SendAsync("early", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Rejected);
             await Assert.That(h.Lane.UserInputs).IsEmpty();
             h.Input.Dispose();
         });

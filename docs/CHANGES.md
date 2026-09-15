@@ -36,6 +36,71 @@ class handler on the bubbling route. One application-wide handler on the tunnel 
 logical line under the pointer and marks the press handled before that handler runs. Markdown
 bodies are outside its reach: MarkView's selection layer is internal and takes no click count.
 
+## Desktop prompts carry attachments
+
+The launcher's goal box and the session composer stage files and send ids, never bytes. The
+server's temp attachment store is the one byte path on every lane, because it is the only
+mechanism that already ships bytes to a daemon on another machine, its size cap is enforced
+server-side, and the bytes' lifetime there is already someone else's problem. Ids are what travel
+onward in receipts, in the pending-launch entries and in the last-sent reference, so a staged
+file's bytes live in one tray and leave with its chip.
+
+Where the daemon writes a fetched file follows the agent's containment rather than the vendor. An
+agent that can already write anywhere the daemon can gets `<worktree>/.attached/`, which is the one
+place a workspace-confined file tool is sure to read. A write-contained runtime — Codex under
+seatbelt or landlock — would instead be handed a write its own sandbox forbids, so its default-kind
+launches land in a per-agent directory under the daemon's state directory, outside every cwd, named
+absolutely in the trailer. Each runtime factory answers one question: can this process be running,
+write-contained, while a fetch for it happens? A worktree placement over a borrowed cwd is refused
+outright — the follow-up is dropped and a launch carrying ids fails — because the user's own
+checkout is never written to and no attachment is dropped without a word.
+
+A chat send that carries attachments rides a new frame, `SendTextWithAttachments` (24), behind
+`input/2`, which an older daemon's codec rejects before routing. A trailing `attachment_ids` on the
+existing text payload was rejected for the opposite behaviour: an older decoder ignores an unknown
+member, so the text would arrive, the files would vanish, and nothing would say so — and a
+capability check on the status connection does not cover the one-shot socket a send opens.
+
+A fetch is fail-closed and published atomically. Files stream into a pending directory and one
+same-filesystem rename publishes the batch, so the agent sees all of it or none of it; the batch
+stays revocable until the runtime's write commits, and every exit between the fetch and that write
+rolls it back, leaving nothing where the agent looks for attachments. A launch whose attachments
+cannot be fetched fails rather than delivering the text alone: a user who attached a file meant the
+file, and the text without it means something else.
+
+One downgrade gap is accepted. The affordance is gated before the send — `input/2` from the local
+daemon's hello, the advertised daemon version for a remote machine — so "+" disables with
+"attachments need the daemon updated" instead of failing after the fact. But the server dispatches a
+launch after that check and enforces no daemon version, so an operator who downgrades their own
+daemon inside a window of seconds gets a pre-change daemon's best-effort delivery; that is the only
+case where an attached file is dropped silently. Because a launch is merely accepted when the hub
+returns, its draft is retained for ten minutes — the server's own byte TTL — and restored when a
+delayed failure can be correlated back to it. The web path changes with all of this, deliberately:
+default-kind Codex files move to the daemon store, every fetch lands in one directory per batch, a
+missing attachment fails the send with the generic rejection the web already renders rather than
+sending text without it, and an in-place non-Codex agent is refused instead of getting `.attached/`
+inside the user's checkout.
+
+The remote workspace's composer carries text alone: its channel declares no attachment support, so
+"+" disables with "attachments to a session on another machine are not supported yet" and a send
+that somehow carries ids is refused before the hub is called. When that lane lands, its channel is
+the server's `SendUserInput(agentId, text, attachmentIds)` and the tray, uploader and Home's version
+gate apply unchanged.
+
+## Plans are declared from the CLI
+
+A plan document is read by the CLI, not sent for the server to fetch: the server keys a document
+on its repo-relative path and the workspace root exactly as discovery keys a written file, so the
+tool sends the path relative to the git top level and only attaches content at or under the
+server's 256 KB transport cap; above it the document is declared by hash alone and the tool result
+says so. A path is refused before it is read when it, or any link between the repository root and
+it, resolves outside the root: the server rejects such a path as well, but only once the content
+has reached it. `update_plan_task` resolves the session's current plan before it posts when no `plan_id` is
+given, because the update route answers with the task alone and every result has to name the plan
+it acted on. The SessionStart nudge for Claude reads the installed plugin's `.mcp.json` rather than
+assuming the bundled copy: a plugin installed before `kcap-plans` existed carries no such server,
+and a nudge toward a tool the session lacks is worse than none.
+
 ## A running daemon follows repos.json
 
 `kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and

@@ -58,7 +58,7 @@ public static class FrameCodec {
             or FrameType.ConsentAck or FrameType.DaemonStatus
             or FrameType.PermissionSubscribe or FrameType.PermissionResolve
             or FrameType.PermissionPending or FrameType.PermissionResolved or FrameType.PermissionAck
-            or FrameType.SendText or FrameType.SendTextAck
+            or FrameType.SendText or FrameType.SendTextAck or FrameType.SendTextWithAttachments
             or FrameType.DaemonSettingsPut or FrameType.DaemonSettingsAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => f.Bytes, // pre-encoded by the helpers below
@@ -81,7 +81,7 @@ public static class FrameCodec {
             or FrameType.ConsentAck or FrameType.DaemonStatus
             or FrameType.PermissionSubscribe or FrameType.PermissionResolve
             or FrameType.PermissionPending or FrameType.PermissionResolved or FrameType.PermissionAck
-            or FrameType.SendText or FrameType.SendTextAck
+            or FrameType.SendText or FrameType.SendTextAck or FrameType.SendTextWithAttachments
             or FrameType.DaemonSettingsPut or FrameType.DaemonSettingsAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => new(t) { Bytes = p },
