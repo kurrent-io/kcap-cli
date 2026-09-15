@@ -59,4 +59,6 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
 
     void OnSizeChanged(object? sender, TerminalSizeChangedEventArgs e) =>
         Resized?.Invoke(e.Cols, e.Rows);
+
+    public void Resize(int cols, int rows) => Model.Terminal.Resize(cols, rows);
 }

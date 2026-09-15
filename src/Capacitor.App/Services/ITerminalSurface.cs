@@ -20,4 +20,7 @@ public interface ITerminalSurface {
     /// correct the client's post-attach nudge (sent at RunAsync's phantom initial size, before the
     /// real pane size was ever known) to what the pane is actually showing.
     (int Cols, int Rows) CurrentSize { get; }
+
+    /// Sizes the pane to the source PTY — a remote viewer follows the source, it never drives it.
+    void Resize(int cols, int rows);
 }
