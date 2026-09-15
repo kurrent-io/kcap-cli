@@ -22,6 +22,7 @@ public sealed class AttachmentDropPaste : IDisposable {
     readonly CancellationTokenSource _lifetime = new();
     bool _reentrantPaste;
     bool _disposed;
+    bool _busy;
     Task? _intake;
 
     AttachmentDropPaste(
@@ -58,7 +59,10 @@ public sealed class AttachmentDropPaste : IDisposable {
     }
 
     void OnPasting(object? sender, RoutedEventArgs e) {
-        if (_reentrantPaste) return;
+        if (_reentrantPaste) {
+            _reentrantPaste = false;
+            return;
+        }
         e.Handled = true;
         StartIntake(async ct => {
             var transfer = await _clipboard();
@@ -86,8 +90,10 @@ public sealed class AttachmentDropPaste : IDisposable {
     }
 
     /// The TextBox's own paste was handled away, so the text case runs it again. The latch has to
-    /// outlive the call: the platform clipboard read inside it is asynchronous, and the paste event
-    /// it raises on the way back would otherwise read as the user's and be handled away in turn.
+    /// outlive the call — the platform clipboard read inside it is asynchronous, and the paste event
+    /// it raises on the way back would otherwise read as the user's and be handled away in turn —
+    /// and the arrival it was armed for drops it, so the very next paste is the user's again. The
+    /// post is the fallback for a paste that raises no event at all.
     void PasteText() {
         _reentrantPaste = true;
         try { _textBox.Paste(); } finally {
@@ -129,19 +135,30 @@ public sealed class AttachmentDropPaste : IDisposable {
     static IntakeResult Refusal(IAttachmentSink sink) =>
         new([], [new("attachments", sink.AttachHint ?? "attachments are not available")]);
 
+    /// The busy flag is raised here rather than inside the delegate: the delegate runs a dispatcher
+    /// turn later, and a source that pumps the queue on its way in — a file picker does — would
+    /// otherwise open a second intake before the first is recorded. The sink's own call is guarded
+    /// too: nothing it throws may reach a task nobody awaits.
     void StartIntake(Func<CancellationToken, Task<IntakeResult?>> work, IntakeRefusal onFailure) {
-        if (_intake is { IsCompleted: false }) return;
+        if (_busy) return;
+        _busy = true;
         var ct = _lifetime.Token;
         _intake = Dispatcher.UIThread.InvokeAsync(async () => {
-            IntakeResult? result;
-            try { result = await work(ct); } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-                return;
+            try {
+                IntakeResult? result;
+                try { result = await work(ct); } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                    return;
+                } catch (Exception ex) {
+                    Console.Error.WriteLine($"attachment intake: {ex.Message}");
+                    result = new IntakeResult([], [onFailure]);
+                }
+                if (ct.IsCancellationRequested || result is null) return;
+                _sink()?.Accept(result);
             } catch (Exception ex) {
                 Console.Error.WriteLine($"attachment intake: {ex.Message}");
-                result = new IntakeResult([], [onFailure]);
+            } finally {
+                _busy = false;
             }
-            if (ct.IsCancellationRequested || result is null) return;
-            _sink()?.Accept(result);
         });
     }
 
@@ -149,6 +166,7 @@ public sealed class AttachmentDropPaste : IDisposable {
         if (_disposed) return;
         _disposed = true;
         _lifetime.Cancel();
+        DragDrop.SetAllowDrop(_card, false);
         _textBox.RemoveHandler(TextBox.PastingFromClipboardEvent, OnPasting);
         _card.RemoveHandler(DragDrop.DragEnterEvent, OnDragOver);
         _card.RemoveHandler(DragDrop.DragOverEvent, OnDragOver);

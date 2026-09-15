@@ -14,6 +14,7 @@ public partial class AttachmentChipStrip : UserControl {
 
     readonly ObservableCollection<StagedAttachmentViewModel> _chips = [];
     INotifyCollectionChanged? _watched;
+    bool _attached;
 
     public AttachmentChipStrip() {
         InitializeComponent();
@@ -27,9 +28,26 @@ public partial class AttachmentChipStrip : UserControl {
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
         base.OnPropertyChanged(change);
-        if (change.Property != TrayProperty) return;
+        if (change.Property == TrayProperty) Rebind();
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _attached = true;
+        Rebind();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _attached = false;
+        Rebind();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    /// Chips live only while the strip is in the tree: a strip taken out of it holds neither the
+    /// tray subscription nor any decoded bitmap, and re-entering rebuilds both from the tray.
+    void Rebind() {
         if (_watched is not null) _watched.CollectionChanged -= OnTrayChanged;
-        _watched = Tray?.Items;
+        _watched = _attached ? Tray?.Items : null;
         if (_watched is not null) _watched.CollectionChanged += OnTrayChanged;
         Sync();
     }
@@ -37,7 +55,7 @@ public partial class AttachmentChipStrip : UserControl {
     void OnTrayChanged(object? sender, NotifyCollectionChangedEventArgs e) => Sync();
 
     void Sync() {
-        var staged = Tray?.Items.ToList() ?? [];
+        var staged = _attached ? Tray?.Items.ToList() ?? [] : [];
         var kept = staged.Select(f => f.Id).ToHashSet();
         var existing = _chips.ToDictionary(c => c.File.Id);
         foreach (var chip in _chips) {

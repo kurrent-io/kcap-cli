@@ -5,7 +5,12 @@
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
     <UserControl.Styles>
-        <Style Selector="Border.dragOver">
+        <!-- The card's resting border is a style, not a local value: a local value outranks every
+             style, and the drag-over brush below would never reach the screen. -->
+        <Style Selector="Border#ComposerCard">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="Border#ComposerCard.dragOver">
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
         </Style>
     </UserControl.Styles>
@@ -184,7 +189,7 @@
         </Border>
 
         <Border x:Name="ComposerCard" Grid.Row="4" Margin="22,8,22,18"
-                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">
                 <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
@@ -201,8 +206,11 @@
                                Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
                 </Border>
                 <Grid ColumnDefinitions="Auto,*,Auto">
+                    <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
+                         is suppressed by default. -->
                     <Button x:Name="AttachButton" Content="+" IsVisible="{Binding ShowsComposer}"
                             IsEnabled="{Binding Attachments.CanAttach}" ToolTip.Tip="{Binding Attachments.AttachHint}"
+                            ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
                             Width="24" Height="24" Padding="0" FontSize="15" CornerRadius="7" Cursor="Hand"
                             Margin="0,0,10,0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Background="Transparent" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"

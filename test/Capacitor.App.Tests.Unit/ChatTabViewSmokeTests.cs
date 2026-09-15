@@ -1161,6 +1161,31 @@ public class ChatTabViewSmokeTests {
     static List<StagedAttachmentViewModel> Chips(Host host) => host.View.GetVisualDescendants()
         .OfType<TextBlock>().Where(t => t.Name == "ChipName").Select(t => (StagedAttachmentViewModel)t.DataContext!).ToList();
 
+    /// The hint the button carries exists only while the button is disabled, which is exactly when
+    /// a tooltip is suppressed by default — and it arrives after the view is built, so the binding
+    /// has to follow the channel rather than whatever the gate said at construction.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_attach_button_carries_its_hint_while_disabled() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.AttachAsync(Tmp.CreateFile("attach-hint.jsonl", UserLine));
+            var button = host.View.FindControl<Button>("AttachButton")!;
+            await Assert.That(ToolTip.GetShowOnDisabled(button)).IsTrue();
+
+            host.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/2"]));
+            host.Settle();
+            await Assert.That(button.IsEnabled).IsFalse();
+            await Assert.That(ToolTip.GetTip(button)).IsEqualTo("attachments aren't available for an in-place session");
+
+            host.AllowAttachments();
+
+            await Assert.That(button.IsEnabled).IsTrue();
+            await Assert.That(ToolTip.GetTip(button)).IsNull();
+            await host.CloseAsync();
+        });
+    }
+
     /// The view's half of the intake: a file dropped on the composer card reaches the tab's tray,
     /// and a text paste goes in through the TextBox exactly once.
     [Test]
@@ -1173,15 +1198,27 @@ public class ChatTabViewSmokeTests {
             await Assert.That(host.Chat.Attachments.CanAttach).IsTrue();
 
             var card = host.View.FindControl<Border>("ComposerCard")!;
+            var resting = card.BorderBrush;
+            await Assert.That(resting).IsNotNull();
             var transfer = new DataTransfer();
             var item = new DataTransferItem();
             item.SetFile(FakeStorageFile.Of("dropped.png", new byte[] { 1, 2, 3, 4 }));
             transfer.Add(item);
+
+            card.RaiseEvent(new DragEventArgs(DragDrop.DragOverEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
+            host.Settle();
+            // The highlight is a class the card's own style answers; a local brush on the card
+            // would outrank it and the drag would look the same as no drag.
+            await Assert.That(card.Classes.Contains("dragOver")).IsTrue();
+            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(resting);
+
             card.RaiseEvent(new DragEventArgs(DragDrop.DropEvent, transfer, card, new Point(6, 6), KeyModifiers.None));
             await (host.View.PendingIntakeForTesting ?? Task.CompletedTask);
             host.Settle();
 
             await Assert.That(host.Chat.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["dropped.png"]);
+            await Assert.That(card.Classes.Contains("dragOver")).IsFalse();
+            await Assert.That(card.BorderBrush).IsSameReferenceAs(resting);
 
             await TopLevel.GetTopLevel(host.Composer)!.Clipboard!.SetDataAsync(new FakeAsyncDataTransfer(text: "pasted text"));
             host.Composer.Focus();

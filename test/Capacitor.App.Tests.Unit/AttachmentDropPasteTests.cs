@@ -135,6 +135,14 @@ public class AttachmentDropPasteTests {
             await Assert.That(harness.ClipboardReads).IsEqualTo(1);
             await Assert.That(harness.Sink.Accepted).IsEmpty();
             await Assert.That(transfer.Disposed).IsEqualTo(1);
+
+            // The paste the behaviour ran raised an event of its own, and dropping that one must
+            // not cost the user the next paste.
+            harness.ClipboardHolds(new FakeAsyncDataTransfer(text: "hello"));
+            harness.RaisePaste();
+            await harness.SettleAsync();
+            await Assert.That(harness.Box.Text).IsEqualTo("hellohello");
+            await Assert.That(harness.ClipboardReads).IsEqualTo(2);
         });
     }
 

@@ -12,14 +12,29 @@ public sealed class StagedAttachmentViewModel : ReactiveObject, IDisposable {
     const int ThumbnailWidth = 64;
 
     readonly CancellationTokenSource _decoding = new();
+    readonly Func<ReadOnlyMemory<byte>, Bitmap> _decode;
     Bitmap? _thumbnail;
     bool _disposed;
 
-    public StagedAttachmentViewModel(StagedAttachment file, Action<StagedAttachment> remove) {
+    public StagedAttachmentViewModel(StagedAttachment file, Action<StagedAttachment> remove)
+        : this(file, remove, DecodeToThumbnail) { }
+
+    /// The decoder is a seam: the headless drawing backend accepts any bytes, so a codec that
+    /// refuses is reachable no other way.
+    internal StagedAttachmentViewModel(StagedAttachment file, Action<StagedAttachment> remove, Func<ReadOnlyMemory<byte>, Bitmap> decode) {
         File = file;
+        _decode = decode;
         RemoveCommand = ReactiveCommand.Create(() => remove(file));
-        if (file.IsImage) _ = DecodeAsync();
+        if (file.IsImage) PendingThumbnailForTesting = DecodeAsync();
     }
+
+    static Bitmap DecodeToThumbnail(ReadOnlyMemory<byte> bytes) {
+        using var stream = new MemoryStream(bytes.ToArray());
+        return Bitmap.DecodeToWidth(stream, ThumbnailWidth);
+    }
+
+    /// Null when the chip is not an image: nothing was decoded, and nothing will be.
+    internal Task? PendingThumbnailForTesting { get; }
 
     public StagedAttachment File { get; }
     public string FileName => File.FileName;
@@ -41,12 +56,9 @@ public sealed class StagedAttachmentViewModel : ReactiveObject, IDisposable {
 
     async Task DecodeAsync() {
         var bytes = File.Bytes;
-        Bitmap? decoded;
+        Bitmap decoded;
         try {
-            decoded = await Task.Run(() => {
-                using var stream = new MemoryStream(bytes.ToArray());
-                return Bitmap.DecodeToWidth(stream, ThumbnailWidth);
-            }, _decoding.Token).ConfigureAwait(false);
+            decoded = await Task.Run(() => _decode(bytes), _decoding.Token).ConfigureAwait(false);
         } catch (Exception) {
             return;
         }
