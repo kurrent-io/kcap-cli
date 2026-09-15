@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -20,6 +21,7 @@ using Capacitor.App.Views;
 using Capacitor.App.Views.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
@@ -181,7 +183,12 @@ public partial class App : Application {
     // counterpart of the wizard sign-in quiesce.
     SignInWindow? _signInWindow;
     SettingsWindow? _settingsWindow;
+    FeedbackWindow? _feedbackWindow;
+    internal FeedbackWindow? FeedbackWindowForTests => _feedbackWindow;
     readonly AppMenu _appMenu = new(AppKitMenus.ShowAboutPanel);
+    // A field, not a local: the report items it retains are enabled only once the profile has
+    // resolved, long after the bar is attached.
+    AppMenuBar? _menuBar;
     Task? _reauthSettle;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
@@ -218,7 +225,8 @@ public partial class App : Application {
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => windowLifecycle.Dispose();
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
-            new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator)).Install();
+            _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
+            _menuBar.Install();
             _ = StartAsync(desktop);
         }
 
@@ -599,6 +607,20 @@ public partial class App : Application {
         // attached to the visual tree (WorkspaceView's own header comment).
         var attachFactory = CoreTerminalAttachClient.Factory(() => _daemonStore.SocketPath(service.DaemonName));
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
+
+        // A resolved server and nothing more — deliberately wider than Settings, which also needs a
+        // profile name for its store. Deferred so each window reads the CLI version installed when
+        // it opens, not the one known at startup.
+        var appVersion = CapacitorVersion.CurrentDisplay();
+        var feedbackTrailer = Observable.Defer(() => service.Snapshots
+            .Select(s => FeedbackTrailer.Build(appVersion, service.DaemonName, s.Daemon.Version, lifecycle.CliVersion))
+            .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, lifecycle.CliVersion)));
+        var feedbackApi = ServerHttp(profiles) is null ? null : _serverHttp?.GetRequiredService<IFeedbackApi>();
+        Action<FeedbackCategory>? openFeedback = feedbackApi is null
+            ? null
+            : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
+        _menuBar?.SetFeedbackAction(openFeedback);
+
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), TimeProvider.System, opener, permissions,
             workContext, ops, uploader,
@@ -633,7 +655,8 @@ public partial class App : Application {
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
-                modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl),
+                modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
+                openFeedback: openFeedback),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -696,6 +719,26 @@ public partial class App : Application {
         _settingsWindow = window;
         window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
+        window.Show();
+        window.Activate();
+    }
+
+    internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category) {
+        if (_shutdownStarted) return;
+        if (_feedbackWindow is { } open) {
+            if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
+            open.Activate();
+            ((FeedbackViewModel)open.DataContext!).Reopen(category);
+            return;
+        }
+
+        var vm = new FeedbackViewModel(api, category, trailer, RuntimeInformation.OSDescription,
+            signIn: signIn, appLifetime: _shutdown.Token);
+
+        var window = new FeedbackWindow { DataContext = vm };
+        _feedbackWindow = window;
+        window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
+        window.Closed += (_, _) => { _feedbackWindow = null; vm.Dispose(); };
         window.Show();
         window.Activate();
     }
@@ -1102,7 +1145,8 @@ public partial class App : Application {
             Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            IAttachmentUploader? uploader = null, string? appServerUrl = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null,
+            Action<FeedbackCategory>? openFeedback = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1147,7 +1191,8 @@ public partial class App : Application {
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
-            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory);
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
+            openFeedback: openFeedback, opener: new ShellUrlOpener());
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
@@ -1628,7 +1673,7 @@ public partial class App : Application {
         _navigation.Latch();
     }
 
-    async Task DisposeAndShutdownAsync() {
+    internal async Task DisposeAndShutdownAsync() {
         // FIRST, before quiesce (which can wait a full minute) and before any disposal: a live
         // workspace holds a terminal attach on the daemon socket, and the clamp it implies must be
         // released for every other viewer as early as possible. Bounded at 5s and never throws.
@@ -1645,6 +1690,7 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
         if (_reauthSettle is { } reauthSettle) await reauthSettle.ConfigureAwait(false);
 
         // spec §3.6 + decision 2: an in-flight sign-in always settles, mutations get a bounded chance

@@ -1,8 +1,12 @@
+using System.Reactive.Linq;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.Http;
 using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
@@ -159,6 +163,45 @@ public class DesktopWindowLifecycleTests {
 
             await Assert.That(visibility).IsEquivalentTo([true, false, true, false], CollectionOrdering.Matching);
         });
+
+    [Test]
+    public Task Feedback_window_is_single_instance_and_switches_category() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var app = new Capacitor.App.App();
+            app.OpenFeedback(new SilentFeedbackApi(), Trailer, null, FeedbackCategory.Bug);
+            var first = app.FeedbackWindowForTests!;
+            try {
+                app.OpenFeedback(new SilentFeedbackApi(), Trailer, null, FeedbackCategory.Feedback);
+
+                await Assert.That(app.FeedbackWindowForTests).IsSameReferenceAs(first);
+                await Assert.That(((FeedbackViewModel)first.DataContext!).Category).IsEqualTo(FeedbackCategory.Feedback);
+            } finally {
+                first.Close();
+            }
+
+            await Assert.That(app.FeedbackWindowForTests).IsNull();
+        });
+
+    [Test]
+    public Task Shutdown_closes_the_feedback_window() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var app = new Capacitor.App.App();
+            app.OpenFeedback(new SilentFeedbackApi(), Trailer, null, FeedbackCategory.Bug);
+            // Without this the assertion below would pass on a window that never opened.
+            await Assert.That(app.FeedbackWindowForTests).IsNotNull();
+
+            await app.DisposeAndShutdownAsync();
+
+            await Assert.That(app.FeedbackWindowForTests).IsNull();
+        });
+
+    static IObservable<string> Trailer =>
+        Observable.Return("Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3");
+
+    sealed class SilentFeedbackApi : IFeedbackApi {
+        public Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) =>
+            throw new NotSupportedException("these tests never send");
+    }
 
     sealed class Fixture : IDisposable {
         public FakeActivatableLifetime Activation { get; } = FakeActivatableLifetime.Create();
