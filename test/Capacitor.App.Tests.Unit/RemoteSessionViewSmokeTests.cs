@@ -122,7 +122,7 @@ public class RemoteSessionViewSmokeTests {
         });
     }
 
-    /// The tab strip swaps the panes; the terminal control is in the tree only for a PTY harness.
+    /// The tab strip swaps the panes, and the terminal tab is offered only for a PTY harness.
     [Test]
     public async Task The_terminal_tab_swaps_the_pane_and_offers_the_special_keys() {
         await AvaloniaSession.DispatchAsync(async () => {
