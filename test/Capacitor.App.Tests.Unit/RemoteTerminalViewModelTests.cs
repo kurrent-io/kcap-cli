@@ -96,12 +96,30 @@ public class RemoteTerminalViewModelTests {
             await Assert.That(h.Vm.Phase).IsEqualTo(RemoteTerminalPhase.Offline);
             await WaitUntilAsync(() => h.Lane.ResizeReleases.Contains("a1"), what: "the viewport released");
 
+            h.Access.OnNext(SessionAccessState.Establishing);
             h.Access.OnNext(SessionAccessState.Established);
             await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 2, what: "the second subscribe");
             await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live again");
             await Assert.That(h.Vm.Surface).IsNotSameReferenceAs(first);
             await Assert.That(h.Surfaces.Count).IsEqualTo(2);
+            await Assert.That(h.Lane.ResizeReleases.Count).IsEqualTo(1);
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_teardown_while_the_subscribe_is_in_flight_still_unsubscribes() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var subscribeSource = new TaskCompletionSource<HubCallOutcome>();
+            h.Lane.TerminalSubscribeHandler = _ => subscribeSource.Task;
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Contains("a1"), what: "the subscribe call");
+
+            await h.Vm.TeardownAsync();
+            subscribeSource.SetResult(HubCallOutcome.Ok);
+            await WaitUntilAsync(() => h.Lane.TerminalUnsubscribes.Contains("a1"), what: "the unsubscribe");
+            await WaitUntilAsync(() => h.Lane.ResizeReleases.Contains("a1"), what: "the release");
         });
     }
 

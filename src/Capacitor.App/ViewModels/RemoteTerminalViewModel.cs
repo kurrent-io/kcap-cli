@@ -64,19 +64,18 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         SendKeyCommand = ReactiveCommand.CreateFromTask<string>(SendKeyAsync);
         _disposables.Add(SendKeyCommand);
 
-        // Establishing is the pre-verdict handshake, not a refusal: it renders as Waiting, the
-        // same as before any access push at all, rather than as Offline.
+        sessionEnded.Where(ended => ended).Take(1).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
+            _ended = true;
+            Detach(RemoteTerminalPhase.Ended);
+        }).DisposeWith(_disposables);
+        // Establishing is the pre-verdict handshake, not a refusal.
         access.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(state => {
             if (_ended) return;
             if (state == SessionAccessState.Established) { Attach(); return; }
             Detach(state == SessionAccessState.Establishing ? RemoteTerminalPhase.Waiting : RemoteTerminalPhase.Offline);
         }).DisposeWith(_disposables);
-        sessionEnded.Where(ended => ended).Take(1).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
-            _ended = true;
-            Detach(RemoteTerminalPhase.Ended);
-        }).DisposeWith(_disposables);
         lane.TerminalOutput.Where(f => f.AgentId == agentId).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(f => {
-            if (Surface is not { } surface || _decoder is not { } decoder) return;
+            if (!_subscribed || Surface is not { } surface || _decoder is not { } decoder) return;
             byte[] bytes;
             try { bytes = Convert.FromBase64String(f.Base64); } catch (FormatException) { return; }
             surface.Feed(decoder.Decode(bytes));
@@ -112,12 +111,15 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         try {
             outcome = await _lane.SubscribeToTerminalAsync(_agentId, _token);
         } catch (OperationCanceledException) {
+            // Teardown cancelled _token while the hub may already have taken the subscribe —
+            // release regardless, since ReleaseAsync's own calls carry CancellationToken.None.
+            _ = ReleaseAsync();
             return;
         } catch (Exception ex) {
             outcome = HubCallOutcome.Failed(ex.Message);
         }
         await Dispatcher.UIThread.InvokeAsync(() => {
-            if (generation != _generation) return;
+            if (generation != _generation) { _ = ReleaseAsync(); return; }
             if (outcome.Result != HubCallResult.Ok) { Phase = RemoteTerminalPhase.Offline; return; }
             _subscribed = true;
             Phase = RemoteTerminalPhase.Live;
@@ -137,12 +139,8 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// Unsubscribe, then release the viewport: the server keeps a viewer's size in its aggregate
     /// until told otherwise or until the whole connection drops.
     async Task ReleaseAsync() {
-        try {
-            await _lane.UnsubscribeFromTerminalAsync(_agentId, CancellationToken.None);
-            await _lane.ReleaseResizeTerminalAsync(_agentId, CancellationToken.None);
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: remote terminal release: {ex.Message}");
-        }
+        await Report(_lane.UnsubscribeFromTerminalAsync(_agentId, CancellationToken.None), "unsubscribe");
+        await Report(_lane.ReleaseResizeTerminalAsync(_agentId, CancellationToken.None), "release");
     }
 
     async Task SendKeyAsync(string key) {
