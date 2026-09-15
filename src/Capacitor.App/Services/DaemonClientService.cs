@@ -74,6 +74,11 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
                 Pending.EditDiff(snap.Pending ?? [], EqualityComparer<PendingLaunchDto>.Default);
                 break;
             case LocalControlEvent.Unreachable(var reason, var version):
+                // Agents stay as display-only history, but a pending launch is the daemon's live
+                // claim on a handshake in progress: a daemon that died mid-handshake never sends
+                // the snapshot that would retire it, and the reconnect snapshot restores any still
+                // in flight.
+                Pending.Clear();
                 _status.OnNext(new(AttachState.Unreachable, reason, null, version));
                 break;
             default:

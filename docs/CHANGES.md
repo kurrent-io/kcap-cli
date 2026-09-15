@@ -13,8 +13,8 @@ take many seconds per stage, and the workspace the launch auto-opened was a blan
 The daemon now lists its in-flight launches, with the runtime's latest stage, in the local status
 snapshot it already pushes, and the app adds its own placeholder row the moment the server accepts
 the request, so the gap is covered from both ends. Both render as one pending row keyed by the
-agent id: the daemon's entry hides the placeholder, and a published row on either lane retires
-both. A pending row never settles the launch — only a published row clears the failure tracking,
+agent id: the daemon's entry hides the placeholder, and a published row on the local lane retires
+both — a same-id row on the remote lane is a different agent. A pending row never settles the launch — only a published row clears the failure tracking,
 or a late `LaunchFailed` would be lost — and a launch failure removes the placeholder, with a
 ten-minute expiry behind it for a failure notice that never arrives.
 
