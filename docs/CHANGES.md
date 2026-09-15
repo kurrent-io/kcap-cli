@@ -6,6 +6,36 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A launch shows in the rail before the daemon publishes it
+
+A hosted runtime's agent instance exists only once its handshake ends, which for an ACP vendor can
+take many seconds per stage, and the workspace the launch auto-opened was a blank shell until then.
+The daemon now lists its in-flight launches, with the runtime's latest stage, in the local status
+snapshot it already pushes, and the app adds its own placeholder row the moment the server accepts
+the request, so the gap is covered from both ends. Both render as one pending row keyed by the
+agent id: the daemon's entry hides the placeholder, and a published row on the local lane retires
+both — a same-id row on the remote lane is a different agent. A pending row never settles the launch — only a published row clears the failure tracking,
+or a late `LaunchFailed` would be lost — and a launch failure removes the placeholder, with a
+ten-minute expiry behind it for a failure notice that never arrives.
+
+## The rail colours a worktree's branch glyph by its pull request
+
+The rail knows nothing of pull requests on its own: PR state was read only for the open workspace,
+per session, behind the access window that masks the reader. A tone cache reads every listed
+session's links and overviews on a slow cadence and reduces each to one tone, keeping the
+overview's own denial semantics — a denied read clears the tone, a transient miss keeps the last
+one. A worktree shows the strongest tone across its sessions, ordered by how much the state needs
+the user, and the card's lifecycle and checks labels share the same vocabulary so the two never
+disagree. "Merge conflicts" waits on the server: the overview carries no mergeability field yet,
+so the client reads an optional `mergeable` that is null until the server sends it.
+
+## A triple click selects the line, not the whole box
+
+Avalonia's `TextBox` and `SelectableTextBlock` answer the third click with `SelectAll` in their own
+class handler on the bubbling route. One application-wide handler on the tunnel route selects the
+logical line under the pointer and marks the press handled before that handler runs. Markdown
+bodies are outside its reach: MarkView's selection layer is internal and takes no click count.
+
 ## Desktop prompts carry attachments
 
 The launcher's goal box and the session composer stage files and send ids, never bytes. The

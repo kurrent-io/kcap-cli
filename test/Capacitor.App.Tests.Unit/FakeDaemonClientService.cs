@@ -15,6 +15,7 @@ sealed class FakeDaemonClientService : IDaemonClientService {
     public IObservable<AttachStatus> Status => StatusSubject;
     public IObservable<DaemonStatusDto> Snapshots => SnapshotsSubject;
     public SourceCache<AgentStatusDto, string> Agents { get; } = new(a => a.Id);
+    public SourceCache<PendingLaunchDto, string> Pending { get; } = new(p => p.Id);
     public string DaemonName { get; set; } = "daemon-a";
 
     public int RestartCount;

@@ -328,6 +328,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // the id here until one of those settles it; one lock covers both maps and the retained draft,
     // since StartAsync, the failure subscription and the rows subscription all touch them.
     readonly object _launchTrackingLock = new();
+    // Keyed by the normalized agent id; the lane says which directory rows can settle the launch,
+    // since a same-id row on the other lane is a different agent.
     readonly Dictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
     readonly Dictionary<string, (string Reason, DateTime At)> _recentFailures = new(StringComparer.Ordinal);
     static readonly TimeSpan PendingLaunchTtl = TimeSpan.FromMinutes(10);
@@ -336,7 +338,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
     /// stamps come from the same clock, so one TimeProvider governs every expiry.
-    sealed record PendingLaunch(DateTimeOffset At, bool HadAttachments, DateTimeOffset? UploadedAt);
+    sealed record PendingLaunch(DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -1154,9 +1156,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             lock (_launchTrackingLock)
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
-        RecordPendingLaunch(agentId, draft.Files.Count > 0, uploadedAt);
+        var tracked = RecordPendingLaunch(agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0, uploadedAt);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
-        // an agent that isn't there — auto-open only ever applies to a local target.
+        // an agent that isn't there — auto-open and the placeholder row only ever apply to a
+        // local target.
+        if (tracked && !draft.Remote)
+            _directory?.AddPlaceholder(agentId, draft.Vendor, draft.RepoPath, AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
         if (!draft.Remote) _openSessionIfCurrent?.Invoke(agentId, generation);
     }
 
@@ -1164,21 +1169,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         (await OwnRemoteDaemonsAsync())
         .Any(d => string.Equals(d.Name, machine, StringComparison.Ordinal) && d.Connected);
 
-    void RecordPendingLaunch(string agentId, bool hadAttachments, DateTimeOffset? uploadedAt) {
+    /// False when a row or a buffered failure has already settled the launch.
+    bool RecordPendingLaunch(string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
         // and clears nothing. So the row is checked twice, and a buffered failure only ever renders
         // when neither check found one. Both checks are outside _launchTrackingLock (RowExists
         // takes no lock of its own), keeping the cache→tracking lock order intact.
-        if (RowExists(agentId)) {
+        if (RowExists(agentId, lane)) {
             ForgetLaunch(agentId);
-            return;
+            return false;
         }
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), hadAttachments, uploadedAt);
+            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), lane, hadAttachments, uploadedAt);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (DateTime.UtcNow - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1187,11 +1193,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _recentFailures.Remove(agentId);
             }
         }
-        if (RowExists(agentId)) {
+        if (RowExists(agentId, lane)) {
             ForgetLaunch(agentId);
-            return;
+            return false;
         }
         if (bufferedReason is not null) ApplyLaunchFailure(agentId, hadAttachments, bufferedReason);
+        return bufferedReason is null;
     }
 
     void ForgetLaunch(string agentId) {
@@ -1221,9 +1228,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // Directory keys preserve the row's incoming id spelling (e.g. a dashed Guid never becomes
     // "local:{N-form}"), so a lookup by the "N"-normalized pending id would miss it — scan and
     // compare under NormalizeAgentId instead, the same comparison ConfirmPendingRows uses.
-    bool RowExists(string agentId) =>
+    bool RowExists(string agentId, AgentOrigin lane) =>
         _directory is { } directory
-        && directory.Rows.Items.Any(r => NormalizeAgentId(r.Id) == agentId);
+        && directory.Rows.Items.Any(r => r.Origin == lane && NormalizeAgentId(r.Id) == agentId);
 
     void RecordRecentFailure(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
@@ -1246,7 +1253,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             if (_pendingLaunches.TryGetValue(agentId, out var entry) && !IsExpired(entry)) pending = entry;
             _pendingLaunches.Remove(agentId);
         }
-        if (pending is not null) ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
+        if (pending is null) return;
+        ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
+        _directory?.RemovePlaceholder(agentId);
     }
 
     /// A text-only launch just renders its reason. A launch that carried files hands the draft
@@ -1287,8 +1296,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
         lock (_launchTrackingLock) {
+            // A pending row is the launch's own stand-in, so only a published one on the launch's
+            // own lane settles it.
             foreach (var change in changes)
-                if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId) {
+                if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId
+                    && _pendingLaunches.TryGetValue(agentId, out var pending) && pending.Lane == change.Current.Origin) {
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
                     if (_retainedDraft?.AgentId == agentId) _retainedDraft = null;
@@ -1313,16 +1325,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             ? mode
             : null;
 
-    /// Id shapes differ across the stack and across daemon versions: the server hub has returned
-    /// DASHED Guids while a production daemon keys its status cache on SHORT (8-hex) ids — so a
-    /// Guid in any format is normalized to "N" (the Guid-keyed daemons' cache shape), and any
-    /// other non-empty id passes through VERBATIM to match whatever the daemon actually sent.
-    /// Only a null/blank id is unusable; an id that matches nothing degrades gracefully in the
-    /// workspace ("session not found" with retry), which beats a red error under a live card.
-    internal static string? NormalizeAgentId(string? agentId) =>
-        Guid.TryParse(agentId, out var parsed) ? parsed.ToString("N")
-        : string.IsNullOrWhiteSpace(agentId) ? null
-        : agentId;
+    /// An id that matches nothing degrades gracefully in the workspace ("session not found" with
+    /// retry), which beats a red error under a live card.
+    internal static string? NormalizeAgentId(string? agentId) => AgentIds.Normalize(agentId);
 
     /// Applied on READ because System.Text.Json rebuilds the dictionary with a default (ordinal)
     /// comparer on load — a comparer set only at write time would not survive the round-trip.

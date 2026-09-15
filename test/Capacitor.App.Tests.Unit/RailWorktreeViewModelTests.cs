@@ -24,10 +24,43 @@ public class RailWorktreeViewModelTests {
     static RailWorktreeViewModel Build(
             SourceCache<AgentRow, string> cache, RailCollapseState? collapse = null,
             string path = "/repo/.claude/worktrees/wt-a", string root = "/repo", bool showHeader = true,
-            IObservable<string?>? selected = null, IObservable<IReadOnlySet<string>>? pending = null) =>
+            IObservable<string?>? selected = null, IObservable<IReadOnlySet<string>>? pending = null,
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? tones = null) =>
         new(path, _ => root, showHeader, cache.AsObservableCache(),
             collapse ?? new RailCollapseState(), selected ?? new BehaviorSubject<string?>(null),
-            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { });
+            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { }, tones);
+
+    static AgentRow SessionRow(string id, string sessionId) =>
+        AgentRow.FromLocal(
+            new(id, "agent", "claude", "/repo/.claude/worktrees/wt-a", "Running",
+                null, null, null, DateTime.UtcNow, null, null, SessionId: sessionId),
+            Repo);
+
+    /// The branch glyph's colour is the strongest PR tone across the worktree's sessions, live
+    /// as the cache updates; a session no tone names leaves the glyph plain.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_branch_glyph_follows_the_strongest_pull_request_tone() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var cache = new SourceCache<AgentRow, string>(r => r.Key);
+            var tones = new BehaviorSubject<IReadOnlyDictionary<string, PullRequestTone>>(new Dictionary<string, PullRequestTone>());
+            using var wt = Build(cache, tones: tones);
+            cache.AddOrUpdate(SessionRow("a1", "s1"));
+            cache.AddOrUpdate(SessionRow("a2", "s2"));
+            await Assert.That(wt.PullRequestTone).IsEqualTo(PullRequestTone.None);
+            await Assert.That(wt.HasPullRequest).IsFalse();
+
+            tones.OnNext(new Dictionary<string, PullRequestTone> { ["s1"] = PullRequestTone.Ready, ["s2"] = PullRequestTone.ChecksRunning });
+            await Assert.That(wt.PullRequestTone).IsEqualTo(PullRequestTone.ChecksRunning);
+            await Assert.That(wt.ChecksRunning).IsTrue();
+            await Assert.That(wt.HasPullRequest).IsTrue();
+            await Assert.That(wt.Tooltip).Contains("Checks running");
+
+            tones.OnNext(new Dictionary<string, PullRequestTone> { ["s1"] = PullRequestTone.Merged });
+            await Assert.That(wt.PullRequestTone).IsEqualTo(PullRequestTone.Merged);
+            await Assert.That(wt.ChecksRunning).IsFalse();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]

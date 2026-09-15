@@ -7,7 +7,10 @@ namespace Capacitor.Cli.Core.LocalIpc;
 /// JSON null, never omitted (one wire shape, exact-JSON testable), so this context must never
 /// gain a DefaultIgnoreCondition. Deserialization ignores unmapped members (STJ default) —
 /// additive fields must never break an older client.
-public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> Agents);
+public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> Agents,
+    // Launches whose runtime is still starting, before an agent exists to list under Agents. Null
+    // from an older daemon, which a client reads as unknown, never as "nothing starting".
+    List<PendingLaunchDto>? Pending = null);
 
 /// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).
