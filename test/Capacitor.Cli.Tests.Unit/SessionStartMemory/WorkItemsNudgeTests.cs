@@ -106,7 +106,7 @@ public class WorkItemsNudgeEmitterTests {
 
 // Availability reads the hermetic registry, which consults no override variable — so this needs no
 // parallel constraint.
-public class WorkItemsNudgeAvailabilityTests {
+public class McpServerNudgeAvailabilityTests {
     [TempHome] public required TempHome Home { get; init; }
 
     HarnessRegistry Harnesses => TestHarnesses.Under(Home);
@@ -115,7 +115,7 @@ public class WorkItemsNudgeAvailabilityTests {
     public async Task Claude_without_an_effective_plugin_suppresses() {
         // A home with no installed kcap plugin → fail closed (no nudge). This is also what keeps the
         // Claude SessionStart hook tests (isolated home / CI) free of the nudge.
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Claude, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -123,7 +123,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var claude = Home.PathTo(".claude");
         var installPath = Path.Combine(claude, "plugins", "cache", "kcap", "kcap", "1.0.0");
         Directory.CreateDirectory(installPath);
-        await File.WriteAllTextAsync(Path.Combine(installPath, ".mcp.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(installPath, ".mcp.json"), """{"mcpServers":{"kcap-workitems":{"command":"kcap","args":["mcp","workitems"]}}}""");
         Directory.CreateDirectory(Path.Combine(claude, "plugins"));
         await File.WriteAllTextAsync(
             Path.Combine(claude, "plugins", "installed_plugins.json"),
@@ -131,7 +131,7 @@ public class WorkItemsNudgeAvailabilityTests {
             System.Text.Json.JsonSerializer.Serialize(installPath) + ", \"version\": \"1.0.0\" } ] } }");
         await File.WriteAllTextAsync(
             Path.Combine(claude, "settings.json"), "{ \"enabledPlugins\": { \"kcap@kcap\": true } }");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Claude, Harnesses)).IsTrue();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, Harnesses, "kcap-workitems")).IsTrue();
     }
 
     [Test]
@@ -139,7 +139,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var path = Harnesses.Of<CursorHarness>().Paths.UserMcpJson;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, """{"mcpServers":{"kcap-workitems":{"command":"kcap","args":["mcp","workitems"]}}}""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses)).IsTrue();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses, "kcap-workitems")).IsTrue();
     }
 
     [Test]
@@ -147,12 +147,12 @@ public class WorkItemsNudgeAvailabilityTests {
         var path = Harnesses.Of<CursorHarness>().Paths.UserMcpJson;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, """{"mcpServers":{"kcap-review":{"command":"kcap"}}}""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
     public async Task Missing_config_file_suppresses() {
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -160,7 +160,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var path = Harnesses.Of<CursorHarness>().Paths.UserMcpJson;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{ this is not json ");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -169,7 +169,7 @@ public class WorkItemsNudgeAvailabilityTests {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         // OpenCode's block key is `mcp`; an explicit "enabled": false reads as absent.
         await File.WriteAllTextAsync(path, """{"mcp":{"kcap-workitems":{"type":"local","enabled":false}}}""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.OpenCode, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.OpenCode, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -179,7 +179,7 @@ public class WorkItemsNudgeAvailabilityTests {
             var path = Harnesses.Of<CursorHarness>().Paths.UserMcpJson;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllTextAsync(path, "{\"mcpServers\":{\"kcap-workitems\":" + badValue + "}}");
-            await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses))
+            await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses, "kcap-workitems"))
                 .IsFalse().Because($"value {badValue} is malformed");
         }
     }
@@ -190,7 +190,7 @@ public class WorkItemsNudgeAvailabilityTests {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         // A string "false" (or any non-Boolean) enabled value must not read as enabled.
         await File.WriteAllTextAsync(path, """{"mcpServers":{"kcap-workitems":{"command":"kcap","enabled":"false"}}}""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Cursor, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -201,7 +201,7 @@ public class WorkItemsNudgeAvailabilityTests {
         // it — comment stripping must make the real one win.
         await File.WriteAllTextAsync(path,
             "// const KCAP_MCP_SERVERS = [\"workitems\"]\nconst KCAP_MCP_SERVERS = [\"review\", \"sessions\"];");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -210,7 +210,7 @@ public class WorkItemsNudgeAvailabilityTests {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path,
             "/* KCAP_MCP_SERVERS = [\"workitems\"] */ const KCAP_MCP_SERVERS = [\"review\"];");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -219,7 +219,7 @@ public class WorkItemsNudgeAvailabilityTests {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         // "workitems" only as a substring of another element must not count.
         await File.WriteAllTextAsync(path, "const KCAP_MCP_SERVERS = [\"review\", \"workitems-extra\"];");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -227,7 +227,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var path = Harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, """{"mcp":{"kcap-workitems":{"type":"local","enabled":true}}}""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.OpenCode, Harnesses)).IsTrue();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.OpenCode, Harnesses, "kcap-workitems")).IsTrue();
     }
 
     [Test]
@@ -235,7 +235,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var path = Harnesses.Of<PiHarness>().Paths.KcapMcpExtension;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, """const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory", "analytics", "workitems"];""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses)).IsTrue();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-workitems")).IsTrue();
     }
 
     [Test]
@@ -243,7 +243,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var path = Harnesses.Of<PiHarness>().Paths.KcapMcpExtension;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, """const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory", "analytics"];""");
-        await Assert.That(WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses)).IsFalse();
+        await Assert.That(McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Pi, Harnesses, "kcap-workitems")).IsFalse();
     }
 
     [Test]
@@ -252,7 +252,7 @@ public class WorkItemsNudgeAvailabilityTests {
         var codexConfig = tmp.CreateFile("config.toml",
             "[mcp_servers.kcap-workitems]\ncommand = \"kcap\"\nargs = [\"mcp\", \"workitems\"]\n");
         await Assert.That(
-            WorkItemsNudgeAvailability.IsRegisteredFor(HarnessId.Codex, Harnesses, codexConfig)).IsTrue();
+            McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Codex, Harnesses, "kcap-workitems", codexConfig)).IsTrue();
     }
 }
 

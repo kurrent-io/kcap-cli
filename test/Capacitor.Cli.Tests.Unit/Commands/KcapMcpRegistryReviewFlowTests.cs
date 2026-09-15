@@ -53,6 +53,14 @@ public class KcapMcpRegistryReviewFlowTests {
     }
 
     [Test]
+    public async Task Resolve_rejects_write_server_kcap_plans() {
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-plans"], out _, out var rejected);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(rejected).IsEqualTo("kcap-plans");
+    }
+
+    [Test]
     public async Task Resolve_rejects_unknown_server() {
         var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["not-a-server"], out _, out var rejected);
 

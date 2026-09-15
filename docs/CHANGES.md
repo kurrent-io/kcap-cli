@@ -57,6 +57,20 @@ that somehow carries ids is refused before the hub is called. When that lane lan
 the server's `SendUserInput(agentId, text, attachmentIds)` and the tray, uploader and Home's version
 gate apply unchanged.
 
+## Plans are declared from the CLI
+
+A plan document is read by the CLI, not sent for the server to fetch: the server keys a document
+on its repo-relative path and the workspace root exactly as discovery keys a written file, so the
+tool sends the path relative to the git top level and only attaches content at or under the
+server's 256 KB transport cap; above it the document is declared by hash alone and the tool result
+says so. A path is refused before it is read when it, or any link between the repository root and
+it, resolves outside the root: the server rejects such a path as well, but only once the content
+has reached it. `update_plan_task` resolves the session's current plan before it posts when no `plan_id` is
+given, because the update route answers with the task alone and every result has to name the plan
+it acted on. The SessionStart nudge for Claude reads the installed plugin's `.mcp.json` rather than
+assuming the bundled copy: a plugin installed before `kcap-plans` existed carries no such server,
+and a nudge toward a tool the session lacks is worse than none.
+
 ## A running daemon follows repos.json
 
 `kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
