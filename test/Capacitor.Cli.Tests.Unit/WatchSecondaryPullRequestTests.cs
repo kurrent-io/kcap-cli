@@ -86,6 +86,80 @@ public class WatchSecondaryPullRequestTests {
         await Assert.That(posted).IsEqualTo(0);
     }
 
+    // In a fork checkout origin names the fork while `gh pr view` resolves the PR in the base
+    // repository, and the base repository is the one the PR must be linked under.
+    [Test]
+    public async Task A_fork_checkout_posts_the_pr_under_its_base_repository() {
+        var state  = StateWithSecondaryRoot();
+        var posted = new List<RepositoryPayload>();
+        var fork   = CliPr() with { Owner = "someone", RepoName = "kcap-cli-fork" };
+
+        await Link(state, Detects(fork), (pr, _) => { posted.Add(pr); return Task.FromResult(true); });
+
+        await Assert.That(posted).Count().IsEqualTo(1);
+        await Assert.That(posted[0].Owner).IsEqualTo("kurrent-io");
+        await Assert.That(posted[0].RepoName).IsEqualTo("kcap-cli");
+        await Assert.That(state.LinkedPullRequests).Contains(("kurrent-io", "kcap-cli", 915));
+    }
+
+    [Test]
+    public async Task A_pr_whose_url_disagrees_with_its_number_is_not_posted() {
+        var state  = StateWithSecondaryRoot();
+        var posted = 0;
+
+        await Link(state, Detects(CliPr() with { PrUrl = "https://github.com/kurrent-io/kcap-cli/pull/999" }), (_, _) => { posted++; return Task.FromResult(true); });
+
+        await Assert.That(posted).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_pr_without_a_parseable_url_is_not_posted() {
+        var state  = StateWithSecondaryRoot();
+        var posted = 0;
+
+        await Link(state, Detects(CliPr() with { PrUrl = null }), (_, _) => { posted++; return Task.FromResult(true); });
+
+        await Assert.That(posted).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_github_enterprise_pr_is_not_posted() {
+        var state  = StateWithSecondaryRoot();
+        var posted = 0;
+
+        await Link(state, Detects(CliPr(host: "ghe.example.com")), (_, _) => { posted++; return Task.FromResult(true); });
+
+        await Assert.That(posted).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_detection_still_running_at_cancellation_does_not_hold_the_pass() {
+        var state = StateWithSecondaryRoot();
+        var never = new TaskCompletionSource<RepositoryPayload?>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Link(state, (_, _) => never.Task, (_, _) => Task.FromResult(true), ct: cts.Token).WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Test]
+    public async Task A_detection_still_running_at_the_budget_does_not_hold_the_pass() {
+        var state = StateWithSecondaryRoot();
+        var never = new TaskCompletionSource<RepositoryPayload?>();
+
+        await Link(state, (_, _) => never.Task, (_, _) => Task.FromResult(true), budget: TimeSpan.FromMilliseconds(50)).WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Test]
+    public async Task A_negative_budget_probes_nothing() {
+        var state  = StateWithSecondaryRoot();
+        var probed = 0;
+
+        await Link(state, (_, _) => { probed++; return Task.FromResult<RepositoryPayload?>(CliPr()); }, (_, _) => Task.FromResult(true),
+            budget: TimeSpan.FromSeconds(-1));
+
+        await Assert.That(probed).IsEqualTo(0);
+    }
+
     [Test]
     public async Task A_new_pr_on_the_same_checkout_is_posted_too() {
         var state  = StateWithSecondaryRoot();

@@ -15,8 +15,16 @@ watcher now collects the roots of every checkout the agent *mutated* outside its
 probes each on the 60s refresh and once more on the final drain, and posts any GitHub PR it finds
 to the session's pull-requests endpoint, which dedupes and never repoints the primary repository.
 Mutation paths only: a checkout the agent merely read must not have whatever PR its branch
-happens to carry attached. Only GitHub, because the endpoint rebuilds the remote URL from owner
-and repo on github.com, so another host would hash to the wrong repository.
+happens to carry attached. The collector reads raw transcript lines ahead of the threshold
+buffer, so a mutation in a session's first lines registers and an oversized Write is not lost to
+redaction. The PR is linked under the repository its URL names rather than the checkout's origin,
+because in a fork checkout `gh pr view` resolves the base repository's PR while origin names the
+fork. Only GitHub, because the endpoint rebuilds the remote URL from owner and repo on github.com,
+so another host would hash to the wrong repository. Each pass runs under one budget that bounds
+every probe and post, abandoning a probe still running when the pass is cancelled, and the final
+pass shares the shutdown deadline with the final-line wait and drain, since the watcher is killed
+five seconds after it is told to stop. A session that never crosses the transcript threshold is
+still discarded whole, PR links included: it sends no transcript and no session-end either.
 
 ## Desktop prompts carry attachments
 

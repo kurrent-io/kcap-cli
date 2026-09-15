@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
@@ -847,6 +848,8 @@ partial class WatchCommand(
             // Expected
         }
 
+        var shutdownStarted = Stopwatch.GetTimestamp();
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -900,7 +903,8 @@ partial class WatchCommand(
             }
 
             // A PR is usually opened in the session's last turn, after the previous 60s probe.
-            await LinkSecondaryPullRequestsAsync(state, sessionId, FinalSecondaryProbeBudget, CancellationToken.None);
+            await LinkSecondaryPullRequestsAsync(state, sessionId,
+                FinalSecondaryProbeDeadline - Stopwatch.GetElapsedTime(shutdownStarted), CancellationToken.None);
         }
 
         // Signal drain complete to server.
@@ -2039,6 +2043,13 @@ partial class WatchCommand(
                 }
             }
 
+            // Secondary checkouts, from raw lines and ahead of the threshold buffering below: a
+            // mutation in a session's first lines must register before the buffer flushes, and an
+            // oversized Write redacts to a placeholder with no path. Only paths are read.
+            if (state.SecondaryRoots is { } secondaryRoots) {
+                foreach (var line in drainRead.Lines) secondaryRoots.OnLine(vendor, line);
+            }
+
             // A Codex collab CHILD watcher additionally folds its own rollout's turn state
             // (task_complete vs renewed activity) so the polling loop can post a live
             // subagent-stop once the child is done + idle. Raw lines here too, in the other
@@ -2188,10 +2199,6 @@ partial class WatchCommand(
             // to ApplyEvidenceScanAsync so the final-drain fallback delivery (the actual send
             // path, not just the promotion) is directly unit-testable with a fake scanner.
             await ApplyEvidenceScanAsync(state, vendor, newLines, isFinalDrain);
-
-            if (state.SecondaryRoots is { } secondaryRoots) {
-                foreach (var line in newLines) secondaryRoots.OnLine(vendor, line);
-            }
 
             // Only include repository info when it has changed since last send
             var repoToSend = RepoPayloadChanged(state.Repository, state.LastSentRepository)
@@ -3336,10 +3343,13 @@ partial class WatchCommand(
 
     /// <summary>
     /// Probes every checkout the agent mutated outside its launch cwd and links each PR found
-    /// there to the session. A PR is posted once per (owner, repo, number); a failed post is
-    /// retried on the next pass. Only GitHub PRs are linked: the server endpoint rebuilds the
-    /// remote URL from owner and repo on github.com, so any other host would hash to the wrong
-    /// repository.
+    /// there to the session. The PR is linked under the repository its URL names, not the
+    /// checkout's origin: in a fork checkout <c>gh pr view</c> resolves the base repository's PR
+    /// while origin names the fork. A PR is posted once per (owner, repo, number); a failed post
+    /// is retried on the next pass. Only github.com PRs are linked: the server endpoint rebuilds
+    /// the remote URL from owner and repo on github.com, so any other host would hash to the
+    /// wrong repository. Detection takes no cancellation token, so a cancelled pass abandons an
+    /// in-flight probe (its child process dies on its own cap) rather than waiting for it.
     /// </summary>
     internal static async Task LinkSecondaryPullRequestsAsync(
             WatchState                                          state,
@@ -3348,7 +3358,7 @@ partial class WatchCommand(
             TimeSpan                                            budget,
             CancellationToken                                   ct
         ) {
-        if (state.SecondaryRoots is null) return;
+        if (state.SecondaryRoots is null || budget <= TimeSpan.Zero) return;
 
         var started = Stopwatch.GetTimestamp();
         using var deadline = new CancellationTokenSource(budget);
@@ -3359,32 +3369,35 @@ partial class WatchCommand(
             if (remaining <= TimeSpan.Zero || linked.IsCancellationRequested) return;
 
             RepositoryPayload? repo;
-            try { repo = await detect(root, remaining); } catch { repo = null; }
+            try { repo = await detect(root, remaining).WaitAsync(linked.Token); }
+            catch (OperationCanceledException) { return; }
+            catch { repo = null; }
 
-            if (repo is not { Owner: { } owner, RepoName: { } name, PrNumber: { } number }) continue;
-            if (!string.Equals(repo.Host, "github.com", StringComparison.OrdinalIgnoreCase)) continue;
+            if (repo is not { PrNumber: { } number, PrUrl: { } url }) continue;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !string.Equals(uri.IdnHost, "github.com", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!PrRefParser.TryParse(url, out var owner, out var name, out var urlNumber) || urlNumber != number) continue;
 
             var key = (owner, name, number);
             if (state.LinkedPullRequests.Contains(key)) continue;
 
             bool accepted;
-            try { accepted = await post(repo, linked.Token); } catch (OperationCanceledException) { return; }
+            try { accepted = await post(repo with { Owner = owner, RepoName = name }, linked.Token); } catch (OperationCanceledException) { return; }
             if (accepted) state.LinkedPullRequests.Add(key);
         }
     }
 
     Task LinkSecondaryPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct) =>
         LinkSecondaryPullRequestsAsync(state,
-            (root, remaining) => RepositoryDetection.DetectRepositoryAsync(config, root, remaining),
+            (root, remaining) => RepositoryDetection.DetectRepositoryAsync(router, config, root, remaining),
             (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, token),
             budget, ct);
 
     // The pass is retried every minute, so a lost post costs a minute, not the PR.
     static readonly TimeSpan SecondaryProbeBudget = TimeSpan.FromSeconds(20);
 
-    // Fits inside the 5s the watcher is given to exit before it is killed, with the drain-complete
-    // signal still to send.
-    static readonly TimeSpan FinalSecondaryProbeBudget = TimeSpan.FromSeconds(3);
+    // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
+    // the PR probe share this much of it, leaving the rest for the drain-complete signal.
+    static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {
