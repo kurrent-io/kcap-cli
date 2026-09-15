@@ -116,6 +116,49 @@ public class ValidatePlanCommandTests : IDisposable {
     }
 
     [Test, NotInParallel]
+    public async Task Task_only_ledger_without_a_document_is_a_plan() {
+        // set_plan_tasks without declare_plan_document: no artifact, but a checklist to validate.
+        StubArtifacts("""
+            {
+              "primary": null, "artifacts": [], "diagnostics": [],
+              "ledger": { "plan_id": "p1",
+                "tasks": [{"task_id":"t1","ordinal":1,"title":"Only","status":"completed","note":null,"source":"mcp","status_partial":false}],
+                "completed": 1, "total": 1, "total_known": true, "is_complete": true, "withheld_contributions": 0 }
+            }
+            """);
+        StubRecap();
+
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).DoesNotContain("No plan found");
+        await Assert.That(stdout).Contains("No plan document; only a task list was declared.");
+        await Assert.That(stdout).Contains("1. [completed] Only (mcp)");
+        await Assert.That(stdout).Contains("## What's Done");
+        await Assert.That(exitCode).IsEqualTo(0);
+    }
+
+    [Test, NotInParallel]
+    public async Task Fully_withheld_ledger_still_reports_the_incomplete_checklist() {
+        StubArtifacts($$"""
+            {
+              "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}},
+              "artifacts": [], "diagnostics": [],
+              "ledger": { "plan_id": "p1", "tasks": [],
+                "completed": 0, "total": 0, "total_known": false, "is_complete": false, "withheld_contributions": 3 }
+            }
+            """);
+        StubRecap();
+
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(Api(), SessionId));
+
+        await Assert.That(stdout).Contains("## Tasks");
+        await Assert.That(stdout).Contains("[tasks incomplete: 3 contribution(s) from sessions you cannot see were withheld]");
+        // No visible task, so the checklist instruction does not apply.
+        await Assert.That(stdout).DoesNotContain("Tasks section");
+    }
+
+    [Test, NotInParallel]
     public async Task No_ledger_renders_no_tasks_section() {
         StubArtifacts($$"""{ "primary": {{ArtifactJson("art-1", "plan", "native_plan", "Step 1")}}, "artifacts": [], "diagnostics": [] }""");
         StubRecap();

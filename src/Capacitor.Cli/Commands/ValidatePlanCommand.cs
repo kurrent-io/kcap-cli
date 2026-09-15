@@ -39,8 +39,13 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
         var response  = ((PlanArtifactsResult.Found)artifactsResult).Response;
         var primary   = response?.Primary;
         var artifacts = response?.Artifacts ?? [];
+        var ledger    = response?.Ledger;
 
-        if (primary is null && artifacts.Count == 0) {
+        // A task list declared without a document is a plan too, and a ledger whose every task
+        // came from a hidden session still has something to say.
+        var hasLedger = ledger is not null && (ledger.Tasks.Count > 0 || !ledger.IsComplete);
+
+        if (primary is null && artifacts.Count == 0 && !hasLedger) {
             await Console.Out.WriteLineAsync("No plan found for this session.");
 
             return 0;
@@ -72,8 +77,7 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
 
         // The declared plan document leads: it is the one the agent said it executes, whatever
         // discovery ranked first.
-        var lead   = artifacts.FirstOrDefault(a => a.Source == "declared" && a.Kind == "plan") ?? primary;
-        var ledger = response?.Ledger;
+        var lead = artifacts.FirstOrDefault(a => a.Source == "declared" && a.Kind == "plan") ?? primary;
 
         var leadUnavailable = await RenderPlanArtifacts(lead, artifacts);
         await RenderTasks(ledger);
@@ -121,6 +125,9 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
 
         await Console.Out.WriteLineAsync("## Plan");
         await Console.Out.WriteLineAsync();
+
+        if (ordered.Count == 0)
+            await Console.Out.WriteLineAsync("No plan document; only a task list was declared.");
 
         foreach (var artifact in ordered) {
             var isLead = lead is not null && artifact.ArtifactId == lead.ArtifactId;
@@ -175,10 +182,11 @@ class ValidatePlanCommand(ISessionsApi sessionsApi) {
         return leadUnavailable;
     }
 
-    /// <summary>The declared task list, when the server sent one with at least one task. Omitted
-    /// otherwise, so a server without the ledger renders exactly as before.</summary>
+    /// <summary>The declared task list, when the server sent one with at least one task or with
+    /// contributions withheld (a checklist the viewer cannot see is still an incomplete one).
+    /// Omitted otherwise, so a server without the ledger renders exactly as before.</summary>
     static async Task RenderTasks(PlanLedgerDto? ledger) {
-        if (ledger is null || ledger.Tasks.Count == 0) return;
+        if (ledger is null || (ledger.Tasks.Count == 0 && ledger.IsComplete)) return;
 
         await Console.Out.WriteLineAsync("## Tasks");
         await Console.Out.WriteLineAsync();
