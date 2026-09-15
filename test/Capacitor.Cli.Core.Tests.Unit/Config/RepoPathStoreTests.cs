@@ -271,4 +271,39 @@ public class RepoPathStoreTests {
         var repo = entries.Single(e => e.Path == Path.GetFullPath("/gone/repo"));
         await Assert.That(repo.LastUsed).IsEqualTo(newer);
     }
+
+    // ── Fingerprint ──────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task Fingerprint_WhenFileDoesNotExist_IsNull() {
+        await Assert.That(Repos.Fingerprint()).IsNull();
+    }
+
+    [Test]
+    public async Task Fingerprint_WithoutAWrite_IsStable() {
+        await Repos.AddAsync("/tmp/project-a");
+
+        await Assert.That(Repos.Fingerprint()).IsEqualTo(Repos.Fingerprint());
+    }
+
+    [Test]
+    public async Task Fingerprint_ChangesWhenAPathIsAdded() {
+        await Repos.AddAsync("/tmp/project-a");
+        var before = Repos.Fingerprint();
+
+        await Repos.AddAsync("/tmp/project-b");
+
+        await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
+    }
+
+    [Test]
+    public async Task Fingerprint_ChangesWhenAPathIsRemoved() {
+        await Repos.AddAsync("/tmp/project-a");
+        await Repos.AddAsync("/tmp/project-b");
+        var before = Repos.Fingerprint();
+
+        await Repos.RemoveAsync("/tmp/project-b");
+
+        await Assert.That(Repos.Fingerprint()).IsNotEqualTo(before);
+    }
 }

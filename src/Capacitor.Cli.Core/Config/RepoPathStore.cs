@@ -108,4 +108,15 @@ public sealed class RepoPathStore(ConfigRoot config) {
         var entries = await LoadAsync();
         return entries.OrderByDescending(e => e.LastUsed).Select(e => e.Path).ToArray();
     }
+
+    /// <summary>Null when the file does not exist. Saves rename a complete file into place, so a
+    /// fingerprint never describes a partial write.</summary>
+    public RepoStoreFingerprint? Fingerprint() {
+        try {
+            var info = new FileInfo(StorePath);
+            return info.Exists ? new RepoStoreFingerprint(info.Length, info.LastWriteTimeUtc.Ticks) : null;
+        } catch {
+            return null;
+        }
+    }
 }

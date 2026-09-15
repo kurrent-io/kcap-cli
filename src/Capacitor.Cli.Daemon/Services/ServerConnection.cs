@@ -648,6 +648,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
+        var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
         var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
@@ -701,6 +702,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ),
                 cancellationToken: _ct
             );
+            _advertisedRepoStore = repoStore;
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -731,6 +733,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// the registration bracket. Null until wired (early startup / tests) — a no-op; failures are contained
     /// by the caller so they never un-register the daemon.</summary>
     internal Func<Task>? OnRegisteredHook { get; set; }
+
+    /// <summary>The <c>repos.json</c> the server's copy of the repo paths was read from; null until a
+    /// send succeeds. <see cref="RepoStoreWatcher"/> re-sends when the file differs from it.</summary>
+    internal RepoStoreFingerprint? AdvertisedRepoStore => _advertisedRepoStore;
+
+    volatile RepoStoreFingerprint? _advertisedRepoStore;
+
+    // Taken before the read it pairs with, so a write landing during the read still reads as a
+    // change afterwards.
+    RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot).Fingerprint();
 
     async Task<string[]> MergeRepoPathsAsync() {
         var persisted = await new RepoPathStore(_config.ConfigRoot).GetSortedPathsAsync();
@@ -835,12 +847,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public virtual async Task UpdateRepoPathsAsync() {
         try {
+            var repoStore = FingerprintRepoStore();
             var repoPaths = await MergeRepoPathsAsync();
-            await _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
+            await SendRepoPathsAsync(repoPaths);
+            _advertisedRepoStore = repoStore;
         } catch (Exception ex) {
             LogRepoPathUpdateFailed(ex);
         }
     }
+
+    internal virtual Task SendRepoPathsAsync(string[] repoPaths)
+        => _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
 
     // Outgoing messages to server
     public virtual Task AgentRegisteredAsync(

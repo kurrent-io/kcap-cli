@@ -565,6 +565,9 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
 
+        builder.Services.AddSingleton<RepoStoreWatcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
+
         // Local control socket: lets `kcap agent start`/`attach`/`ls`/`stop` drive daemon-hosted
         // agents from the user's own terminal (AI local-attach Phase 1).
         builder.Services.AddSingleton<LocalControlServer>();
