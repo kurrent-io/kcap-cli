@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
@@ -118,6 +119,81 @@ public class LaunchAttachmentsTests : IDisposable {
         await Assert.That(ctx.Prompt).IsEqualTo($"goal\n\n[Attached files: .attached/{batch}/f.png]");
         await Assert.That(File.Exists(Path.Combine(attached, batch, "f.png"))).IsTrue();
         await Assert.That(orch.GetAgentForTest("a1")!.Placement).IsEqualTo(AttachmentPlacement.Worktree);
+    }
+
+    [Test]
+    public async Task Borrowed_request_that_resolves_to_an_owned_snapshot_fetches_into_it() {
+        using var cwd = GitRepo.CreateWithCommit();
+        Serve(Id(0));
+        var server  = new CaptureServerConnection();
+        var factory = new SpyHostedAgentRuntimeFactory("cursor") {
+            BorrowedReviewRequiresIndependentSnapshot = true
+        };
+        await using var orch = Build(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(), [factory]);
+        var bridge = orch.PermissionBridgeForTest;
+        await bridge.StartAsync(CancellationToken.None);
+
+        try {
+            await orch.HandleLaunchAgentForTest(
+                Launch("a1", cwd.Path, "cursor", [Id(0)]) with { Borrowed = true, BorrowCwd = cwd.Path });
+
+            var ctx      = factory.LastContext!;
+            var attached = Path.Combine(ctx.Worktree.Path, ".attached");
+            var batch    = Path.GetFileName(Directory.GetDirectories(attached).Single());
+
+            await Assert.That(server.LaunchFailedCalls).IsEmpty();
+            await Assert.That(ctx.Work).IsEqualTo(WorkLocation.OwnedWorktree);
+            await Assert.That(ctx.Worktree.Path).IsNotEqualTo(cwd.Path);
+            await Assert.That(ctx.Prompt).IsEqualTo($"goal\n\n[Attached files: .attached/{batch}/f.png]");
+            await Assert.That(Directory.Exists(Path.Combine(cwd.Path, ".attached"))).IsFalse();
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task Daemon_store_batch_is_kept_by_a_launch_that_publishes() {
+        using var repo = GitRepo.CreateWithCommit();
+        Serve(Id(0));
+        var server  = new CaptureServerConnection();
+        var factory = new SpyHostedAgentRuntimeFactory("codex") { Placement = AttachmentPlacement.DaemonStore };
+        await using var orch = Build(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(), [factory]);
+
+        await orch.HandleLaunchAgentForTest(Launch("a1", repo.Path, "codex", [Id(0)]));
+
+        var store = orch.AttachmentStore.DirectoryFor("a1");
+        var batch = Directory.GetDirectories(store).Single();
+
+        await Assert.That(server.LaunchFailedCalls).IsEmpty();
+        await Assert.That(orch.GetAgentForTest("a1")).IsNotNull();
+        await Assert.That(factory.LastContext!.Prompt)
+            .IsEqualTo($"goal\n\n[Attached files: {Path.Combine(batch, "f.png")}]");
+        await Assert.That(File.Exists(Path.Combine(batch, "f.png"))).IsTrue();
+    }
+
+    /// <summary>A relaunch under an id a live agent still holds must not take that agent's files with
+    /// it when it fails: the lease releases the directory only when no incarnation holds the id.</summary>
+    [Test]
+    public async Task Failed_relaunch_leaves_the_live_incarnations_store_batch_in_place() {
+        using var repo = GitRepo.CreateWithCommit();
+        Serve(Id(0));
+        var server  = new CaptureServerConnection();
+        var factory = new SpyHostedAgentRuntimeFactory("codex") { Placement = AttachmentPlacement.DaemonStore };
+        await using var orch = Build(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(), [factory]);
+
+        await orch.HandleLaunchAgentForTest(Launch("a1", repo.Path, "codex", [Id(0)]));
+
+        var live = Directory.GetDirectories(orch.AttachmentStore.DirectoryFor("a1")).Single();
+
+        // The second fetch ends on the unserved id, so this launch never publishes.
+        await orch.HandleLaunchAgentForTest(Launch("a1", repo.Path, "codex", [Id(0), Id(1)]));
+
+        await Assert.That(server.LaunchFailedCalls.Single().Reason).StartsWith("attachment_unavailable:");
+        await Assert.That(orch.GetAgentForTest("a1")).IsNotNull();
+        await Assert.That(File.Exists(Path.Combine(live, "f.png"))).IsTrue();
     }
 
     [Test]

@@ -2201,7 +2201,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (placement == AttachmentPlacement.Worktree && work == WorkLocation.BorrowedCwd)
                     throw new InvalidOperationException(
-                        "attachments_refused: attachments need a daemon-owned worktree");
+                        $"attachments_refused: {AttachmentRefusals.NeedsOwnedWorktree}");
 
                 var root = placement == AttachmentPlacement.DaemonStore
                     ? _attachmentStore.DirectoryFor(agentId)
@@ -2625,9 +2625,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Only tear down a worktree we OWN. A borrowed cwd is the user's real checkout — never
             // remove it, its branch, or its Claude project symlink on a failed launch (spec's top
-            // safety invariant; mirrors the normal-stop guard in CleanupAgentAsync). For a borrowed
-            // launch there is nothing daemon-created to clean up anyway (no CreateAsync, no mirror,
-            // no attachments), and StartAsync throwing means mcpConfigPath was never assigned.
+            // safety invariant; mirrors the normal-stop guard in CleanupAgentAsync). A borrowed launch
+            // creates no worktree and no mirror here; its attachments, if its runtime places them in
+            // the daemon store, are released by the lease in the finally below. StartAsync throwing
+            // means mcpConfigPath was never assigned.
             if (worktree != null && work == WorkLocation.OwnedWorktree) {
                 if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
                     try {
@@ -2667,7 +2668,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // was torn down and no agent was ever registered; terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         } finally {
-            storeLease?.Dispose();
+            if (storeLease is not null) {
+                // Never drop a directory a LIVE incarnation under this id owns: a relaunch that fails
+                // before publishing finds the previous agent still holding the id, and that agent's
+                // batch is not this launch's to remove. Same rule the failed-launch journal keeps.
+                if (_agents.ContainsKey(agentId)) {
+                    if (!published) LogAttachmentsLeftToLiveAgent(agentId);
+                    storeLease.Keep();
+                }
+
+                // The failure this launch already reported must stand: a cleanup fault here would
+                // replace the outcome after LaunchFailedAsync has been sent.
+                try { storeLease.Dispose(); }
+                catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments (failed-launch)", agentId); }
+            }
         }
     }
 
@@ -5365,6 +5379,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment {AttachmentId} for agent {AgentId} unavailable: {Error}")]
     partial void LogAttachmentFetchFailed(string agentId, string? attachmentId, string? error);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed launch for agent {AgentId} left its attachment directory to the live incarnation holding that id")]
+    partial void LogAttachmentsLeftToLiveAgent(string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} cannot take attachments ({Detail})")]
     partial void LogSendInputAttachmentsRefused(string agentId, string detail);
