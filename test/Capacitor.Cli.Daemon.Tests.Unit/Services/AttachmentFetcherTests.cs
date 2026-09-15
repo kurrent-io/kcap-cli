@@ -160,6 +160,33 @@ public class AttachmentFetcherTests : IDisposable {
         b.Batch.Rollback();
     }
 
+    /// <summary>A root that is a link is refused without being followed, so neither the staging
+    /// directory nor the stale-batch sweep can be steered outside the daemon-owned tree. The link is
+    /// pre-existing on purpose: <c>Directory.CreateDirectory</c> through a link to a directory
+    /// succeeds silently, so a check that ran only after it would prove nothing.</summary>
+    [Test]
+    public async Task A_root_that_is_a_link_or_a_file_is_refused_and_its_target_is_untouched() {
+        Serve(Id(0), [1]);
+        var target = Tmp.CreateDir("elsewhere");
+        var stale  = Directory.CreateDirectory(Path.Combine(target, ".pending-" + new string('0', 32))).FullName;
+        var link   = Tmp.PathTo(".attached");
+        File.CreateSymbolicLink(link, target.Path);
+
+        var viaLink = await Fetcher().FetchAsync(link, AttachmentPlacement.Worktree, [Id(0)], CancellationToken.None);
+
+        await Assert.That(viaLink.Batch).IsNull();
+        await Assert.That(viaLink.Error).Contains("not a directory");
+        await Assert.That(Directory.Exists(stale)).IsTrue();
+        await Assert.That(Directory.GetFileSystemEntries(target)).IsEquivalentTo(new[] { stale });
+
+        var file    = Tmp.CreateFile("plain-file");
+        var viaFile = await Fetcher().FetchAsync(file, AttachmentPlacement.Worktree, [Id(0)], CancellationToken.None);
+
+        await Assert.That(viaFile.Batch).IsNull();
+        await Assert.That(viaFile.Error).Contains("not a directory");
+        await Assert.That(File.ReadAllText(file)).IsEmpty();
+    }
+
     [Test]
     public async Task Stale_staging_directory_is_removed_by_the_next_fetch() {
         Serve(Id(0), [1]);

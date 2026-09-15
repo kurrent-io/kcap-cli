@@ -244,6 +244,11 @@ internal static class AgentOrchestratorHarness {
     /// to meet a condemned agent without standing up a sweep to condemn it.</summary>
     internal static void ClaimReap(AgentInstance agent) => Interlocked.CompareExchange(ref agent.ReapClaimed, 1, 0);
 
+    /// <summary>The latch every teardown claims before its first destructive step, without holding
+    /// the delivery gate.</summary>
+    internal static void BeginCleanup(AgentInstance agent) =>
+        Interlocked.CompareExchange(ref agent.CleanupStarted, 1, 0);
+
     /// <summary>A borrowed-checkout reviewer: it takes the acknowledging send path, and its
     /// <see cref="WorkLocation.BorrowedCwd"/> work location is what keeps a delivery from trying to
     /// refresh a snapshot that no daemon-owned worktree exists to receive.</summary>

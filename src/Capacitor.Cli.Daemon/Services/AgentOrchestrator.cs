@@ -190,6 +190,11 @@ internal record AgentInstance(
     /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
     public int CleanupStarted;
 
+    /// <summary><see cref="CleanupStarted"/> as a bool, through a
+    /// <see cref="System.Threading.Volatile"/> read: teardown latches it outside every per-agent gate,
+    /// so a plain field read is not guaranteed to observe it.</summary>
+    public bool IsCleanupStarted => Volatile.Read(ref CleanupStarted) != 0;
+
     /// <summary>Design spec §3.3: single-flight guard for reporting a published ACP launch-window
     /// reap verdict to the server — claimed (0→1) by the FIRST path that reports it, via
     /// <see cref="System.Threading.Interlocked.CompareExchange(ref int,int,int)"/>, so dedupe is
@@ -3928,6 +3933,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
 
         async Task<InputDeliveryOutcome> DeliverInSectionAsync() {
+            const string TearingDown = "agent teardown has started";
+
             // Losing side of the reap claim: a reap-claimed agent gets nothing — no write, no clock
             // advance. Failing the dispatch here rather than writing into a dying runtime is
             // deliberate; the server heals it on resubmit.
@@ -3936,6 +3943,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimed);
             }
+
+            // Teardown latches CleanupStarted before its first destructive step and never waits for
+            // this section, so a delivery admitted while the agent was live can otherwise download
+            // into — and recreate — a root CleanupAgentAsync is removing.
+            if (agent.IsCleanupStarted)
+                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, TearingDown);
 
             // Fails closed: a refresh that failed has already terminated the reviewer rather than
             // leave it on a possibly-partial snapshot, so this round is over.
@@ -3981,6 +3994,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     batch?.Rollback();
 
                     return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimedLate);
+                }
+
+                // Same re-read for teardown, which the reap latch does not cover: every path but the
+                // reaper's tears an agent down without claiming it.
+                if (agent.IsCleanupStarted) {
+                    batch?.Rollback();
+
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, TearingDown);
                 }
 
                 // Codex turn diagnostic: bump the round generation and sample the rollout length BEFORE

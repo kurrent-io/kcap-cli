@@ -13,12 +13,22 @@ internal sealed class AttachmentFetcher(
 
     static readonly string OverCap = $"over the {InputWire.MaxAttachmentBytes / (1024 * 1024)} MB cap";
 
+    const string RootNotADirectory = "attachment root is not a directory";
+
     /// <param name="destinationRoot"><c>&lt;cwd&gt;/.attached</c> (Worktree) or
     /// <c>store.DirectoryFor(agentId)</c> (DaemonStore).</param>
     public async Task<AttachmentFetch> FetchAsync(
             string destinationRoot, AttachmentPlacement placement,
             IReadOnlyList<string> ids, CancellationToken ct) {
+        // Checked before anything is created or deleted: a root that is a link — a repository can
+        // commit one at .attached — sends both the staging directory and the sweep's deletions
+        // wherever it points. CreateDirectory through an existing link to a directory succeeds
+        // silently, so the pre-existing entry is what has to be refused.
+        if (IsNotARealDirectory(destinationRoot)) return new(null, null, RootNotADirectory);
+
         Directory.CreateDirectory(destinationRoot);
+
+        if (IsNotARealDirectory(destinationRoot)) return new(null, null, RootNotADirectory);
 
         if (placement == AttachmentPlacement.Worktree) {
             var gitignore = Path.Combine(destinationRoot, ".gitignore");
@@ -123,6 +133,20 @@ internal sealed class AttachmentFetcher(
         }
 
         return (Path.GetFileName(path), null);
+    }
+
+    /// <summary>Whether an entry is present at this path and is anything other than a real directory,
+    /// WITHOUT following it: attribute-based, so a link — dangling or not — reads as present.</summary>
+    static bool IsNotARealDirectory(string path) {
+        try {
+            var attributes = File.GetAttributes(path);
+
+            return attributes.HasFlag(FileAttributes.ReparsePoint) || !attributes.HasFlag(FileAttributes.Directory);
+        } catch (FileNotFoundException) {
+            return false;
+        } catch (DirectoryNotFoundException) {
+            return false;
+        }
     }
 
     static string UniquePath(string directory, string fileName) {

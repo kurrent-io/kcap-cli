@@ -190,6 +190,40 @@ public class DeliverInputAttachmentsTests : IDisposable {
         await Assert.That(Batches(okWt)).HasSingleItem();
     }
 
+    /// <summary>Teardown latches its claim without the delivery gate, so a download admitted while the
+    /// agent was live can still be running when cleanup removes the worktree: the batch goes back
+    /// rather than recreating a directory nothing will read, and a later send fetches nothing at
+    /// all.</summary>
+    [Test]
+    public async Task A_teardown_that_starts_during_the_fetch_takes_the_batch_back() {
+        await using var orch = Build();
+        Serve(Id(0));
+        var wt = Tmp.CreateDir("torn");
+        var rt = new FakeAcpRuntime();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "a1", rt, worktreePath: wt);
+
+        orch.SendInputBeforeWriteHookForTest = () => {
+            AgentOrchestratorHarness.BeginCleanup(agent);
+
+            return Task.CompletedTask;
+        };
+
+        var outcome = await orch.DeliverInputAsync(agent, "hi", [Id(0)]);
+        orch.SendInputBeforeWriteHookForTest = null;
+
+        await Assert.That(outcome.Kind).IsEqualTo(InputDeliveryKind.Dropped);
+        await Assert.That(outcome.Reason).IsEqualTo(AgentOrchestrator.SendInputDropReason.DeliveryFailed);
+        await Assert.That(rt.SentInputs).IsEmpty();
+        await Assert.That(Batches(wt)).IsEmpty();
+
+        var downloads = _server.LogEntries.Count;
+        var afterwards = await orch.DeliverInputAsync(agent, "hi", [Id(0)]);
+
+        await Assert.That(afterwards.Reason).IsEqualTo(AgentOrchestrator.SendInputDropReason.DeliveryFailed);
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(downloads);
+        await Assert.That(Batches(wt)).IsEmpty();
+    }
+
     /// <summary>What the server is told is the reason token alone: the wording behind it names an
     /// attachment this daemon refused, which is the owner's business and not the dispatcher's.</summary>
     [Test]
