@@ -33,6 +33,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     string? _reporterEmail;
     string? _outcome;
     bool _signInOffered;
+    bool _disposed;
 
     public FeedbackViewModel(IFeedbackApi api, FeedbackCategory initial, IObservable<string> trailer,
             string osDescription, Action? signIn, CancellationToken appLifetime = default) {
@@ -52,6 +53,9 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     public FeedbackCategory Category {
         get => _category;
         set {
+            // A two-way chip binding can fire mid-send; the frozen snapshot is not touched, and the
+            // re-announce snaps the control back to the category actually being sent.
+            if (IsBusy) { this.RaisePropertyChanged(nameof(Category)); return; }
             if (_category == value) return;
             Release();
             _category = value;
@@ -185,6 +189,8 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     }
 
     public void Dispose() {
+        if (_disposed) return;
+        _disposed = true;
         _lifetime.Cancel();
         _lifetime.Dispose();
         _subscriptions.Dispose();

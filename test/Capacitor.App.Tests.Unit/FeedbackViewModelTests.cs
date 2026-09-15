@@ -45,12 +45,55 @@ public class FeedbackViewModelTests {
     }
 
     [Test]
+    public async Task An_edit_and_a_new_trailer_each_announce_both_derived_properties() {
+        var (vm, _, trailer, _) = New();
+        var raised = new List<string>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
+        vm.Message = "It broke.";
+
+        await Assert.That(raised).Contains(nameof(FeedbackViewModel.CanSend));
+        await Assert.That(raised).Contains(nameof(FeedbackViewModel.Hint));
+
+        raised.Clear();
+        trailer.OnNext(TrailerB);
+
+        await Assert.That(raised).Contains(nameof(FeedbackViewModel.CanSend));
+        await Assert.That(raised).Contains(nameof(FeedbackViewModel.Hint));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task The_send_command_becomes_executable_when_the_message_is_filled() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, _, _, _) = New();
+            var seen = new List<bool>();
+            using var subscription = vm.SendCommand.CanExecute.Subscribe(seen.Add);
+
+            vm.Message = "It broke.";
+
+            await Assert.That(seen[0]).IsFalse();
+            await Assert.That(seen[^1]).IsTrue();
+        });
+
+    [Test]
     public async Task Hint_names_the_attachment_and_the_remaining_allowance() {
         var (vm, _, _, _) = New();
         vm.Message = "abc";
 
         await Assert.That(vm.Hint).IsEqualTo(
             $"Attached automatically: desktop 1.0.3 · daemon d cli 1.0.3 · macOS 15.6 · {8000 - 2 - TrailerA.Length - 3} characters left");
+    }
+
+    [Test]
+    public async Task Hint_reads_a_trailer_FeedbackTrailer_actually_built() {
+        var built = FeedbackTrailer.Build("1.0.3", "d", "1.0.2", null);
+        using var vm = new FeedbackViewModel(
+            new ScriptedFeedbackApi(), FeedbackCategory.Bug, new BehaviorSubject<string>(built), "macOS 15.6", null);
+        vm.Message = "abc";
+
+        await Assert.That(vm.Hint).IsEqualTo(
+            $"Attached automatically: desktop 1.0.3 · daemon d 1.0.2 · macOS 15.6 · {8000 - 2 - built.Length - 3} characters left");
     }
 
     [Test]
@@ -204,6 +247,35 @@ public class FeedbackViewModelTests {
         api.Release(new FeedbackResult.Sent("a@b.c"));
         await send;
         await Assert.That(api.Sent[0].Category).IsEqualTo(FeedbackCategory.Bug);
+    }
+
+    [Test]
+    public async Task A_category_binding_that_fires_mid_send_leaves_the_snapshot_alone() {
+        var api     = new BlockingFeedbackApi();
+        var trailer = new BehaviorSubject<string>(TrailerA);
+        var vm      = new FeedbackViewModel(api, FeedbackCategory.Bug, trailer, "macOS 15.6", null);
+        vm.Message = "It broke.";
+        var send = vm.SendCommand.Execute().ToTask();
+        await api.Started.Task;
+        var bound = vm.CurrentId;
+
+        vm.Category = FeedbackCategory.Feedback;
+
+        await Assert.That(vm.Category).IsEqualTo(FeedbackCategory.Bug);
+        await Assert.That(vm.CurrentId).IsEqualTo(bound);
+
+        api.Release(new FeedbackResult.Sent("a@b.c"));
+        await send;
+        await Assert.That(api.Sent[0].Category).IsEqualTo(FeedbackCategory.Bug);
+        await Assert.That(api.Sent[0].ClientRequestId).IsEqualTo(bound);
+    }
+
+    [Test]
+    public async Task Disposing_twice_is_a_no_op() {
+        var (vm, _, _, _) = New();
+        vm.Dispose();
+
+        await Assert.That(vm.Dispose).ThrowsNothing();
     }
 
     sealed class BlockingFeedbackApi : IFeedbackApi {
