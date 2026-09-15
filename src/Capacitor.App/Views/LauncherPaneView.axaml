@@ -130,6 +130,9 @@
                 BorderBrush="{StaticResource KcapWarningBrush}" BorderThickness="1"
                 IsVisible="{Binding ConnectionBannerVisible}">
             <StackPanel Spacing="12">
+                <ProgressBar x:Name="BannerBusyBar" Height="3" IsIndeterminate="True"
+                             IsVisible="{Binding BannerBusy}"
+                             Foreground="{StaticResource KcapWarningBrush}" />
                 <TextBlock x:Name="BannerMessageText" Text="{Binding BannerMessage}"
                            Foreground="{StaticResource KcapWarningBrush}" FontSize="13" LineHeight="20"
                            TextWrapping="Wrap" />

@@ -20,6 +20,24 @@ it acted on. The SessionStart nudge for Claude reads the installed plugin's `.mc
 assuming the bundled copy: a plugin installed before `kcap-plans` existed carries no such server,
 and a nudge toward a tool the session lacks is worse than none.
 
+## A running daemon follows repos.json
+
+`kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
+after its own launches, so a repo added from a terminal reached the launch dialog only after a daemon
+restart. The daemon now polls a content hash of the file and re-sends its repo paths through the
+existing `DaemonUpdateRepoPaths` hub method when the file differs from the one the last send read.
+Polling rather than a control-socket nudge from the CLI: the file has several writers (the CLI, the
+desktop app, the daemon's own launch path, a hand edit), and every one of them is covered without any
+of them knowing whether a daemon is running. Content rather than size and mtime, because re-adding a
+known path rewrites the file at the same length and two such writes inside the filesystem's timestamp
+resolution would read as one. The comparison is against the fingerprint recorded by the last
+successful send, not against a baseline the watcher primes at start, which closes the window between
+registration reading the file and the watcher starting, and makes a failed send retry on the next
+tick by construction. Registration and the update share one lock across snapshot-and-send: the server
+runs one client's invocations in parallel, so two overlapping sends could otherwise land in the
+opposite order to the fingerprints they record. The interval is 3 s — one hash of one small file —
+so the repo is listed by the time the user has switched from the terminal to the browser.
+
 ## Work-items tools take the session from the running harness
 
 An MCP stdio server is spawned once, at harness startup, from the launching process's environment.
