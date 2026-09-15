@@ -1326,14 +1326,31 @@ public class ChatTabViewModelTests {
         public void Dispose() { }
     }
 
+    /// Serves one Reset read on demand — the pane opens its feed and reads once during
+    /// construction, so a feed that resets on its first read would spend it before the test.
+    sealed class ScriptedFeed : IChatTranscriptFeed {
+        public bool ResetNext;
+
+        public FeedRead ReadAppended() {
+            if (!ResetNext) return new(FeedStatus.Ok, []);
+            ResetNext = false;
+            return new(FeedStatus.Reset, []);
+        }
+
+        public long? CurrentOffset => 0;
+        public void Dispose() { }
+    }
+
     static QueuedInputItem Item(string text, Guid id, string? sender = "u2") => new() { DispatchId = id, Text = text, SenderUserId = sender };
+
+    static ChatSessionInfo Session(string? feedKey) => new("Running", "Running", "gemini", null, null, null, false, "", feedKey);
 
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_servers_queue_confirms_an_own_send_and_lists_and_retires_the_others() {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
-            var session = new BehaviorSubject<ChatSessionInfo>(new("Running", "Running", "gemini", null, null, null, false, "", "s1"));
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => new EmptyFeed(),
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), serverQueue: queue);
@@ -1359,6 +1376,74 @@ public class ChatTabViewModelTests {
             // The own message leaves with the transcript's echo, never with the queue alone.
             queue.OnNext([]);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
+
+            // An item the server sent no id for is unkeyed: nothing here can retire it later, so
+            // it is neither shown nor allowed to match a send of this pane's own.
+            queue.OnNext([Item("do it", Guid.Empty, sender: "u1"), Item("and this", theirs)]);
+            await Assert.That(chat.QueuedMessages.Count(q => q.IsForeign)).IsEqualTo(1);
+            await Assert.That(chat.QueuedMessages.Single(q => q.IsForeign).Text).IsEqualTo("and this");
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A foreign row answers for one session. The pane moving to another — or to none, where no
+    /// snapshot can ever arrive to retire it — drops it, while this pane's own send rides along.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_change_drops_the_foreign_rows_and_keeps_an_own_send() {
+        await RunOnUiAsync(async () => {
+            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => new EmptyFeed(),
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), serverQueue: queue);
+
+            chat.ComposerText = "do it";
+            await chat.SendCommand.Execute();
+            queue.OnNext([Item("and this", Guid.NewGuid())]);
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
+
+            session.OnNext(Session("s2"));
+            await Assert.That(chat.QueuedMessages.Single().IsForeign).IsFalse();
+
+            queue.OnNext([Item("and theirs again", Guid.NewGuid())]);
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
+            session.OnNext(Session(null));
+            await Assert.That(chat.QueuedMessages.Single().IsForeign).IsFalse();
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A foreign row is the server's, not this pane's: neither an ended session nor a transcript
+    /// reset may rebase one or cast doubt on a delivery this pane never made.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_foreign_row_is_never_rebased_nor_marked_unconfirmed() {
+        await RunOnUiAsync(async () => {
+            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feed = new ScriptedFeed();
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), _ => feed,
+                new RecordingOpener(), time, new FakePermissionService(), serverQueue: queue);
+
+            chat.ComposerText = "do it";
+            await chat.SendCommand.Execute();
+            queue.OnNext([Item("and this", Guid.NewGuid())]);
+            var own = chat.QueuedMessages.Single(q => !q.IsForeign);
+            var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
+
+            session.OnNext(Session("s1") with { Ended = true });
+            await Assert.That(own.IsUnconfirmed).IsTrue();
+            await Assert.That(foreign.IsUnconfirmed).IsFalse();
+
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            feed.ResetNext = true;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(chat.QueuedMessages.Single(q => q.IsForeign)).IsSameReferenceAs(foreign);
+            await Assert.That(foreign.IsUnconfirmed).IsFalse();
             await chat.TeardownAsync();
         });
     }

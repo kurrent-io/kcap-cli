@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text;
+using System.Text.Json;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
@@ -541,6 +542,24 @@ public class ServerConnectionServiceTests {
         await Assert.That(received[0].SessionId).IsEqualTo("s1");
         await Assert.That(received[0].Items.Single().Text).IsEqualTo("queued one");
         await Assert.That(received[1].Items.Single().Text).IsEqualTo("queued two");
+    }
+
+    /// An unreadable push is no news about the queue. Publishing it as an empty one would retire
+    /// every prompt the strip is showing on behalf of the server that still holds them.
+    [Test]
+    public async Task AnUnreadableQueuePushIsSkippedRatherThanPublishedAsAnEmptyQueue() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var update = lane.PendingInputChanged.Take(1).ToTask();
+        using var malformed = JsonDocument.Parse("""[{"dispatch_id":"not-a-guid","text":"unreadable"}]""");
+        await host.BroadcastAsync(HubBroadcasts.PendingInputChanged, "a1", "s1", malformed.RootElement);
+        await host.BroadcastAsync(HubBroadcasts.PendingInputChanged, "a1", "s1",
+            new[] { new QueuedInputItem { DispatchId = Guid.NewGuid(), Text = "readable" } });
+        var received = await update.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Items.Single().Text).IsEqualTo("readable");
     }
 
     static StreamEventEnvelope Envelope(string stream, ulong position, string content) => new() {

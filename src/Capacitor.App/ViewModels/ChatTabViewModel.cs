@@ -69,6 +69,8 @@ public sealed class ChatTabViewModel : ReactiveObject {
     int _inputGeneration;
     int _readInFlight;
     string? _feedKey;
+    /// The session the listed foreign rows belong to.
+    string? _queueKey;
     string? _root;
     volatile FeedLease? _lease;
     ITimer? _timer;
@@ -412,7 +414,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
     void ApplyServerQueue(IReadOnlyList<QueuedInputItem> items) {
         var listed = new HashSet<Guid>();
         foreach (var item in items) {
-            if (!listed.Add(item.DispatchId)) continue;
+            // An item with no id is unkeyed, not identified as nobody's: keying it would collide
+            // with every other such item and could disqualify an own send from its real match.
+            if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
             if (_queuedMessages.Any(q => q.DispatchId == item.DispatchId)) continue;
             var own = _queuedMessages.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
             if (own is not null) own.MarkQueued(item.DispatchId);
@@ -437,6 +441,13 @@ public sealed class ChatTabViewModel : ReactiveObject {
         if (info.Ended)
             foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
+        // A foreign row is the server's answer for one session. Moving to another — or to none,
+        // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
+        if (info.FeedKey != _queueKey) {
+            _queueKey = info.FeedKey;
+            foreach (var foreign in _queuedMessages.Where(q => q.IsForeign).ToList()) _queuedMessages.Remove(foreign);
+            RefreshQueue();
+        }
         if (_openFeed is { } open && info.FeedKey is { } key && key != _feedKey) SwitchFeed(key, open);
         RefreshActivityNote();
         RefreshQueue();

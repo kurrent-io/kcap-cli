@@ -254,7 +254,9 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
             (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
-        hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => _pendingInput.OnNext(new(sessionId, ParseQueue(items))));
+        hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => {
+            if (ParseQueue(items) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
+        });
         hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
         hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
         return hub;
@@ -358,16 +360,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     /// consumer sees one shape.
     public async Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) {
         var (outcome, snapshot) = await InvokeAsync<JsonElement?>(HubMethods.SubscribeToChat, ct, sessionId).ConfigureAwait(false);
-        if (outcome.Result == HubCallResult.Ok) _pendingInput.OnNext(new(sessionId, ParseQueue(snapshot)));
+        if (outcome.Result == HubCallResult.Ok && ParseQueue(snapshot) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
         return outcome;
     }
 
-    // Lenient on purpose: binding the push to the typed array would drop the whole push over one
-    // item that does not read as one.
-    static IReadOnlyList<QueuedInputItem> ParseQueue(JsonElement? items) {
-        if (items is not { ValueKind: JsonValueKind.Array } array) return [];
-        try { return array.Deserialize(RemoteModelsJsonContext.Default.QueuedInputItemArray) ?? []; }
-        catch (JsonException) { return []; }
+    /// Null for a payload that is not a readable queue — never an empty one, which a consumer
+    /// would read as the server having dropped every prompt it holds.
+    static IReadOnlyList<QueuedInputItem>? ParseQueue(JsonElement? items) {
+        if (items is not { ValueKind: JsonValueKind.Array } array) return null;
+        try { return array.Deserialize(RemoteModelsJsonContext.Default.QueuedInputItemArray); }
+        catch (JsonException) { return null; }
     }
 
     async Task<(HubCallOutcome Outcome, T? Result)> InvokeAsync<T>(string method, CancellationToken ct, params object?[] args) {
