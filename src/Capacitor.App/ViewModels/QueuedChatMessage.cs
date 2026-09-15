@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Remote.Models;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -19,6 +20,22 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     public bool IsUnconfirmed { get => _isUnconfirmed; private set => this.RaiseAndSetIfChanged(ref _isUnconfirmed, value); }
 
     internal void MarkUnconfirmed() => IsUnconfirmed = true;
+
+    /// The server's id for this prompt once it has listed it; null until then.
+    internal Guid? DispatchId { get; private set; }
+    /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
+    public bool IsForeign { get; private init; }
+    public string Sender { get; private init; } = "";
+
+    internal static QueuedChatMessage FromServer(QueuedInputItem item) =>
+        new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true, Sender = item.SenderUserId ?? "" };
+
+    internal void MarkQueued(Guid dispatchId) {
+        DispatchId = dispatchId;
+        IsUnconfirmed = false;
+    }
+
+    internal bool MatchesText(string text) => Normalize(Text) == Normalize(text);
 
     /// A new transcript may contain either replayed history or the lost echo. Neither is safe
     /// evidence. Retain the message, then allow only subsequent appends in this generation.

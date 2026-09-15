@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.SignalR;
@@ -29,6 +30,21 @@ public sealed class HubTestHost : IAsyncDisposable {
     public static List<string> ChatSubscribes { get; } = [];
     public static List<string> ChatUnsubscribes { get; } = [];
     public static List<string> AccessWatches { get; } = [];
+    /// What a chat join answers with: the session's queue.
+    public static List<QueuedInputItem> ChatSnapshot { get; } = [];
+
+    public static Func<string, bool> StreamHandler { get; set; } = _ => true;
+    public static List<(string Stream, ulong? From)> StreamSubscribes { get; } = [];
+    public static List<string> StreamUnsubscribes { get; } = [];
+    public static Func<string, bool> TerminalHandler { get; set; } = _ => true;
+    public static (int Cols, int Rows)? TerminalDims { get; set; }
+    public static List<byte[]> TerminalReplay { get; } = [];
+    public static List<string> TerminalSubscribes { get; } = [];
+    public static List<string> TerminalUnsubscribes { get; } = [];
+    public static List<(string AgentId, int Cols, int Rows)> Resizes { get; } = [];
+    public static List<string> ResizeReleases { get; } = [];
+    public static List<(string AgentId, string Text)> UserInputs { get; } = [];
+    public static List<(string AgentId, string Key)> SpecialKeys { get; } = [];
 
     public static async Task<HubTestHost> StartAsync(bool requireAuth = false) {
         DaemonsHandler = () => [];
@@ -40,6 +56,19 @@ public sealed class HubTestHost : IAsyncDisposable {
         ChatSubscribes.Clear();
         ChatUnsubscribes.Clear();
         AccessWatches.Clear();
+        ChatSnapshot.Clear();
+        StreamHandler = _ => true;
+        StreamSubscribes.Clear();
+        StreamUnsubscribes.Clear();
+        TerminalHandler = _ => true;
+        TerminalDims = null;
+        TerminalReplay.Clear();
+        TerminalSubscribes.Clear();
+        TerminalUnsubscribes.Clear();
+        Resizes.Clear();
+        ResizeReleases.Clear();
+        UserInputs.Clear();
+        SpecialKeys.Clear();
 
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
@@ -72,6 +101,9 @@ public sealed class HubTestHost : IAsyncDisposable {
         _app!.Services.GetRequiredService<IHubContext<SessionsHub>>()
             .Clients.All.SendCoreAsync(method, args);
 
+    /// A stream event, the way the server's gateway delivers one.
+    public Task PushStreamEventAsync(StreamEventEnvelope envelope) => BroadcastAsync(SignalRSubscriptionMethods.StreamEvent, envelope);
+
     public Task StopAsync() => _app!.StopAsync();
 
     public async ValueTask DisposeAsync() {
@@ -91,10 +123,10 @@ public sealed class HubTestHost : IAsyncDisposable {
 
         public Task RequestStopAgent(string agentId) { StopCalls.Add(agentId); return Task.CompletedTask; }
 
-        public JsonElement[] SubscribeToChat(string sessionId) {
+        public QueuedInputItem[] SubscribeToChat(string sessionId) {
             if (!ChatSubscribeHandler(sessionId)) throw new HubException(WireTokens.SessionNotVisible);
             ChatSubscribes.Add(sessionId);
-            return [];
+            return ChatSnapshot.ToArray();
         }
 
         public Task UnsubscribeFromChat(string sessionId) { ChatUnsubscribes.Add(sessionId); return Task.CompletedTask; }
@@ -104,5 +136,28 @@ public sealed class HubTestHost : IAsyncDisposable {
             AccessWatches.Add(sessionId);
             return Task.CompletedTask;
         }
+
+        public Task SubscribeToStream(string stream, ulong? fromPosition) {
+            if (!StreamHandler(stream)) throw new HubException(WireTokens.StreamNotAuthorized);
+            StreamSubscribes.Add((stream, fromPosition));
+            return Task.CompletedTask;
+        }
+
+        public Task UnsubscribeFromStream(string stream) { StreamUnsubscribes.Add(stream); return Task.CompletedTask; }
+
+        // The server's terminal denial is silence, never a throw.
+        public async Task SubscribeToTerminal(string agentId) {
+            if (!TerminalHandler(agentId)) return;
+            TerminalSubscribes.Add(agentId);
+            if (TerminalDims is { } dims) await Clients.Caller.SendAsync(HubBroadcasts.TerminalDimensions, agentId, dims.Cols, dims.Rows);
+            foreach (var chunk in TerminalReplay)
+                await Clients.Caller.SendAsync(HubBroadcasts.TerminalOutput, agentId, Convert.ToBase64String(chunk));
+        }
+
+        public Task UnsubscribeFromTerminal(string agentId) { TerminalUnsubscribes.Add(agentId); return Task.CompletedTask; }
+        public Task RequestResizeTerminal(string agentId, int cols, int rows) { Resizes.Add((agentId, cols, rows)); return Task.CompletedTask; }
+        public Task ReleaseResizeTerminal(string agentId) { ResizeReleases.Add(agentId); return Task.CompletedTask; }
+        public Task SendUserInput(string agentId, string text, string[]? attachmentIds) { UserInputs.Add((agentId, text)); return Task.CompletedTask; }
+        public Task SendSpecialKey(string agentId, string key) { SpecialKeys.Add((agentId, key)); return Task.CompletedTask; }
     }
 }

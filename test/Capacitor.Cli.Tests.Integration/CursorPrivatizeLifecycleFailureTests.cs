@@ -5,6 +5,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -99,9 +100,9 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir);
+        var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir, router: new GitProviderRouter());
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -138,9 +139,9 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir);
+        var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir, router: new GitProviderRouter());
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -174,9 +175,9 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir);
+        var source = new CursorImportSource(Config.Root, WriteOneCursorSession(), WorkspaceStorageDir, router: new GitProviderRouter());
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -265,9 +266,9 @@ public class CursorPrivatizeLifecycleFailureTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var source = new CursorImportSource(Config.Root, WriteParentWithCorrelatedChild(), WorkspaceStorageDir);
+        var source = new CursorImportSource(Config.Root, WriteParentWithCorrelatedChild(), WorkspaceStorageDir, router: new GitProviderRouter());
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient()).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],

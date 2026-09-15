@@ -122,13 +122,14 @@ public class AgentOrchestratorLocalAttachTests {
     [Test]
     public async Task Owned_worktree_cleanup_still_removes_it() {
         using var tmp = new TempDir();
+        string worktree = tmp.CreateDir("worktree");
 
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance(
-            "owned-1", null, "", null, tmp.Path, "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(tmp.Path, "", tmp.Path, IsStandalone: true), new CancellationTokenSource()
+            "owned-1", null, "", null, worktree, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(worktree, "", worktree, IsStandalone: true), new CancellationTokenSource()
         ) {
             Work = WorkLocation.OwnedWorktree
         };
@@ -136,7 +137,9 @@ public class AgentOrchestratorLocalAttachTests {
         orch.RegisterAgentForTest(agent);
         await orch.CleanupAgentForTest("owned-1");
 
-        await Assert.That(Directory.Exists(tmp.Path)).IsFalse();
+        await Assert.That(Directory.Exists(worktree)).IsFalse();
+        // Scoped to the worktree: the cleanup owns what it was handed, not the tree above it.
+        await Assert.That(Directory.Exists(tmp.Path)).IsTrue();
     }
 
     [Test]
@@ -525,13 +528,14 @@ public class AgentOrchestratorLocalAttachTests {
     [Arguments("cursor")]
     public async Task Attach_to_a_runtime_with_no_terminal_is_refused_by_name(string vendor) {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var runtime = new NoRawInputRuntime(vendor);
         var agent = new AgentInstance(
-            "hosted-1", null, "", null, worktree.Path, vendor,
-            runtime, new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
+            "hosted-1", null, "", null, worktreePath, vendor,
+            runtime, new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         );
         orch.RegisterAgentForTest(agent);
 
@@ -563,6 +567,7 @@ public class AgentOrchestratorLocalAttachTests {
     [Test]
     public async Task Attach_to_a_terminal_runtime_that_rejects_raw_input_gets_an_error_frame_instead_of_crashing() {
         using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
@@ -571,8 +576,8 @@ public class AgentOrchestratorLocalAttachTests {
         // disagree.
         var runtime = new NoRawInputRuntime("claude", emitsTerminalOutput: true);
         var agent = new AgentInstance(
-            "pty-1", null, "", null, worktree.Path, "claude",
-            runtime, new WorktreeInfo(worktree.Path, "", worktree.Path, IsStandalone: true), new CancellationTokenSource()
+            "pty-1", null, "", null, worktreePath, "claude",
+            runtime, new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         );
         orch.RegisterAgentForTest(agent);
 

@@ -13,10 +13,12 @@ public static class CapacitorContextServices {
             this IServiceCollection services,
             ConfigRoot config,
             UserHome home,
+            WorkingDirectory workdir,
             DaemonStore daemons,
             ProfileContext profiles) {
         services.AddSingleton(config);
         services.AddSingleton(home);
+        services.AddSingleton(workdir);
         services.AddSingleton(daemons);
         services.AddSingleton(profiles);
 

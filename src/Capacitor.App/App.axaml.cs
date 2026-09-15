@@ -612,7 +612,8 @@ public partial class App : Application {
         // host, and the click opens nothing.
         RemoteSessionViewModel? BuildRemote(string agentId) =>
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
-                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions)
+                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, TimeProvider.System,
+                    () => new XtermTerminalSurface(80, 24, PtyDumpPath))
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -1146,7 +1147,7 @@ public partial class App : Application {
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
-            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory);
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,

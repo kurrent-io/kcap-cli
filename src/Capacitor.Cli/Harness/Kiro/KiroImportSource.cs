@@ -7,6 +7,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Kiro;
 
@@ -26,10 +27,11 @@ internal sealed class KiroImportSource : IImportSource {
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
+        GitProviderRouter                        router,
         Func<string, Task<RepositoryPayload?>>? repoDetector        = null
     ) {
         _sessionsDir  = sessionsDir;
-        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
+        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false));
     }
 
     static StringComparison PathComparison =>

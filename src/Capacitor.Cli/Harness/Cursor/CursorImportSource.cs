@@ -6,6 +6,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Cursor;
 
@@ -53,6 +54,7 @@ internal sealed class CursorImportSource : IImportSource {
         ConfigRoot                               config,
         string                                   projectsDir,
         string                                   workspaceStorageDir,
+        GitProviderRouter                        router,
         Func<string, Task<RepositoryPayload?>>?  repoDetector                = null
     ) {
         _config              = config;
@@ -68,7 +70,7 @@ internal sealed class CursorImportSource : IImportSource {
         // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
         // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
         // separate call site untouched by this default and keeps live PR detection.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false));
     }
 
     /// <summary>

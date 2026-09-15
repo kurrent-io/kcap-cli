@@ -20,6 +20,7 @@ using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,7 +30,8 @@ namespace Capacitor.Cli.Commands;
 
 partial class WatchCommand(
         ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers) {
+        ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
+        GitProviderRouter router) {
     readonly CursorMarkers  _markers  = new(config);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -117,9 +119,9 @@ partial class WatchCommand(
             TimeSpan        noProgressElapsed,
             TimeSpan        ceiling
         ) =>
-        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
-        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
-        :                                          ParentDeadRecovery.KeepWaiting;
+        reResolvedPid is { } pid && pid > 1 && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling                        ? ParentDeadRecovery.EndTerminal
+        :                                                      ParentDeadRecovery.KeepWaiting;
 
     /// <summary>
     /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
@@ -430,7 +432,9 @@ partial class WatchCommand(
                                 return;
                             }
 
-                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
+                            // No fallback: this watcher has been reparented, so the heuristic here
+                            // resolves systemd/init rather than the agent.
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false);
                             var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
 
                             switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
@@ -501,7 +505,7 @@ partial class WatchCommand(
 
         // Detect repository info upfront if cwd is provided (session watchers only, not agents)
         if (cwd is not null) {
-            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
             state.LastRepoDetection = DateTimeOffset.UtcNow;
         }
 
@@ -511,7 +515,7 @@ partial class WatchCommand(
         // watcher is always spawned with cwd: null too and has never had its own repo detection.
         if (vendor == "claude" && agentId is null && (cwd is null || GitRepository.FindRoot(cwd) is null)) {
             state.EvidenceScanner = new RepoEvidenceScanner<RepositoryPayload>(
-                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(config, root),
+                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(router, config, root),
                 p => p.Owner is not null && p.RepoName is not null);
 
             try {
@@ -728,7 +732,7 @@ partial class WatchCommand(
 
                 // Periodically refresh repository info (every 60s)
                 if (cwd is not null && DateTimeOffset.UtcNow - state.LastRepoDetection > TimeSpan.FromSeconds(60)) {
-                    var detected = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+                    var detected = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
 
                     // An evidence-derived repo may only be replaced by another real detection,
                     // never cleared back to null by a launch-cwd probe that still finds nothing.

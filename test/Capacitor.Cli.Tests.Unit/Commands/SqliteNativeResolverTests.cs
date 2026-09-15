@@ -57,9 +57,8 @@ public class SqliteNativeResolverTests {
         await Assert.That(IsLoadableSqlite(path)).IsTrue()
             .Because("the cached native must be a real, loadable SQLite engine");
 
-        // Second call is cache-only — works even after the mirror disappears.
-        Directory.Delete(mirror.Path, true);
-        var again = SqliteNativeResolver.EnsureNativeLibrary(rid, mirror.Path, cache.Path, "0.0.0");
+        // Second call is cache-only: a mirror path that does not exist cannot be the source.
+        var again = SqliteNativeResolver.EnsureNativeLibrary(rid, mirror.PathTo("absent"), cache.Path, "0.0.0");
         await Assert.That(again).IsEqualTo(path);
     }
 

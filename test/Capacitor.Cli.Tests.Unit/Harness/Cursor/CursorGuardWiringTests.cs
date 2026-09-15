@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
 using Microsoft.AspNetCore.SignalR.Client;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -19,7 +20,7 @@ public class CursorGuardWiringTests {
     [TempHome] public required TempHome Home { get; init; }
 
     WatchCommand? _watch;
-    WatchCommand Watch => _watch ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()));
+    WatchCommand Watch => _watch ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter());
 
     CursorMarkers Markers => new(Config.Root);
 

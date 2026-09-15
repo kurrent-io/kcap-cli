@@ -192,7 +192,7 @@ public class PtySpawnTests {
     static int Spawn(IntPtr plan, out UnixPtyInterop.PtySpawnResult result, string? cwd = null,
             int expectedParent = -1, int cancelFd = -1) {
         var expected = expectedParent == -1 ? Environment.ProcessId : expectedParent;
-        return UnixPtyInterop.pty_spawn(plan, EmptyEnvp(), cwd ?? Directory.GetCurrentDirectory(), 40, 120, expected, cancelFd, out result);
+        return UnixPtyInterop.pty_spawn(plan, EmptyEnvp(), cwd ?? AppContext.BaseDirectory, 40, 120, expected, cancelFd, out result);
     }
 
     static void Free(IntPtr plan) { var p = plan; UnixPtyInterop.pty_plan_free(ref p); }

@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -49,6 +50,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -80,6 +82,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -113,6 +116,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -143,6 +147,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -171,6 +176,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -202,6 +208,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -241,6 +248,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -270,6 +278,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
@@ -306,6 +315,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client, _server.Url!, transcripts,
@@ -337,6 +347,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client, _server.Url!, transcripts,
@@ -380,6 +391,7 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client, _server.Url!, transcripts,

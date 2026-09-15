@@ -76,7 +76,22 @@ public sealed class TempDir : IDisposable {
     public string CreateFile(string relativePath, string[] lines) =>
         Root.CreateFile(relativePath, lines);
 
+    bool _disposed;
+
+    /// <summary>Deleting is best effort; finding it already gone is not. Nothing but this owner may
+    /// remove the directory, so its absence means something reached outside its own — and the
+    /// failures that causes surface far from the cause, in whatever the victim was doing when its
+    /// tree went away.</summary>
     public void Dispose() {
+        if (_disposed) return;
+
+        _disposed = true;
+
+        if (!Directory.Exists(Path))
+            throw new InvalidOperationException(
+                $"{Path} was gone before its owner disposed it: something outside this fixture " +
+                $"deleted a directory that is not its own.");
+
         try { Directory.Delete(Path, recursive: true); } catch { /* best effort */ }
     }
 

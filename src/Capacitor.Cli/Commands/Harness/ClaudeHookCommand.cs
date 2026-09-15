@@ -9,6 +9,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -23,7 +24,7 @@ namespace Capacitor.Cli.Commands.Harness;
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        IProcessStarter starter) {
+        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -277,7 +278,7 @@ public sealed class ClaudeHookCommand(
 
     internal async Task<bool> IsSessionExcludedAsync(Profile? profile, string body, HookBudget budget) {
         if (profile?.ExcludedRepos is { Length: > 0 } repos
-         && await RepoExclusion.IsExcludedAsync(config, body, repos, budget.Remaining)) {
+         && await RepoExclusion.IsExcludedAsync(router, config, body, repos, budget.Remaining)) {
             return true;
         }
 
@@ -406,13 +407,13 @@ public sealed class ClaudeHookCommand(
         if (command == "session-start") {
             // Awaited INSIDE the session-start block after EnsureWatcherRunning so it never delays
             // transcript-capture start.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
         } else if (command is "session-end" or "subagent-stop") {
             // Budgeted so a slow git probe can't push the bounded POST/spool path past the hook
             // deadline. The await below is also budget-bounded as a hard backstop.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
         } else {
-            body = await RepositoryDetection.EnrichWithRepositoryInfo(config, body, detectPullRequest: false);
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, detectPullRequest: false);
         }
 
         // Resolve the V2 profile once for repo/path exclusion and
@@ -1112,7 +1113,7 @@ public sealed class ClaudeHookCommand(
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(config, clock.Time), http.ForMemoryAsync, clock.Time);
+                new SessionStartMemoryScopeResolver(router, config, workdir, clock.Time), http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,

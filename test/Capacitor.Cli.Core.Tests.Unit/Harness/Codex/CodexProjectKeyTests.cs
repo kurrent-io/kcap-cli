@@ -35,8 +35,8 @@ public class CodexProjectKeyTests {
 
     [Test]
     public async Task NormalizeProjectKey_is_absolute_and_collapsed() {
-        var key = CodexPaths.NormalizeProjectKey(
-            Path.Combine(Directory.GetCurrentDirectory(), "sub", "..", "leaf"));
+        using var tmp = new TempDir();
+        var key = CodexPaths.NormalizeProjectKey(tmp.PathTo("sub", "..", "leaf"));
 
         await Assert.That(Path.IsPathFullyQualified(key)).IsTrue();
         await Assert.That(key).DoesNotContain("..");

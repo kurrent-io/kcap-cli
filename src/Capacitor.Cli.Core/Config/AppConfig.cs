@@ -48,7 +48,7 @@ public static class AppConfig {
     // so the deprecation notice in LoadProfileConfig fires at most once per run.
     static bool _v1MigrationSignalled;
 
-    public static string RepoRoot => GetGitRepoRoot() ?? Environment.CurrentDirectory;
+    public static string RepoRootOf(WorkingDirectory workdir) => GetGitRepoRoot(workdir.Path) ?? workdir.Path;
 
     /// <summary>
     /// Resolve server URL using only the active profile (or KCAP_PROFILE /
@@ -80,7 +80,8 @@ public static class AppConfig {
         return new(resolved, loaded);
     }
 
-    public static async Task<ProfileContext> ResolveForRepo(string[] args, ConfigRoot root, ProfileOverrides env, int gitTimeoutMs = 5000) {
+    public static async Task<ProfileContext> ResolveForRepo(
+            string[] args, ConfigRoot root, ProfileOverrides env, WorkingDirectory workdir, int gitTimeoutMs = 5000) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
@@ -107,7 +108,7 @@ public static class AppConfig {
         {
             var config = await LoadProfileConfig(root);
 
-            var repoRoot = GetGitRepoRoot(gitTimeoutMs) ?? Environment.CurrentDirectory;
+            var repoRoot = GetGitRepoRoot(workdir.Path, gitTimeoutMs) ?? workdir.Path;
 
             RepoConfig? repoConfig     = null;
             var         repoConfigPath = Path.Combine(repoRoot, ".kcap.json");
@@ -121,7 +122,7 @@ public static class AppConfig {
                 }
             }
 
-            var remoteUrls = GetGitRemoteUrls(gitTimeoutMs);
+            var remoteUrls = GetGitRemoteUrls(workdir.Path, gitTimeoutMs);
 
             var resolver = new ProfileResolver(
                 config,
@@ -143,9 +144,10 @@ public static class AppConfig {
         }
     }
 
-    static string[] GetGitRemoteUrls(int timeoutMs = 5000) {
+    static string[] GetGitRemoteUrls(string cwd, int timeoutMs = 5000) {
         try {
             var psi = new ProcessStartInfo("git", "remote -v") {
+                WorkingDirectory       = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
@@ -175,9 +177,10 @@ public static class AppConfig {
         }
     }
 
-    static string? GetGitRepoRoot(int timeoutMs = 5000) {
+    static string? GetGitRepoRoot(string cwd, int timeoutMs = 5000) {
         try {
             var psi = new ProcessStartInfo("git", "rev-parse --show-toplevel") {
+                WorkingDirectory       = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,

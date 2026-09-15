@@ -11,5 +11,6 @@ public sealed record SessionEventDto {
     [JsonPropertyName("event_number")] public long EventNumber { get; init; } = -1;
     [JsonPropertyName("payload")]      public JsonElement? Payload { get; init; }
     [JsonPropertyName("data")]         public JsonElement? Data { get; init; }
+    [JsonPropertyName("timestamp")]    public DateTimeOffset? Timestamp { get; init; }
     [JsonIgnore] public JsonElement? Body => Payload is { ValueKind: JsonValueKind.Object } p ? p : Data;
 }

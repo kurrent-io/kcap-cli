@@ -133,8 +133,8 @@ public class ProcessHelpersTests {
 
         await Assert.That(info).IsNotNull();
         await Assert.That(info!.Value.ppid).IsEqualTo(ProcessHelpers.GetParentPid()!.Value);
-        await Assert.That(info.Value.comm).IsNotNull();
-        await Assert.That(info.Value.comm.Length).IsGreaterThan(0);
+        await Assert.That(info.Value.names.Count).IsGreaterThan(0);
+        await Assert.That(info.Value.names.All(n => n.Length > 0)).IsTrue();
     }
 
     [Test]
@@ -162,7 +162,9 @@ public class ProcessHelpersTests {
                 .TrimEnd(Path.DirectorySeparatorChar);
         }
 
+#pragma warning disable RS0030 // the process's own directory is what this reports
         await Assert.That(Canonical(reported!)).IsEqualTo(Canonical(Directory.GetCurrentDirectory()));
+#pragma warning restore RS0030
     }
 
     [Test]
@@ -229,5 +231,63 @@ public class ProcessHelpersTests {
     public async Task ParseExecPath_returns_null_when_the_exec_path_is_empty() {
         // argc followed immediately by the NUL terminator — no path present.
         await Assert.That(ProcessHelpers.ParseExecPath(ProcArgs2.Of(1, "", "claude"))).IsNull();
+    }
+
+    [Test]
+    [Arguments("/home/me/.local/share/claude/versions/2.1.272")]
+    [Arguments("/Users/me/.local/share/claude/versions/2.1.272")]
+    [Arguments(@"C:\Users\me\AppData\Local\claude\versions\2.1.272.exe")]
+    public async Task ExecutableNameCandidates_names_the_agent_above_a_versions_directory(string execPath) {
+        // With a native install the basename IS the version, so only the directory above
+        // versions/ names the agent.
+        var candidates = ProcessHelpers.ExecutableNameCandidates(execPath).ToList();
+
+        await Assert.That(candidates.Contains("claude")).IsTrue();
+    }
+
+    [Test]
+    public async Task ExecutableNameCandidates_yields_the_basename_first() {
+        var candidates = ProcessHelpers.ExecutableNameCandidates("/home/me/.local/share/claude/versions/2.1.272").ToList();
+
+        await Assert.That(candidates.Count).IsEqualTo(2);
+        await Assert.That(candidates[0]).IsEqualTo("2.1.272");
+        await Assert.That(candidates[1]).IsEqualTo("claude");
+    }
+
+    [Test]
+    [Arguments("/usr/bin/claude")]
+    [Arguments("claude")]
+    public async Task ExecutableNameCandidates_yields_only_the_basename_for_an_ordinary_path(string execPath) {
+        var candidates = ProcessHelpers.ExecutableNameCandidates(execPath).ToList();
+
+        await Assert.That(candidates.Count).IsEqualTo(1);
+        await Assert.That(candidates[0]).IsEqualTo("claude");
+    }
+
+    [Test]
+    public async Task ExecutableNameCandidates_does_not_climb_past_a_bare_versions_root() {
+        var candidates = ProcessHelpers.ExecutableNameCandidates("/versions/2.1.272").ToList();
+
+        await Assert.That(candidates.Count).IsEqualTo(1);
+        await Assert.That(candidates[0]).IsEqualTo("2.1.272");
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("/")]
+    public async Task ExecutableNameCandidates_is_empty_for_an_unusable_path(string? execPath) {
+        await Assert.That(ProcessHelpers.ExecutableNameCandidates(execPath).Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetProcessInfo_reports_distinct_names_for_the_current_process() {
+        // The three sources agree on an ordinary install, and the walk should see one entry
+        // rather than the same string three times.
+        var info = ProcessHelpers.GetProcessInfo(Environment.ProcessId);
+
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Value.names.Distinct(StringComparer.Ordinal).Count())
+            .IsEqualTo(info.Value.names.Count);
     }
 }

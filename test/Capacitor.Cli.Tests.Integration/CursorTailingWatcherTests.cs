@@ -6,6 +6,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -44,7 +45,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// </summary>
 [NotInParallel] // KCAP_WATCHER_DIR is process-global, and other classes pin it too.
 public class CursorTailingWatcherTests {
-    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()));
+    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter());
 
     CursorMarkers Markers => new(Config.Root);
 
@@ -188,7 +189,7 @@ public class CursorTailingWatcherTests {
         var spool = new HookSpool(tmp.PathTo("spool"));
 
         var body = $$"""{"hook_event_name":"sessionStart","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath.Replace(@"\", @"\\")}}"}""";
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(client, new StringReader(body), spool);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(spawner.Keys).IsEquivalentTo([sessionId]);
@@ -222,7 +223,7 @@ public class CursorTailingWatcherTests {
         var spool = new HookSpool(tmp.PathTo("spool"));
 
         var body = $$"""{"hook_event_name":"postToolUse","session_id":"{{sessionId}}","transcript_path":"{{transcriptPath.Replace(@"\", @"\\")}}","tool_name":"Bash"}""";
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner)).HandleCore(client, new StringReader(body), spool);
+        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(client, new StringReader(body), spool);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(spawner.Keys).IsEquivalentTo([sessionId]);

@@ -170,6 +170,8 @@
                                                Foreground="{StaticResource KcapMutedBrush}" />
                                     <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
                                                FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
+                                    <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
+                                               FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

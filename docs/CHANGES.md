@@ -51,6 +51,12 @@ missing attachment fails the send with the generic rejection the web already ren
 sending text without it, and an in-place non-Codex agent is refused instead of getting `.attached/`
 inside the user's checkout.
 
+The remote workspace's composer carries text alone: its channel declares no attachment support, so
+"+" disables with "attachments to a session on another machine are not supported yet" and a send
+that somehow carries ids is refused before the hub is called. When that lane lands, its channel is
+the server's `SendUserInput(agentId, text, attachmentIds)` and the tray, uploader and Home's version
+gate apply unchanged.
+
 ## A running daemon follows repos.json
 
 `kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
@@ -384,6 +390,28 @@ every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a 
 the lane connected in a session never opened still need the server's pending-interrupts seed; until
 it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
 session discovers.
+
+## Desktop shell: remote workspace — chat and read-only terminal
+
+A session on another machine opens as a workspace: its transcript as chat, a composer, and for a
+PTY harness a read-only terminal, all over the server. Three rules hold it together.
+
+**One chat pane, two feeds.** The chat reads rows through a feed seam: locally a tail of the
+transcript file, remotely a seed from the session detail route followed by a live tail of the
+session's stream from the position the seed ended at. Every access establishment restarts the
+tail from the last position seen and the seed is fetched only until one lands, so a reconnect
+resumes rather than replays rows under the user. Server events reach the same envelope mapping
+and vendor rules the file path applies, so the two paths cannot disagree about a row.
+
+**Authorization is the server's word, never inferred from silence.** The seed fetch and the stream
+subscribe both refuse loudly; the terminal subscribe, which the server refuses with silence, is
+attempted only once the session's access lease reads Established. An empty terminal after that is
+"no output yet", and a lane loss keeps the rows it already has.
+
+**A reported viewport is released, and (0,0) is never sent.** The server folds every viewer's size
+into the PTY's clamp until told otherwise, so a viewer that stops driving releases its size, and
+each establishment subscribes onto a fresh surface so the replay never stacks on old scrollback.
+Keystrokes cross only as the daemon's seven special keys; everything else stays local.
 
 ## A vendor update under a running daemon is re-advertised
 
