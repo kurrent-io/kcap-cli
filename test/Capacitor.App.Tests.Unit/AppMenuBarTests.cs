@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -176,7 +177,7 @@ public class AppMenuBarTests {
             return Layout(help);
         });
 
-        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog");
+        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…");
         await Assert.That(string.Join("|", opener.Opened))
             .IsEqualTo("https://www.kurrent.io/docs/capacitor/|https://github.com/kurrent-io/kcap-cli/releases");
     }
@@ -264,5 +265,67 @@ public class AppMenuBarTests {
         });
 
         await Assert.That(same).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Help_menu_offers_the_report_items_after_a_separator() {
+        var layout = await AvaloniaSession.DispatchAsync(() => Layout(Submenu(NewBar().Build(new Window()), "Help")));
+
+        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Report_items_are_disabled_until_an_action_exists_and_then_click_through_with_their_category() {
+        var opened = new List<FeedbackCategory>();
+        var (bugBefore, feedbackBefore, bugAfter, feedbackAfter) = await AvaloniaSession.DispatchAsync(() => {
+            var bar    = NewBar();
+            var window = new Window();
+            bar.Attach(window);
+            var help = Submenu(NativeMenu.GetMenu(window)!, "Help");
+            var bug = Item(help, "Report a Bug…"); var feedback = Item(help, "Send Feedback…");
+            var before = (bug.IsEnabled, feedback.IsEnabled);
+            bar.SetFeedbackAction(opened.Add);
+            Click(bug); Click(feedback);
+            return (before.Item1, before.Item2, bug.IsEnabled, feedback.IsEnabled);
+        });
+
+        await Assert.That(bugBefore).IsFalse();
+        await Assert.That(feedbackBefore).IsFalse();
+        await Assert.That(bugAfter).IsTrue();
+        await Assert.That(feedbackAfter).IsTrue();
+        await Assert.That(opened).IsEquivalentTo([FeedbackCategory.Bug, FeedbackCategory.Feedback]);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_window_attached_after_the_action_is_set_gets_enabled_items() {
+        var enabled = await AvaloniaSession.DispatchAsync(() => {
+            var bar = NewBar();
+            bar.SetFeedbackAction(_ => { });
+            var window = new Window();
+            bar.Attach(window);
+            return Item(Submenu(NativeMenu.GetMenu(window)!, "Help"), "Report a Bug…").IsEnabled;
+        });
+
+        await Assert.That(enabled).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Closing_an_attached_window_drops_its_items_from_later_updates() {
+        var (liveEnabled, closedEnabled) = await AvaloniaSession.DispatchAsync(() => {
+            var bar = NewBar();
+            var live = new Window(); var closed = new Window();
+            bar.Attach(live); bar.Attach(closed);
+            var closedItem = Item(Submenu(NativeMenu.GetMenu(closed)!, "Help"), "Report a Bug…");
+            closed.Show(); closed.Close();
+            bar.SetFeedbackAction(_ => { });
+            return (Item(Submenu(NativeMenu.GetMenu(live)!, "Help"), "Report a Bug…").IsEnabled, closedItem.IsEnabled);
+        });
+
+        await Assert.That(liveEnabled).IsTrue();
+        await Assert.That(closedEnabled).IsFalse();
     }
 }
