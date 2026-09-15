@@ -204,6 +204,7 @@ public partial class App : Application {
 
     public override void Initialize() {
         AvaloniaXamlLoader.Load(this);
+        LineSelection.Install();
         // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
         // "About Avalonia" when there is none.
         NativeMenu.SetMenu(this, _appMenu.Menu);
