@@ -1,9 +1,11 @@
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
+using DynamicData;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -134,6 +136,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
     readonly Func<string, AgentOrigin?> _originOf;
     readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
+    readonly IAgentDirectory? _directory;
+    readonly SerialDisposable _rebind = new();
 
     ISessionWorkspace? _currentWorkspace;
     /// null = the Sessions surface shows its placeholder pane; non-null = that session's workspace,
@@ -254,6 +258,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// runs. A null factory means a remote id has no host to open, so it falls back to the local
     /// factory.
     /// </param>
+    /// <param name="directory">
+    /// The merged rows, watched so an open local workspace can follow its agent to the server lane.
+    /// Null means a dropped local row is only ever an ended session — the only reading a caller with
+    /// no directory can give it.
+    /// </param>
     public MainWindowViewModel(
             IDaemonClientService service,
             CancellationToken shutdownToken, ActivityViewModel activity, Func<CancellationToken, Task>? startAction = null,
@@ -262,7 +271,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
-            Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null) {
+            Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
+            IAgentDirectory? directory = null) {
         _service = service;
         _time = time ?? TimeProvider.System;
         Activity = activity;
@@ -272,6 +282,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _workspaceFactory = workspaceFactory;
         _originOf = originOf ?? (_ => AgentOrigin.Local);
         _remoteFactory = remoteWorkspaceFactory;
+        _directory = directory;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
@@ -475,6 +486,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void LatchShutdown() {
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
+        _rebind.Disposable = Disposable.Empty;
         if (Rail is not null) Rail.SelectedAgentId = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
@@ -483,9 +495,41 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
+        WatchOrigin(next);
         if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
+    }
+
+    /// An open workspace follows its row across lanes: a remote host whose agent the local daemon
+    /// proved it hosts becomes the local workspace, and a local workspace whose row the daemon
+    /// dropped while the server still shows the agent live becomes the remote host. The tab in
+    /// use carries over. Nothing here ends a session — the row that wins says whether it did.
+    void WatchOrigin(ISessionWorkspace? workspace) {
+        _rebind.Disposable = workspace switch {
+            RemoteSessionViewModel remote => remote.OriginChangedChanges
+                .Where(moved => moved)
+                .Take(1)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
+            WorkspaceViewModel local when _directory is { } directory => directory.Rows.Connect()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Where(changes => changes.Any(c => c.Key == $"local:{local.AgentId}" && c.Reason == ChangeReason.Remove))
+                .Where(_ => directory.Rows.Lookup($"remote:{local.AgentId}") is { HasValue: true, Value: var row } && !SessionStatusDots.IsTerminal(row.Status))
+                .Take(1)
+                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
+            _ => Disposable.Empty,
+        };
+    }
+
+    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
+        if (!ReferenceEquals(CurrentWorkspace, open)) return;
+        OpenSession(open.AgentId, origin);
+        if (!terminal || ReferenceEquals(CurrentWorkspace, open)) return;
+        switch (CurrentWorkspace) {
+            case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+        }
     }
 
     // A VM built without a tracker (a test, or any caller predating workspaces) must still not

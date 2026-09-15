@@ -30,13 +30,13 @@ public class MainWindowViewModelTests {
             FakeDaemonClientService service, Func<string, WorkspaceViewModel>? workspaceFactory = null,
             SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
-            Action<Func<Task>>? trackWorkspaceTeardown = null) {
+            Action<Func<Task>>? trackWorkspaceTeardown = null, IAgentDirectory? directory = null) {
         var (actions, _) = NewActions(service);
         return new MainWindowViewModel(
             service, CancellationToken.None, TestActivity.New(),
             trackWorkspaceTeardown: trackWorkspaceTeardown,
             workspaceFactory: workspaceFactory, rail: rail,
-            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory);
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: directory);
     }
 
     /// The remote host's dependencies, held together so a test disposes them once. The lane is
@@ -64,7 +64,8 @@ public class MainWindowViewModelTests {
             });
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
-                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider());
+                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(),
+                () => new FakeTerminalSurface());
         }
 
         public void Dispose() {
@@ -735,36 +736,96 @@ public class MainWindowViewModelTests {
         });
     }
 
-    /// The local daemon proving the twin swaps the id from one lane to the other while its host is
-    /// open: the same id must then open the local workspace instead of reading as a re-click.
+    /// The directory's own twin verdict plus one session id across both rows prove the move;
+    /// the window then swaps to the local workspace on its own, keeping the tab in use.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_open_remote_host_whose_row_moved_to_this_machine_reopens_as_the_local_workspace() {
+    public async Task An_open_remote_host_whose_row_moved_to_this_machine_becomes_the_local_workspace_on_its_own() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
-            var origin = AgentOrigin.Remote;
             var vm = NewVm(service,
                 workspaceFactory: id => NewWorkspace(service, id),
-                originOf: _ => origin,
+                originOf: _ => AgentOrigin.Remote,
                 remoteWorkspaceFactory: id => host.New(id, "s1"),
-                trackWorkspaceTeardown: teardown => _ = teardown());
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
 
             vm.OpenSession("r1");
-            await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+            var remote = (RemoteSessionViewModel)vm.CurrentWorkspace!;
+            await remote.ShowTerminalCommand.Execute().ToTask();
+            await Assert.That(remote.IsTerminalActive).IsTrue();
 
-            // The directory's own twin verdict plus one session id across both rows are what prove
-            // it; without either the removal reads as an ended session, not a change of origin.
             host.Directory.ProvenTwins.Add("r1");
             host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
                 WorkspaceFixtures.Agent("r1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             host.Directory.Rows.Remove("remote:r1");
-            origin = AgentOrigin.Local;
 
-            await Assert.That(((RemoteSessionViewModel)vm.CurrentWorkspace!).OriginChangedToLocal).IsTrue();
-            vm.OpenSession("r1");
+            await Assert.That(remote.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
+            await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
+            await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
+        });
+    }
+
+    /// The daemon dropping a row is not the end of the session while the server still shows the
+    /// same agent live under the user's other daemon: the workspace follows it there.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_local_workspace_whose_row_the_daemon_dropped_becomes_the_remote_host_while_the_server_shows_it_live() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: id => host.Directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                    : host.Directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote : null,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+
+            vm.OpenSession("a1");
+            var local = (WorkspaceViewModel)vm.CurrentWorkspace!;
+            await local.ShowTerminalCommand.Execute().ToTask();
+
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
+                Vendor = "claude", RegisteredAt = DateTime.UtcNow,
+            }));
+            host.Directory.Rows.Remove("local:a1");
+
+            await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+            await Assert.That(((RemoteSessionViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
+        });
+    }
+
+    /// With no live server row, a dropped local row is what it always was: the session ended,
+    /// and the workspace stays to say so.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_dropped_local_row_with_no_server_row_keeps_the_local_workspace() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local,
+                remoteWorkspaceFactory: id => host.New(id, "s1"),
+                trackWorkspaceTeardown: teardown => _ = teardown(),
+                directory: host.Directory);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, "/repos/kcap-cli", sessionId: "s1"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            vm.OpenSession("a1");
+            var local = vm.CurrentWorkspace;
+
+            host.Directory.Rows.Remove("local:a1");
+
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
         });
     }
 

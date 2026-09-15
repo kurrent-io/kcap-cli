@@ -1144,7 +1144,7 @@ public partial class App : Application {
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
-            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory);
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
