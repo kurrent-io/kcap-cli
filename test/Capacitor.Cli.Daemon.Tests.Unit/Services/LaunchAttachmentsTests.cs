@@ -213,7 +213,7 @@ public class LaunchAttachmentsTests : IDisposable {
         var store = orch.AttachmentStore.DirectoryFor("a1");
 
         await Assert.That(server.LaunchFailedCalls.Single().Reason).IsEqualTo("runtime refused");
-        await Assert.That(factory.LastContext!.Prompt).Contains($"[Attached files: {store}/");
+        await Assert.That(factory.LastContext!.Prompt).Contains($"[Attached files: {store}{Path.DirectorySeparatorChar}");
         await Assert.That(Directory.Exists(store)).IsFalse();
     }
 
@@ -230,7 +230,7 @@ public class LaunchAttachmentsTests : IDisposable {
 
         var store = orch.AttachmentStore.DirectoryFor("a1");
 
-        await Assert.That(factory.LastContext!.Prompt).Contains($"[Attached files: {store}/");
+        await Assert.That(factory.LastContext!.Prompt).Contains($"[Attached files: {store}{Path.DirectorySeparatorChar}");
         await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
         await Assert.That(orch.GetAgentForTest("a1")).IsNull();
         await Assert.That(Directory.Exists(store)).IsFalse();
