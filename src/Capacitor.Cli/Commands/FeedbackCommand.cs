@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Commands;
@@ -76,7 +77,14 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi) {
     /// is already "bug"/"feedback" and <paramref name="message"/> is already trimmed and non-empty.</summary>
     internal static async Task<int> HandleCore(IFeedbackApi feedbackApi, string category, string message) {
         try {
-            return await ReportResultAsync(await feedbackApi.SubmitAsync(category, message));
+            var submission = new FeedbackSubmission(
+                category == "bug" ? FeedbackCategory.Bug : FeedbackCategory.Feedback,
+                message,
+                Guid.NewGuid(),
+                FeedbackSource.Cli
+            );
+
+            return await ReportResultAsync(await feedbackApi.SubmitAsync(submission));
         } catch (CapacitorApiException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
 
