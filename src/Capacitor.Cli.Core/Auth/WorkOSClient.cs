@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using Capacitor.Cli.Core.Http;
 
@@ -16,31 +17,78 @@ namespace Capacitor.Cli.Core.Auth;
 /// authenticate exits quietly rather than stack-tracing into a transcript. The sign-in legs do not,
 /// because a sign-in is interactive and a transport failure there is worth saying out loud.</para>
 /// </summary>
-public sealed class WorkOSClient(IHttpClientFactory httpFactory, TimeSpan? refreshTimeout = null) {
+public sealed class WorkOSClient(
+        IHttpClientFactory httpFactory,
+        TimeSpan?          refreshTimeout = null,
+        TimeSpan?          replayBudget   = null,
+        TimeSpan?          replayBackoff  = null) {
     /// <summary>AuthKit's API host. The machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.</summary>
     public const string ApiBase = "https://api.workos.com";
 
-    // A hard deadline on the single refresh attempt: the shared HttpClient carries the 100 s default,
-    // and a refresh runs under the cross-process lock, so a stalled WorkOS would otherwise hold auth
-    // and every peer's refresh for that long. Short — a hook must not block on an unreachable WorkOS.
+    // Per-attempt deadline. The shared HttpClient carries the 100 s default, and a refresh runs under
+    // the cross-process lock, so a stalled WorkOS would otherwise hold every peer's auth for that long.
     readonly TimeSpan _refreshTimeout = refreshTimeout ?? TimeSpan.FromSeconds(5);
+
+    // WorkOS retires a refresh token on use but honours a replay of it for 30 s, answering with the
+    // same rotated pair. Replays run only while the next attempt can still start inside that window,
+    // measured from the first send: 20 s plus one 5 s attempt keeps every replay under the 30 s.
+    readonly TimeSpan _replayBudget  = replayBudget  ?? TimeSpan.FromSeconds(20);
+    readonly TimeSpan _replayBackoff = replayBackoff ?? TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// The longest <see cref="RefreshAsync"/> runs: no attempt starts unless it can finish inside this
+    /// budget. A peer waiting on the token lock must wait at least this long, or it gives up on a
+    /// holder that is about to persist a fresh token.
+    /// </summary>
+    public TimeSpan RefreshBudget => _replayBudget;
 
     /// <summary>
     /// Exchanges a rotating refresh token for a fresh access token, classifying the outcome so a caller
     /// can tell a token WorkOS refused apart from a request that never landed.
     ///
-    /// <para>Sent once — never retried. WorkOS consumes the refresh token on every use, so re-sending
-    /// one after a lost response presents a token it has already spent, which trips reuse detection and
-    /// revokes the whole family. A <see cref="WorkOSRefreshOutcome.Rejected"/> is any non-success status
-    /// (an <c>invalid_grant</c> among them); <see cref="WorkOSRefreshOutcome.TransportFailed"/> is an
-    /// exception or an unreadable body, where the token was not spent. Reports rather than throws,
-    /// cancellation aside.</para>
+    /// <para>A lost reply, a 5xx/408/429, or an unreadable success body is replayed with the same token
+    /// while the next attempt can still complete inside <see cref="RefreshBudget"/>. Inside WorkOS's
+    /// replay window a replay is idempotent — it returns the rotated pair the first exchange minted —
+    /// and a replay that lands outside it is refused as <c>invalid_grant</c>, so the budget is
+    /// re-checked after every backoff, never only before it. A 4xx is never replayed: WorkOS
+    /// understood the token and refused it. Reports rather than throws, cancellation aside.</para>
     /// </summary>
     public async Task<WorkOSRefreshResult> RefreshAsync(
             string clientId, string refreshToken, CancellationToken ct) {
-        // The deadline cancels only the linked token, not the caller's ct, so a timeout is caught below
-        // as a TransportFailed (the token was not spent — retry is safe) while a real caller cancel
-        // still propagates.
+        var started  = Stopwatch.GetTimestamp();
+        var consumed = false;
+
+        bool AnotherAttemptFits() => Stopwatch.GetElapsedTime(started) + _refreshTimeout <= _replayBudget;
+
+        while (true) {
+            var (outcome, body) = await RefreshOnceAsync(clientId, refreshToken, ct);
+
+            switch (outcome) {
+                case Attempt.Rotated: return new(WorkOSRefreshOutcome.Rotated, body);
+                case Attempt.Refused: return new(WorkOSRefreshOutcome.Rejected, null);
+            }
+
+            // Any success WorkOS sent, readable or not, proves the token is spent — whatever the later
+            // replays do, once they run out the outcome is Rejected, never a retryable failure.
+            consumed |= outcome == Attempt.Unreadable;
+
+            if (AnotherAttemptFits()) {
+                await Task.Delay(_replayBackoff, ct);
+            }
+
+            // A suspended machine or a starved scheduler can stretch the delay past the window.
+            if (!AnotherAttemptFits()) {
+                return new(consumed ? WorkOSRefreshOutcome.Rejected : WorkOSRefreshOutcome.TransportFailed, null);
+            }
+        }
+    }
+
+    enum Attempt { Rotated, Refused, Transient, Unreadable }
+
+    async Task<(Attempt Outcome, WorkOSAuthResponse? Body)> RefreshOnceAsync(
+            string clientId, string refreshToken, CancellationToken ct) {
+        // The deadline cancels only the linked token, so a timeout is classified below while the
+        // caller's own cancellation still propagates.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(_refreshTimeout);
 
@@ -52,39 +100,23 @@ public sealed class WorkOSClient(IHttpClientFactory httpFactory, TimeSpan? refre
                 ["refresh_token"] = refreshToken
             }, deadline.Token);
         } catch when (!ct.IsCancellationRequested) {
-            // No response headers arrived — the request may never have reached WorkOS, so the token is
-            // most likely still live and a later attempt re-reads the same on-disk one. The residual
-            // ambiguity (a reply lost after WorkOS processed it) needs a durable "attempted" marker to
-            // close fully — a deliberate follow-up, since marking every transient blip terminal would
-            // force a re-login far more often than a lost reply actually occurs.
-            return new(WorkOSRefreshOutcome.TransportFailed, null);
+            return (Attempt.Transient, null);
         }
 
         using (response) {
             if (!response.IsSuccessStatusCode) {
-                // A 4xx means WorkOS understood and refused the refresh token (a 400 invalid_grant on
-                // a consumed/revoked token is the usual one) — terminal, only `kcap login` repairs it.
-                // A 5xx/408/429 is the server faltering, not the token being bad, so it reads as a
-                // transport failure the caller may retry with the same still-live token.
-                return IsTransientStatus((int)response.StatusCode)
-                    ? new(WorkOSRefreshOutcome.TransportFailed, null)
-                    : new(WorkOSRefreshOutcome.Rejected, null);
+                return (IsTransientStatus((int)response.StatusCode) ? Attempt.Transient : Attempt.Refused, null);
             }
 
-            // A success status means WorkOS has consumed the old token and rotated. If the new one is
-            // unreadable it is lost and the old token is spent — Rejected (re-login), never a
-            // retryable failure that would re-send the consumed token.
             WorkOSAuthResponse? body;
             try {
                 body = await response.Content.ReadFromJsonAsync(
                     CapacitorJsonContext.Default.WorkOSAuthResponse, deadline.Token);
             } catch when (!ct.IsCancellationRequested) {
-                return new(WorkOSRefreshOutcome.Rejected, null);
+                return (Attempt.Unreadable, null);
             }
 
-            return body is null
-                ? new(WorkOSRefreshOutcome.Rejected, null)
-                : new(WorkOSRefreshOutcome.Rotated, body);
+            return body is null ? (Attempt.Unreadable, null) : (Attempt.Rotated, body);
         }
     }
 

@@ -1,9 +1,10 @@
 namespace Capacitor.Cli.Core.Auth;
 
 /// <summary>
-/// How a WorkOS refresh resolved. WorkOS rotates the refresh token single-use, so the outcome must
-/// separate a token it <see cref="Rejected"/> — consumed or refused, repair is a fresh login — from a
-/// <see cref="TransportFailed"/> that never reached it, where the same token is still live to try again.
+/// How a WorkOS refresh resolved once its in-window replays are spent. WorkOS rotates the refresh
+/// token on use, so the outcome must separate a token it <see cref="Rejected"/> — consumed or refused,
+/// repair is a fresh login — from a <see cref="TransportFailed"/> where no reply ever arrived and the
+/// same token may still be live for a later attempt.
 /// </summary>
 public enum WorkOSRefreshOutcome {
     Rotated,

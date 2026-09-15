@@ -91,6 +91,11 @@ if (isHook && args.Contains("--claude")) {
     }
 }
 
+// The refresh continuation was spawned inside a hook's process group and must leave it before the
+// repository probe below, or the host kills it with the hook at the ceiling.
+var isRefreshHandoff = RefreshTokenHandoff.IsDetached(command, args);
+if (isRefreshHandoff) RefreshTokenHandoff.EnterDetached();
+
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
@@ -98,7 +103,7 @@ var serverEnv = ProfileOverrides.FromEnvironment();
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook ? 1000 : 5000);
+var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000);
 var baseUrl  = profiles.Resolution.ServerUrl;
 
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
@@ -192,7 +197,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
@@ -788,6 +793,13 @@ switch (command) {
     // ReportVersionCommand for why it never surfaces an error.
     case "report-version":
         return await Run<ReportVersionCommand>().HandleAsync();
+    // Spawned detached by a hook that gave up on its own client creation (RefreshTokenHandoff); it
+    // outlives the hook to finish the rotation. Not in PrintUsage — nobody types it by hand.
+    case RefreshTokenHandoff.Command: {
+        try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
+
+        return 0;
+    }
     case "hook": {
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6

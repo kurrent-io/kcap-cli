@@ -108,4 +108,13 @@ public class CrossProcessRefreshTests {
         await Assert.That(refreshCalled).IsTrue();
         await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("alpha"))!.AccessToken).IsEqualTo("fresh");
     }
+
+    /// <summary>A waiter outlasts the holder's whole WorkOS replay budget. A shorter wait gives up on a
+    /// holder that is one replay from persisting a fresh token and falls back to the stale one.</summary>
+    [Test]
+    public async Task Lock_waiters_outlast_the_holders_replay_budget() {
+        var budget = new WorkOSClient(new PlainHttpClientFactory()).RefreshBudget;
+
+        await Assert.That(AuthFixtures.NewTokenStore(Config.Root).LockWait).IsGreaterThan(budget);
+    }
 }
