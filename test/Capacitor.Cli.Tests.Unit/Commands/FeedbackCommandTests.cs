@@ -158,7 +158,7 @@ public class FeedbackCommandTests : IDisposable {
         await Assert.That(context.GetProperty("client_version").GetString()).IsEqualTo(CapacitorVersion.CurrentDisplay());
         await Assert.That(string.IsNullOrEmpty(context.GetProperty("os").GetString())).IsFalse();
 
-        // No camelCase leakage — the server binds snake_case only (Task 10's global JSON policy).
+        // No camelCase leakage — the server binds snake_case only.
         await Assert.That(root.TryGetProperty("clientRequestId", out _)).IsFalse();
     }
 

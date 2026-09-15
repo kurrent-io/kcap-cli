@@ -83,8 +83,6 @@
                 </ToolTip.Tip>
                 <DockPanel Margin="16,10,16,14" Background="Transparent">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding Rail.HostedText, FallbackValue=''}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                         <!-- Its own ToolTip.Tip outranks the footer Border's daemon tooltip while the
                              pointer is over the button. -->
                         <Button x:Name="RailHelpButton" Classes="kcapChip" Width="22" Height="22" Padding="0" CornerRadius="6"
@@ -99,6 +97,8 @@
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>
+                        <TextBlock Text="{Binding Rail.HostedText, FallbackValue=''}" FontSize="11.5"
+                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <Ellipse Width="7" Height="7" Fill="{Binding StatusDotBrush}" VerticalAlignment="Center" />

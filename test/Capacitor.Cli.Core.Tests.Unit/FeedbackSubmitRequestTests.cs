@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.Cli.Core.Tests.Unit;
@@ -22,6 +23,21 @@ public class FeedbackSubmitRequestTests {
         var request = FeedbackSubmitRequest.From(Submission(FeedbackCategory.Bug, source));
 
         await Assert.That(request.Context.Source).IsEqualTo(wire);
+    }
+
+    /// The lane is as far as the source travels, so the byte the server reads is what it has to
+    /// pin — a property assertion would survive the context object being renamed off the wire.
+    [Test]
+    [Arguments(FeedbackSource.Cli, "cli")]
+    [Arguments(FeedbackSource.Desktop, "desktop")]
+    public async Task Source_reaches_the_request_body_under_context(FeedbackSource source, string wire) {
+        var json = JsonSerializer.Serialize(
+            FeedbackSubmitRequest.From(Submission(FeedbackCategory.Bug, source)),
+            CapacitorJsonContext.Default.FeedbackSubmitRequest);
+
+        using var body = JsonDocument.Parse(json);
+
+        await Assert.That(body.RootElement.GetProperty("context").GetProperty("source").GetString()).IsEqualTo(wire);
     }
 
     [Test]

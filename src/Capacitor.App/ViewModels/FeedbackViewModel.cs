@@ -122,7 +122,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     /// <summary>The hint discloses the trailer it is sliced from, so the two can never disagree.</summary>
     string BuildHint() {
         var trailer   = EffectiveTrailer;
-        var remaining = FeedbackMessageComposer.Remaining(_message, trailer);
+        var remaining = Math.Max(0, FeedbackMessageComposer.Remaining(_message, trailer));
         var marker    = trailer.IndexOf(ClientMarker, StringComparison.Ordinal);
         var client    = marker < 0 ? trailer : trailer[(marker + ClientMarker.Length)..];
         return $"Attached automatically: desktop {client} · {_os} · {remaining} characters left";

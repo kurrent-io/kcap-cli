@@ -293,6 +293,28 @@ public class FeedbackViewModelTests {
     }
 
     [Test]
+    public async Task The_hint_stops_counting_down_at_zero_once_the_cap_is_passed() {
+        var (vm, _, _, _) = New();
+        vm.Message = new string('x', 8000 - 2 - TrailerA.Length + 12);
+
+        await Assert.That(vm.Hint).EndsWith("· 0 characters left");
+        await Assert.That(vm.CanSend).IsFalse();
+    }
+
+    [Test]
+    public async Task Dispose_releases_the_trailer_subscription() {
+        var (vm, _, trailer, _) = New();
+        vm.Dispose();
+        var raised = new List<string>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
+        trailer.OnNext(TrailerB);
+
+        await Assert.That(raised).IsEmpty();
+        await Assert.That(vm.Hint).Contains("daemon d cli 1.0.3");
+    }
+
+    [Test]
     public async Task Disposing_twice_is_a_no_op() {
         var (vm, _, _, _) = New();
         vm.Dispose();
