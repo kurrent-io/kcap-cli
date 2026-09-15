@@ -77,6 +77,7 @@ MCP servers (stdio):
   mcp flows                          Start and manage review flows from agents
   mcp memory                         Team memory tools (search, get, save, update, rescope, archive)
   mcp workitems                      Declare/list a session's work-item attachments
+  mcp plans                          Declare a session's plan document and task list
   mcp analytics                      Governed SQL over org coding-agent analytics (schema + query)
 
 Plugin:
