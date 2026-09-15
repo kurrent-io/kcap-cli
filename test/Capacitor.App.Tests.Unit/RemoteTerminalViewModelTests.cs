@@ -271,4 +271,32 @@ public class RemoteTerminalViewModelTests {
             await h.Vm.TeardownAsync();
         });
     }
+
+    /// The server holds a viewer's size until told otherwise, so a detach gives it back at once: a
+    /// release that waited for its unsubscribe to return would land after the next attach's report
+    /// and take that one back instead.
+    [Test]
+    public async Task A_detach_gives_its_viewport_back_before_the_next_attach_reports() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var unsubscribe = new TaskCompletionSource<HubCallOutcome>();
+            h.Lane.TerminalUnsubscribeHandler = _ => unsubscribe.Task;
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.Resizes.Count == 1, what: "the first viewport");
+
+            h.Access.OnNext(SessionAccessState.Unavailable);
+            await Assert.That(h.Lane.ResizeReleases.Count).IsEqualTo(1);
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.Resizes.Count == 2, what: "the second viewport");
+            var calls = h.Lane.Calls.ToList();
+            await Assert.That(calls.IndexOf("release:a1")).IsLessThan(calls.LastIndexOf("resize:a1:80x24"));
+
+            unsubscribe.SetResult(HubCallOutcome.Ok);
+            await Task.Delay(50);
+            await Assert.That(h.Lane.ResizeReleases.Count).IsEqualTo(1);
+
+            await h.Vm.TeardownAsync();
+            await Assert.That(h.Lane.ResizeReleases.Count).IsEqualTo(2);
+        });
+    }
 }

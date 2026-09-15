@@ -34,6 +34,7 @@ sealed class FakeServerLane : IServerLane {
     /// Returns the exception a tail throws at its first MoveNextAsync, or null to tail normally.
     public Func<string, ulong?, Exception?> TailHandler = (_, _) => null;
     public Func<string, Task<HubCallOutcome>> TerminalSubscribeHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+    public Func<string, Task<HubCallOutcome>> TerminalUnsubscribeHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> UserInputHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     ImmutableList<string> _stops = [], _chatSubscribes = [], _chatUnsubscribes = [], _accessWatches = [], _calls = [];
@@ -130,7 +131,7 @@ sealed class FakeServerLane : IServerLane {
     public Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct) {
         Append(ref _calls, $"unterminal:{agentId}");
         Append(ref _terminalUnsubscribes, agentId);
-        return Task.FromResult(HubCallOutcome.Ok);
+        return TerminalUnsubscribeHandler(agentId);
     }
 
     public Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct) {

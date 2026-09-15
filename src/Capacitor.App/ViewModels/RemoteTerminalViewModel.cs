@@ -181,12 +181,13 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _ = ReleaseAsync();
     }
 
-    /// Unsubscribe, then give back whatever viewport this viewer still holds: the server keeps a
-    /// viewer's size in its aggregate until told otherwise or until the whole connection drops.
-    async Task ReleaseAsync() {
-        await Report(_lane.UnsubscribeFromTerminalAsync(_agentId, CancellationToken.None), "unsubscribe");
-        await ReleaseViewportAsync();
-    }
+    /// Unsubscribe and give back whatever viewport this viewer holds — the server keeps a viewer's
+    /// size until told otherwise. Both go out now, ahead of anything a newer attach sends, and
+    /// whether a viewport is owed is settled synchronously: deciding after the unsubscribe returned
+    /// could take back one the next attach had reported meanwhile.
+    Task ReleaseAsync() => Task.WhenAll(
+        Report(_lane.UnsubscribeFromTerminalAsync(_agentId, CancellationToken.None), "unsubscribe"),
+        ReleaseViewportAsync());
 
     async Task SendKeyAsync(string key) {
         if (!_subscribed || Phase != RemoteTerminalPhase.Live) return;
