@@ -303,34 +303,72 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.UnsubscribeFromChat, ct, sessionId);
     public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) => InvokeAsync(HubMethods.RegisterSessionAccessWatch, ct, sessionId);
 
+    /// One tail per stream at a time. The subscription client keys its registrations by stream
+    /// name and removes the key unconditionally when an enumeration ends, so a replacement that
+    /// registered before the previous enumeration finished would lose its registration to that
+    /// cleanup and receive nothing: a new tail ends the previous one and waits for its cleanup
+    /// first, and the replaced consumer sees an ended tail. Ending an enumeration also removes
+    /// only the client-side registration — the server keeps pushing the stream to this
+    /// connection until told otherwise — so a tail that ends with the hub up unsubscribes there.
     public async IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(
             string stream, ulong? fromPosition, [EnumeratorCancellation] CancellationToken ct) {
-        var streams = _streams;
-        if (streams is null || _hub is not { State: HubConnectionState.Connected }) yield break;
-        var source = streams.SubscribeAsync(stream, fromPosition, ct).GetAsyncEnumerator(ct);
+        var slot = new TailSlot(ct);
+        TailSlot? previous;
+        lock (_tailLock) {
+            _tails.TryGetValue(stream, out previous);
+            _tails[stream] = slot;
+        }
         try {
-            while (true) {
-                bool more;
-                try {
-                    more = await source.MoveNextAsync().ConfigureAwait(false);
-                } catch (HubException) {
-                    throw;
-                } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-                    throw;
-                } catch (Exception) {
-                    // Lane loss is data, not an error: the next Connected re-tails from the last
-                    // position, so the consumer sees an ended tail, never a transport fault. This
-                    // also catches the library's own reconnect-exhausted close, which completes the
-                    // channel with an OperationCanceledException carrying ITS OWN internal token —
-                    // indistinguishable from ours by type, so only our own `ct` firing re-throws.
-                    more = false;
+            if (previous is not null) {
+                previous.Cts.Cancel();
+                await previous.Done.Task.ConfigureAwait(false);
+            }
+            var streams = _streams;
+            var hub = _hub;
+            if (streams is null || hub is not { State: HubConnectionState.Connected }) yield break;
+            var source = streams.SubscribeAsync(stream, fromPosition, slot.Cts.Token).GetAsyncEnumerator(slot.Cts.Token);
+            var refused = false;
+            try {
+                while (true) {
+                    bool more;
+                    try {
+                        more = await source.MoveNextAsync().ConfigureAwait(false);
+                    } catch (HubException) {
+                        refused = true;
+                        throw;
+                    } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                        throw;
+                    } catch (Exception) {
+                        // Lane loss is data, not an error: the next Connected re-tails from the last
+                        // position, so the consumer sees an ended tail, never a transport fault. This
+                        // also catches the library's own reconnect-exhausted close, which completes the
+                        // channel with an OperationCanceledException carrying ITS OWN internal token —
+                        // indistinguishable from ours by type, so only our own `ct` firing re-throws.
+                        more = false;
+                    }
+                    if (!more) yield break;
+                    yield return source.Current;
                 }
-                if (!more) yield break;
-                yield return source.Current;
+            } finally {
+                await source.DisposeAsync().ConfigureAwait(false);
+                if (!refused && hub.State == HubConnectionState.Connected) {
+                    try { await hub.InvokeAsync(SignalRSubscriptionMethods.Unsubscribe, stream, CancellationToken.None).ConfigureAwait(false); }
+                    catch (Exception) { }
+                }
             }
         } finally {
-            await source.DisposeAsync().ConfigureAwait(false);
+            lock (_tailLock) { if (ReferenceEquals(_tails.GetValueOrDefault(stream), slot)) _tails.Remove(stream); }
+            slot.Cts.Dispose();
+            slot.Done.TrySetResult();
         }
+    }
+
+    readonly Dictionary<string, TailSlot> _tails = new(StringComparer.Ordinal);
+    readonly Lock _tailLock = new();
+
+    sealed class TailSlot(CancellationToken ct) {
+        public readonly CancellationTokenSource Cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        public readonly TaskCompletionSource Done = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     public Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct) => InvokeAsync(HubMethods.SubscribeToTerminal, ct, agentId);

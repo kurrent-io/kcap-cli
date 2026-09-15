@@ -571,4 +571,41 @@ public class ServerConnectionServiceTests {
         StreamPosition = position, GlobalPosition = position, Timestamp = DateTime.UtcNow,
         JsonPayload = $$"""{"content":"{{content}}"}""",
     };
+
+    /// The subscription client's cleanup removes a stream's registration by name, so a replacement
+    /// that registered first would lose its own; and ending an enumeration tells the server
+    /// nothing, so the tail has to.
+    [Test]
+    public async Task AnEndedTailUnsubscribesOnTheServerAndAReplacementWaitsForThatFirst() {
+        await using var host = await HubTestHost.StartAsync();
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var firstEnded = false;
+        var first = Task.Run(async () => {
+            await foreach (var _ in lane.TailStreamAsync("AgentSession-s1", null, cts.Token)) { }
+            firstEnded = true;
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Count == 1, what: "the first subscribe");
+
+        var received = new List<StreamEventEnvelope>();
+        var second = Task.Run(async () => {
+            await foreach (var envelope in lane.TailStreamAsync("AgentSession-s1", 4, cts.Token)) {
+                received.Add(envelope);
+                break;
+            }
+        });
+        await WaitUntilAsync(() => HubTestHost.StreamSubscribes.Count == 2, what: "the second subscribe");
+        // The replaced tail ended, and told the server so, before the replacement subscribed.
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(firstEnded).IsTrue();
+        await Assert.That(HubTestHost.StreamUnsubscribes).IsEquivalentTo(new[] { "AgentSession-s1" });
+
+        await host.PushStreamEventAsync(Envelope("AgentSession-s1", 5, "hello"));
+        await second.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(received.Single().StreamPosition).IsEqualTo(5UL);
+        await WaitUntilAsync(() => HubTestHost.StreamUnsubscribes.Count == 2, what: "the second unsubscribe");
+    }
 }
