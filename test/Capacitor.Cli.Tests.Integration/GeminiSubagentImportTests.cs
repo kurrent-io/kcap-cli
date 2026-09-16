@@ -122,6 +122,45 @@ public class GeminiSubagentImportTests : IDisposable {
         await Assert.That(stopBody).Contains($"\"agent_id\":\"{DashlessSub}\"");
     }
 
+    // --- The working directory recovered from the <session_context> bootstrap ---
+
+    [Test]
+    public async Task ImportSession_forwards_the_workspace_recovered_from_the_bootstrap() {
+        const string bootstrap =
+            "<session_context>\\n- **Workspace Directories:**\\n  - /work/demo\\n- **Directory Structure:**\\n</session_context>";
+
+        var chats = Path.Combine(_tempDir, "proj", "chats");
+        Directory.CreateDirectory(chats);
+        File.WriteAllLines(Path.Combine(chats, "session-2026-06-22T14-31-0a900002.jsonl"), new[] {
+            $$$"""{"sessionId":"{{{DashedParent}}}","projectHash":"h","startTime":"2026-06-22T14:31:00.000Z","kind":"main"}""",
+            $$$"""{"$set":{"messages":[{"id":"d0","timestamp":"2026-06-22T14:31:01.000Z","type":"user","content":[{"text":"{{{bootstrap}}}"}]}],"lastUpdated":"t"}}""",
+            """{"id":"m1","timestamp":"2026-06-22T14:31:05.000Z","type":"gemini","content":"hello"}"""
+        });
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var route in new[] { "/hooks/session-start/gemini", "/hooks/transcript", "/hooks/session-end/gemini" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source     = new GeminiImportSource(_tempDir);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+
+        // Capture scope reads Meta.Cwd, so the recovered directory has to survive classification.
+        await Assert.That(classified[0].Meta.Cwd).IsEqualTo("/work/demo");
+
+        await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var startBody = _server.LogEntries
+            .Single(e => e.RequestMessage.Path == "/hooks/session-start/gemini").RequestMessage.Body!;
+        await Assert.That(startBody).Contains("\"cwd\":\"/work/demo\"");
+    }
+
     // --- Gemini's SentChildContent signal, partial-plumbing with a documented residual (no
     // per-child watermark — see ImportSubagentsAsync's doc comment). ---
 
