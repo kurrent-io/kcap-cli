@@ -31,6 +31,8 @@ export const ProbeRegisterPlugin = async () => ({{
 }})
 """
 
+SEARCH_TOOLS = ("bash", "grep", "glob", "list", "read", "webfetch")
+
 
 class OpenCodeV1Adapter(Adapter):
     entry = "opencode-v1"
@@ -39,6 +41,7 @@ class OpenCodeV1Adapter(Adapter):
     lever = "OPENCODE_CONFIG_DIR"
     native_root = ".opencode/skills"
     documented_roots = frozenset({".opencode/skills", ".claude/skills", ".agents/skills"})
+    # Flags a version accepts only after its subcommand.
     extra_argv: tuple[str, ...] = ()
 
     def real_root(self) -> Path | None:
@@ -89,8 +92,11 @@ class OpenCodeV1Adapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            return acp_ask([binary, *self.extra_argv, "acp"], sb.repo, sb.env, prompt,
-                           sb.root / "opencode-acp.stderr.log", self.turn_timeout)
+            res = acp_ask([binary, "acp", *self.extra_argv], sb.repo, sb.env, prompt,
+                          sb.root / "opencode-acp.stderr.log", self.turn_timeout)
+            generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
+            res.notes = (generic + " " + classify_acp_tools(res.raw)).strip()
+            return res
 
         def extract(raw: str) -> str:
             texts = []
@@ -104,5 +110,57 @@ class OpenCodeV1Adapter(Adapter):
                     texts.append(part["text"])
             return "\n".join(texts) if texts else raw
 
-        argv = [binary, *self.extra_argv, "run", "--format", "json", prompt]
-        return print_ask(argv, sb.repo, sb.env, sb.root / "opencode.stderr.log", self.turn_timeout, extract=extract)
+        argv = [binary, "run", *self.extra_argv, "--format", "json", prompt]
+        res = print_ask(argv, sb.repo, sb.env, sb.root / "opencode.stderr.log", self.turn_timeout, extract=extract)
+        if "USAGE" in res.reply_text and "FLAGS" in res.reply_text:
+            # The CLI printed its usage instead of running: an invocation error, not an answer.
+            res.reply_text = ""
+            res.exit_code = res.exit_code or 2
+            res.notes = (res.notes + " usage printed").strip()
+        res.notes = (res.notes + " " + classify_print_tools(res.raw)).strip()
+        return res
+
+
+def classify_acp_tools(raw: str) -> str:
+    """OpenCode loads a listed skill through its own `skill` tool over ACP."""
+    skill_loads = searches = other = 0
+    try:
+        frames = json.loads(raw)
+    except json.JSONDecodeError:
+        frames = []
+    for f in frames:
+        fr = f.get("frame") or {}
+        if fr.get("method") != "session/update":
+            continue
+        upd = (fr.get("params") or {}).get("update") or {}
+        if upd.get("sessionUpdate") != "tool_call":
+            continue
+        title = (upd.get("title") or "").lower()
+        if title == "skill" or title.startswith("loaded skill"):
+            skill_loads += 1
+        elif any(title.startswith(t) for t in SEARCH_TOOLS) or upd.get("kind") in ("execute", "search"):
+            searches += 1
+        else:
+            other += 1
+    return f"tools_used={searches + other} skill_loads={skill_loads} searches={searches}"
+
+
+def classify_print_tools(raw: str) -> str:
+    """The `run --format json` events name each tool part by its tool name."""
+    skill_loads = searches = other = 0
+    for line in raw.splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        part = obj.get("part") if isinstance(obj.get("part"), dict) else obj
+        if part.get("type") != "tool":
+            continue
+        tool = (part.get("tool") or "").lower()
+        if tool == "skill":
+            skill_loads += 1
+        elif tool in SEARCH_TOOLS:
+            searches += 1
+        else:
+            other += 1
+    return f"tools_used={searches + other} skill_loads={skill_loads} searches={searches}"

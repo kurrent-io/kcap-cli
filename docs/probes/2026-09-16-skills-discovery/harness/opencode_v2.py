@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
-from harness.base import HookInfo
-from harness.opencode_v1 import OpenCodeV1Adapter
+from harness.base import AskResult, HookInfo
+from harness.opencode_v1 import OpenCodeV1Adapter, classify_acp_tools
+from lib.acp_driver import acp_ask
 from lib.hook_script import stamp_path, write_hook_script
 from lib.isolation import Sandbox
 
@@ -38,12 +40,26 @@ export default Plugin.define({{
 
 class OpenCodeV2Adapter(OpenCodeV1Adapter):
     entry = "opencode-v2"
-    # A private server per run: the shared background service would outlive the sandbox.
+    # `run` takes a private server; `acp` rejects the flag and always uses the background service,
+    # which is started under the sandbox's config and stopped after the turn.
     extra_argv = ("--standalone",)
 
     def binary_path(self) -> str | None:
         p = Path(os.environ.get("KCAP_OPENCODE_V2_PATH") or (Path.home() / ".local" / "opencode-v2" / "bin" / "opencode"))
         return str(p) if p.exists() else None
+
+    def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
+        if mode != "daemon":
+            return super().ask(sb, mode, prompt)
+        binary = self.binary_path() or self.binary
+        try:
+            res = acp_ask([binary, "acp"], sb.repo, sb.env, prompt, sb.root / "opencode-acp.stderr.log",
+                          self.turn_timeout)
+        finally:
+            subprocess.run([binary, "service", "stop"], env=sb.env, capture_output=True, text=True, timeout=60)
+        generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
+        res.notes = (generic + " " + classify_acp_tools(res.raw)).strip()
+        return res
 
     def _plugin_file(self, sb: Sandbox) -> Path:
         d = self._plugins(sb) / "probe"
