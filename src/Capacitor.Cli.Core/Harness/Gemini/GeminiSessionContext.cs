@@ -51,6 +51,10 @@ public static class GeminiSessionContext {
     }
 
     static IEnumerable<string> TextParts(JsonElement message) {
+        // Only a user record is ever a bootstrap. A model turn that opens with the block is a
+        // forgery, and the directory it invents would place a session the profile meant to exclude.
+        if (message.Str("type") != "user") yield break;
+
         if (message.Str("content") is { } direct) {
             yield return direct;
             yield break;

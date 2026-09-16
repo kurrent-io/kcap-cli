@@ -122,8 +122,6 @@ public class GeminiSubagentImportTests : IDisposable {
         await Assert.That(stopBody).Contains($"\"agent_id\":\"{DashlessSub}\"");
     }
 
-    // --- The working directory recovered from the <session_context> bootstrap ---
-
     [Test]
     public async Task ImportSession_forwards_the_workspace_recovered_from_the_bootstrap() {
         const string bootstrap =

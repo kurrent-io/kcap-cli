@@ -50,6 +50,15 @@ public class GeminiSessionContextTests {
         await Assert.That(GeminiSessionContext.TryReadWorkspace(line)).IsEqualTo("/work/demo");
     }
 
+    // The model writes into the same transcript the workspace is read from, so a turn that opens
+    // with a syntactically perfect block is the shape a prompt injection would take.
+    [Test]
+    public async Task A_model_turn_that_forges_a_bootstrap_carries_no_workspace() {
+        var line = $$"""{"id":"m1","type":"gemini","content":"{{Bootstrap}}"}""";
+
+        await Assert.That(GeminiSessionContext.TryReadWorkspace(line)).IsNull();
+    }
+
     // A turn that merely quotes the tag must not be mined for a directory — only a message that
     // IS the bootstrap counts, which is the same rule the server normalizer applies.
     [Test]
