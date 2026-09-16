@@ -4,8 +4,13 @@ namespace Capacitor.Cli.Core;
 /// Callers pass the MAIN repo root (GitRepository.ResolveMainRepoRoot), so worktree gitfiles
 /// never reach this parser.
 public static class GitRemoteReader {
-    public static string? ReadOriginUrl(string mainRepoRoot) {
-        var path = Path.Combine(mainRepoRoot, ".git", "config");
+    public static string? ReadOriginUrl(string mainRepoRoot) =>
+        ReadOriginUrlFromConfig(Path.Combine(mainRepoRoot, ".git", "config"));
+
+    /// <summary>The origin URL in a git config file named directly, for a checkout whose config is
+    /// not at <c>&lt;root&gt;/.git/config</c> — a submodule keeps its own under the superproject's
+    /// <c>.git/modules/</c>.</summary>
+    public static string? ReadOriginUrlFromConfig(string path) {
         string[] lines;
         try {
             if (!File.Exists(path)) return null;

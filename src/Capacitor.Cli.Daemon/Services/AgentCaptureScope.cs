@@ -25,8 +25,8 @@ internal static class AgentCaptureScope {
 
     /// <summary>
     /// Whether the profile scopes anything at all. Checked before <see cref="IsOutOfScope"/> so a
-    /// profile with no lists — the default, and every config predating them — costs nothing on the
-    /// launch path and never resolves a home directory or a repository it has no use for.
+    /// profile with no lists — the default — costs nothing on the launch path and never resolves a
+    /// home directory or a repository it has no use for.
     /// </summary>
     internal static bool Configured(Profile? profile)
         => profile is not null

@@ -2107,21 +2107,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
-            // Capture scope, for unattended launches only — ahead of every review-specific check
-            // and of the worktree, so a refused launch neither inspects a repository it may not
-            // report on nor copies one into a borrowed snapshot it is about to discard. The borrow
-            // is re-authorized below regardless, and this gate only ever removes permission, so
-            // running it on the requested cwd cannot admit one the authorizer would reject.
-            if ((isReview || isReviewFlow) && AgentCaptureScope.Configured(_config.Profiles.Effective)) {
-                var scopeOrigin = cmd.Borrowed ? cmd.BorrowCwd : repoPath;
-
-                if (AgentCaptureScope.IsOutOfScope(scopeOrigin, _config.Profiles.Effective, _config.Home)) {
-                    LogLaunchOutOfCaptureScope(agentId, scopeOrigin ?? "");
-                    await _server.LaunchFailedAsync(agentId, AgentCaptureScope.RefusalReason);
-
-                    return new CommandOutcome(
-                        CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
-                }
+            // Capture scope for an unattended launch into a named repo, ahead of every
+            // review-specific check and of the worktree, so a refused launch never inspects a
+            // repository it may not report on. A BORROWED launch is judged further down instead,
+            // on the canonical path its authorization resolves.
+            if ((isReview || isReviewFlow) && !cmd.Borrowed
+             && await RefuseOutOfCaptureScopeAsync(agentId, repoPath) is { } scopeRefusal) {
+                return scopeRefusal;
             }
 
             if (isReview) {
@@ -2180,6 +2172,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (!auth.Allowed) {
                     throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
+                }
+
+                // The canonical path is the one that will actually be run, and it is only known
+                // here: a symlink retargeted between the request and this resolution would
+                // otherwise hand the runtime a checkout no list was ever compared against. Before
+                // the snapshot, so a refusal never copies a checkout it is about to discard.
+                if ((isReview || isReviewFlow)
+                 && await RefuseOutOfCaptureScopeAsync(agentId, auth.CanonicalGitRoot ?? auth.CanonicalCwd)
+                        is { } borrowScopeRefusal) {
+                    return borrowScopeRefusal;
                 }
 
                 if (snapshotBorrow) {
@@ -5375,6 +5377,44 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Refusing unattended agent {AgentId}: {Origin} is outside the profile's capture scope")]
     partial void LogLaunchOutOfCaptureScope(string agentId, string origin);
+
+    /// <summary>
+    /// The refusal for an unattended launch whose originating checkout falls outside the profile's
+    /// capture scope, or null to proceed. Only the daemon's own log names the checkout; what
+    /// reaches the server does not.
+    /// </summary>
+    async Task<CommandOutcome?> RefuseOutOfCaptureScopeAsync(string agentId, string? origin) {
+        var profile = await CurrentCaptureProfileAsync();
+
+        if (!AgentCaptureScope.Configured(profile)) return null;
+        if (!AgentCaptureScope.IsOutOfScope(origin, profile, _config.Home)) return null;
+
+        LogLaunchOutOfCaptureScope(agentId, origin ?? "");
+        await _server.LaunchFailedAsync(agentId, AgentCaptureScope.RefusalReason);
+
+        return new CommandOutcome(
+            CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+    }
+
+    /// <summary>
+    /// The capture lists as they stand now, read per launch rather than taken from the resolution
+    /// the daemon booted with. A daemon outlives its config, and a list added while one is running
+    /// has to bind to the next launch rather than the next restart —
+    /// <see cref="ProfileContext.Snapshot"/> says the same of any setting a long-lived process must
+    /// observe. Launches are rare enough for a disk read; the hook path this shares rules with is
+    /// the one that cannot afford one.
+    /// <para>A read that fails falls back to the boot resolution, which still restricts. Treating
+    /// it as "no lists" would turn a transient disk error into an open gate.</para>
+    /// </summary>
+    async Task<Profile?> CurrentCaptureProfileAsync() {
+        try {
+            var snapshot = await AppConfig.LoadProfileConfig(_config.ConfigRoot);
+
+            return snapshot.Profiles.GetValueOrDefault(_config.Profiles.Name) ?? _config.Profiles.Effective;
+        } catch {
+            return _config.Profiles.Effective;
+        }
+    }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Vendor '{Vendor}' cannot apply a requested model; launching with its default and reporting no model instead of '{RequestedModel}', so the dashboard and analytics are not told a model is live that isn't.")]
     partial void LogModelSelectionUnsupported(string vendor, string requestedModel);
