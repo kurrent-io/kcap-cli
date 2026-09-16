@@ -6,6 +6,21 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A session's loose ends are declared, and bounded by the server
+
+`declare_loose_end` posts one concrete piece of unfinished work — a missing test, a TODO left in the
+code, a follow-up — to `/api/loose-ends/declare`, and the CLI validates its shape only: present, a
+string, not blank. The 12-500 character bound and the refusal of none-class text are the server's, so
+a caller who trips one reads a coded 400 naming the real reason rather than a client-side guess that
+drifts as those rules move, and the tool never refuses text the server would take. `session_id`
+resolves through the same path as the other session-scoped tools here — the running harness's own
+session first, the ambient variables behind it — so an agent that omits it records against the
+session it is actually in. The tool lives on the work-items server because that is where an agent
+already declares what its session is doing, but a loose end is the user's ledger entry, not a work
+item, and nothing here turns one into the other. A server that does not serve the route answers 404
+and the tool surfaces `Error: HTTP 404`: the client half is inert until the route is there, never
+broken.
+
 ## Support from the desktop rides the feedback lane
 
 The desktop app has no web view, so the Plain chat widget the web app uses cannot embed; instead a

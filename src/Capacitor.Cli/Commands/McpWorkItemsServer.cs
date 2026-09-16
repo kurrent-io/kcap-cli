@@ -147,7 +147,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         "may cross repositories — and use the retract_* tools when it changes. Two items for the same " +
         "work — a title-only item you created and the issue/PR-keyed item the server minted — are a " +
         "duplicate: merge yours into the keyed one with merge_work_item. A wrong attach is undone with " +
-        "detach_work_item, never papered over with a breakdown.";
+        "detach_work_item, never papered over with a breakdown. Work you leave unfinished goes in with " +
+        "declare_loose_end — one call per concrete item, and never a 'none'.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -177,6 +178,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             using var httpResponse = toolName switch {
                 "declare_work_item"      => await client.PostAsync($"{baseUrl}/api/work-items/declare", ToJsonContent(BuildDeclareBody(arguments))),
                 "get_session_work_items" => await client.GetAsync(BuildSessionUrl(baseUrl, arguments)),
+                "declare_loose_end"      => await client.PostAsync($"{baseUrl}/api/loose-ends/declare", ToJsonContent(BuildDeclareLooseEndBody(arguments))),
 
                 // The declared breakdown/relation surface. Every id is a
                 // REQUIRED argument here, unlike session_id: there is no ambient "current work item"
@@ -311,6 +313,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static JsonObject BuildDetachBody(JsonObject? args) =>
         new() { ["session_id"] = McpSessionId.Resolve(args) };
 
+    // Text bounds and the none-class rule stay the server's, so its 400 names the real reason.
+    internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) =>
+        new() { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
+
     static void CopySuppliedString(JsonObject? args, string key, JsonObject body) {
         if (args is null || !args.TryGetPropertyValue(key, out var node)) return;
 
@@ -393,6 +399,15 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new() {
                 ["session_id"] = new("string", "Session id to look up. Defaults to the session this server runs in when omitted.")
             }, [])),
+
+        new("declare_loose_end",
+            "Record a loose end — a concrete piece of work this session leaves unfinished (a missing test, "
+          + "a TODO, a follow-up) — so it appears in the user's next-work ledger. One call per item, in "
+          + "plain text; do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
+            new("object", new() {
+                ["text"]       = new("string", "The unfinished work, as one plain-text sentence (12-500 characters)."),
+                ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
+            }, ["text"])),
 
         // The declared work-breakdown / relation surface. NOTE: no tool
         // here accepts `source` or `declared_by`. The server resolves both from the authenticated

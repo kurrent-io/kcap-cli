@@ -250,7 +250,7 @@ Beyond registering the servers, `kcap setup` / `kcap plugin install` also instal
 
 Where a harness exposes a per-server trust knob, registration also marks the **read-only** kcap servers auto-approved so the agent doesn't stop to ask before every read: **Gemini** marks `kcap-review`, `kcap-sessions`, and `kcap-analytics` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same three via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The write-capable `kcap-memory` (saves memories) and the work-launching `kcap-flows` (starts a *paid* hosted reviewer) are deliberately left prompting. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
 
-The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — or list what a session is already attached to. `kcap setup` / `kcap plugin install` **register it for every supported harness** (Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, OpenCode, Antigravity, and Pi). See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
+The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — list what a session is already attached to, or record the loose ends a session leaves unfinished. `kcap setup` / `kcap plugin install` **register it for every supported harness** (Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, OpenCode, Antigravity, and Pi). See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
 
 The `kcap mcp plans` stdio server lets agents declare the plan, spec or design document a session works from and the plan's task list — `declare_plan_document`, `set_plan_tasks`, `update_plan_task`, `get_plan` — so progress shows in the session view and the list survives context compaction. `kcap setup` / `kcap plugin install` **register it for every supported harness** alongside `kcap-workitems`. See the [Plans MCP server](#plans-mcp-server-for-agents) section for details.
 
@@ -672,10 +672,11 @@ kcap mcp workitems
 
 Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — and read that structure back. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
 
-It provides nine tools:
+It provides ten tools:
 
 - **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (e.g. `"AI-1234"`), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.
+- **`declare_loose_end`** — record one concrete piece of work this session leaves unfinished (`text`), so it appears in the user's next-work loose-ends ledger. Idempotent per session, owner and normalized text; the server refuses none-class text (`"none"`, `"n/a"`, …).
 - **`declare_work_breakdown`** — declare that a work item is broken into parts (`parent_id` + `part_ids`). Idempotent; a part has at most one parent, and every item must be visible to the caller — a part may live in a different repository than its parent.
 - **`retract_work_breakdown`** — detach the named parts from the parent.
 - **`declare_work_relation`** — declare a dependency between two items (`from_id`, `to_id`, `relation_kind` `"blocks"` or `"blocked_by"`). Both ends must be visible to the caller and may live in different repositories; no self-relation.
@@ -684,7 +685,7 @@ It provides nine tools:
 - **`merge_work_item`** — merge a duplicate item into another (`work_item_id` → `into_work_item_id`): its sessions and links move to the survivor. Refused when a user marked either item standalone, rejected the pairing, or the items sit in different tracker hierarchies.
 - **`detach_work_item`** — detach a session from a work item it was wrongly attached to; durable against automated re-attach, and unable to remove a user-pinned attachment.
 
-`declare_work_item` / `get_session_work_items` / `detach_work_item` default `session_id` to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
+`declare_work_item` / `get_session_work_items` / `declare_loose_end` / `detach_work_item` default `session_id` to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
 
 ### Plans MCP server (for agents)
 
