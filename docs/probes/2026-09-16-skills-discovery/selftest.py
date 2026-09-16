@@ -1032,6 +1032,22 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(classify_tool_items(appserver_items(json.dumps(frames))), "tools_used=0 skill_reads=1 searches=0")
 
 
+class CopilotAdapterTests(unittest.TestCase):
+    def test_skill_tool_is_the_native_load(self):
+        from harness.copilot import acp_tool_calls, classify_copilot_tools, print_tool_calls
+        lines = [json.dumps({"type": "tool.execution_start", "data": {"toolName": "skill", "arguments": {"skill": "x"}}}),
+                 json.dumps({"type": "tool.execution_start", "data": {"toolName": "bash", "arguments": {"command": "find"}}}),
+                 json.dumps({"type": "assistant.message", "data": {"content": "hi"}})]
+        self.assertEqual(classify_copilot_tools(print_tool_calls("\n".join(lines))),
+                         "tools_used=1 skill_loads=1 searches=1")
+        frames = [{"frame": {"method": "session/update", "params": {"update": {
+            "sessionUpdate": "tool_call", "title": "Using skill: kcap-probe-1", "kind": "other"}}}},
+                  {"frame": {"method": "session/update", "params": {"update": {
+                      "sessionUpdate": "tool_call", "title": "Run command", "kind": "execute"}}}}]
+        self.assertEqual(classify_copilot_tools(acp_tool_calls(json.dumps(frames))),
+                         "tools_used=1 skill_loads=1 searches=0")
+
+
 class PiAdapterTests(unittest.TestCase):
     def test_registration_extension_names_the_root(self):
         from harness.pi import PiAdapter
