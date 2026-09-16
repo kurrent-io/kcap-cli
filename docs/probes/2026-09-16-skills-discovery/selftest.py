@@ -964,11 +964,15 @@ class AdapterHookFilesTests(unittest.TestCase):
                 script = sb.config_root / "probe-hook.sh"
                 script.write_text("#!/bin/sh\nexit 0\n")
                 info = a.install_startup_hook(sb, script)
-                self.assertIsNotNone(info, name)
-                self.assertTrue(Path(info.config_path).exists(), info)
-                self.assertIn(str(script), Path(info.config_path).read_text())
-                self.assertTrue(info.mechanism)
-                self.assertIn(a.native_root, a.documented_roots, name)
+                try:
+                    self.assertIsNotNone(info, name)
+                    self.assertTrue(Path(info.config_path).exists(), info)
+                    self.assertIn(str(script), Path(info.config_path).read_text())
+                    self.assertTrue(info.mechanism)
+                    self.assertIn(a.native_root, a.documented_roots, name)
+                finally:
+                    # An adapter that must write into the real home removes its hook after a turn.
+                    getattr(a, "cleanup_hook", lambda _sb: None)(sb)
 
 
 class ClaudeAdapterTests(unittest.TestCase):
