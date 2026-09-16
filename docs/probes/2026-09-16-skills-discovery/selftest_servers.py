@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,8 @@ def uses_tool() -> bool:
 
 
 def acp() -> None:
+    if os.environ.get("KCAP_FAKE_GRANDCHILD") == "1":
+        subprocess.Popen(["sleep", "60"])
     for line in sys.stdin:
         msg = json.loads(line)
         m, i, p = msg.get("method"), msg.get("id"), msg.get("params") or {}
@@ -86,6 +89,9 @@ def appserver() -> None:
 
 
 def pirpc() -> None:
+    if os.environ.get("KCAP_FAKE_GRANDCHILD") == "1":
+        # A vendor that re-execs leaves a process like this one holding stdout after it exits.
+        subprocess.Popen(["sleep", "60"])
     for line in sys.stdin:
         msg = json.loads(line)
         if msg.get("type") == "prompt":

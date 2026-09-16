@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from harness.base import AskResult
+from lib.procs import kill_group
 
 KIT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(KIT.parent / "2026-08-04-acp-reconnect-c0"))
@@ -28,15 +29,35 @@ class IsolatedAcpClient(AcpClient):
 
     async def start(self):
         self.stderr_f = open(self.stderr_path, "ab")
+        # Its own session, so a vendor that re-execs itself leaves no grandchild holding the
+        # pipes open after the child is gone (an open pipe is a shutdown that never returns).
         self.proc = await asyncio.create_subprocess_exec(
-            *self.argv, cwd=self.cwd, env=self.env,
+            *self.argv, cwd=self.cwd, env=self.env, start_new_session=True,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=self.stderr_f)
         self.reader_task = asyncio.create_task(self._read_loop())
         self.record("mark", {"event": "spawned", "pid": self.proc.pid, "argv": self.argv})
 
     async def shutdown(self, hard_after=5):
+        # asyncio's Process.wait() only completes once every pipe is closed, so a grandchild that
+        # inherited stdout keeps the base class's wait from ever returning: the whole session is
+        # killed as soon as a graceful exit has not happened.
         if self.proc is not None:
-            await super().shutdown(hard_after)
+            if self.proc.returncode is None:
+                try:
+                    self.proc.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(self.proc.wait(), hard_after)
+                except asyncio.TimeoutError:
+                    kill_group(self.proc.pid)
+                    try:
+                        await asyncio.wait_for(self.proc.wait(), hard_after)
+                    except asyncio.TimeoutError:
+                        pass
+            kill_group(self.proc.pid)
+            if self.reader_task is not None:
+                await asyncio.wait([self.reader_task], timeout=5)
         if self.stderr_f is not None:
             self.stderr_f.close()
             self.stderr_f = None

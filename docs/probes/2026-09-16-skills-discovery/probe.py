@@ -209,13 +209,16 @@ class Runner:
 
     def _ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         res = self.adapter.ask(sb, mode, prompt)
-        if not res.reply_text.strip() and res.exit_code not in (0, None):
+        broken = res.exit_code not in (0, None) or any(m in res.notes for m in ("failed:", "exception="))
+        if not res.reply_text.strip() and broken:
             # A vendor that failed to run said nothing about the skill: that row is untested, and
             # the stderr tail is the reason a reader needs.
-            tail = ""
+            reason = ""
             if res.stderr_path and Path(res.stderr_path).is_file():
-                tail = Path(res.stderr_path).read_text(errors="replace")[-300:].replace("\n", " | ")
-            raise RuntimeError(f"vendor exit {res.exit_code} with no reply; {res.notes}; stderr: {tail}")
+                text = Path(res.stderr_path).read_text(errors="replace")
+                errors = [line.strip() for line in text.splitlines() if "Error" in line or "error" in line]
+                reason = (errors[0] if errors else text[-300:].replace("\n", " | "))[:300]
+            raise RuntimeError(f"vendor exit {res.exit_code} with no reply; {res.notes}; stderr: {reason}")
         return res
 
     def _hook_dict(self, sb: Sandbox, mechanism: str, config_path: str) -> dict:

@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+from lib.procs import kill_group
+
 
 class JsonlChild:
     def __init__(self, argv: list[str], cwd: Path, env: dict, stderr_path: Path) -> None:
@@ -22,13 +24,17 @@ class JsonlChild:
     def start(self) -> None:
         self._err = open(self.stderr_path, "ab")
         try:
+            # Its own session, so a grandchild left behind by a self-re-execing vendor can be
+            # killed with it instead of holding stdout open forever.
             self.proc = subprocess.Popen(self.argv, cwd=self.cwd, env=self.env, stdin=subprocess.PIPE,
-                                         stdout=subprocess.PIPE, stderr=self._err, text=True, bufsize=1)
+                                         stdout=subprocess.PIPE, stderr=self._err, text=True, bufsize=1,
+                                         start_new_session=True)
         except OSError:
             self._err.close()
             self._err = None
             raise
-        threading.Thread(target=self._reader, daemon=True).start()
+        self._reader_thread = threading.Thread(target=self._reader, daemon=True)
+        self._reader_thread.start()
 
     def _reader(self) -> None:
         assert self.proc and self.proc.stdout
@@ -75,6 +81,8 @@ class JsonlChild:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
+        kill_group(self.proc.pid)
+        self._reader_thread.join(timeout=5)
         if self.proc.stdout:
             self.proc.stdout.close()
         if self._err is not None:

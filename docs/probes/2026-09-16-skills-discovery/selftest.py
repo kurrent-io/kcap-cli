@@ -273,6 +273,7 @@ class RecorderTests(unittest.TestCase):
 
 
 import subprocess  # noqa: E402
+import time  # noqa: E402
 
 from lib.hook_script import read_stamp, stamp_path, write_hook_script  # noqa: E402
 
@@ -697,6 +698,16 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("IneligibleTierError", recs[0].notes)
             self.assertTrue(Path(recs[0].stderr_path).exists())
 
+    def test_protocol_failure_without_a_reply_is_untested(self):
+        class _ProtocolFailure(FakeAdapter):
+            def ask(self, sb, mode, prompt):
+                return AskResult(reply_text="", raw="[]", argv=["fake", "acp"], started_at=0.0, first_request_at=0.0,
+                                 stderr_path=None, exit_code=None, notes='session/new failed: {"error": "no key"}')
+        with tempfile.TemporaryDirectory() as d:
+            recs = probe.Runner(_ProtocolFailure(), Path(d) / "out", runs=1, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual(recs[0].verdict, "untested")
+            self.assertIn("session/new failed", recs[0].notes)
+
     def test_odd_log_name_is_still_kept(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "out"
@@ -817,6 +828,17 @@ class AcpDriverTests(unittest.TestCase):
             self.assertGreaterEqual(res.first_request_at, res.started_at)
             self.assertEqual(res.argv[-1], "acp")
 
+    def test_grandchild_holding_stdout_does_not_wedge_shutdown(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            env = dict(os.environ, KCAP_FAKE_GRANDCHILD="1")
+            started = time.time()
+            res = acp_ask([sys.executable, str(SERVERS), "acp"], repo, env, single_prompt(skill),
+                          Path(d) / "acp.stderr.log", timeout=30)
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertLess(time.time() - started, 20)
+
     def test_tool_call_updates_are_counted(self):
         with tempfile.TemporaryDirectory() as d:
             skill = ProbeSkill.fresh()
@@ -902,6 +924,17 @@ class JsonlDriversTests(unittest.TestCase):
             self.assertTrue(res.argv[idx + 1].startswith("hooks.state="))
             self.assertIn(skill.body_token, res.reply_text)
             self.assertIn("hooks/list", res.raw)
+
+    def test_grandchild_holding_stdout_does_not_wedge_the_driver(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            env = dict(os.environ, KCAP_FAKE_GRANDCHILD="1")
+            started = time.time()
+            res = pirpc_ask([sys.executable, str(SERVERS), "pirpc"], repo, env, single_prompt(skill),
+                            Path(d) / "pi.stderr.log", timeout=30)
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertLess(time.time() - started, 20)
 
     def test_spawn_failure_is_reported(self):
         with tempfile.TemporaryDirectory() as d:
@@ -997,6 +1030,22 @@ class CodexAdapterTests(unittest.TestCase):
                                                                               "command": "cat /r/.agents/skills/x/SKILL.md"}}}},
                   {"frame": {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "t"}}}}]
         self.assertEqual(classify_tool_items(appserver_items(json.dumps(frames))), "tools_used=0 skill_reads=1 searches=0")
+
+
+class PiAdapterTests(unittest.TestCase):
+    def test_registration_extension_names_the_root(self):
+        from harness.pi import PiAdapter
+        with tempfile.TemporaryDirectory() as d:
+            a = PiAdapter()
+            sb = new_sandbox(a.lever, None, [], base=Path(d))
+            skill = ProbeSkill.fresh()
+            target = a.skill_file(sb, a.native_root, skill.name)
+            info = a.install_registration(sb, target, skill.render())
+            ext = Path(info.config_path).read_text()
+            self.assertIn("resources_discover", ext)
+            self.assertIn(json.dumps(str(sb.repo / ".pi" / "skills")), ext)
+            self.assertIn(json.dumps(str(sb.config_root / "probe-hook.sh")), ext)
+            self.assertTrue((sb.config_root / "probe-hook.sh").exists())
 
 
 if __name__ == "__main__":
