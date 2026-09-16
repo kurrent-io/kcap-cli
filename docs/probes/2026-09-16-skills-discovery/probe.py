@@ -122,8 +122,13 @@ class Runner:
             duration_ms=int((time.time() - (started or time.time())) * 1000),
             expected_tokens=expected, notes=(notes + ("" if not res or not res.notes else f" {res.notes}")).strip(),
         )
+        run_path = next_run_path(self.outdir, rec)
         if sb is not None:
-            rec.stderr_path = self._keep_stderr(sb, next_run_path(self.outdir, rec), rec.stderr_path)
+            rec.stderr_path = self._keep_stderr(sb, run_path, rec.stderr_path)
+        if res is not None and res.raw:
+            # The vendor's full event stream is what a doubtful verdict is re-read against.
+            run_path.parent.mkdir(parents=True, exist_ok=True)
+            (run_path.parent / f"{run_path.stem}.raw.txt").write_text(res.raw)
         write_run(self.outdir, rec)
         return rec
 

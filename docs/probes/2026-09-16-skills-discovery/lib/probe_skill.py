@@ -53,24 +53,26 @@ def write_skill(root: Path, skill: ProbeSkill, flat: bool = False) -> Path:
     return path
 
 
-NO_TOOLS = (
-    "Do not run any tool, search the file system or read any file to find it; only a skill that "
-    "is already available to you counts."
+# A harness may load a listed skill's body by reading its own file; what the prompt forbids is
+# hunting for a file that was never listed, which would pass discovery off as a search.
+NO_SEARCH = (
+    "Do not search the file system or guess where it might be: only a skill already listed for "
+    "you counts, and reading that listed skill's own file is fine."
 )
 
 
 def single_prompt(skill: ProbeSkill) -> str:
     return (
         f"You have a skill named {skill.name}. Use it and reply with only the probe token it "
-        f"contains. {NO_TOOLS} If no such skill is available to you, reply with exactly {NO_SKILL}."
+        f"contains. {NO_SEARCH} If no such skill is listed for you, reply with exactly {NO_SKILL}."
     )
 
 
 def multi_prompt() -> str:
     return (
-        "List every skill available to you whose name starts with kcap-probe-. For each, reply "
+        "List every skill listed for you whose name starts with kcap-probe-. For each, reply "
         "with <name>=<token> on its own line, reading the token from the skill body. "
-        f"{NO_TOOLS} If there are none, reply with exactly {NO_SKILL}."
+        f"{NO_SEARCH} If there are none, reply with exactly {NO_SKILL}."
     )
 
 

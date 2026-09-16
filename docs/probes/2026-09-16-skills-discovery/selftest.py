@@ -949,5 +949,36 @@ class ClaudeAdapterTests(unittest.TestCase):
             self.assertIn("real config root", info.mechanism)
 
 
+class CodexAdapterTests(unittest.TestCase):
+    def test_prepare_trusts_repo_and_print_argv(self):
+        from harness.codex import CodexAdapter
+        with tempfile.TemporaryDirectory() as d:
+            a = CodexAdapter()
+            sb = new_sandbox(a.lever, None, [], base=Path(d))
+            a.prepare(sb)
+            toml = (sb.config_root / "config.toml").read_text()
+            self.assertIn(f'[projects."{sb.repo}"]', toml)
+            self.assertIn('trust_level = "trusted"', toml)
+            info = a.install_startup_hook(sb, sb.config_root / "probe-hook.sh")
+            hooks = json.loads(Path(info.config_path).read_text())
+            self.assertEqual(hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"], str(sb.config_root / "probe-hook.sh"))
+
+    def test_tool_items_distinguish_a_listed_read_from_a_search(self):
+        from harness.codex import appserver_items, classify_tool_items, exec_items
+        lines = [
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "hi"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "command_execution",
+                                                            "command": "/bin/zsh -lc 'cat /r/.agents/skills/kcap-probe-1/SKILL.md'"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "command_execution",
+                                                            "command": "/bin/zsh -lc 'find / -name SKILL.md'"}}),
+            json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "date"}}),
+        ]
+        self.assertEqual(classify_tool_items(exec_items("\n".join(lines))), "tools_used=2 skill_reads=1 searches=1")
+        frames = [{"frame": {"method": "item/completed", "params": {"item": {"type": "commandExecution",
+                                                                              "command": "cat /r/.agents/skills/x/SKILL.md"}}}},
+                  {"frame": {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "t"}}}}]
+        self.assertEqual(classify_tool_items(appserver_items(json.dumps(frames))), "tools_used=0 skill_reads=1 searches=0")
+
+
 if __name__ == "__main__":
     unittest.main()
