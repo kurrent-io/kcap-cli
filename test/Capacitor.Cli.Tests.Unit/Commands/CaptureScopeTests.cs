@@ -83,6 +83,31 @@ public class CaptureScopeTests {
         await Assert.That(result[0].OutsideAllowlist).IsTrue();
     }
 
+    // The ordinary miss: a cwd that is simply not in a repository. The detector returns null
+    // rather than throwing, and that null has to survive the warm-up cache to reach the verdict.
+    [Test]
+    public async Task A_detector_that_finds_no_repository_leaves_the_session_unplaceable() {
+        var result = await Scope(allowedRepos: ["acme/widgets"],
+                                 repoDetector: _ => Task.FromResult<RepositoryPayload?>(null))
+            .ApplyAsync([Session("s1", "/tmp/not-a-repo")]);
+
+        await Assert.That(result[0].OutsideAllowlist).IsTrue();
+    }
+
+    // One unresolvable cwd is a verdict about that session, not an outcome for the run: the
+    // sessions warmed alongside it still get theirs.
+    [Test]
+    public async Task An_unresolvable_cwd_does_not_stop_the_sessions_beside_it() {
+        var result = await Scope(
+                allowedRepos: ["acme/widgets"],
+                repoDetector: cwd => Task.FromResult<RepositoryPayload?>(
+                    cwd == "/tmp/widgets" ? new RepositoryPayload { Owner = "acme", RepoName = "widgets" } : null))
+            .ApplyAsync([Session("unplaceable", "/tmp/not-a-repo"), Session("admitted", "/tmp/widgets")]);
+
+        await Assert.That(result[0].OutsideAllowlist).IsTrue();
+        await Assert.That(result[1].OutsideAllowlist).IsFalse();
+    }
+
     [Test]
     public async Task Excluded_path_is_tagged_with_the_normalized_entry() {
         using var tmp = new TempDir();
