@@ -31,7 +31,9 @@ from lib.git_exclusion import apply as apply_exclusion, assert_untracked_state  
 from lib.hook_script import read_stamp, stamp_path, write_hook_script  # noqa: E402
 from lib.isolation import Sandbox, new_sandbox  # noqa: E402
 from lib.probe_skill import ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill  # noqa: E402
-from lib.recorder import RunRecord, emit_matrix, load_runs, os_label, run_dir, write_run  # noqa: E402
+from lib.recorder import (  # noqa: E402
+    RunRecord, emit_matrix, load_runs, next_run_path, os_label, run_dir, write_run,
+)
 from lib.verdict import (  # noqa: E402
     PromptDesignFailure, judge_control, judge_root, judge_single, needs_third_run, combine,
 )
@@ -105,8 +107,19 @@ class Runner:
             duration_ms=int((time.time() - (started or time.time())) * 1000),
             expected_tokens=expected, notes=(notes + ("" if not res or not res.notes else f" {res.notes}")).strip(),
         )
+        if sb is not None:
+            rec.stderr_path = self._keep_stderr(sb, next_run_path(self.outdir, rec), rec.stderr_path)
         write_run(self.outdir, rec)
         return rec
+
+    def _keep_stderr(self, sb: Sandbox, run_path: Path, stderr_path: str | None) -> str | None:
+        """Copy the sandbox's stderr logs beside the run file: the sandbox is about to be removed."""
+        copied: dict[str, str] = {}
+        for src in sorted(sb.root.rglob("*.stderr.log")):
+            dst = run_path.parent / f"{run_path.stem}.{src.name}"
+            shutil.copy2(src, dst)
+            copied[str(src)] = str(dst)
+        return copied.get(stderr_path or "", stderr_path)
 
     def _existing(self, mode: str, scenario: str, arm: str) -> list[RunRecord]:
         d = run_dir(self.outdir, self.adapter.entry, mode, scenario, arm)
@@ -172,10 +185,10 @@ class Runner:
                 verdict = judge_control(parse_reply(res.reply_text, res.raw))
             except PromptDesignFailure as ex:
                 # The reply that broke the control is the evidence for it: record before unwinding.
-                self.record(mode, "S0", "S0/none", None, "none", res, "untested", {}, started=started,
-                            notes=f"prompt design failure: {ex}")
+                self.record(mode, "S0", "S0/none", None, "none", res, "untested", {}, sb=sb,
+                            started=started, notes=f"prompt design failure: {ex}")
                 raise
-            return self.record(mode, "S0", "S0/none", None, "none", res, verdict, {}, started=started)
+            return self.record(mode, "S0", "S0/none", None, "none", res, verdict, {}, sb=sb, started=started)
         finally:
             sb.cleanup()
 
@@ -201,7 +214,7 @@ class Runner:
                 verdict = "untested"
             arm = "S1/native" if scenario == "S1" else f"S3/{exclusion}"
             return self.record(mode, scenario, arm, root, exclusion, res, verdict,
-                               {"native": skill.token}, started=started, notes=notes)
+                               {"native": skill.token}, sb=sb, started=started, notes=notes)
         finally:
             sb.cleanup()
 
@@ -219,7 +232,8 @@ class Runner:
                 info = a.install_registration(sb, target, skill.render())
                 if info is None:
                     return self.record(mode, "S2", "S2/registration", root, "none", None, "untested", {},
-                                       notes="no registration mechanism for this entry", started=started)
+                                       sb=sb, notes="no registration mechanism for this entry",
+                                       started=started)
                 reload_used = True
             else:
                 script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
@@ -233,7 +247,7 @@ class Runner:
                 notes = (notes + " skill file absent after the turn").strip()
                 verdict = "untested"
             return self.record(mode, "S2", f"S2/{arm}", root, "none", res, verdict, {"native": skill.token},
-                               hook=hook, started=started, notes=notes)
+                               hook=hook, sb=sb, started=started, notes=notes)
         finally:
             sb.cleanup()
 
@@ -256,7 +270,7 @@ class Runner:
             verdict = "leaked" if leaked else ("visible_first_turn" if found else "not_visible")
             notes = f"found={sorted(found)} leaked={sorted(leaked)}"
             return self.record(mode, "S4", "S4/all-roots", None, "none", res, verdict,
-                               {k: s.token for k, s in skills.items()}, started=started, notes=notes)
+                               {k: s.token for k, s in skills.items()}, sb=sb, started=started, notes=notes)
         finally:
             sb.cleanup()
 
@@ -270,7 +284,7 @@ class Runner:
             res = self._ask(sb, mode, single_prompt(skill))
             verdict = judge_root(skill.token, root in a.documented_roots, parse_reply(res.reply_text, res.raw))
             return self.record(mode, "S4", f"S4/confirm-{root_key}", root, "none", res, verdict,
-                               {root_key: skill.token}, started=started)
+                               {root_key: skill.token}, sb=sb, started=started)
         finally:
             sb.cleanup()
 

@@ -48,13 +48,17 @@ def run_dir(outdir: Path, entry: str, mode: str, scenario: str, arm: str) -> Pat
     return outdir / entry / mode / scenario / arm.replace("/", "_")
 
 
-def write_run(outdir: Path, rec: RunRecord) -> Path:
+def next_run_path(outdir: Path, rec: RunRecord) -> Path:
     d = run_dir(outdir, rec.entry, rec.mode, rec.scenario, rec.arm)
     d.mkdir(parents=True, exist_ok=True)
     n = 1
     while (d / f"run{n}.json").exists():
         n += 1
-    path = d / f"run{n}.json"
+    return d / f"run{n}.json"
+
+
+def write_run(outdir: Path, rec: RunRecord) -> Path:
+    path = next_run_path(outdir, rec)
     path.write_text(json.dumps(asdict(rec), indent=2, sort_keys=True) + "\n")
     return path
 
@@ -69,24 +73,13 @@ def load_runs(outdir: Path) -> list[RunRecord]:
     return runs
 
 
-def _version_key(v: str) -> tuple:
-    parts = []
-    for piece in v.replace("-", ".").split("."):
-        parts.append((0, int(piece)) if piece.isdigit() else (1, piece))
-    return tuple(parts)
-
-
 def emit_matrix(outdir: Path, target: Path) -> list[dict]:
     runs = load_runs(outdir)
-    latest: dict[str, str] = {}
-    for r in runs:
-        if r.entry not in latest or _version_key(r.version) > _version_key(latest[r.entry]):
-            latest[r.entry] = r.version
     groups: dict[tuple, list[RunRecord]] = {}
     for r in runs:
-        if r.version != latest[r.entry]:
-            continue
-        groups.setdefault((r.entry, r.mode, r.scenario, r.arm, r.root or "", r.exclusion), []).append(r)
+        # Version is part of the key: runs from two versions of one entry are never averaged,
+        # and the older measurement keeps its own row rather than disappearing.
+        groups.setdefault((r.entry, r.version, r.mode, r.scenario, r.arm, r.root or "", r.exclusion), []).append(r)
     rows = []
     for key in sorted(groups):
         members = groups[key]
@@ -98,7 +91,7 @@ def emit_matrix(outdir: Path, target: Path) -> list[dict]:
             "exclusion": first.exclusion, "verdict": verdict, "flaky": flaky, "runs": len(members),
             "mechanism": (first.hook or {}).get("mechanism"),
             "evidence": [str(m._path.relative_to(target.parent)) for m in members],  # type: ignore[attr-defined]
-            "notes": "; ".join(n for n in {m.notes for m in members} if n),
+            "notes": "; ".join(dict.fromkeys(m.notes for m in members if m.notes)),
         })
     target.write_text(json.dumps(rows, indent=2) + "\n")
     return rows

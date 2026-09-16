@@ -225,13 +225,18 @@ class RecorderTests(unittest.TestCase):
             write_run(out, _rec(version="0.9", verdict="not_visible", arm="S0/none", scenario="S0"))
             self.assertEqual(len(load_runs(out)), 4)
             rows = emit_matrix(out, Path(d) / "matrix.json")
-            self.assertEqual(len(rows), 1)
-            row = rows[0]
+            self.assertEqual(len(rows), 2)
+            by_version = {r["version"]: r for r in rows}
+            row = by_version["1.0"]
             self.assertEqual(row["verdict"], "visible_first_turn")
             self.assertTrue(row["flaky"])
             self.assertEqual(row["runs"], 3)
-            self.assertEqual(row["version"], "1.0")
+            self.assertEqual(row["arm"], "S1/native")
             self.assertTrue(all(e.startswith("out/") for e in row["evidence"]))
+            older = by_version["0.9"]
+            self.assertEqual(older["runs"], 1)
+            self.assertEqual(older["verdict"], "not_visible")
+            self.assertEqual(older["arm"], "S0/none")
             self.assertEqual(json.loads((Path(d) / "matrix.json").read_text())[0]["entry"], "fake")
 
     def test_os_label(self):
@@ -352,6 +357,15 @@ class _RaisingAdapter(FakeAdapter):
         raise RuntimeError("vendor exploded")
 
 
+class _StderrAdapter(FakeAdapter):
+    def ask(self, sb, mode, prompt):
+        log = sb.root / "fake.stderr.log"
+        log.write_text("vendor noise\n")
+        res = super().ask(sb, mode, prompt)
+        res.stderr_path = str(log)
+        return res
+
+
 class _NoBinaryAdapter(FakeAdapter):
     entry = "nobin"
 
@@ -444,6 +458,17 @@ class RunnerTests(unittest.TestCase):
             for x in recs:
                 self.assertIn("hook never fired", x.notes)
                 self.assertIn("skill file absent after the turn", x.notes)
+
+    def test_stderr_log_survives_sandbox_cleanup(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            r = probe.Runner(_StderrAdapter(), out, runs=1, base=Path(d))
+            recs = r.run_scenario("print", "S1")
+            copied = out / "fake" / "print" / "S1" / "S1_native" / "run1.fake.stderr.log"
+            self.assertEqual(copied.read_text(), "vendor noise\n")
+            self.assertEqual(recs[0].stderr_path, str(copied))
+            written = json.loads((copied.parent / "run1.json").read_text())
+            self.assertEqual(written["stderr_path"], str(copied))
 
     def test_arm_exception_is_untested(self):
         with tempfile.TemporaryDirectory() as d:
