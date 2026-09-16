@@ -56,6 +56,9 @@ internal static class AgentOrchestratorHarness {
             // directory, so each harness gets its own and nothing reaches the real daemons dir.
             Store               = daemonStore.Store,
             ConfigRoot          = configRoot.Root,
+            // Set like the entry point sets it, so a test configuring capture scope resolves `~`
+            // against its own temp home rather than throwing on an unset one.
+            Home                = home,
             // Set like the entry point sets it: the orchestrator's own token reads name a profile,
             // and an unset one throws rather than reporting "not authenticated".
             Profiles            = Resolutions.None(configRoot.Root)

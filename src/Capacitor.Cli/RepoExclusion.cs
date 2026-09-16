@@ -31,11 +31,7 @@ static class RepoExclusion {
 
         var key = await ResolveKeyAsync(router, config, body, budget);
 
-        if (key is null) return hasAllowlist;
-
-        if (hasAllowlist && !allowedRepos!.Contains(key, StringComparer.OrdinalIgnoreCase)) return true;
-
-        return hasDenylist && excludedRepos!.Contains(key, StringComparer.OrdinalIgnoreCase);
+        return RepoScope.IsOutOfScope(key, allowedRepos, excludedRepos);
     }
 
     /// <summary>
@@ -44,8 +40,7 @@ static class RepoExclusion {
     /// same call as <see cref="IsOutOfScopeAsync"/> makes.
     /// </summary>
     public static bool IsOutsideAllowlist(string? repoKey, IReadOnlyList<string>? allowedRepos)
-        => allowedRepos is { Count: > 0 }
-        && (repoKey is null || !allowedRepos.Contains(repoKey, StringComparer.OrdinalIgnoreCase));
+        => RepoScope.IsOutsideAllowlist(repoKey, allowedRepos);
 
     /// <summary><c>owner/repo</c> for the session, or null when it cannot be determined.</summary>
     static async Task<string?> ResolveKeyAsync(

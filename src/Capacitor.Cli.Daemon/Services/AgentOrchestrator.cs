@@ -2107,6 +2107,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
+            // Capture scope for an unattended launch into a named repo, ahead of every
+            // review-specific check and of the worktree, so a refused launch never inspects a
+            // repository it may not report on. A BORROWED launch is judged further down instead,
+            // on the canonical path its authorization resolves.
+            if ((isReview || isReviewFlow) && !cmd.Borrowed
+             && await RefuseOutOfCaptureScopeAsync(agentId, repoPath) is { } scopeRefusal) {
+                return scopeRefusal;
+            }
+
             if (isReview) {
                 if (cmd.Review is not { } review) {
                     await _server.LaunchFailedAsync(agentId, "Review launch missing PR info");
@@ -2163,6 +2172,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (!auth.Allowed) {
                     throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
+                }
+
+                // The canonical cwd is the one that will actually be run — a borrow may sit below
+                // its repository root, and judging the root would miss a list entry naming the
+                // subdirectory itself. It is only known here, too: a symlink retargeted between the
+                // request and this resolution would otherwise hand the runtime a checkout no list
+                // was compared against. Before the snapshot, so a refusal copies nothing.
+                // The repo key still resolves from here, since it walks up to the root.
+                if ((isReview || isReviewFlow)
+                 && await RefuseOutOfCaptureScopeAsync(agentId, auth.CanonicalCwd)
+                        is { } borrowScopeRefusal) {
+                    return borrowScopeRefusal;
                 }
 
                 if (snapshotBorrow) {
@@ -5355,6 +5376,65 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Refusing unattended agent {AgentId}: {Origin} is outside the profile's capture scope")]
+    partial void LogLaunchOutOfCaptureScope(string agentId, string origin);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refusing unattended agent {AgentId}: the profile's capture scope could not be read")]
+    partial void LogLaunchCaptureScopeUnreadable(string agentId);
+
+    /// <summary>
+    /// The refusal for an unattended launch whose originating checkout falls outside the profile's
+    /// capture scope, or null to proceed. Only the daemon's own log names the checkout; what
+    /// reaches the server does not.
+    /// </summary>
+    async Task<CommandOutcome?> RefuseOutOfCaptureScopeAsync(string agentId, string? origin) {
+        var (profile, readable) = await CurrentCaptureProfileAsync();
+
+        // A config that could not be read is not evidence that nothing is scoped. Proceeding on
+        // an empty profile here would let a transient read error open the gate on exactly the
+        // checkout an existing list was excluding.
+        if (!readable) {
+            LogLaunchCaptureScopeUnreadable(agentId);
+            await _server.LaunchFailedAsync(agentId, AgentCaptureScope.UnreadableReason);
+
+            return new CommandOutcome(
+                CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        if (!AgentCaptureScope.Configured(profile)) return null;
+        if (!AgentCaptureScope.IsOutOfScope(origin, profile, _config.Home)) return null;
+
+        LogLaunchOutOfCaptureScope(agentId, origin ?? "");
+        await _server.LaunchFailedAsync(agentId, AgentCaptureScope.RefusalReason);
+
+        return new CommandOutcome(
+            CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+    }
+
+    /// <summary>
+    /// The capture lists as they stand now, read per launch rather than taken from the resolution
+    /// the daemon booted with. A daemon outlives its config, and a list added while one is running
+    /// has to bind to the next launch rather than the next restart —
+    /// <see cref="ProfileContext.Snapshot"/> says the same of any setting a long-lived process must
+    /// observe. Launches are rare enough for a disk read; the hook path this shares rules with is
+    /// the one that cannot afford one.
+    /// <para>Returns <c>Readable: false</c> for a config that exists and cannot be understood, and
+    /// the caller refuses the launch on it. Unknown lists are not absent lists: reading them as
+    /// empty would turn a corrupt or unreadable config into an open gate on exactly the checkout
+    /// an existing entry was excluding.</para>
+    /// </summary>
+    async Task<(Profile? Profile, bool Readable)> CurrentCaptureProfileAsync() {
+        // One parse, with the outcome carried out of it. A config that exists and cannot be read
+        // or understood loads as an empty profile, which is indistinguishable from one that scopes
+        // nothing — so the distinction has to come from the load itself rather than from a
+        // pre-check, which could only ever cover the failures it happened to anticipate.
+        var (outcome, snapshot) = await AppConfig.TryLoadProfileConfig(_config.ConfigRoot);
+
+        if (outcome == ProfileConfigLoad.Unreadable) return (null, false);
+
+        return (snapshot.Profiles.GetValueOrDefault(_config.Profiles.Name) ?? _config.Profiles.Effective, true);
+    }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Vendor '{Vendor}' cannot apply a requested model; launching with its default and reporting no model instead of '{RequestedModel}', so the dashboard and analytics are not told a model is live that isn't.")]
     partial void LogModelSelectionUnsupported(string vendor, string requestedModel);
