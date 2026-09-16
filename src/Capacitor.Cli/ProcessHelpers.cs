@@ -289,10 +289,12 @@ static partial class ProcessHelpers {
     /// from the Agent/Task tool, and the watcher is then orphaned because the disrupted flow
     /// never fires the matching <c>SubagentStop</c> that would reap it.
     ///
-    /// On Windows, fds 0/1/2 (the std handles .NET redirects) are the whole story: a plain
-    /// <c>fork</c>+<c>exec</c> equivalent doesn't exist there, so <c>CreateProcess</c>'s
-    /// blanket handle inheritance is the only leak path, and clearing
-    /// <c>HANDLE_FLAG_INHERIT</c> on those three handles closes it.
+    /// On Windows the std handles are NOT the whole story, so a detached spawn must not rely
+    /// on this: <c>CreateProcess</c> inherits every handle marked inheritable, and an agent
+    /// invokes its hook holding further inheritable copies of its own pipes, under values
+    /// <c>GetStdHandle</c> never reports. Clearing these three applies cleanly and still
+    /// leaves the leak open, which is why <see cref="StartDetachedWindows"/> spawns with
+    /// <c>bInheritHandles: false</c> rather than calling this.
     ///
     /// Unix is different in a way that makes the std-handle-only mitigation insufficient:
     /// <c>fork</c>+<c>exec</c> <c>dup2</c>s the redirect pipes over fds 0/1/2 in the child,

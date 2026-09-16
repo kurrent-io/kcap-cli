@@ -28,4 +28,8 @@ sealed class FakeProcessStarter : IProcessStarter {
 
         return _behaviour(psi);
     }
+
+    /// <summary>Counts alongside <see cref="Start"/>: a test asserting a guard ran cares that
+    /// nothing was spawned, not which spawn shape the caller reached for.</summary>
+    public int? StartDetached(ProcessStartInfo psi) => Start(psi)?.Id;
 }

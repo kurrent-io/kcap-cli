@@ -53,6 +53,12 @@ static class ClaudeSessionEndHandoff {
 
             // Same pipe-leak hazard as the watcher spawn: the child must not hold Claude's hook
             // pipes open, or Claude waits on them past the hook's own exit.
+            //
+            // This is the one detached spawn that cannot use IProcessStarter.StartDetached: the
+            // payload is handed over through the child's stdin, and a pipe can only reach a child
+            // by being inherited. Windows therefore still inherits the rest of the agent's
+            // handles here, so the leak survives on this path until the spawn passes an explicit
+            // PROC_THREAD_ATTRIBUTE_HANDLE_LIST naming just that one pipe.
             ProcessHelpers.PreventInheritedHandles();
 
             process = starter.Start(psi);
