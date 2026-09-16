@@ -196,9 +196,15 @@ class Runner:
 
     def _blocked(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str,
                  notes: str = "S1 failed") -> list[RunRecord]:
-        """One untested row per arm, written once: a repeated sweep must not stack blocked rows."""
-        existing = self._load(mode, scenario, arm)[1]
-        return existing or [self.record(mode, scenario, arm, root, exclusion, None, "untested", {}, notes=notes)]
+        """One untested row per arm carrying the current reason: measured rows are kept, a stale
+        blocked row is replaced, and a repeated sweep never stacks blocked rows."""
+        d, existing = self._load(mode, scenario, arm)
+        if existing and any(r.verdict != "untested" for r in existing):
+            return existing
+        if existing and all(r.notes == notes for r in existing):
+            return existing
+        shutil.rmtree(d, ignore_errors=True)
+        return [self.record(mode, scenario, arm, root, exclusion, None, "untested", {}, notes=notes)]
 
     def record_blocked(self, mode: str, notes: str) -> list[RunRecord]:
         native = self.adapter.native_root

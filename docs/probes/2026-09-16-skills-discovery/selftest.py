@@ -680,6 +680,17 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual([x.verdict for x in recs], ["untested", "untested"])
             self.assertEqual(len(_load(out)), 2)
 
+    def test_blocked_rows_carry_the_current_reason(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            first = probe.Runner(FakeAdapter(), out, runs=2, base=Path(d))
+            first.record_blocked("print", "binary not installed")
+            second = probe.Runner(FakeAdapter(), out, runs=2, base=Path(d))
+            second.s1_ok["print"] = False
+            recs = second.run_scenario("print", "S3")
+            self.assertEqual({x.notes for x in recs}, {"S1 failed"})
+            self.assertEqual(len([r for r in _load(out) if r.scenario == "S3"]), 2)
+
     def test_exception_path_keeps_stderr_and_tears_down(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "out"
