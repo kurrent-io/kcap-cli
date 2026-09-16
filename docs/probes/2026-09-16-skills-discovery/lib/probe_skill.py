@@ -81,12 +81,14 @@ class Reply:
     no_skill: bool
 
 
-def parse_reply(reply_text: str, raw: str) -> Reply:
+def parse_reply(reply_text: str, raw: str, name: str | None = None) -> Reply:
     # The reply decides; the raw event log is consulted only when no reply text was extracted,
     # because a tool-call frame that echoes SKILL.md would otherwise count as a loaded skill.
     found = TOKEN_RE.findall(reply_text) if reply_text.strip() else TOKEN_RE.findall(raw)
+    # A reply that lists some other probe skill has not named this one.
+    named = (name in reply_text) if name else NAME_RE.search(reply_text) is not None
     return Reply(
         tokens=frozenset(found),
-        skill_named=NAME_RE.search(reply_text) is not None,
+        skill_named=named,
         no_skill=NO_SKILL in reply_text,
     )

@@ -14,7 +14,8 @@ class PromptDesignFailure(Exception):
 def judge_single(expected_token: str, reply: Reply, reload_used: bool = False) -> str:
     if expected_token in reply.tokens:
         return "visible_after_reload" if reload_used else "visible_first_turn"
-    if reply.skill_named:
+    # Naming the skill while answering NO-SKILL is an echo of the prompt, not a sighting.
+    if reply.skill_named and not reply.no_skill:
         return "catalogue_only"
     return "not_visible"
 

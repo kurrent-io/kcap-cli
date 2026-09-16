@@ -109,8 +109,8 @@ class Runner:
     def record(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str,
                res: AskResult | None, verdict: str, expected: dict[str, str], hook: dict | None = None,
                sb: Sandbox | None = None, notes: str = "", started: float | None = None,
-               auth_ok: bool | None = None) -> RunRecord:
-        reply = parse_reply(res.reply_text, res.raw) if res else None
+               auth_ok: bool | None = None, name: str | None = None) -> RunRecord:
+        reply = parse_reply(res.reply_text, res.raw, name) if res else None
         rec = RunRecord(
             entry=self.adapter.entry, harness=self.adapter.harness, binary=self._binary,
             version=self._version, os=self._os, mode=mode, argv=res.argv if res else [],
@@ -218,13 +218,14 @@ class Runner:
         skill = ProbeSkill.fresh()
         res = self._ask(sb, mode, single_prompt(skill))
         try:
-            verdict = judge_control(parse_reply(res.reply_text, res.raw))
+            verdict = judge_control(parse_reply(res.reply_text, res.raw, skill.name))
         except PromptDesignFailure as ex:
             # The reply that broke the control is the evidence for it: record before unwinding.
             self.record(mode, "S0", "S0/none", None, "none", res, "untested", {}, sb=sb,
-                        started=started, notes=f"prompt design failure: {ex}")
+                        started=started, notes=f"prompt design failure: {ex}", name=skill.name)
             raise
-        return self.record(mode, "S0", "S0/none", None, "none", res, verdict, {}, sb=sb, started=started)
+        return self.record(mode, "S0", "S0/none", None, "none", res, verdict, {}, sb=sb, started=started,
+                           name=skill.name)
 
     def arm_s1(self, mode: str, exclusion: str = "none", scenario: str = "S1",
                root: str | None = None) -> RunRecord:
@@ -245,9 +246,9 @@ class Runner:
                                {"native": skill.token}, sb=sb, started=started,
                                notes=f"git state: {ex}")
         res = self._ask(sb, mode, single_prompt(skill))
-        verdict = judge_single(skill.token, parse_reply(res.reply_text, res.raw))
+        verdict = judge_single(skill.token, parse_reply(res.reply_text, res.raw, skill.name))
         return self.record(mode, scenario, arm, root, exclusion, res, verdict,
-                           {"native": skill.token}, sb=sb, started=started)
+                           {"native": skill.token}, sb=sb, started=started, name=skill.name)
 
     def arm_s2(self, mode: str, arm: str) -> RunRecord:
         started = time.time()
@@ -272,14 +273,15 @@ class Runner:
                                    sb=sb, notes="no startup hook mechanism for this entry", started=started)
             reload_used = False
         res = self._ask(sb, mode, single_prompt(skill))
-        verdict = judge_single(skill.token, parse_reply(res.reply_text, res.raw), reload_used=reload_used)
+        verdict = judge_single(skill.token, parse_reply(res.reply_text, res.raw, skill.name),
+                               reload_used=reload_used)
         hook = self._hook_dict(sb, info.mechanism, info.config_path)
         notes = "" if hook["fired_at"] is not None or arm == "registration" else "hook never fired"
         if not target.exists():
             notes = (notes + " skill file absent after the turn").strip()
             verdict = "untested"
         return self.record(mode, "S2", f"S2/{arm}", root, "none", res, verdict, {"native": skill.token},
-                           hook=hook, sb=sb, started=started, notes=notes)
+                           hook=hook, sb=sb, started=started, notes=notes, name=skill.name)
 
     def arm_s3(self, mode: str, exclusion: str) -> RunRecord:
         return self.arm_s1(mode, exclusion=exclusion, scenario="S3")
@@ -300,7 +302,8 @@ class Runner:
         # One turn, one row per root: a single verdict for eleven roots cannot say which leaked.
         return [self.record(mode, "S4", "S4/all-roots", root, "none", res,
                             judge_root(skills[key].token, root in a.documented_roots, reply),
-                            {key: skills[key].token}, sb=sb, started=started, notes=notes)
+                            {key: skills[key].token}, sb=sb, started=started, notes=notes,
+                            name=skills[key].name)
                 for key, root in roots.items()]
 
     def arm_s4_confirm(self, mode: str, root_key: str, root: str) -> RunRecord:
@@ -310,9 +313,10 @@ class Runner:
         skill = ProbeSkill.fresh()
         write_skill(sb.repo / root, skill, flat=a.flat_skill_layout and root == a.native_root)
         res = self._ask(sb, mode, single_prompt(skill))
-        verdict = judge_root(skill.token, root in a.documented_roots, parse_reply(res.reply_text, res.raw))
+        verdict = judge_root(skill.token, root in a.documented_roots,
+                             parse_reply(res.reply_text, res.raw, skill.name))
         return self.record(mode, "S4", f"S4/confirm-{root_key}", root, "none", res, verdict,
-                           {root_key: skill.token}, sb=sb, started=started)
+                           {root_key: skill.token}, sb=sb, started=started, name=skill.name)
 
     # -- scenarios ----------------------------------------------------------------------------
 

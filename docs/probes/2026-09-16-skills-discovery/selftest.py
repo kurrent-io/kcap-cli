@@ -60,6 +60,12 @@ class ProbeSkillTests(unittest.TestCase):
         self.assertEqual(r.tokens, frozenset({s.token}))
         r = parse_reply(NO_SKILL, f'{{"tool_result":"{s.body_token}"}}')
         self.assertEqual(r.tokens, frozenset())
+        # naming some other probe skill is not naming this one
+        other = ProbeSkill.fresh()
+        r = parse_reply(f"The skill listed is {other.name}, not {s.name}.", "", name=s.name)
+        self.assertTrue(r.skill_named)
+        r = parse_reply(f"Only {other.name} is available.", "", name=s.name)
+        self.assertFalse(r.skill_named)
 
 
 import os  # noqa: E402
@@ -192,6 +198,8 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(judge_single("a" * 12, found, reload_used=True), "visible_after_reload")
         self.assertEqual(judge_single("b" * 12, Reply(frozenset(), True, False)), "catalogue_only")
         self.assertEqual(judge_single("b" * 12, Reply(frozenset(), False, True)), "not_visible")
+        # the name echoed beside an explicit NO-SKILL is a negative, not a sighting
+        self.assertEqual(judge_single("b" * 12, Reply(frozenset(), True, True)), "not_visible")
 
     def test_judge_control(self):
         self.assertEqual(judge_control(Reply(frozenset(), False, True)), "not_visible")
@@ -882,6 +890,63 @@ class JsonlDriversTests(unittest.TestCase):
                             Path(d) / "sf.stderr.log", timeout=5)
             self.assertIsNone(res.exit_code)
             self.assertIn("exception=", res.notes)
+
+
+from harness import ENTRIES  # noqa: E402
+
+# Adapters that probe a real binary at construction are pinned to one mode here, so the
+# self-tests neither spawn a vendor nor depend on which one is installed.
+ADAPTER_TEST_ENV = {"KCAP_PROBE_CLAUDE_REAL_CONFIG": "0"}
+
+
+class AdapterHookFilesTests(unittest.TestCase):
+    def test_every_adapter_writes_a_hook_referencing_the_script(self):
+        for name, cls in ENTRIES.items():
+            if name == "fake":
+                continue
+            with self.subTest(entry=name), tempfile.TemporaryDirectory() as d, \
+                    mock.patch.dict(os.environ, ADAPTER_TEST_ENV):
+                a = cls()
+                sb = new_sandbox(a.lever, None, [], base=Path(d))
+                a.prepare(sb)
+                script = sb.config_root / "probe-hook.sh"
+                script.write_text("#!/bin/sh\nexit 0\n")
+                info = a.install_startup_hook(sb, script)
+                self.assertIsNotNone(info, name)
+                self.assertTrue(Path(info.config_path).exists(), info)
+                self.assertIn(str(script), Path(info.config_path).read_text())
+                self.assertTrue(info.mechanism)
+                self.assertIn(a.native_root, a.documented_roots, name)
+
+
+class ClaudeAdapterTests(unittest.TestCase):
+    def test_isolated_mode_trusts_the_repo(self):
+        from harness.claude import ClaudeAdapter
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KCAP_PROBE_CLAUDE_REAL_CONFIG": "0"}):
+            a = ClaudeAdapter()
+            sb = new_sandbox(a.lever, None, [], base=Path(d))
+            a.prepare(sb)
+            cfg = json.loads((sb.config_root / ".claude.json").read_text())
+            self.assertTrue(cfg["projects"][str(sb.repo)]["hasTrustDialogAccepted"])
+            argv = a.print_argv(sb, "hi")
+            self.assertEqual(argv[1:3], ["-p", "hi"])
+            self.assertEqual(argv[-2:], ["--setting-sources", "user"])
+            self.assertNotIn("KCAP_SKIP", sb.env)
+
+    def test_real_mode_uses_the_real_root_with_settings_flag(self):
+        from harness.claude import ClaudeAdapter
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KCAP_PROBE_CLAUDE_REAL_CONFIG": "1"}):
+            a = ClaudeAdapter()
+            sb = new_sandbox(a.lever, None, [], base=Path(d))
+            a.prepare(sb)
+            self.assertNotIn("CLAUDE_CONFIG_DIR", sb.env)
+            self.assertEqual(sb.env["KCAP_SKIP"], "1")
+            argv = a.print_argv(sb, "hi")
+            self.assertIn("--settings", argv)
+            self.assertEqual(argv[argv.index("--settings") + 1], str(sb.config_root / "settings.json"))
+            self.assertEqual(argv[argv.index("--setting-sources") + 1], "project")
+            info = a.install_startup_hook(sb, sb.config_root / "probe-hook.sh")
+            self.assertIn("real config root", info.mechanism)
 
 
 if __name__ == "__main__":
