@@ -33,7 +33,7 @@ namespace Capacitor.Cli.Commands;
 public sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
         HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers,
-        WorkingDirectory workdir) {
+        WorkingDirectory workdir, TimeProvider time) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
@@ -106,7 +106,7 @@ public sealed class UninstallCommand(
         // (launchctl bootout / systemctl disable --now), after which the plain
         // `daemon stop --yes` below mops up any non-service daemons.
         try {
-            var services = ServiceManagerFactory.ForCurrentOs(config, home);
+            var services = ServiceManagerFactory.ForCurrentOs(config, home, time);
             foreach (var id in services.ListInstalled()) {
                 if (services.Uninstall(id, out var error)) {
                     await Console.Out.WriteLineAsync($"  • Removed daemon service '{id}' ({services.Describe()})");
@@ -123,7 +123,7 @@ public sealed class UninstallCommand(
         // about to delete. --yes silences the multi-daemon confirmation so this
         // works non-interactively. A non-zero exit code means at least one
         // daemon couldn't be stopped; we leave the config dir alone in that case.
-        if (await new DaemonCommands(store, config, profiles, home, harnesses, binaries)
+        if (await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time)
                 .HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
 
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.

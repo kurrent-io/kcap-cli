@@ -226,7 +226,7 @@ sealed class ServiceVerify(
         LastViabilityReason  = null;
         LastBootRefusalToken = null;
 
-        using var txn = ServiceTxnLock.TryAcquire(store, serviceId, LockWait);
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, serviceId, LockWait, time);
 
         if (txn is null) {
             Say(VerifyExit.ContendedToken);
@@ -712,7 +712,7 @@ sealed class ServiceVerify(
 
         var serviceId   = spec.ServiceId;
         var op          = replace ? "replace" : "install";
-        using var txn = ServiceTxnLock.TryAcquire(store, serviceId, LockWait);
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, serviceId, LockWait, time);
 
         if (txn is null) {
             Say(VerifyExit.ContendedToken);
@@ -1008,7 +1008,7 @@ sealed class ServiceVerify(
         // The lock must be held BEFORE reading the plist and deciding "same profile, mine to
         // destroy" — reading first would let a concurrent install/verify on this same id replace
         // the unit in the window between that read and acquiring the lock.
-        using var retireTxn = ServiceTxnLock.TryAcquire(store, retireId, LockWait);
+        using var retireTxn = await ServiceTxnLock.TryAcquireAsync(store, retireId, LockWait, time);
         if (retireTxn is null) {
             Say(VerifyExit.ContendedToken);
             return VerifyExit.Contended;

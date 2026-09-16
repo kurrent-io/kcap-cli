@@ -19,7 +19,9 @@ namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, GitProviderRouter router) {
+        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
+    static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
+
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
     /// channel-based dispatcher in ImportChainsAsync and the TTY slot-row
@@ -679,10 +681,11 @@ class ImportCommand(
     /// indistinguishable from the process having died.
     /// </summary>
     static int WriteEmptyDiscoveryReport(
-            Action<ImportDiscoveryResult> sink, IReadOnlyList<HarnessId> scanned, DateTimeOffset? windowsAsOf) {
+            Action<ImportDiscoveryResult> sink, IReadOnlyList<HarnessId> scanned, DateTimeOffset? windowsAsOf,
+            TimeProvider time) {
         sink(new ImportDiscoveryResult(
             ImportDiscoverySummary.Build(
-                [], new Dictionary<string, (string, string)?>(), DiscoveryWindows(windowsAsOf)),
+                [], new Dictionary<string, (string, string)?>(), DiscoveryWindows(windowsAsOf ?? time.GetUtcNow())),
             scanned));
 
         return 0;
@@ -705,8 +708,8 @@ class ImportCommand(
     /// The same keys the first-run flow reports under, so the picker there and this command's own
     /// output cannot offer different windows.
     /// </summary>
-    internal static IReadOnlyList<ImportDiscoveryWindow> DiscoveryWindows(DateTimeOffset? now = null) {
-        var today = DateOnly.FromDateTime((now ?? DateTimeOffset.UtcNow).UtcDateTime);
+    internal static IReadOnlyList<ImportDiscoveryWindow> DiscoveryWindows(DateTimeOffset asOf) {
+        var today = DateOnly.FromDateTime(asOf.UtcDateTime);
 
         return [.. FirstRunImportWindows.All.Select(
             key => new ImportDiscoveryWindow(key, FirstRunImportWindows.Since(key, today)))];
@@ -773,7 +776,7 @@ class ImportCommand(
 
         // --- Sources ---
         // A caller that names none means Claude only.
-        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router)];
+        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time)];
 
         // --- No-source exit policy ---
         var available = sources.Where(s => s.IsAvailable).ToList();
@@ -790,7 +793,7 @@ class ImportCommand(
                 return 1;
             }
 
-            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, [], windowsAsOf);
+            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, [], windowsAsOf, time);
 
             display.Line("No coding-agent sessions found. Install Claude, Codex, or Cursor and try again.");
 
@@ -839,14 +842,14 @@ class ImportCommand(
             // Keep the message aligned with the dead branch lower in this method
             // (cleanup follow-up) so downstream tooling sees consistent output.
             if (filterSession is not null) {
-                if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf);
+                if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf, time);
 
                 await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
 
                 return 1;
             }
 
-            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf);
+            if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf, time);
 
             display.Line("No transcript files found.");
 
@@ -942,7 +945,7 @@ class ImportCommand(
                     async (cwd, _) => {
                         try {
                             // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
+                            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false);
                             repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
                         } catch {
                             repoByCwd[cwd] = null;
@@ -971,7 +974,7 @@ class ImportCommand(
                     sources.SelectMany((src, i) =>
                         discoveriesPerSource[i].Select(d => (d.SessionId, src.DiscoveryAge(d)))),
                     resolved,
-                    DiscoveryWindows(windowsAsOf)),
+                    DiscoveryWindows(windowsAsOf ?? time.GetUtcNow())),
                 ScannedVendors(sources)));
 
             return 0;
@@ -1184,7 +1187,7 @@ class ImportCommand(
 
         // Capture scope is decided here, over every source's output at once, and nowhere else.
         var captureScope = new CaptureScope(router, config, home,
-                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos);
+                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
 
         if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
 
@@ -1418,7 +1421,7 @@ class ImportCommand(
                             await concurrencyLimit.WaitAsync();
 
                             try {
-                                var rc = await new WhatsDoneCommand(config, profiles, harnesses, http)
+                                var rc = await new WhatsDoneCommand(config, profiles, harnesses, http, time)
                                     .GenerateForSessionAsync(baseUrl, sid, _ => { }, vnd.VendorId);
 
                                 if (rc == 0) Interlocked.Increment(ref summariesGenerated);
@@ -1526,7 +1529,7 @@ class ImportCommand(
             if (existing.Count > 0) {
                 display.BeginPhase("Making existing sessions private");
 
-                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing, display.Indented);
+                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing, time, display.Indented);
 
                 if (unprivatized.Count > 0) {
                     var blocked = unprivatized.ToHashSet(StringComparer.Ordinal);
@@ -1909,7 +1912,7 @@ class ImportCommand(
                     : "Sharing imported sessions with your workspace");
 
                 var lost = await SetVisibilityForAll(
-                    httpClient, baseUrl, [.. touched], explicitVisibility, display.Indented);
+                    httpClient, baseUrl, [.. touched], explicitVisibility, time, display.Indented);
 
                 visibilityFailures += lost.Count;
 
@@ -1957,7 +1960,7 @@ class ImportCommand(
                                 }
 
                                 seenS = sList.Count;
-                                await Task.Delay(250);
+                                await Task.Delay(ProgressPollGap, time);
                             }
 
                             try { await Task.WhenAll(backgroundTasks); } catch {
@@ -2720,7 +2723,7 @@ class ImportCommand(
 
             async ValueTask DetectOne(string cwd) {
                 // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
+                var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false);
                 repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
             }
 
@@ -2842,7 +2845,7 @@ class ImportCommand(
             }
 
             var result = await TitleGeneration.GenerateAsync(
-                userText, assistantText, _ => { }, profiles.Resolution.Profile, harnesses, vendor.VendorId);
+                userText, assistantText, time, _ => { }, profiles.Resolution.Profile, harnesses, vendor.VendorId);
 
             if (result is null) {
                 return TitleResult.Skipped;
@@ -2860,7 +2863,7 @@ class ImportCommand(
 
             var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.SessionTitlePayload);
             using var content     = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-            using var titleResp   = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-title", content);
+            using var titleResp   = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-title", content, time);
 
             return TitleResult.Generated;
         } catch {
@@ -3061,7 +3064,7 @@ class ImportCommand(
                     session.SessionId,
                     session.FilePath,
                     agentId: null,
-                    startLine: session.ResumeFromLine,
+                    startLine: session.ResumeFromLine, time: time,
                     progress: perSessionProgress,
                     vendor: session.Vendor,
                     failOnError: true
@@ -3083,7 +3086,7 @@ class ImportCommand(
 
                 using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
                 using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
 
                 if (!endResp.IsSuccessStatusCode) {
                     events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
@@ -3143,7 +3146,7 @@ class ImportCommand(
         if (cwd is not null) {
             // The imported session-start payload carries no PR fields (only owner/repo/branch/user),
             // so skip the PR/MR provider round-trip.
-            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false);
 
             if (repo is not null || codexRepo is not null) {
                 var repoNode = new JsonObject();
@@ -3180,7 +3183,7 @@ class ImportCommand(
                 session.Vendor.VendorId,
                 session.FilePath,
                 GitRepository.FindRoot,
-                root => RepositoryDetection.DetectRepositoryAsync(router, config, root, detectPullRequest: false));
+                root => RepositoryDetection.DetectRepositoryAsync(router, config, root, time, detectPullRequest: false));
 
             if (evidenceNode is not null) startHook["repository"] = evidenceNode;
         }
@@ -3194,7 +3197,7 @@ class ImportCommand(
         try {
             using var startContent = new StringContent(startHook.ToJsonString(), Encoding.UTF8, "application/json");
             using var startResp    = await httpClient.PostWithRetryAsync(
-                $"{baseUrl}/hooks/session-start/{session.Vendor.VendorId}", startContent, ct: ct, retryStatuses: true);
+                $"{baseUrl}/hooks/session-start/{session.Vendor.VendorId}", startContent, time, ct: ct, retryStatuses: true);
 
             if (!startResp.IsSuccessStatusCode) {
                 events.OnSessionErrored(slot, session.SessionId, $"session-start failed: HTTP {(int)startResp.StatusCode}");
@@ -3217,6 +3220,7 @@ class ImportCommand(
                 session.SessionId,
                 meta,
                 session.EncodedCwd,
+                time,
                 perSessionProgress,
                 session.Vendor
             );
@@ -3247,7 +3251,7 @@ class ImportCommand(
         try {
             using var endContent = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
             using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
 
             if (endResp.IsSuccessStatusCode) {
                 try {
@@ -3322,8 +3326,9 @@ class ImportCommand(
             HttpClient            httpClient,
             string                baseUrl,
             IReadOnlyList<string> sessionIds,
+            TimeProvider          time,
             string                indent = ""
-        ) => SetVisibilityForAll(httpClient, baseUrl, sessionIds, "none", indent);
+        ) => SetVisibilityForAll(httpClient, baseUrl, sessionIds, "none", time, indent);
 
     /// <summary>
     /// Failures are logged inline (one line per session) but never throw — the import already
@@ -3337,6 +3342,7 @@ class ImportCommand(
             string                baseUrl,
             IReadOnlyList<string> sessionIds,
             string                visibility,
+            TimeProvider          time,
             string                indent = ""
         ) {
         var lost = new List<string>();
@@ -3348,7 +3354,7 @@ class ImportCommand(
             try {
                 using var resp = await httpClient.PutWithRetryAsync(
                     $"{baseUrl}/api/sessions/{sessionId}/visibility",
-                    content,
+                    content, time,
                     retryStatuses: true
                 );
 

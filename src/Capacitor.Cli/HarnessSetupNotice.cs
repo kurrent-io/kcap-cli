@@ -27,7 +27,8 @@ internal static class HarnessSetupNotice {
     }
 
     public static async Task FlushAsync(
-            string command, ConfigRoot config, ProfileContext profiles, Func<HarnessRegistry> harnesses) {
+            string command, ConfigRoot config, ProfileContext profiles, Func<HarnessRegistry> harnesses,
+            TimeProvider time) {
         try {
             if (!ShouldNotify(command)) return;
             if (Console.IsErrorRedirected) return; // scripts/pipelines never see it
@@ -36,8 +37,8 @@ internal static class HarnessSetupNotice {
             // A delegate, so the guards above can return without the registry ever being built:
             // this runs on the way out of every invocation, most of which want no notice.
             var notice = HarnessNudgeEmitter.ResolveNotice(
-                harnesses(), new HarnessOfferStore(config),
-                profile?.DisableHarnessNudge is true, DateTimeOffset.UtcNow);
+                harnesses(), new HarnessOfferStore(config, time),
+                profile?.DisableHarnessNudge is true, time.GetUtcNow());
             if (notice is null) return;
 
             await Console.Error.WriteLineAsync();

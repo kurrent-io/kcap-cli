@@ -42,7 +42,7 @@ sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -187,7 +187,7 @@ sealed class CodexHookCommand(
             if (remaining <= TimeSpan.Zero)
                 return task.IsCompletedSuccessfully ? task.Result : null;
 
-            return await task.WaitAsync(remaining);
+            return await task.WaitAsync(remaining, budget.Time);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -301,7 +301,7 @@ sealed class CodexHookCommand(
             // CLI's top-level guard would exit 0 with empty stdout and Codex would
             // report "invalid hook output". Emit the
             // event-appropriate fallback here first, and record for diagnosis.
-            CrashReporter.Record(config, "hook", ex);
+            CrashReporter.Record(config, "hook", ex, clock.Time);
             EmitFallbackOutput(eventName);
             return 0;
         }
@@ -344,8 +344,8 @@ sealed class CodexHookCommand(
             node["workspace_root"] = workspaceRoot;
         }
 
-        SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString());
+        SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString(), clock.Time);
 
         // Repo exclusion runs here (not above the event switch) so that the
         // repository block is already populated by enrichment — RepoExclusion
@@ -355,7 +355,7 @@ sealed class CodexHookCommand(
         // take the existing disabled-session fast path at the top of Handle
         // without paying any git cost.
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             var excludedSessionId = TryGetString(node, "session_id");
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);
@@ -387,7 +387,7 @@ sealed class CodexHookCommand(
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining);
 
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
         var outcome = await _poster.PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
             sessionId: sessionId ?? "", route: "session-start/codex");
 
@@ -409,9 +409,9 @@ sealed class CodexHookCommand(
         // The static work-items nudge, resolved (availability-gated + opt-out) independently
         // of the lease-driven memory/guidelines fragment and merged only at the output layer.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
 
         await RunSessionStartHandshakeForTest(
             writeStdout: () => WriteSessionStartOutput(Console.Out, fragment, workItemsNudge),
@@ -437,7 +437,7 @@ sealed class CodexHookCommand(
 
     Task RunPostStdoutWork(
             HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome) {
-        var transcriptSpool = new TranscriptSpool(config);
+        var transcriptSpool = new TranscriptSpool(config, clock.Time);
 
         _ = _poster.DrainSpoolsAsync(spool, transcriptSpool, sessionId);
 
@@ -601,7 +601,7 @@ sealed class CodexHookCommand(
             return;
         }
 
-        using var cts = new CancellationTokenSource(cap);
+        using var cts = new CancellationTokenSource(cap, clock.Time);
 
         try {
             // The hook verb, so a lapse writes nothing to stderr: a per-turn Stop would spam it, and

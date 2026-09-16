@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// no <c>..</c>/separator can escape the directory (same discipline as
 /// <see cref="AgentPidRecordStore"/>). Plain file I/O — NativeAOT-safe.
 /// </summary>
-internal sealed class FailedLaunchLog(string stateDir, int maxBytes = 64 * 1024) {
+internal sealed class FailedLaunchLog(string stateDir, TimeProvider time, int maxBytes = 64 * 1024) {
     readonly string _dir = Path.Combine(stateDir, "agents", "failed");
 
     /// <summary>The retained failed-launch directory ({state}/agents/failed). Exposed for tests to
@@ -47,7 +47,7 @@ internal sealed class FailedLaunchLog(string stateDir, int maxBytes = 64 * 1024)
 
             var header = Encoding.UTF8.GetBytes(
                 $"# kcap failed-launch capture\n" +
-                $"# time:   {DateTimeOffset.UtcNow:O}\n" +
+                $"# time:   {time.GetUtcNow():O}\n" +
                 $"# agent:  {agentId}\n" +
                 $"# reason: {reason}\n" +
                 $"# --- last {tail.Length} bytes of PTY output follow ---\n");

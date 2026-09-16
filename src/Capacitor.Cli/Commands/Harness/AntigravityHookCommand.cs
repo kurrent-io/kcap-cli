@@ -40,7 +40,7 @@ sealed class AntigravityHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -149,7 +149,7 @@ sealed class AntigravityHookCommand(
             ["hook_event_name"] = "sessionStart",
             ["session_id"]      = sessionId,
             ["home_dir"]        = home.Path,
-            ["started_at"]      = DateTimeOffset.UtcNow.ToString("O")
+            ["started_at"]      = clock.Time.GetUtcNow().ToString("O")
         };
 
         if (cwd is not null) {
@@ -170,11 +170,11 @@ sealed class AntigravityHookCommand(
         if (activeProfile?.DefaultVisibility is { } visibility)
             forwarded["default_visibility"] = visibility;
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -202,7 +202,7 @@ sealed class AntigravityHookCommand(
         // unreachable server must never leave the once-per-conversation lease committed while the
         // fragment it paid for is still stuck behind the POST — the vendor kills the hook at its own
         // timeout, and that firing never retries.
-        var spool    = new HookSpool(config);
+        var spool    = new HookSpool(config, clock.Time);
         var postTask = _poster.PostOrSpoolAsync("session-start/antigravity", enriched, "antigravity-hook",
             spool, sessionId, route: "session-start/antigravity");
 
@@ -217,9 +217,9 @@ sealed class AntigravityHookCommand(
         // re-injects them as another persistent userMessage step.
         var workItemsNudge = IsFirstInvocation(payload)
             ? HarnessNudgeEmitter.Combine(
-                WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+                WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
                 PlansNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses))
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time))
             : null;
         WritePreInvocationOutput(stdout, fragment, workItemsNudge);
         await stdout.FlushAsync();
@@ -231,7 +231,7 @@ sealed class AntigravityHookCommand(
         HookPostOutcome outcome;
 
         try {
-            outcome = await postTask.WaitAsync(budget.Remaining);
+            outcome = await postTask.WaitAsync(budget.Remaining, budget.Time);
         } catch (TimeoutException) {
             outcome = spool.Append(sessionId, "session-start/antigravity", enriched)
                 ? HookPostOutcome.Spooled
@@ -253,7 +253,7 @@ sealed class AntigravityHookCommand(
             await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "antigravity"
-            ).WaitAsync(budget.Remaining);
+            ).WaitAsync(budget.Remaining, budget.Time);
         } catch (TimeoutException) {
             // Budget exhausted. The next PreInvocation ensures the watcher.
         }

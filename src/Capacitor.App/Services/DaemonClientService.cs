@@ -163,13 +163,13 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
     /// a concurrently-changing profile.
     /// </summary>
     public static DaemonClientService CreateResolved(
-            DaemonStore store, ResolvedProfile? profile,
+            DaemonStore store, ResolvedProfile? profile, TimeProvider time,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation) {
         var name = DaemonNameResolver.Resolve([], profile?.Profile?.Daemon?.Name);
 
         return new DaemonClientService(
             name,
-            ct => new LocalControlClient(store, name).RunAsync(ct),
+            ct => new LocalControlClient(store, name, time).RunAsync(ct),
             BuildStartDaemon(name, profile, runMutation)
         );
     }

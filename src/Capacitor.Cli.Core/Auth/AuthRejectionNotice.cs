@@ -86,7 +86,7 @@ public static class AuthRejectionNotice {
             : $"[kcap] {agentTag} {endpoint}: HTTP {code}";
 
     /// <summary>Pure classification of a raw store snapshot against the request's target server.</summary>
-    public static StoredCredentialState Classify(StoredTokens? stored, string targetBaseUrl) {
+    public static StoredCredentialState Classify(StoredTokens? stored, string targetBaseUrl, TimeProvider time) {
         if (stored is null) return StoredCredentialState.Missing;
 
         // An unbound (pre-upgrade) token is treated as bound — same rule as TokenStore's
@@ -95,10 +95,11 @@ public static class AuthRejectionNotice {
             return StoredCredentialState.WrongServer;
         }
 
-        return stored.IsExpired ? StoredCredentialState.Expired : StoredCredentialState.LooksValid;
+        return stored.IsExpiredAt(time.GetUtcNow()) ? StoredCredentialState.Expired : StoredCredentialState.LooksValid;
     }
 
-    public static string Render(StoredCredentialState state, StoredTokens? stored, string targetBaseUrl) =>
+    public static string Render(
+            StoredCredentialState state, StoredTokens? stored, string targetBaseUrl, TimeProvider time) =>
         state switch {
             StoredCredentialState.Missing => NotLoggedIn,
 
@@ -117,7 +118,7 @@ public static class AuthRejectionNotice {
             // superstition the incident produced.
             _ =>
                 $"The server rejected kcap's credentials (HTTP 401) even after re-reading the token store — " +
-                $"yet the stored login for {stored?.GitHubUsername} looks valid locally ({DescribeExpiry(stored)}). " +
+                $"yet the stored login for {stored?.GitHubUsername} looks valid locally ({DescribeExpiry(stored, time)}). " +
                 "This usually means the server's auth state changed (a restart or auth incident). " +
                 "Run 'kcap login' on the host shell to mint a fresh credential — restarting the daemon will not help. " +
                 "If a fresh login still hits this, the server is mid-incident; retry later.",
@@ -130,20 +131,21 @@ public static class AuthRejectionNotice {
     /// replacing an auth diagnosis with an IO stack trace.
     /// </summary>
     public static async Task<string> ForPersistentUnauthorizedAsync(
-            TokenStore store, string profile, string targetBaseUrl, CancellationToken ct = default) {
+            TokenStore store, string profile, string targetBaseUrl, TimeProvider time,
+            CancellationToken ct = default) {
         try {
             var stored = await store.LoadForProfileAsync(profile, ct);
 
-            return Render(Classify(stored, targetBaseUrl), stored, targetBaseUrl);
+            return Render(Classify(stored, targetBaseUrl, time), stored, targetBaseUrl, time);
         } catch {
             return NotLoggedIn;
         }
     }
 
-    static string DescribeExpiry(StoredTokens? stored) {
+    static string DescribeExpiry(StoredTokens? stored, TimeProvider time) {
         if (stored is null) return "expiry unknown";
 
-        var remaining = stored.ExpiresAt - DateTimeOffset.UtcNow;
+        var remaining = stored.ExpiresAt - time.GetUtcNow();
 
         return remaining.TotalHours >= 1
             ? $"expires in {remaining.TotalHours:F0}h"

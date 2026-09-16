@@ -5,9 +5,9 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Capacitor.Cli.Core.PullRequests;
 
-public sealed class PullRequestClient(HttpClient http, string serverUrl, TimeProvider? clock = null) : IPullRequestSource, IDisposable {
+public sealed class PullRequestClient(HttpClient http, string serverUrl, TimeProvider clock) : IPullRequestSource, IDisposable {
     readonly Uri _base = ServerOrigin(serverUrl);
-    readonly TimeProvider _time = clock ?? TimeProvider.System;
+    readonly TimeProvider _time = clock;
     readonly SemaphoreSlim _discoveryGate = new(1, 1);
     PullRequestCapability? _capability;
     long _discovered;

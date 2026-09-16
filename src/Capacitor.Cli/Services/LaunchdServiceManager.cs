@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Capacitor.Cli.Core;
 
@@ -6,6 +5,7 @@ namespace Capacitor.Cli.Services;
 
 sealed partial class LaunchdServiceManager(
     UserHome home,
+    TimeProvider time,
     UnitFileWriter? writeUnit = null,
     Func<string, string[], (int ExitCode, string StdOut, string StdErr)>? runProcess = null,
     Func<string, string[], TimeSpan, (int ExitCode, string StdOut, string StdErr, bool TimedOut)>? runBounded = null
@@ -187,7 +187,7 @@ sealed partial class LaunchdServiceManager(
     /// of it — rather than each getting the full budget (which would let the pair invade up to 2x
     /// the caller's forward remainder, including its separately reserved rollback budget).</summary>
     public bool StartBootstrapOnly(string serviceId, TimeSpan timeout, out string? error) {
-        var sw = Stopwatch.StartNew();
+        var started = time.GetTimestamp();
         var (probeExit, probeOut, probeErr, probeTimedOut) = RunCtl(timeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
         var probe = probeTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(probeExit, probeOut, probeErr);
 
@@ -196,7 +196,7 @@ sealed partial class LaunchdServiceManager(
             return false;
         }
 
-        var remaining = timeout - sw.Elapsed;
+        var remaining = timeout - time.GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero) {
             error = "launchctl bootstrap timed out and was terminated";
             return false;

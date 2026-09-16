@@ -68,7 +68,7 @@ sealed class GeminiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -262,7 +262,7 @@ sealed class GeminiHookCommand(
 
         // Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
         // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
-        var spool = new HookSpool(config);
+        var spool = new HookSpool(config, clock.Time);
 
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = profiles.Effective;
@@ -321,11 +321,11 @@ sealed class GeminiHookCommand(
             forwarded["default_visibility"] = visibility;
         }
 
-        SessionStartInventory.Stamp(forwarded, config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
+        SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
         if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }
@@ -354,9 +354,9 @@ sealed class GeminiHookCommand(
         // parses hook stdout unconditionally, with the exit code only setting its own `success` flag.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             PlansNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
         result.Write(RenderSessionStartPayload(fragment, workItemsNudge));
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;
@@ -391,10 +391,10 @@ sealed class GeminiHookCommand(
                         // it (subagent-stop). Restart-safe — driven off the on-disk files,
                         // not an in-memory set. Shared with the watcher's parent-exit fallback
                         // so a crash that bypasses this hook still finalizes subagents.
-                        await new GeminiSubagentTeardown(profiles, http, watchers).DrainAsync(sessionId, transcriptPath);
+                        await new GeminiSubagentTeardown(profiles, http, watchers, clock.Time).DrainAsync(sessionId, transcriptPath);
                     },
                     PreHookDrainCap
-                );
+                , clock.Time);
 
                 if (!drained) {
                     await Console.Error.WriteLineAsync(
@@ -446,7 +446,7 @@ sealed class GeminiHookCommand(
 
         if (cwd is not null) forwarded["cwd"] = cwd;
 
-        using var cts = new CancellationTokenSource(NotificationPostBudget);
+        using var cts = new CancellationTokenSource(NotificationPostBudget, clock.Time);
         try {
             // The hook verb, so a lapse writes nothing to stderr: stay quiet and skip the doomed
             // POST rather than spend a per-turn line on it.

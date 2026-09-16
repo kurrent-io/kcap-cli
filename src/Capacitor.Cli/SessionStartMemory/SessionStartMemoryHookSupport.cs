@@ -37,7 +37,7 @@ internal static class SessionStartMemoryHookSupport {
         var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(router, config, workdir, time);
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
-        var guidelines = new SessionStartGuidelinesLane(client);
+        var guidelines = new SessionStartGuidelinesLane(client, time);
         return new SessionStartCompositeContextProvider(resolver, memory, guidelines, time);
     }
 

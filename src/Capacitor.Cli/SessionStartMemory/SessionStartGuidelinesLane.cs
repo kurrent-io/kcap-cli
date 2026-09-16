@@ -17,6 +17,7 @@ namespace Capacitor.Cli.SessionStartMemory;
 /// </summary>
 internal sealed class SessionStartGuidelinesLane(
     Func<CancellationToken, Task<HttpClient>> client,
+    TimeProvider time,
     Action<string>? diagnostic = null) {
 
     /// <summary>
@@ -30,7 +31,7 @@ internal sealed class SessionStartGuidelinesLane(
         if (scope.RepoHash is null) return SessionStartMemoryContextResult.Empty;
 
         var outcome = await SessionStartContextFetch.FetchAsync(
-            await client(ct), BuildUrl(request.BaseUrl, scope.RepoHash), ct);
+            await client(ct), BuildUrl(request.BaseUrl, scope.RepoHash), time, ct);
 
         if (outcome.Status == HttpStatusCode.NoContent) return SessionStartMemoryContextResult.Empty;
         if (outcome.Status == HttpStatusCode.BadRequest) {

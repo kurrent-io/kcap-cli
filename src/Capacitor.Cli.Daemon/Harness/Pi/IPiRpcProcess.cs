@@ -106,6 +106,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
 
     readonly Process                 _process;
     readonly ILogger                 _logger;
+    readonly TimeProvider            _time;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
     readonly Lock                    _diagnosticsGate = new();
@@ -120,14 +121,15 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
     /// begins, so a plain volatile read here is already coherent with that write.</summary>
     bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
-    internal PiRpcProcess(ProcessStartInfo psi, ILogger logger)
+    internal PiRpcProcess(ProcessStartInfo psi, ILogger logger, TimeProvider time)
         : this(Process.Start(psi) ?? throw new InvalidOperationException(
                    $"pi_rpc_spawn_failed: '{psi.FileName}' did not start (Process.Start returned null)."),
-               logger) { }
+               logger, time) { }
 
-    internal PiRpcProcess(Process process, ILogger logger) {
+    internal PiRpcProcess(Process process, ILogger logger, TimeProvider time) {
         _process = process;
         _logger  = logger;
+        _time    = time;
         Pid      = SafePid(process);
 
         // Deliberately NOT closed — unlike AgyTurnProcess's exec-per-turn child, this process backs
@@ -238,7 +240,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
     public async Task WaitForExitAsync(TimeSpan? timeout = null) {
         try {
             if (timeout is { } t) {
-                using var cts = new CancellationTokenSource(t);
+                using var cts = new CancellationTokenSource(t, _time);
 
                 try {
                     await _process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
@@ -295,7 +297,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
         }
 
         try {
-            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2), _time).ConfigureAwait(false);
         } catch {
             // DrainStderrAsync already swallows its expected exceptions; never let a stuck drain hang
             // or fault a dispose.

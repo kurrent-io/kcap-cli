@@ -24,7 +24,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </list>
 /// </summary>
 internal sealed class OrphanReaper(
-        AgentPidRecordStore store, string daemonId, string currentEpoch, ILogger logger,
+        AgentPidRecordStore store, string daemonId, string currentEpoch, ILogger logger, TimeProvider time,
         Action<string, string, string?, string?>? onRecordResolved = null,
         MarkerCandidateStore? markerStore = null,
         Action<string, string>? onMarkerResolved = null) {
@@ -138,7 +138,7 @@ internal sealed class OrphanReaper(
             if (string.Equals(record.DaemonEpoch, currentEpoch, StringComparison.Ordinal)) continue;
 
             try {
-                var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, logger, ct);
+                var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, logger, time, ct);
                 if (confirmedGone) {
                     // Phase B2-b (sequenced-settlement design §4.2.4): ledger-append BEFORE
                     // source-deletion. A crash between the two leaves a committed entry + leftover
@@ -154,14 +154,14 @@ internal sealed class OrphanReaper(
                 } else if (record.IdentityKind == PidIdentityKind.IdentityUnavailable) {
                     logger.LogWarning(
                         "OrphanReaper: identity_unavailable record for {AgentId} (pid {Pid}, age {Age}) unresolved by the record pass — the env-marker scan may still reap it on Linux; macOS requires a manual kill",
-                        record.AgentId, record.Pid, DateTimeOffset.UtcNow - record.SpawnedAt);
+                        record.AgentId, record.Pid, time.GetUtcNow() - record.SpawnedAt);
                 } else if (OperatingSystem.IsMacOS()) {
                     // Present but Ambiguous on macOS almost always means a cross-scheme mismatch
                     // (a pre-M1-A tk: record compared against the now-mac:-producing live
                     // process) — the spec's "legacy_unresolvable" residual.
                     logger.LogWarning(
                         "OrphanReaper: legacy_unresolvable record for {AgentId} (pid {Pid}, age {Age}) — spared every pass (cross-scheme token); manually verify and kill the pid",
-                        record.AgentId, record.Pid, DateTimeOffset.UtcNow - record.SpawnedAt);
+                        record.AgentId, record.Pid, time.GetUtcNow() - record.SpawnedAt);
                 }
                 // otherwise spared (unreadable env) → retain the record for the next tick
             } catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -259,7 +259,7 @@ internal sealed class OrphanReaper(
         if (OperatingSystem.IsLinux())
             CurrentDiscovery = captureFailed
                 ? new StartupDiscovery(MarkerScanState.Failed, CurrentDiscovery.LastSuccessfulScanAt)
-                : new StartupDiscovery(MarkerScanState.Complete, DateTimeOffset.UtcNow);
+                : new StartupDiscovery(MarkerScanState.Complete, time.GetUtcNow());
     }
 
     /// <summary>Resolve a marker-candidate source through the asymmetric matrix. Because a recordless
@@ -287,7 +287,7 @@ internal sealed class OrphanReaper(
         if (!tripleMatches) return; // (c) pending
 
         // (b) alive + triple still matches -> kill; on CONFIRMED death, resolve.
-        if (await ProcessReaper.ReapByMarkerAsync(c.Pid, token!, c.AgentId, logger, ct)) EmitAndClear(c);
+        if (await ProcessReaper.ReapByMarkerAsync(c.Pid, token!, c.AgentId, logger, time, ct)) EmitAndClear(c);
         else logger.LogWarning("OrphanReaper: marker kill of {AgentId} (pid {Pid}) not confirmed — retry next tick", c.AgentId, c.Pid);
     }
 

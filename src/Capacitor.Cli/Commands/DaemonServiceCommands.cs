@@ -11,10 +11,11 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 sealed class DaemonServiceCommands(
         DaemonStore store, ConfigRoot root, ProfileContext profiles, IServiceManager manager, string id,
-        UserHome home) {
+        UserHome home, TimeProvider time) {
     /// <summary>Resolves the OS service manager and the service id once, then runs one verb.</summary>
     public static async Task<int> DispatchAsync(
-            DaemonStore store, ConfigRoot root, ProfileContext profiles, UserHome home, string[] args) {
+            DaemonStore store, ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time,
+            string[] args) {
         if (args.Length == 0) return Usage();
 
         var action  = args[0];
@@ -23,7 +24,7 @@ sealed class DaemonServiceCommands(
 
         IServiceManager manager;
         try {
-            manager = ServiceManagerFactory.ForCurrentOs(root, home);
+            manager = ServiceManagerFactory.ForCurrentOs(root, home, time);
         } catch (PlatformNotSupportedException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
             return 1;
@@ -31,7 +32,7 @@ sealed class DaemonServiceCommands(
 
         var verbs = new DaemonServiceCommands(
             store, root, profiles, manager,
-            DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName)), home);
+            DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName)), home, time);
 
         return action switch {
             "install"   => await verbs.Install(rest, startNow: !noStart),
@@ -49,11 +50,11 @@ sealed class DaemonServiceCommands(
     /// manager</b> — the caller renders that as its own refusal rather than as a failed transaction.
     /// </summary>
     internal static async Task<ServiceEnsureJson?> FlowEnsureAsync(
-            ConfigRoot root, ProfileContext profiles, UserHome home) {
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time) {
         DaemonServiceCommands verbs;
 
         try {
-            verbs = ForFlow(root, profiles, home);
+            verbs = ForFlow(root, profiles, home, time);
         } catch (PlatformNotSupportedException) {
             return null;
         }
@@ -65,9 +66,10 @@ sealed class DaemonServiceCommands(
 
     /// <summary>The flow's own resolution of the manager and the service id, matching
     /// <see cref="DispatchAsync"/>'s with no command-line arguments to draw a daemon name from.</summary>
-    static DaemonServiceCommands ForFlow(ConfigRoot root, ProfileContext profiles, UserHome home) =>
-        new(DaemonStore.FromEnvironment(), root, profiles, ServiceManagerFactory.ForCurrentOs(root, home),
-            DaemonStore.Sanitize(DaemonNameResolver.Resolve([], profiles.DaemonName)), home);
+    static DaemonServiceCommands ForFlow(
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time) =>
+        new(DaemonStore.FromEnvironment(), root, profiles, ServiceManagerFactory.ForCurrentOs(root, home, time),
+            DaemonStore.Sanitize(DaemonNameResolver.Resolve([], profiles.DaemonName)), home, time);
 
     /// <summary>
     /// The <c>ExtraArgs</c> baked into a service unit, from the raw <c>--max-agents</c> flag value.
@@ -170,8 +172,8 @@ sealed class DaemonServiceCommands(
             // install one whose daemon would exit config-invalid and never satisfy readiness.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
             var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
-                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, t),
-                TimeProvider.System, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable);
+                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
+                time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable);
             var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
             if (exit != VerifyExit.Ok) return exit;
         } else {
@@ -234,7 +236,7 @@ sealed class DaemonServiceCommands(
     /// null lock → the same coded-contention message, exit 1, without calling <c>Install</c>. Internal so
     /// the lock-contention path is testable without <see cref="UnitIdentity.ResolveDaemonBinary"/> in the loop.</summary>
     internal async Task<int> InstallPlain(ServiceSpec spec, bool startNow) {
-        using var txn = ServiceTxnLock.TryAcquire(store, spec.ServiceId, TimeSpan.FromSeconds(10));
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, spec.ServiceId, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
             await Console.Error.WriteLineAsync($"Another service operation is in progress for '{spec.ServiceId}'. Try again shortly.");
@@ -246,7 +248,7 @@ sealed class DaemonServiceCommands(
     }
 
     async Task<int> Uninstall() {
-        using var txn = ServiceTxnLock.TryAcquire(store, id, TimeSpan.FromSeconds(10));
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
             await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
@@ -279,7 +281,7 @@ sealed class DaemonServiceCommands(
     }
 
     async Task<int> StartPlain() {
-        using var txn = ServiceTxnLock.TryAcquire(store, id, TimeSpan.FromSeconds(10));
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
             await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
@@ -301,7 +303,7 @@ sealed class DaemonServiceCommands(
     /// </summary>
     async Task<int> StartVerified() {
         var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
-            n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, t), TimeProvider.System,
+            n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
             gateEnv: Environment.GetEnvironmentVariable);
         var exit = await engine.StartVerifiedAsync(id);
 
@@ -316,7 +318,7 @@ sealed class DaemonServiceCommands(
     }
 
     async Task<int> Stop() {
-        using var txn = ServiceTxnLock.TryAcquire(store, id, TimeSpan.FromSeconds(10));
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
             await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
@@ -521,8 +523,8 @@ sealed class DaemonServiceCommands(
         if (manager is LaunchdServiceManager) {
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
             var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
-                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, t),
-                TimeProvider.System, profileViable: () => profileUrlValid, gateEnv: EnsureGateEnv(profileName, serverUrl));
+                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
+                time, profileViable: () => profileUrlValid, gateEnv: EnsureGateEnv(profileName, serverUrl));
             exit = await engine.InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current());
             // InstallVerifiedAsync never returns StartGate — its gated refusals are viability/drift —
             // so gateReason stays null here and StartGate recovery never fires from the install arm.
@@ -580,8 +582,8 @@ sealed class DaemonServiceCommands(
         int exit;
         if (manager is LaunchdServiceManager) {
             var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
-                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, t),
-                TimeProvider.System, gateEnv: EnsureGateEnv(profileName, serverUrl));
+                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
+                time, gateEnv: EnsureGateEnv(profileName, serverUrl));
             exit = await engine.StartVerifiedAsync(id);
             gateReason       = engine.LastGateReason;
             bootRefusalToken = engine.LastBootRefusalToken;

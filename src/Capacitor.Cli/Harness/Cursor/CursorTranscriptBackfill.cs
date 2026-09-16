@@ -43,6 +43,7 @@ public static class CursorTranscriptBackfill {
             string            sessionId,
             string?           transcriptPath,
             Func<bool>        budget,
+            TimeProvider      time,
             CancellationToken ct,
             string?           agentId    = null,
             bool              finalDrain = false
@@ -61,7 +62,7 @@ public static class CursorTranscriptBackfill {
         // attachment the Cursor normalizer needs to see BEFORE the matching user transcript line
         // is normalized. While the barrier is pending, hold delivery entirely (retry next
         // invocation) rather than risk normalizing ahead of the attachment.
-        if (markers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+        if (markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound)) {
             return new Stats(0, false);
         }
 
@@ -74,6 +75,7 @@ public static class CursorTranscriptBackfill {
         try {
             using var resp = await client.GetOnceAsync(
                 watermarkUrl,
+                time,
                 WatermarkTimeout,
                 ct
             );
@@ -124,7 +126,7 @@ public static class CursorTranscriptBackfill {
         // here rather than let the transcript line overtake the attachment it depends on, or
         // escape the quarantine the watcher just imposed.
         if (markers.IsQuarantined(sessionId)
-         || markers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+         || markers.BarrierPending(sessionId, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound)) {
             return new Stats(0, false);
         }
 
@@ -146,6 +148,7 @@ public static class CursorTranscriptBackfill {
             resp2 = await client.PostOnceAsync(
                 $"{baseUrl}/hooks/transcript",
                 content,
+                time,
                 BatchPostTimeout,
                 ct
             );

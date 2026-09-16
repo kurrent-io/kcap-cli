@@ -33,6 +33,7 @@ static class SetupDaemonService {
             ConfigRoot                       root,
             ProfileContext                   saved,
             UserHome                         home,
+            TimeProvider                     time,
             Func<Task<ServiceEnsureJson?>>?  ladder = null,
             CancellationToken                ct     = default) {
         // Polled fresh rather than read off the leg's last view: the browser can still be open, so the
@@ -50,7 +51,7 @@ static class SetupDaemonService {
             "  [dim]The browser asked to run the agent daemon as a service, so this machine stays "
           + "reachable.[/]");
 
-        var result = await PerformAsync(root, saved, home, ladder);
+        var result = await PerformAsync(root, saved, home, time, ladder);
 
         for (var attempt = 0; attempt < ReportAttempts; attempt++) {
             var reported = await channel.ReportMachineActionAsync(
@@ -68,9 +69,10 @@ static class SetupDaemonService {
     }
 
     static async Task<FirstRunMachineActionResult> PerformAsync(
-            ConfigRoot root, ProfileContext saved, UserHome home, Func<Task<ServiceEnsureJson?>>? ladder) {
+            ConfigRoot root, ProfileContext saved, UserHome home, TimeProvider time,
+            Func<Task<ServiceEnsureJson?>>? ladder) {
         try {
-            var run = ladder ?? (() => DaemonServiceCommands.FlowEnsureAsync(root, saved, home));
+            var run = ladder ?? (() => DaemonServiceCommands.FlowEnsureAsync(root, saved, home, time));
 
             return await run() is { } outcome
                 ? EnsureFlowMap.Map(outcome)

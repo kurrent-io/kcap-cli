@@ -15,11 +15,11 @@ public static class TimeBudget {
     /// forever. The server's own StopAndDrain plus the "kcap import" recovery hint cover
     /// anything an abandoned drain didn't finish.
     /// </summary>
-    public static async Task<bool> RunCappedAsync(Func<Task> work, TimeSpan cap) {
+    public static async Task<bool> RunCappedAsync(Func<Task> work, TimeSpan cap, TimeProvider time) {
         var workTask = work();
 
         using var cts       = new CancellationTokenSource();
-        var       delayTask = Task.Delay(cap, cts.Token);
+        var       delayTask = Task.Delay(cap, time, cts.Token);
 
         await Task.WhenAny(workTask, delayTask);
         await cts.CancelAsync(); // stop the timer either way

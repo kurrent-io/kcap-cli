@@ -12,7 +12,7 @@ namespace Capacitor.Cli;
 
 public sealed partial class WatcherManager(
         ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, IProcessStarter starter,
-        WatcherPaths paths, IWatcherSpawner spawner) {
+        WatcherPaths paths, IWatcherSpawner spawner, TimeProvider time) {
     // The one URL this process resolved. No member takes one: a watcher spawned against a different
     // server than the hook that spawned it would stream a session nothing on this side can see.
     // Nullable because an offline invocation resolves none — the IsPostable guards refuse that.
@@ -116,7 +116,7 @@ public sealed partial class WatcherManager(
                 }
 
                 // Wait up to 5 seconds for graceful exit
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
 
                 try {
                     await process.WaitForExitAsync(cts.Token);
@@ -227,7 +227,7 @@ public sealed partial class WatcherManager(
             return false;
         }
 
-        var now       = DateTimeOffset.UtcNow;
+        var now       = time.GetUtcNow();
         var lastBeat  = WatcherHeartbeat.Read(paths.HeartbeatFile(key));
         // A missing started marker (shouldn't happen in practice — the spawner always
         // writes it) falls back to "now", i.e. the freshest possible grace window rather
@@ -436,7 +436,7 @@ public sealed partial class WatcherManager(
 
             try {
                 var query = agentId is not null ? $"?agentId={agentId}" : "";
-                var resp  = await httpClient.GetWithRetryAsync($"{Url}/api/sessions/{sessionId}/last-line{query}");
+                var resp  = await httpClient.GetWithRetryAsync($"{Url}/api/sessions/{sessionId}/last-line{query}", time);
 
                 if (resp.IsSuccessStatusCode && resp.StatusCode != System.Net.HttpStatusCode.NoContent) {
                     var json = await resp.Content.ReadAsStringAsync();
@@ -500,7 +500,7 @@ public sealed partial class WatcherManager(
             using var content   = new StringContent(batchJson, Encoding.UTF8, "application/json");
 
             try {
-                var resp = await httpClient.PostWithRetryAsync($"{Url}/hooks/transcript", content);
+                var resp = await httpClient.PostWithRetryAsync($"{Url}/hooks/transcript", content, time);
 
                 if (resp.IsSuccessStatusCode) {
                     await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: sent {newLines.Count} line(s)");

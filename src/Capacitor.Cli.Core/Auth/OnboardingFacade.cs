@@ -151,6 +151,7 @@ public sealed class OnboardingFacade(
         ITenantProvisioner?                                         provisioner,
         CliTelemetry                                                telemetry,
         AuthEndpoints                                               endpoints,
+        TimeProvider                                                time,
         Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit) {
     /// <summary>Test seam for the one WorkOS effect with no HTTP surface (loopback browser + OidcClient).</summary>
     internal Func<CancellationToken, Task<WorkOSAuthResponse?>>? WorkOSOrglessLogin { get; init; }
@@ -231,12 +232,12 @@ public sealed class OnboardingFacade(
             HttpClient http, AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
         var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
             github, config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice, launcher,
-            telemetry.Join, ct, progress);
+            telemetry.Join, time, ct, progress);
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
         var exchanged = await OAuthLoginFlow.ExchangeAsync(
-            http, target.ServerUrl, accessToken, config.Provider, target.Profile, progress, ct);
+            http, target.ServerUrl, accessToken, config.Provider, target.Profile, progress, time, ct);
 
         if (exchanged is null) return Stop("Token exchange failed.", ct);
 
@@ -249,7 +250,7 @@ public sealed class OnboardingFacade(
         // collaborator is attached — see the ownership guard, which enumerates every site.
         var authenticated = await OAuthLoginFlow.WorkOSTokensForServerAsync(
             workos, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
-            telemetry.Join, WorkOSBrowser, ct, progress,
+            telemetry.Join, WorkOSBrowser, ct, progress, time,
             WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase, KeyWatcher);
 
         if (authenticated is null) return Stop("WorkOS sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
@@ -302,7 +303,7 @@ public sealed class OnboardingFacade(
                 ? WorkOSOrglessLogin(ct)
                 // Org-less: the sign-in picks the organization, and discovery reconciles it afterwards.
                 : OAuthLoginFlow.AcquireWorkOSAsync(
-                    workos, clientId, organizationId: null, forceDevice, launcher, telemetry.Join,
+                    workos, clientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
                     browser: null,
                     apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
                     ct: ct, progress: progress, keys: KeyWatcher),
@@ -311,6 +312,7 @@ public sealed class OnboardingFacade(
             orglessRefresh: async (refreshToken, refreshCt) =>
                 (await workos.RefreshAsync(clientId, refreshToken, refreshCt)).Response,
             provisioner: provisioner,
+            time: time,
             ct: ct,
             progress: progress,
             // Bearer and channel are filled in by discovery once the login has answered; only the
@@ -321,7 +323,8 @@ public sealed class OnboardingFacade(
                 PickerVersion: proxyConfig.CliPickerVersion));
 
         return flow switch {
-            WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(root, store, ready, progress, beforeCommit, ct),
+            WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(
+                                                        root, store, ready, progress, beforeCommit, time, ct),
             WorkOSDiscoveryFlow.Retarget retarget => new AuthResult.Retarget(retarget.ServerInput),
             WorkOSDiscoveryFlow.Failed failed     => Stop(failed.Message, ct, failed.Reason),
             _                                     => Stop("No Capacitor tenants are linked to your account.", ct,
@@ -337,7 +340,7 @@ public sealed class OnboardingFacade(
 
         var accessToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
             github, proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice, launcher,
-            telemetry.Join, ct, progress);
+            telemetry.Join, time, ct, progress);
 
         if (accessToken is null) return Stop("GitHub sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
@@ -384,7 +387,7 @@ public sealed class OnboardingFacade(
             try {
                 var exchanged = await OAuthLoginFlow.ExchangeAsync(
                     http, AppConfig.NormalizeUrl(tenant.Origin), githubAccessToken, AuthProvider.GitHubApp,
-                    tenant.ProfileName, progress, CancellationToken.None);
+                    tenant.ProfileName, progress, time, CancellationToken.None);
 
                 if (exchanged is null) {
                     WarnExchangeFailed(tenant.ProfileName);

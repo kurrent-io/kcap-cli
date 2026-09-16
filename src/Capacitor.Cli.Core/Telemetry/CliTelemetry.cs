@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// an exception escaping to the NativeAOT runtime aborts the process (see Program.cs), so a
 /// telemetry bug must never become a crash-on-every-command regression.
 ///
-/// <para>One facade per process entry, constructed by <see cref="Start(TelemetryStartup, ConfigRoot)"/> and injected. A process
+/// <para>One facade per process entry, constructed by <see cref="Start(TelemetryStartup, ConfigRoot, TimeProvider)"/> and injected. A process
 /// that starts a second one — an MCP server re-deriving its startup under the reportable
 /// <c>mcp-server</c> pseudo-command — passes the same <see cref="TelemetryStartup"/> forward, so
 /// suppression and the resolved server travel as values rather than as state the first facade left
@@ -23,6 +23,7 @@ public sealed class CliTelemetry {
     static readonly TimeSpan FlushBudget = TimeSpan.FromSeconds(1.5);
 
     readonly ITelemetrySink _sink;
+    readonly TimeProvider   _time;
     readonly string         _command;
     readonly string?        _deviceId;
     readonly string?        _orgGroup;
@@ -43,8 +44,9 @@ public sealed class CliTelemetry {
 
     CliTelemetry(
             ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
-            bool debug, string signupUrl, JsonObject shared) {
+            bool debug, string signupUrl, JsonObject shared, TimeProvider time) {
         _sink     = sink;
+        _time     = time;
         _command  = command;
         _deviceId = deviceId;
         _orgGroup = orgGroup;
@@ -64,9 +66,9 @@ public sealed class CliTelemetry {
     public SetupFunnel Funnel { get; }
 
     /// <summary>A facade that is off: nothing resolved, nothing minted, nothing captured.</summary>
-    public static CliTelemetry Disabled() =>
+    public static CliTelemetry Disabled(TimeProvider time) =>
         new(new NullTelemetrySink(), command: "", enabled: false, deviceId: null, orgGroup: null,
-            debug: false, AuthEndpoints.DefaultSignupUrl, new JsonObject());
+            debug: false, AuthEndpoints.DefaultSignupUrl, new JsonObject(), time);
 
     /// <summary>
     /// Resolves the opt-out decision, mints the device id and builds the shared property bag,
@@ -77,23 +79,24 @@ public sealed class CliTelemetry {
     /// shared bag is complete. Keeping them apart is what lets a container resolve this without
     /// printing a disclosure or consuming a once-per-device marker.</para>
     /// </summary>
-    public static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config) =>
-        Start(startup, config,
-            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint));
+    public static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config, TimeProvider time) =>
+        Start(startup, config, time,
+            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time));
 
     /// <param name="sink">
     /// Invoked only when the facade comes up live, so a run that is opted out builds no HTTP
     /// handler and touches no spool. Internal because the endpoint a run ships to is this class's
     /// to decide, not a caller's; the test assemblies reach it through their grant.
     /// </param>
-    internal static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config, Func<ITelemetrySink> sink) {
+    internal static CliTelemetry Start(
+            TelemetryStartup startup, ConfigRoot config, TimeProvider time, Func<ITelemetrySink> sink) {
         try {
             // An app-spawned child: no notice, no device id, no events.
-            if (startup.Suppressed) return Disabled();
+            if (startup.Suppressed) return Disabled(time);
 
             var enabled = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled
                        && CommandEvents.IsReportable(startup.Command);
-            if (!enabled) return Disabled();
+            if (!enabled) return Disabled(time);
 
             var version = Version();
 
@@ -118,7 +121,8 @@ public sealed class CliTelemetry {
                     ["is_ci"]         = TelemetryEnvironment.IsCi(),
                     ["is_headless"]   = Auth.HeadlessEnvironment.IsHeadless(),
                     ["has_server"]    = startup.ServerUrl is not null,
-                });
+                },
+                time);
 
             // Minted here rather than in Announce so the key is in the shared bag before ANY event
             // can be captured — cli_first_run included, which is once per device and unrepairable by
@@ -130,7 +134,7 @@ public sealed class CliTelemetry {
 
             return telemetry;
         } catch {
-            return Disabled();
+            return Disabled(time);
         }
     }
 
@@ -143,7 +147,7 @@ public sealed class CliTelemetry {
                 foreach (var (key, value) in _shared)
                     properties[key] ??= value?.DeepClone();
 
-            var e = new TelemetryEvent(name, properties, DateTimeOffset.UtcNow);
+            var e = new TelemetryEvent(name, properties, _time.GetUtcNow());
 
             if (_debug) Console.Error.WriteLine($"[telemetry] {name} {DebugRender(properties)}");
 

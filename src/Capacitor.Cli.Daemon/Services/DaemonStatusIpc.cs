@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// trust as every other local frame.
 internal sealed class DaemonStatusIpc(
     DaemonConfig config, AgentOrchestrator orchestrator, ServerConnection connection,
-    DaemonStatusNotifier notifier) {
+    DaemonStatusNotifier notifier, TimeProvider time) {
 
     /// Coalesces a pulse burst into one trailing snapshot. A tuning constant, not a wire
     /// contract; tests shrink it.
@@ -43,7 +43,7 @@ internal sealed class DaemonStatusIpc(
                 AfterSnapshotForTest?.Invoke();
                 await FrameCodec.WriteAsync(stream, LocalFrame.StatusJson(FrameType.DaemonStatus, json), cts.Token);
                 await notifier.WaitBeyondAsync(seen, cts.Token);
-                await Task.Delay(Debounce, cts.Token);
+                await Task.Delay(Debounce, time, cts.Token);
             }
         } catch (OperationCanceledException) {
             // subscriber EOF or daemon shutdown — either way the connection just closes

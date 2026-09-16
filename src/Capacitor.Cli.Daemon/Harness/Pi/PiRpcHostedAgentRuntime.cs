@@ -94,6 +94,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     readonly string        _agentId;
     readonly string?       _requestedModel;
     readonly string        _cwd;
+    readonly TimeProvider  _time;
     readonly TimeSpan      _readyDeadline;
     readonly TimeSpan      _stopGrace;
     readonly Action?       _onDisposed;
@@ -177,6 +178,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             string        agentId,
             string?       requestedModel,
             string        cwd,
+            TimeProvider  time,
             TimeSpan?     readyDeadline = null,
             TimeSpan?     stopGrace     = null,
             Action?       onDisposed    = null,
@@ -186,6 +188,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         _agentId        = agentId;
         _requestedModel = requestedModel;
         _cwd            = cwd;
+        _time           = time;
         _readyDeadline  = readyDeadline ?? DefaultReadyDeadline;   // never absent — rule (a)
         _stopGrace      = stopGrace ?? DefaultStopGrace;
         _onDisposed     = onDisposed;
@@ -367,7 +370,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         try {
             await _process.WriteLineAsync(PiRpc.GetStateCommand(InitStateCommandId), _ownerToken).ConfigureAwait(false);
 
-            var response = await waiter.Task.WaitAsync(_readyDeadline).ConfigureAwait(false);
+            var response = await waiter.Task.WaitAsync(_readyDeadline, _time).ConfigureAwait(false);
 
             ApplyState(response);
         } catch (Exception ex) {
@@ -759,7 +762,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         // a dispose. The handshake is joined too so its own `finally` cannot run against a disposed
         // process.
         try {
-            await Task.WhenAll(_pumpTask, _handshakeTask).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await Task.WhenAll(_pumpTask, _handshakeTask).WaitAsync(TimeSpan.FromSeconds(5), _time).ConfigureAwait(false);
         } catch (Exception ex) {
             _logger.LogDebug(ex, "Pi: the read pump did not join within the dispose budget (agentId={AgentId}).", _agentId);
         }

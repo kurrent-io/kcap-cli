@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Harness.Claude;
 /// <see cref="ImportSessionAsync"/> is never the entry point — <c>ImportChainsAsync</c> is.
 /// </summary>
 internal sealed class ClaudeImportSource(
-        ConfigRoot config, string projectsDir, GitProviderRouter router) : IImportSource {
+        ConfigRoot config, string projectsDir, GitProviderRouter router, TimeProvider time) : IImportSource {
     readonly string _projectsDir = projectsDir;
 
     public HarnessId Vendor => HarnessId.Claude;
@@ -92,7 +92,7 @@ internal sealed class ClaudeImportSource(
             router,
             config,
             ctx.Home,
-            ctx.HttpClient,
+            ctx.HttpClient, time,
             ctx.BaseUrl,
             transcripts,
             ctx.MinLines,

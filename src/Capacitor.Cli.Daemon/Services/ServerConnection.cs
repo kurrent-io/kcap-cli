@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +15,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort {
     readonly HubConnection             _hub;
+    readonly TimeProvider _time;
     readonly DaemonConfig              _config;
     readonly TokenStore                _tokens;
     readonly ILogger<ServerConnection> _logger;
@@ -198,7 +198,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public ServerConnection(
             DaemonConfig config, TokenStore tokens, ILoggerFactory loggerFactory,
-            ILogger<ServerConnection> logger, DaemonStatusNotifier? statusNotifier = null) {
+            ILogger<ServerConnection> logger, TimeProvider time, DaemonStatusNotifier? statusNotifier = null) {
+        _time            = time;
         _config          = config;
         _tokens          = tokens;
         _logger          = logger;
@@ -336,7 +337,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _terminalSender = new TerminalOutputSender(
             (agentId, base64, ct) => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64), ct),
             isConnected: () => _hub.State == HubConnectionState.Connected,
-            logger
+            logger,
+            _time
         );
     }
 
@@ -409,7 +411,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     CancellationTokenSource?         _terminalSenderCts;
 
     /// <summary>
-    /// <see cref="Stopwatch.GetTimestamp"/> taken each time the hub reaches a
+    /// A monotonic timestamp taken each time the hub reaches a
     /// connected+registered state. Logged as connection uptime in
     /// <see cref="OnClosed"/> so the daemon log shows how long each connection
     /// survived — the cadence that distinguishes a steady transport from one
@@ -523,7 +525,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     }
 
                     await RegisterDaemonAsync();
-                    _connectedTimestamp = Stopwatch.GetTimestamp();
+                    _connectedTimestamp = _time.GetTimestamp();
                     LogConnected(_config.Name);
                     _statusNotifier.Pulse();
 
@@ -543,9 +545,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     LogConnectionAttemptFailed(ex, attempt + 1, delay.TotalSeconds);
                     // The failed attempt has returned the hub to Disconnected — pulse so a
                     // subscriber converges to "disconnected" during the backoff instead of a
-                    // stale "connecting" (Codex P2: initial-start failures never fired a pulse).
+                    // stale "connecting".
                     _statusNotifier.Pulse();
-                    await Task.Delay(delay, ct);
+                    await Task.Delay(delay, _time, ct);
                     attempt++;
                 }
             }
@@ -564,7 +566,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             return;
         }
 
-        var uptimeSeconds = _connectedTimestamp == 0 ? 0 : Stopwatch.GetElapsedTime(_connectedTimestamp).TotalSeconds;
+        var uptimeSeconds = _connectedTimestamp == 0 ? 0 : _time.GetElapsedTime(_connectedTimestamp).TotalSeconds;
         LogConnectionClosed(ex, uptimeSeconds);
 
         try {
@@ -737,10 +739,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     // Taken before the read it pairs with, so a write landing during the read still reads as a
     // change afterwards.
-    RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot).Fingerprint();
+    RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot, _time).Fingerprint();
 
     async Task<string[]> MergeRepoPathsAsync() {
-        var persisted = await new RepoPathStore(_config.ConfigRoot).GetSortedPathsAsync();
+        var persisted = await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync();
 
         if (_config.AllowedRepoPaths.Length == 0)
             return persisted;
@@ -787,7 +789,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _statusNotifier.Pulse();
         LogReconnected();
         await RegisterDaemonAsync();
-        _connectedTimestamp = Stopwatch.GetTimestamp();
+        _connectedTimestamp = _time.GetTimestamp();
     }
 
     /// <summary>
@@ -827,8 +829,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// bounded and keeps retrying.
     /// </summary>
     public async Task ForceReconnectAsync() {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
-        cts.CancelAfter(ForceStopCap);
+        using var cap = new CancellationTokenSource(ForceStopCap, _time);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct, cap.Token);
 
         try {
             await StopHubAsync(CancellationToken.None).WaitAsync(cts.Token);
@@ -946,7 +948,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual async Task SendInputRejectedAsync(Guid dispatchId, string agentId, string reason) {
         try {
             await _hub.InvokeAsync("SendInputRejected", dispatchId, agentId, reason, cancellationToken: _ct)
-                .WaitAsync(SendInputRejectedBudget, _ct);
+                .WaitAsync(SendInputRejectedBudget, _time, _ct);
         } catch (Exception ex) {
             _logger.LogDebug(ex, "Could not report the dropped input for agent {AgentId} ({Reason})", agentId, reason);
         }
@@ -1034,6 +1036,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             () => _hub.InvokeAsync<EndAgentSessionResult>("EndAgentSession", agentId, reason, cancellationToken: _ct),
             () => IsReady,
             EndSessionRetryPollInterval,
+            _time,
             attempt => LogEndSessionRetry(agentId, attempt),
             _ct
         );
@@ -1082,6 +1085,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             },
             () => IsReady,
             PermissionRetryPollInterval,
+            _time,
             attempt => LogPermissionRetry(sessionId, attempt),
             ct,
             isRetriableServerError: IsOwnershipNotReady,
@@ -1149,6 +1153,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             () => _hub.InvokeAsync<string>("AcpRequestInteraction", request, ct),
             () => IsReady,
             PermissionRetryPollInterval,
+            _time,
             attempt => LogPermissionRetry(request.AcpSessionId, attempt),
             ct,
             isRetriableServerError: IsOwnershipNotReady,
@@ -1306,7 +1311,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     if (attempt == AcpRebindMaxAttempts) break;
 
                     try {
-                        await Task.Delay(AcpRebindRetryDelay, _ct);
+                        await Task.Delay(AcpRebindRetryDelay, _time, _ct);
                     } catch (OperationCanceledException) {
                         return; // shutting down mid-retry — nothing more to do here
                     }
@@ -1342,6 +1347,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             () => InvokeAcpSessionStartedRawAsync(agentId, vendor, acpSessionId, cwd, model, metadata, ct),
             () => IsReady,
             AcpRetryPollInterval,
+            _time,
             attempt => LogAcpSessionStartedRetry(agentId, attempt),
             ct
         ).ConfigureAwait(false);
@@ -1372,6 +1378,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             () => InvokeAcpSessionEventsRawAsync(agentId, acpSessionId, envelopes, ct),
             () => IsReady,
             AcpRetryPollInterval,
+            _time,
             attempt => LogAcpEventsRetry(agentId, attempt),
             ct
         );
@@ -1422,6 +1429,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             () => InvokeAcpSessionSourceClaimRawAsync(agentId, acpSessionId, ct),
             () => IsReady,
             AcpRetryPollInterval,
+            _time,
             attempt => LogAcpSourceClaimRetry(agentId, attempt),
             ct
         );
@@ -1440,6 +1448,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             () => InvokeConfirmSessionLaunchRawAsync(acpSessionId, ownershipToken, ct),
             () => IsReady,
             AcpRetryPollInterval,
+            _time,
             attempt => LogConfirmSessionLaunchRetry(acpSessionId, attempt),
             ct
         );
@@ -1498,13 +1507,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // cancels, ConnectionRetry surfaces OperationCanceledException, and the generic catch below folds
         // it to Ambiguous — "no definite reply" — releasing the claim for a later sweep to retry. If
         // IsReady never came, no report was sent, so there is nothing to reconcile.
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ParkAckBudget);
+        using var parkCap    = new CancellationTokenSource(ParkAckBudget, _time);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct, parkCap.Token);
         try {
             var outcome = await ConnectionRetry.InvokeWithConnectionRetryAsync(
                 () => InvokeReportParticipantParkedRawAsync(agentId, canonicalSessionId, reason, timeoutCts.Token),
                 () => IsReady,
                 ParkRetryPollInterval,
+                _time,
                 attempt => LogReportParticipantParkedRetry(agentId, attempt),
                 timeoutCts.Token
             );
@@ -1669,7 +1679,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                         LogEventPostFailed(ex, retryDelay.TotalSeconds);
 
                         try {
-                            await Task.Delay(retryDelay, ct);
+                            await Task.Delay(retryDelay, _time, ct);
                         } catch (OperationCanceledException) {
                             return;
                         }

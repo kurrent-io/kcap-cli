@@ -93,7 +93,7 @@ public interface IFirstRunFlowChannel {
 /// single-tenant <i>multi-user</i> and it is the server's ownership check, not the token, that
 /// decides whose flow this is.</para>
 /// </summary>
-public sealed class FirstRunFlowClient(HttpClient http) : IFirstRunFlowChannel {
+public sealed class FirstRunFlowClient(HttpClient http, TimeProvider time) : IFirstRunFlowChannel {
     /// <inheritdoc/>
     public async Task<FirstRunCreateOutcome> CreateAsync(
             string serverUrl, string flowId, FirstRunMachineReport report, CancellationToken ct) {
@@ -245,9 +245,9 @@ public sealed class FirstRunFlowClient(HttpClient http) : IFirstRunFlowChannel {
     /// delta-seconds as an HTTP date, and reading only the delta would report that as no header at
     /// all. A date is measured against the response's own Date header, so server clock skew cannot
     /// turn the wait negative.</summary>
-    static TimeSpan? RetryAfter(HttpResponseMessage resp) => resp.Headers.RetryAfter switch {
+    TimeSpan? RetryAfter(HttpResponseMessage resp) => resp.Headers.RetryAfter switch {
         { Delta: { } delta } => delta,
-        { Date:  { } date  } => Max(date - (resp.Headers.Date ?? DateTimeOffset.UtcNow), TimeSpan.Zero),
+        { Date:  { } date  } => Max(date - (resp.Headers.Date ?? time.GetUtcNow()), TimeSpan.Zero),
         _                    => null
     };
 

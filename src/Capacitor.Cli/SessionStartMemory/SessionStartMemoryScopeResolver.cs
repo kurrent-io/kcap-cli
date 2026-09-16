@@ -17,7 +17,7 @@ internal sealed class SessionStartMemoryScopeResolver(
         string? machine = null;
         try {
             var path = string.IsNullOrWhiteSpace(cwd) ? workdir.Path : cwd;
-            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, path, Remaining(), detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, path, time, Remaining(), detectPullRequest: false);
             if (repo?.Owner is not null && repo.RepoName is not null)
                 repoHash = RepoHashHelper.ComputeRepoHash(repo.Owner, repo.RepoName);
         } catch { }

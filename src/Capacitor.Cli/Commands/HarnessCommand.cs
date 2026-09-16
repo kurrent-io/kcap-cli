@@ -10,11 +10,11 @@ namespace Capacitor.Cli.Commands;
 /// nudge; <c>reset</c> undoes a dismissal. All three run their own detection pass and neither read
 /// nor claim the shared 6-hour evaluation throttle (the nudge surfaces' concern, not the commands').
 /// </summary>
-public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses) {
+public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses, TimeProvider time) {
     public Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) { PrintUsage(); return Task.FromResult(1); }
 
-        var store = new HarnessOfferStore(config);
+        var store = new HarnessOfferStore(config, time);
 
         return Task.FromResult(args[1] switch {
             "list"                    => List(harnesses, store),
@@ -36,7 +36,7 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses)
         return 0;
     }
 
-    static int Dismiss(string[] args, HarnessRegistry harnesses, HarnessOfferStore store) {
+    int Dismiss(string[] args, HarnessRegistry harnesses, HarnessOfferStore store) {
         var rest = args.Skip(2).ToArray();
         List<IHarness> targets;
 
@@ -64,7 +64,7 @@ public sealed class HarnessCommand(ConfigRoot config, HarnessRegistry harnesses)
             }
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = time.GetUtcNow();
         if (!store.Update(l => l.WithDismissed(targets.Select(t => t.Id), now))) {
             Console.Error.WriteLine("kcap: could not persist the dismissal (failed to write the offer ledger).");
             return 1;

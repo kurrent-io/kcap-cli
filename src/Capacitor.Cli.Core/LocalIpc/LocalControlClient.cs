@@ -56,8 +56,8 @@ internal static class DaemonStatusValidator {
 /// StatusSubscribe → snapshot stream, reconnecting with backoff. All failure is DATA (the
 /// event stream); only cancellation ends the enumeration. See the state machine and
 /// classification rules in the app-shell design spec §4 — every branch here is pinned there.
-public sealed class LocalControlClient(DaemonStore store, string daemonName, TimeProvider? time = null) {
-    readonly TimeProvider _time = time ?? TimeProvider.System;
+public sealed class LocalControlClient(DaemonStore store, string daemonName, TimeProvider time) {
+    readonly TimeProvider _time = time;
 
     // Internal test seams: production always runs these defaults, so no public validation
     // contract exists — an invalid value is a test-authoring bug.

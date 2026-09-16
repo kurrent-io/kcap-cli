@@ -9,12 +9,12 @@ namespace Capacitor.Cli.Commands;
 sealed class SetupFacadeFactory(
         ConfigRoot config, TokenStore store, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
         GitHubOAuthClient github, WorkOSClient workos, IBrowserLauncher browser,
-        CliTelemetry telemetry, AuthEndpoints endpoints) : IOnboardingFacadeFactory {
+        CliTelemetry telemetry, AuthEndpoints endpoints, TimeProvider time) : IOnboardingFacadeFactory {
     public OnboardingFacade Create(
             ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null) =>
         new OnboardingFacade(config, store, httpFactory, proxy, github, workos, SetupCommand.StepProgress, browser,
-            picker ?? SetupCommand.DefaultPicker(browser, () => true), provisioner, telemetry, endpoints,
-            SetupCommand.WorkspaceGuard(requested)) {
+            picker ?? SetupCommand.DefaultPicker(browser, () => true, time), provisioner, telemetry, endpoints,
+            time, SetupCommand.WorkspaceGuard(requested)) {
             KeyWatcher = ConsoleKeyWatcher.Instance
         };
 }

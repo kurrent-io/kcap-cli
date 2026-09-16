@@ -335,6 +335,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     public AntigravityHostedAgentRuntime(
             Func<string, string?, CancellationToken, Task<IAgyTurnProcess>> spawnTurn,
             ILogger                                                        logger,
+            TimeProvider                                                  timeProvider,
             string                                                         agentId = "",
             string?                                                        model = null,
             string?                                                        cwd = null,
@@ -343,7 +344,6 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             int?                                                           transcriptCapacity = null,
             int?                                                           pendingTurnsCapacity = null,
             Action?                                                        onDisposed = null,
-            TimeProvider?                                                  timeProvider = null,
             TranscriptJournal?                                             journal = null
         ) {
         _spawnTurn            = spawnTurn;
@@ -355,7 +355,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _turnDeadline         = turnDeadline;
         _pendingTurnsCapacity = pendingTurnsCapacity ?? DefaultPendingTurnsCapacity;
         _onDisposed           = onDisposed;
-        _time                 = timeProvider ?? TimeProvider.System;
+        _time                 = timeProvider;
         _journal              = journal;
 
         // DropOldest: the turn worker is the only writer that matters for ordering, but
@@ -413,8 +413,6 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     public string? ResolvedModel => _model;
     public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
 
-    /// <summary>Defaults to <see cref="TimeProvider.System"/>, overridable in tests for a deterministic
-    /// <c>user_message</c> timestamp.</summary>
     string NowIso() => _time.GetUtcNow().ToString("o");
 
     /// <summary>Rule (c): parks on the single constructor-owned <see cref="_terminalTcs"/> and nothing
@@ -717,8 +715,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             var conversationChanged = false;
             string? resultStatus    = null;
 
-            using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(ownerCt);
-            if (_turnDeadline is { } turnDeadline) turnCts.CancelAfter(turnDeadline);
+            using var turnCap = _turnDeadline is { } turnDeadline
+                ? new CancellationTokenSource(turnDeadline, _time)
+                : null;
+            using var turnCts = turnCap is null
+                ? CancellationTokenSource.CreateLinkedTokenSource(ownerCt)
+                : CancellationTokenSource.CreateLinkedTokenSource(ownerCt, turnCap.Token);
 
             try {
                 await foreach (var line in process.ReadLinesAsync(turnCts.Token).ConfigureAwait(false)) {
@@ -860,9 +862,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// process that actually exists.
     /// </summary>
     async Task<IAgyTurnProcess?> SpawnTurnProcessAsync(PendingTurn turn, bool firstTurn, CancellationToken ownerCt) {
-        using var spawnCts = CancellationTokenSource.CreateLinkedTokenSource(ownerCt);
-        if (firstTurn && _launchDeadline is { } launchDeadline)
-            spawnCts.CancelAfter(launchDeadline);
+        using var spawnCap = firstTurn && _launchDeadline is { } launchDeadline
+            ? new CancellationTokenSource(launchDeadline, _time)
+            : null;
+        using var spawnCts = spawnCap is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(ownerCt)
+            : CancellationTokenSource.CreateLinkedTokenSource(ownerCt, spawnCap.Token);
 
         try {
             return await _spawnTurn(turn.Text, _conversationId, spawnCts.Token).ConfigureAwait(false);
@@ -1084,7 +1089,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     public async Task WaitForExitAsync(TimeSpan? timeout = null) {
         if (timeout is { } t) {
             try {
-                await _terminalTcs.Task.WaitAsync(t).ConfigureAwait(false);
+                await _terminalTcs.Task.WaitAsync(t, _time).ConfigureAwait(false);
             } catch (TimeoutException) {
                 // Returns silently on timeout — per this method's interface contract.
             }
@@ -1128,7 +1133,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         var workerJoined = true;
 
         try {
-            await _turnWorkerTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await _turnWorkerTask.WaitAsync(TimeSpan.FromSeconds(5), _time).ConfigureAwait(false);
         } catch (Exception ex) {
             // Best-effort — a stuck turn worker must never hang dispose. It is NOT evidence of
             // quiescence, which is what `workerJoined` records.

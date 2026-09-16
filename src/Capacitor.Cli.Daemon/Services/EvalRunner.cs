@@ -19,6 +19,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>EvalRunOrchestrator</c>) threads the phases together.</para>
 /// </summary>
 internal sealed class EvalRunner {
+    readonly TimeProvider         _time;
     readonly ServerConnection     _connection;
     readonly EvalContextCache     _cache;
     readonly ILogger<EvalRunner>  _logger;
@@ -35,8 +36,10 @@ internal sealed class EvalRunner {
             DaemonConfig             config,
             ICapacitorHttpClient     http,
             IHostApplicationLifetime lifetime,
-            ILogger<EvalRunner>      logger
+            ILogger<EvalRunner>      logger,
+            TimeProvider             time
         ) {
+        _time       = time;
         _connection    = connection;
         _cache         = cache;
         _harnesses     = harnesses;
@@ -64,7 +67,7 @@ internal sealed class EvalRunner {
         try {
             // Phase 3 — fetch the catalog (rendered prompts + raw text +
             // versions) so PrepareAsync reconciles the run question list from it.
-            var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _shutdownToken);
+            var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _time, _shutdownToken);
             if (catalog is null) return new(false, "catalog load failed", null, 0, 0, 0, 0, 0);
 
             var ctx = await EvalService.PrepareAsync(
@@ -78,6 +81,7 @@ internal sealed class EvalRunner {
                 cmd.Chain,
                 cmd.ThresholdBytes,
                 observer,
+                _time,
                 _shutdownToken,
                 cmd.Model,
                 cmd.EvalRunId
@@ -132,6 +136,7 @@ internal sealed class EvalRunner {
                 cmd.Index,
                 cmd.Total,
                 observer,
+                _time,
                 _shutdownToken
             );
 
@@ -172,6 +177,7 @@ internal sealed class EvalRunner {
                 cmd.Verdicts,
                 cmd.Model,
                 observer,
+                _time,
                 _shutdownToken
             );
 

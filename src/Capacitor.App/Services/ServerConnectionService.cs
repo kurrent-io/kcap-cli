@@ -22,6 +22,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public const string TeamClaimMissingNotice =
         "Signed-in token carries no team claim — server broadcasts may not reach this app.";
 
+    readonly TimeProvider _time;
+
     static readonly TimeSpan[] Backoff =
         [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
 
@@ -62,8 +64,9 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     Task _loop = Task.CompletedTask;
     volatile HubConnection? _hub;
 
-    public ServerConnectionService(ProfileContext? profiles, TokenStore tokenStore)
+    public ServerConnectionService(ProfileContext? profiles, TokenStore tokenStore, TimeProvider time)
         : this(
+            time,
             profiles?.Resolution.ServerUrl,
             profiles is null
                 ? () => Task.FromResult<string?>(null)
@@ -71,7 +74,9 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                     profiles.Name, profiles.Resolution.ServerUrl!)).Tokens?.AccessToken) { }
 
     internal ServerConnectionService(
-            string? serverUrl, Func<Task<string?>> accessTokenProvider, TimeSpan[]? reconnectDelays = null) {
+            TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
+            TimeSpan[]? reconnectDelays = null) {
+        _time = time;
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;
         _reconnectDelays = reconnectDelays;
@@ -224,7 +229,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
 
             if (ct.IsCancellationRequested) break;
             var delay = Backoff[Math.Min(attempt++, Backoff.Length - 1)];
-            try { await Task.Delay(delay, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+            try { await Task.Delay(delay, _time, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
         }
     }
 

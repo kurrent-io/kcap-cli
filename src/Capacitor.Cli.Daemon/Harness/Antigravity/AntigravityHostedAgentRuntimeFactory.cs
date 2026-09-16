@@ -95,6 +95,7 @@ internal interface IAgyTurnDiagnostics {
 internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         DaemonConfig                                                     config,
         ILoggerFactory                                                   loggerFactory,
+        TimeProvider                                                     time,
         Func<ProcessStartInfo, CancellationToken, Task<IAgyTurnProcess>>? turnSource = null,
         Func<string, bool>?                                              binaryExists = null,
         Func<string, string?>?                                           resolveVersion = null,
@@ -104,7 +105,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
     readonly Func<ProcessStartInfo, CancellationToken, Task<IAgyTurnProcess>> _turnSource =
         turnSource ?? ((psi, _) => Task.FromResult<IAgyTurnProcess>(
-            new AgyTurnProcess(psi, loggerFactory.CreateLogger<AgyTurnProcess>())));
+            new AgyTurnProcess(psi, loggerFactory.CreateLogger<AgyTurnProcess>(), time)));
 
     readonly Func<string, bool> _binaryExists =
         binaryExists ?? (path => config.Binaries.Finds(path));
@@ -319,7 +320,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
         var runtime = new AntigravityHostedAgentRuntime(
             spawnTurn: SpawnTurnAsync,
-            logger: loggerFactory.CreateLogger<AntigravityHostedAgentRuntime>(),
+            logger: loggerFactory.CreateLogger<AntigravityHostedAgentRuntime>(), timeProvider: time,
             agentId: ctx.AgentId,
             model: model,
             cwd: ctx.Worktree.Path,
@@ -339,8 +340,9 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // still wins and is never misreported as a timeout. This is what turns the measured
         // unauthenticated shapes — an immediate error, or an OAuth URL followed by a 60-second
         // interactive wait — into a bounded failure.
-        using var launchDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        launchDeadline.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, config.AntigravityReviewerLaunchTimeoutSeconds)));
+        using var launchCap      = new CancellationTokenSource(
+            TimeSpan.FromSeconds(Math.Max(1, config.AntigravityReviewerLaunchTimeoutSeconds)), time);
+        using var launchDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct, launchCap.Token);
 
         try {
             // A dispose racing this launch can already have closed the turn queue; the launch still
@@ -614,6 +616,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
 
     readonly Process                 _process;
     readonly ILogger                 _logger;
+    readonly TimeProvider            _time;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
     readonly Lock                    _diagnosticsGate = new();
@@ -621,14 +624,15 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
 
     int _disposed;
 
-    internal AgyTurnProcess(ProcessStartInfo psi, ILogger logger)
+    internal AgyTurnProcess(ProcessStartInfo psi, ILogger logger, TimeProvider time)
         : this(Process.Start(psi) ?? throw new InvalidOperationException(
                    $"antigravity_turn_spawn_failed: '{psi.FileName}' did not start (Process.Start returned null)."),
-               logger) { }
+               logger, time) { }
 
-    internal AgyTurnProcess(Process process, ILogger logger) {
+    internal AgyTurnProcess(Process process, ILogger logger, TimeProvider time) {
         _process = process;
         _logger  = logger;
+        _time    = time;
         Pid      = SafePid(process);
 
         // Closed immediately, and this is a containment decision rather than tidiness: an
@@ -721,7 +725,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
     public async Task WaitForExitAsync(TimeSpan? timeout = null) {
         try {
             if (timeout is { } t) {
-                using var cts = new CancellationTokenSource(t);
+                using var cts = new CancellationTokenSource(t, _time);
 
                 try {
                     await _process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
@@ -772,7 +776,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
         }
 
         try {
-            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2), _time).ConfigureAwait(false);
         } catch {
             // DrainStderrAsync already swallows its expected exceptions; never let a stuck drain hang
             // or fault a dispose.

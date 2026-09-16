@@ -16,7 +16,7 @@ namespace Capacitor.Cli;
 /// back, which is the half of this nothing else can observe.</param>
 /// <param name="measure">The terminal's width, or null where it cannot be read. Injectable because the
 /// wrap it guards against happens inside Spectre's writer, where no test can see it.</param>
-sealed class TerminalWaitLine(bool tty, TextWriter? control = null, Func<int?>? measure = null) : IDisposable {
+sealed class TerminalWaitLine(bool tty, TimeProvider time, TextWriter? control = null, Func<int?>? measure = null) : IDisposable {
     static readonly IReadOnlyList<string> Frames = Spinner.Known.Dots.Frames;
 
     static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(100);
@@ -34,7 +34,7 @@ sealed class TerminalWaitLine(bool tty, TextWriter? control = null, Func<int?>? 
 
     readonly object _gate = new();
 
-    Timer?  _timer;
+    ITimer? _timer;
     string? _text;
     string? _offer;
     int     _drawn;
@@ -70,7 +70,7 @@ sealed class TerminalWaitLine(bool tty, TextWriter? control = null, Func<int?>? 
 
             if (!_running) {
                 _running = true;
-                _timer = new Timer(_ => Tick(), null, FrameInterval, FrameInterval);
+                _timer = time.CreateTimer(_ => Tick(), null, FrameInterval, FrameInterval);
             }
 
             Draw();

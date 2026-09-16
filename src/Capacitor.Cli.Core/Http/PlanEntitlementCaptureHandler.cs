@@ -11,8 +11,8 @@ namespace Capacitor.Cli.Core.Http;
 /// harness: eight of the nine discard the session-start response body, but they all send on a lane
 /// this handler is registered against.</para>
 /// </summary>
-internal sealed class PlanEntitlementCaptureHandler(string serverUrl, ConfigRoot config) : DelegatingHandler {
-    public PlanEntitlementCaptureHandler(CapacitorServer server) : this(server.Url, server.Config) { }
+internal sealed class PlanEntitlementCaptureHandler(string serverUrl, ConfigRoot config, TimeProvider time) : DelegatingHandler {
+    public PlanEntitlementCaptureHandler(CapacitorServer server, TimeProvider time) : this(server.Url, server.Config, time) { }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
         var response = await base.SendAsync(request, ct);
@@ -22,7 +22,7 @@ internal sealed class PlanEntitlementCaptureHandler(string serverUrl, ConfigRoot
             // it is what a server predating the feature sends, and forgetting on it would re-nudge
             // every session against any intermediary that strips unknown headers.
             if (response.Headers.TryGetValues(HttpClientExtensions.PlanHeader, out var values))
-                PlanEntitlementStore.Set(serverUrl, values.FirstOrDefault(), config);
+                PlanEntitlementStore.Set(serverUrl, values.FirstOrDefault(), config, time.GetUtcNow());
         } catch {
             // Header capture must never affect the response the caller gets back.
         }

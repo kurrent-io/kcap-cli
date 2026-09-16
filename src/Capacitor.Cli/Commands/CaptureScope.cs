@@ -24,7 +24,7 @@ sealed class CaptureScope {
     public CaptureScope(
             GitProviderRouter router, ConfigRoot config, UserHome home,
             string[]? allowedPaths, string[]? excludedPaths,
-            string[]? allowedRepos, string[]? excludedRepos,
+            string[]? allowedRepos, string[]? excludedRepos, TimeProvider time,
             Func<string, Task<RepositoryPayload?>>? repoDetector = null) {
         _home          = home;
         _allowedPaths  = allowedPaths;
@@ -32,7 +32,7 @@ sealed class CaptureScope {
         _allowedRepos  = allowedRepos;
         _excludedRepos = excludedRepos;
         _repoDetector  = repoDetector
-                      ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false));
+                      ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false));
     }
 
     /// <summary>Whether any list is set. Nothing to do when the profile scopes nothing.</summary>

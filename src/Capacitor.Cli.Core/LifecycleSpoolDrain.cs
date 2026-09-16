@@ -12,15 +12,15 @@ namespace Capacitor.Cli.Core;
 /// this exact ordering logic without referencing the CLI's exe project.</para>
 /// </summary>
 public static class LifecycleSpoolDrain {
-    // Injectable core (test seam). Ordering is enforced by draining the lifecycle spool's START routes
-    // first, then the transcript spool, then the lifecycle END routes — per session.
+    // Ordering is enforced by draining the lifecycle spool's START routes first, then the transcript
+    // spool, then the lifecycle END routes — per session.
     public static async Task RunAsync(
             HookSpool lifecycle, TranscriptSpool transcript, string? currentSessionId,
             Func<string, string, Task<DrainOutcome>> lifecyclePoster,
             Func<string, Task<DrainOutcome>>         transcriptPoster,
-            TimeSpan budget, CancellationToken ct) {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        bool Expired() => sw.Elapsed >= budget || ct.IsCancellationRequested;
+            TimeSpan budget, TimeProvider time, CancellationToken ct) {
+        var started = time.GetTimestamp();
+        bool Expired() => time.GetElapsedTime(started) >= budget || ct.IsCancellationRequested;
 
         foreach (var sid in OrderedSessions(lifecycle, transcript, currentSessionId)) {
             if (Expired()) return;
@@ -80,18 +80,19 @@ public static class LifecycleSpoolDrain {
     /// </summary>
     public static Task RunAsync(CursorMarkers markers, HttpClient client, string baseUrl, HookSpool lifecycle,
                                 TranscriptSpool transcript, string? currentSessionId, TimeSpan budget,
-                                CancellationToken ct, Action<string, string>? onWhatsDoneRequested = null)
+                                TimeProvider time, CancellationToken ct,
+                                Action<string, string>? onWhatsDoneRequested = null)
         => RunAsync(lifecycle, transcript, currentSessionId,
-            lifecyclePoster: (route, body) => PostOnce(client, baseUrl, route, body, ct, onWhatsDoneRequested),
-            transcriptPoster: body => PostTranscript(markers, client, baseUrl, body, ct),
-            budget, ct);
+            lifecyclePoster: (route, body) => PostOnce(client, baseUrl, route, body, time, ct, onWhatsDoneRequested),
+            transcriptPoster: body => PostTranscript(markers, client, baseUrl, body, time, ct),
+            budget, time, ct);
 
     static async Task<DrainOutcome> PostOnce(
-            HttpClient client, string baseUrl, string route, string body, CancellationToken ct,
-            Action<string, string>? onWhatsDoneRequested) {
+            HttpClient client, string baseUrl, string route, string body, TimeProvider time,
+            CancellationToken ct, Action<string, string>? onWhatsDoneRequested) {
         try {
             using var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            using var resp = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, TimeSpan.FromSeconds(3), ct);
+            using var resp = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, time, TimeSpan.FromSeconds(3), ct);
             if (resp.IsSuccessStatusCode) {
                 if (HookSpool.IsTerminalRoute(route) && onWhatsDoneRequested is not null) {
                     try {
@@ -115,16 +116,15 @@ public static class LifecycleSpoolDrain {
     }
 
     static Task<DrainOutcome> PostTranscript(
-            CursorMarkers markers, HttpClient client, string baseUrl, string body, CancellationToken ct) {
-        // review fix #1/#8 — a Cursor batch already quarantined by the runtime rewrite
-        // guard must never be replayed from the shutdown transcript spool: the tail spooled at
-        // shutdown could predate the quarantine (a batch queued before the guard tripped on a
-        // later poll), and this is the ONLY delivery-time check the spool-replay path has, since
-        // the live watcher's own checks never see a batch once it's on disk here. Drop it
-        // permanently (D0's quarantine is a deliberate, non-retracted stop — see
-        // CursorRewriteGuard) rather than post the corrupted tail behind the watcher's back. A
-        // pending side-effect barrier is treated as transient (retry the whole pass later) since
-        // it self-clears/expires.
+            CursorMarkers markers, HttpClient client, string baseUrl, string body, TimeProvider time,
+            CancellationToken ct) {
+        // A Cursor batch already quarantined by the runtime rewrite guard must never be replayed
+        // from the shutdown transcript spool: the tail spooled at shutdown can predate the
+        // quarantine, and this is the ONLY delivery-time check the replay path has — the live
+        // watcher's own checks never see a batch once it is on disk here. A quarantine is never
+        // retracted (see CursorRewriteGuard), so drop permanently rather than post the corrupted
+        // tail behind the watcher's back. A pending side-effect barrier self-clears, so it is
+        // transient: retry the whole pass later.
         try {
             var node   = System.Text.Json.Nodes.JsonNode.Parse(body);
             var vendor = node?["vendor"]?.GetValue<string>();
@@ -132,7 +132,7 @@ public static class LifecycleSpoolDrain {
 
             if (vendor == "cursor" && sid is not null) {
                 if (markers.IsQuarantined(sid)) return Task.FromResult(DrainOutcome.Drop);
-                if (markers.BarrierPending(sid, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound))
+                if (markers.BarrierPending(sid, time.GetUtcNow(), CursorMarkers.DefaultBarrierBound))
                     return Task.FromResult(DrainOutcome.TransientStop);
             }
         } catch {
@@ -141,6 +141,6 @@ public static class LifecycleSpoolDrain {
             // drain over a marker check.
         }
 
-        return PostOnce(client, baseUrl, "transcript", body, ct, onWhatsDoneRequested: null);
+        return PostOnce(client, baseUrl, "transcript", body, time, ct, onWhatsDoneRequested: null);
     }
 }

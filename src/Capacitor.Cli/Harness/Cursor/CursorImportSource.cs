@@ -50,15 +50,19 @@ internal sealed class CursorImportSource : IImportSource {
     readonly ConfigRoot                             _config;
     readonly CursorMarkers                          _markers;
 
+    readonly TimeProvider _time;
+
     public CursorImportSource(
         ConfigRoot                               config,
         string                                   projectsDir,
         string                                   workspaceStorageDir,
         GitProviderRouter                        router,
+        TimeProvider                             time,
         Func<string, Task<RepositoryPayload?>>?  repoDetector                = null
     ) {
+        _time                = time;
         _config              = config;
-        _markers             = new CursorMarkers(config);
+        _markers             = new CursorMarkers(config, time);
         _projectsDir         = projectsDir;
         _workspaceStorageDir = workspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
@@ -70,7 +74,7 @@ internal sealed class CursorImportSource : IImportSource {
         // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
         // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
         // separate call site untouched by this default and keeps live PR detection.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false));
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false));
     }
 
     /// <summary>
@@ -563,7 +567,7 @@ internal sealed class CursorImportSource : IImportSource {
                 sessionId:     classification.SessionId,
                 filePath:      transcriptPath,
                 agentId:       null,
-                startLine:     startLine,
+                startLine:     startLine, time: _time,
                 vendor:        Vendor,
                 progress:      ctx.Progress,
                 abortDelivery: () => _markers.IsQuarantined(quarantineIdentity));
@@ -840,7 +844,7 @@ internal sealed class CursorImportSource : IImportSource {
                 sessionId:     parentSessionId,
                 filePath:      child.TranscriptPath,
                 agentId:       agentId,
-                startLine:     startLine,
+                startLine:     startLine, time: _time,
                 vendor:        Vendor,
                 progress:      ctx.Progress,
                 failOnError:   true,
@@ -939,12 +943,12 @@ internal sealed class CursorImportSource : IImportSource {
         }
     }
 
-    static async Task<bool> PostSyntheticHookAsync(
+    async Task<bool> PostSyntheticHookAsync(
         HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, _time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
@@ -997,12 +1001,12 @@ internal sealed class CursorImportSource : IImportSource {
         return (lastIdx, count);
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
+    async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
         // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark.
         var url = string.IsNullOrEmpty(agentId)
             ? $"{baseUrl}/api/sessions/{sessionId}/last-line"
             : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";
-        using var resp = await http.GetWithRetryAsync(url, ct: ct);
+        using var resp = await http.GetWithRetryAsync(url, _time, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         // Construct via the (string?, Exception?, HttpStatusCode?) overload so .StatusCode is

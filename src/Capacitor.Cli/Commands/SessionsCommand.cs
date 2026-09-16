@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Commands;
 
 class SessionsCommand(
         ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, GitProviderRouter router,
-        WorkingDirectory workdir) {
+        WorkingDirectory workdir, TimeProvider time) {
     public async Task<int> HandleAsync(string[] args) {
         var options = SessionsArgs.Parse(args, out var error);
 
@@ -27,7 +27,7 @@ class SessionsCommand(
         if (options.Repo is null) {
             var repo = await RepositoryDetection.DetectRepositoryAsync(
                 router,
-                config, workdir.Path, detectPullRequest: false);
+                config, workdir.Path, time, detectPullRequest: false);
 
             if (repo?.Owner is null || repo.RepoName is null) {
                 await Console.Error.WriteLineAsync("Not in a git repository with a remote origin.");
@@ -48,7 +48,7 @@ class SessionsCommand(
         HttpResponseMessage resp;
 
         try {
-            resp = await httpClient.GetWithRetryAsync(BuildUrl(baseUrl, repoHash, options));
+            resp = await httpClient.GetWithRetryAsync(BuildUrl(baseUrl, repoHash, options), time);
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
 

@@ -28,13 +28,16 @@ namespace Capacitor.Cli.Harness.Pi;
 /// </summary>
 internal sealed class PiImportSource : IImportSource {
     readonly string                                 _sessionsDir;
+    readonly TimeProvider                           _time;
 
     public PiImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
-        GitProviderRouter                        router
+        GitProviderRouter                        router,
+        TimeProvider                            time
     ) {
         _sessionsDir  = sessionsDir;
+        _time         = time;
     }
 
     static StringComparison PathComparison =>
@@ -161,7 +164,7 @@ internal sealed class PiImportSource : IImportSource {
 
             int? serverLastLine;
             try {
-                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
+                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, _time, ctx.BaseUrl, s.SessionId, ct);
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlankCount, "watermark probe failed"));
                 continue;
@@ -230,7 +233,7 @@ internal sealed class PiImportSource : IImportSource {
         }
 
         var startOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-start/pi",
+            ctx.HttpClient, _time, ctx.BaseUrl, "session-start/pi",
             startPayload,
             ct);
         if (!startOk) return ImportOutcome.Failed;
@@ -250,6 +253,7 @@ internal sealed class PiImportSource : IImportSource {
                 filePath:   transcriptPath,
                 agentId:    null,
                 startLine:  startLine,
+                time:       _time,
                 vendor:     Vendor,
                 progress:   ctx.Progress);
         } catch {
@@ -257,7 +261,7 @@ internal sealed class PiImportSource : IImportSource {
         }
 
         var endOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-end/pi",
+            ctx.HttpClient, _time, ctx.BaseUrl, "session-end/pi",
             BuildSessionEndPayload(classification.SessionId, cwd, classification.Meta.LastTimestamp),
             ct);
         if (!endOk) return ImportOutcome.Failed;
@@ -296,11 +300,11 @@ internal sealed class PiImportSource : IImportSource {
     }
 
     static async Task<bool> PostSyntheticHookAsync(
-        HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
+        HttpClient client, TimeProvider time, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, time, ct: ct);
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
@@ -400,8 +404,8 @@ internal sealed class PiImportSource : IImportSource {
         }
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
-        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+    static async Task<int?> FetchServerLastLineAsync(HttpClient http, TimeProvider time, string baseUrl, string sessionId, CancellationToken ct) {
+        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", time, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");

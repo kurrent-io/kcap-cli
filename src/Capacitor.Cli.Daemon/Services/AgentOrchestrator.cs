@@ -61,8 +61,8 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
     public string               Status            { get; set; } = "Starting";
-    public DateTime             CreatedAt         { get; init; } = DateTime.UtcNow;
-    public DateTime             LastOutputAt      { get; set; } = DateTime.UtcNow;
+    public required DateTime    CreatedAt         { get; init; }
+    public required DateTime    LastOutputAt      { get; set; }
     public bool                 HasReceivedOutput { get; set; }
     public TerminalOutputBuffer OutputBuffer      { get; } = new();
 
@@ -128,10 +128,9 @@ internal record AgentInstance(
     public long CodexTurnProbeGen;
 
     /// <summary>This agent's monotonic activity clock. One instance per launch — a relaunch gets a
-    /// fresh one, never inheriting the predecessor's idle window. Defaults to a real-time instance so
-    /// existing test constructions keep compiling; a production launch builds it explicitly, before
-    /// this record exists, so the ACP runtime and the permission bridge share the same instance.</summary>
-    public AgentActivityClock ActivityClock { get; init; } = new(TimeProvider.System);
+    /// fresh one, never inheriting the predecessor's idle window. Built before this record exists, so
+    /// the ACP runtime and the permission bridge share the same instance.</summary>
+    public required AgentActivityClock ActivityClock { get; init; }
 
     /// <summary>Phase B (D2): the launch kind + (for a ReviewFlow launch) the flow identity,
     /// captured from <see cref="LaunchAgentCommand"/> at construction. Reported in
@@ -562,6 +561,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly PermissionPromptBroker                            _permissionBroker;
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> _runtimeFactories;
+    readonly TimeProvider                                      _time;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
     /// <summary>Serialises + coalesces the background capability refresh fired after a certification
@@ -583,7 +583,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// change here cannot silently weaken the one-claim-waiter-per-agent property.</summary>
     internal static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(30);
 
-    readonly PeriodicTimer _heartbeatTimer = new(HeartbeatInterval);
+    readonly PeriodicTimer _heartbeatTimer;
 
     // heartbeat tightened from 60 s SendAsync to round-trip Ping.
     // tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
@@ -591,7 +591,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // instead of ~25 s. This is independent of SignalR's transport timeout
     // (which stays at the 30 s default) — the heartbeat is the daemon's
     // application-level liveness probe.
-    readonly PeriodicTimer _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
+    readonly PeriodicTimer _daemonHeartbeat;
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
 
@@ -602,19 +602,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // token is within ProactiveRefreshWindow of expiry; TokenRefreshLoop further rate-limits
     // attempts to at most one per ProactiveRefreshMinInterval, so refresh traffic stays bounded
     // even for a failing refresh or a short-lived token that keeps re-entering the window.
-    readonly PeriodicTimer _tokenRefresh = new(TimeSpan.FromSeconds(60));
+    readonly PeriodicTimer _tokenRefresh;
 
-    // Task 12: periodic sweep of the cross-vendor lifecycle + transcript spools. Covers
+    // Periodic sweep of the cross-vendor lifecycle + transcript spools. Covers
     // backlogs left behind by vendors whose session-end never fires another `kcap` hook process
     // (Kiro/OpenCode watcher-owned session-end, Antigravity/Codex-desktop GUI idle/parent-exit) —
     // see SpoolDrainLoop's doc comment. 60s mirrors the reaper-style cadence of the other timers;
     // the drain's own per-tick budget keeps a slow/unreachable server from stalling the daemon.
-    readonly PeriodicTimer _spoolDrain = new(TimeSpan.FromSeconds(60));
+    readonly PeriodicTimer _spoolDrain;
 
     // Title resolution ladder (native transcript title → server title → one local generation).
     // 60s: a title is display convenience — the lanes it drives are either cheap (a transcript
     // scan) or explicitly rate-limited by TitleResolveLoop itself.
-    readonly PeriodicTimer _titleResolve = new(TimeSpan.FromSeconds(60));
+    readonly PeriodicTimer _titleResolve;
 
     // Refresh once the token is within this much of its expiry. Kept above the 60 s tick plus the
     // reactive 30 s IsExpired margin, so proactive refresh still fires before a hook would hit the
@@ -677,6 +677,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             IHostApplicationLifetime                          lifetime,
             ILogger<AgentOrchestrator>                        logger,
             LaunchConsentGate                                 consentGate,
+            TimeProvider                                      time,
             // §3.3 test-only: leave the sequenced processor unpublished so a test can drive the
             // pre-settlement inline arm and the publication barrier explicitly (see
             // PublishSequencedProcessorForTest). Production ALWAYS publishes here, before any handler is
@@ -695,6 +696,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PolicySnapshotProvider?                           policySnapshots = null
         ) {
         _shutdownCts       = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
+        _time              = time;
+        _heartbeatTimer    = new(HeartbeatInterval, time);
+        _daemonHeartbeat   = new(TimeSpan.FromSeconds(7), time);
+        _tokenRefresh      = new(TimeSpan.FromSeconds(60), time);
+        _spoolDrain        = new(TimeSpan.FromSeconds(60), time);
+        _titleResolve      = new(TimeSpan.FromSeconds(60), time);
         _config            = config;
         _configRoot        = configRoot;
         _tokens            = tokens;
@@ -724,8 +731,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _attachmentFetcher = new AttachmentFetcher(
             httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
-        _failedLaunchLog = new FailedLaunchLog(recordRoot);
-        _quarantine  = new AgentKillQuarantine(logger);
+        _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
+        _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
         _recordlessSurvivorsImpossible = config.RecordlessSurvivorsImpossible;
@@ -739,7 +746,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // shares the same record root. A recordless survivor resolves with a NULL flow (env untrusted);
         // a co-existing durable record's TRUSTED flow is routed through onRecordResolved by EmitAndClear.
         _markerCandidates = new MarkerCandidateStore(recordRoot, logger);
-        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger,
+        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger, time,
             onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role),
             markerStore: _markerCandidates,
             onMarkerResolved: (a, e) => _resolvedLedger?.Upsert(a, e, null, null));
@@ -840,7 +847,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // IsKnownStopTarget is the §3.3 un-sequenced stop-admission probe; the two server sends are its
         // ack/reject channels.
         var processor = new SequencedCommandProcessor(
-            _daemonEpoch, ReadLiveness, _server.CommandAckAsync, _server.CommandRejectedAsync, _logger,
+            _daemonEpoch, ReadLiveness, _server.CommandAckAsync, _server.CommandRejectedAsync, _logger, _time,
             isKnownStopTarget: IsKnownStopTarget, startBarrier: startGate.Task);
 
         Task? inlineDrained;
@@ -982,10 +989,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _permissionBroker.WithdrawForAgent(agentId);
         UnpublishAgent(agentId);
     }
-
-    /// <summary>Phase B (D3): clock seam so the reviewer-TTL heartbeat check is testable with a
-    /// fixed time. Production uses the real UTC clock.</summary>
-    internal Func<DateTime> ClockUtc { get; set; } = () => DateTime.UtcNow;
 
     /// <summary>The ReviewFlow agents the heartbeat should reap now — the daemon's coarse backstop for
     /// a dead or disconnected server. Only Running ReviewFlow agents; pure, so the heartbeat and tests
@@ -1155,9 +1158,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     void RefreshHarnessInventoryIfStale() {
         lock (_harnessInventoryGate) {
             if (_harnessInventory is not null &&
-                DateTimeOffset.UtcNow - _harnessInventoryEvaluatedAt < HarnessInventoryTtl) return;
+                _time.GetUtcNow() - _harnessInventoryEvaluatedAt < HarnessInventoryTtl) return;
             try {
-                _harnessInventory = HarnessInventory.EvaluateCurrent(_configRoot, _harnesses);
+                _harnessInventory = HarnessInventory.EvaluateCurrent(_configRoot, _harnesses, _time);
             } catch (Exception ex) {
                 // Keep the last cached value (or null); inventory must never break the report path.
                 _logger.LogDebug(ex, "Harness inventory evaluation failed — keeping last cached");
@@ -1165,7 +1168,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Advance on success AND failure: a persistently-failing environment (e.g. a read-only
             // config dir) then backs off to the TTL instead of re-probing on every 60s send. The
             // evaluation's sub-probes are already defensive, so a throw here is rare/environmental.
-            _harnessInventoryEvaluatedAt = DateTimeOffset.UtcNow;
+            _harnessInventoryEvaluatedAt = _time.GetUtcNow();
         }
     }
 
@@ -1403,7 +1406,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             _pidRecords.Write(new AgentPidRecord(
                 agent.Id, pid, capturedStartIdentity, identityKind, agent.Kind.ToString(), agent.Vendor,
-                agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+                agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, _time.GetUtcNow()));
 
             return;
         }
@@ -1425,7 +1428,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // This legacy path only reaches here with a non-null capture (see the guard above) — always Present.
         _pidRecords.Write(new AgentPidRecord(
             agent.Id, pid, identity, PidIdentityKind.Present, agent.Kind.ToString(), agent.Vendor,
-            agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+            agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, _time.GetUtcNow()));
     }
 
     /// <summary>Delete an agent's PID record after its death is confirmed (teardown / confirmed reap).</summary>
@@ -1496,7 +1499,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<bool> TryStopByPidRecordAsync(string agentId) {
         if (FindPidRecord(agentId) is not { } record) return false;
 
-        var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _shutdownCts.Token);
+        var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _time, _shutdownCts.Token);
         if (confirmedGone) {
             // Phase B2-b (sequenced-settlement design §4.2.4) Hook C: ledger-append the positive per-id
             // death evidence (from the TRUSTED record — its epoch + flow identity) BEFORE deleting the
@@ -1614,7 +1617,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             Task? send = null;
             try {
                 send = _server.DaemonStatusReportAsync(BuildStatusReport(echoNonce));
-                await send.WaitAsync(StatusReportSendTimeout, _shutdownCts.Token);
+                await send.WaitAsync(StatusReportSendTimeout, _time, _shutdownCts.Token);
             } catch (TimeoutException) {
                 // The invocation already happened under the gate (see the gate's own doc), so wire
                 // FIFO on this single connection still holds even though we stop waiting here.
@@ -1661,7 +1664,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal Task SendStatusReportNowAsync() => SendDaemonStatusReportOnceAsync();
 
     async Task RunDaemonStatusReportLoopAsync(CancellationToken ct) {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60), _time);
         while (await timer.WaitForNextTickAsync(ct)) {
             try { await SendDaemonStatusReportOnceAsync(); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
@@ -1742,7 +1745,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
             string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
         _pendingLaunches[agentId] = new PendingLaunch(
-            agentId, kind, createdAt ?? DateTime.UtcNow, flowRunId, flowRole, clock, vendor, repoPath, title);
+            agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
         _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
@@ -1760,7 +1763,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// builds its own clock silently loses the stage-report wiring. Shared with
     /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
     AgentActivityClock CreateActivityClock() =>
-        new(TimeProvider.System) {
+        new(_time) {
             OnLaunchStageChanged   = () => { _statusNotifier.Pulse(); _ = SendStatusReportNowAsync(); },
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
@@ -1786,11 +1789,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             string? borrowedSnapshotSource = null) {
         var agent = new AgentInstance(
             id, prompt, model, null, "/repo", "codex",
-            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance),
+            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance, _time),
             worktree ?? new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
-            CreatedAt = createdAt ?? DateTime.UtcNow, StartIdentity = startIdentity,
+            CreatedAt = createdAt ?? _time.GetUtcNow().UtcDateTime,
+            LastOutputAt = _time.GetUtcNow().UtcDateTime, StartIdentity = startIdentity,
             RequesterUserId = requester,
             RequesterDisplay = requesterDisplay,
             InactivityBoundSeconds = inactivityBoundSeconds,
@@ -2117,7 +2121,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Final guard: re-validate that the chosen path's origin really
                 // matches the PR's repo. The match the UI saw could have moved
                 // (remote renamed, repo moved) between picker and launch.
-                var actual = await GetOriginRemoteAsync(repoPath);
+                var actual = await GetOriginRemoteAsync(repoPath, _time);
 
                 if (actual is null) {
                     await _server.LaunchFailedAsync(agentId, $"No origin remote at {repoPath}");
@@ -2285,7 +2289,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
 
                     if (work == WorkLocation.OwnedWorktree) {
-                        try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
+                        try { await WorktreeManager.RemoveAsync(worktree, _time); } catch { /* best-effort */ }
                     }
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2318,7 +2322,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (brokeredResultDelivery) flowResultCapabilityUrl = reviewerUrl;
             }
 
-            journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger);
+            journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger, _time);
 
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
@@ -2374,7 +2378,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Captured BEFORE the spawn so the transcript-based session-id fallback
             // (DetectSessionIdAsync) can filter the shared project/rollout dir to files
             // written by THIS agent's process, not the user's earlier sessions.
-            var spawnedAtUtc = DateTime.UtcNow;
+            var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
@@ -2408,7 +2412,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // A borrowed cwd is the user's real checkout; removing it here would `git worktree
                 // remove` the user's tree (spec's top safety invariant; mirrors CleanupAgentAsync).
                 if (work == WorkLocation.OwnedWorktree) {
-                    try { await WorktreeManager.RemoveAsync(worktree); } catch {
+                    try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
                         /* best-effort */
                     }
                 }
@@ -2465,7 +2469,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // back to effectiveModel.
             var registeredModel = start.Transcript is { } confirmed ? confirmed.ResolvedModel : effectiveModel;
 
+            // Stamped here rather than from spawnedAtUtc above: the handshake runs between the two,
+            // and LastOutputAt anchors the stuck-in-Starting window while CreatedAt is the age the
+            // server and the rail report.
+            var startedAtUtc = _time.GetUtcNow().UtcDateTime;
+
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
+                CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
                 SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : null,
@@ -2655,10 +2665,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             effort,
                             repoPath,
                             cmd.Vendor,
-                            new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance),
+                            new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance, _time),
                             worktree,
                             new CancellationTokenSource()
                         ) {
+                            CreatedAt     = _time.GetUtcNow().UtcDateTime,
+                            LastOutputAt  = _time.GetUtcNow().UtcDateTime,
+                            ActivityClock = CreateActivityClock(),
                             McpConfigPath = mcpConfigPath
                         };
                         launcherForCleanup.Cleanup(transient);
@@ -2667,7 +2680,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     }
                 }
 
-                try { await WorktreeManager.RemoveAsync(worktree); } catch {
+                try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
                     /* best-effort */
                 }
             }
@@ -2798,7 +2811,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// guard before a hosted PR review is launched, so it must never hang the
     /// launch path.
     /// </summary>
-    static async Task<string?> GetOriginRemoteAsync(string repoPath) {
+    static async Task<string?> GetOriginRemoteAsync(string repoPath, TimeProvider time) {
         try {
             var psi = new ProcessStartInfo("git", ["remote", "get-url", "origin"]) {
                 WorkingDirectory       = repoPath,
@@ -2815,7 +2828,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             if (proc is null) return null;
 
-            using var cts = new CancellationTokenSource(GitGuardTimeout);
+            using var cts = new CancellationTokenSource(GitGuardTimeout, time);
 
             try {
                 await proc.WaitForExitAsync(cts.Token);
@@ -2856,7 +2869,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         try {
             await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
-                agent.LastOutputAt      = DateTime.UtcNow;
+                agent.LastOutputAt      = _time.GetUtcNow().UtcDateTime;
                 agent.HasReceivedOutput = true;
                 // PTY output IS the activity signal for a PTY-hosted agent — no turn gate applies.
                 agent.ActivityClock.Advance();
@@ -3143,7 +3156,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var endTask = _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
 
                 try {
-                    var result = await endTask.WaitAsync(EndAgentSessionBudget, _shutdownCts.Token);
+                    var result = await endTask.WaitAsync(EndAgentSessionBudget, _time, _shutdownCts.Token);
 
                     // The daemon doesn't track sessionId on its own (only agentId), so
                     // the server returns it in the result. Spawn what's-done locally
@@ -3687,7 +3700,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             try {
                 graceful = agent.Runtime.RequestGracefulStopAsync();
-                await graceful.WaitAsync(GracefulExitWait);
+                await graceful.WaitAsync(GracefulExitWait, _time);
                 await agent.Runtime.WaitForExitAsync(GracefulExitWait);
             } catch (TimeoutException ex) {
                 // WaitAsync abandons the send rather than cancelling it (nothing CAN cancel it), so the
@@ -3904,7 +3917,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // the command's meaning. The runtime is what journals a delivered prompt, so the one text it
         // never sees is recorded here: the chat renders the journal alone.
         if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) {
-            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, DateTimeOffset.UtcNow.ToString("O"), text));
+            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, _time.GetUtcNow().ToString("O"), text));
 
             return InputDeliveryOutcome.QuitRequested;
         }
@@ -4119,14 +4132,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Monotonic elapsed measurement (same clock domain the observer uses) — DateTime.UtcNow
             // could skew or go negative if the wall clock shifts mid-observation.
-            var startTs = TimeProvider.System.GetTimestamp();
+            var startTs = _time.GetTimestamp();
 
             // Single-flight: this round's generation was bumped (under the send gate) before its
             // input was delivered, so a newer round instantly makes this one stale. The predicate is
             // checked inside the poll loop, so a superseded probe stops within one interval instead
             // of polling to the timeout; the generation stays the sole verdict authority.
             var outcome = await CodexTurnObserver.ObserveGrowthAsync(
-                CurrentLength, baseline, CodexTurnObserveTimeout, CodexTurnObserveInterval, TimeProvider.System, cts.Token,
+                CurrentLength, baseline, CodexTurnObserveTimeout, CodexTurnObserveInterval, _time, cts.Token,
                 isCurrent: () => Volatile.Read(ref agent.CodexTurnProbeGen) == gen);
 
             // Verdict authority: the in-loop predicate stops a superseded probe promptly, but it is
@@ -4138,7 +4151,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             switch (outcome) {
                 case CodexTurnObserver.Outcome.TurnObserved:
-                    LogCodexTurnStarted(agent.Id, (long)TimeProvider.System.GetElapsedTime(startTs).TotalMilliseconds);
+                    LogCodexTurnStarted(agent.Id, (long)_time.GetElapsedTime(startTs).TotalMilliseconds);
                     break;
                 case CodexTurnObserver.Outcome.NotObserved:
                     LogCodexTurnNotObserved(agent.Id, CodexTurnObserveTimeout.TotalSeconds);
@@ -4166,8 +4179,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.BorrowedSnapshotSource is not { } source || agent.Work != WorkLocation.OwnedWorktree)
             return true;
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
-        timeout.CancelAfter(BorrowedSnapshotRefreshTimeout);
+        using var cap     = new CancellationTokenSource(BorrowedSnapshotRefreshTimeout, _time);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cap.Token);
         try {
             await agent.Runtime.WaitForTurnIdleAsync(timeout.Token);
             var auth = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(source);
@@ -4353,7 +4366,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Persist repo path and notify server so the launch dialog updates.
         _ = Task.Run(async () => {
                 try {
-                    await new RepoPathStore(_configRoot).AddAsync(agent.RepoPath);
+                    await new RepoPathStore(_configRoot, _time).AddAsync(agent.RepoPath);
                     await _server.UpdateRepoPathsAsync();
                 } catch (Exception ex) {
                     LogRepoPathPersistFailed(ex, agent.Id);
@@ -4462,7 +4475,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         var sessionStarted = isRebind ? (AcpEventEnvelope?) null : AcpEventTranslator.BuildSessionStarted(
             seq: 0,
-            DateTimeOffset.UtcNow.ToString("O"),
+            _time.GetUtcNow().ToString("O"),
             cwd: transcript.Cwd,
             model: transcript.ResolvedModel,
             rawSessionId: transcript.AcpSessionId
@@ -4473,6 +4486,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             initialEnvelope: sessionStarted,
             envelopes: transcript.Envelopes,
             logger: _logger,
+            time: _time,
             resumeFromSeq: isRebind ? acceptedSeq : null
         );
 
@@ -4612,7 +4626,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return; // the agent finalized — stop quietly, never tear down
             } catch (Exception ex) {
                 LogConfirmSessionLaunchRetrying(ex, agent.Id);
-                try { await Task.Delay(ConfirmRetryDelay, ct); }
+                try { await Task.Delay(ConfirmRetryDelay, _time, ct); }
                 catch (OperationCanceledException) { return; }
             }
         }
@@ -4677,7 +4691,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             LogCleanupStepFailed(ex, "disposing ACP runtime for final transcript drain", agent.Id);
         }
 
-        var completed = await Task.WhenAny(acpForwarder.RunTask, Task.Delay(AcpFinalDrainBudget));
+        var completed = await Task.WhenAny(acpForwarder.RunTask, Task.Delay(AcpFinalDrainBudget, _time));
 
         if (completed != acpForwarder.RunTask) {
             LogAcpFinalDrainTimedOut(agent.Id, AcpFinalDrainBudget.TotalSeconds);
@@ -4796,7 +4810,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     break;
                 } catch (Exception) when (attempt < ReRegisterMaxAttempts && !_shutdownCts.IsCancellationRequested) {
                     try {
-                        await Task.Delay(ReRegisterRetryDelay, _shutdownCts.Token);
+                        await Task.Delay(ReRegisterRetryDelay, _time, _shutdownCts.Token);
                     } catch (OperationCanceledException) {
                         return;
                     }
@@ -4821,8 +4835,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// observed at least one chunk) AND that the gap between spawn and the last
     /// output is at least <see cref="MinSessionLifespan"/>. The
     /// <paramref name="hasReceivedOutput"/> guard prevents a no-output process
-    /// from being misclassified when the <c>CreatedAt</c> and <c>LastOutputAt</c>
-    /// field initializers happen to straddle a long pause.
+    /// from being misclassified when the two stamps straddle a long pause.
     /// </summary>
     internal static bool IsStartupFailure(DateTime createdAt, DateTime lastOutputAt, bool hasReceivedOutput)
         => !hasReceivedOutput || lastOutputAt - createdAt < MinSessionLifespan;
@@ -4881,7 +4894,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task RunDiscoveryAsync(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
         try {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
-            var discovery = new TranscriptDiscovery(TimeProvider.System, SessionIdPollInterval, SessionIdPollTimeout);
+            var discovery = new TranscriptDiscovery(_time, SessionIdPollInterval, SessionIdPollTimeout);
 
             // Cancelled and awaited in the finally below, never merely dropped: an agent that exits
             // inside the window is finalized and cleaned up without anyone touching ReadCts, and a
@@ -4919,7 +4932,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// and a slow link still resolves.</summary>
     async Task WarnIfStillUnlinkedAsync(AgentInstance agent, CancellationToken ct) {
         try {
-            await Task.Delay(SessionIdSlowWarnAfter, ct).ConfigureAwait(false);
+            await Task.Delay(SessionIdSlowWarnAfter, _time, ct).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             return;
         }
@@ -4959,8 +4972,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
                 // Detect agents stuck in "Starting" with no output
                 if (agent.Status                         == "Starting" &&
-                    DateTime.UtcNow - agent.LastOutputAt > StartupTimeout) {
-                    LogAgentStuck(agent.Id, (DateTime.UtcNow - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
+                    _time.GetUtcNow().UtcDateTime - agent.LastOutputAt > StartupTimeout) {
+                    LogAgentStuck(agent.Id, (_time.GetUtcNow().UtcDateTime - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
                     _ = HandleStopAgent(agent.Id);
 
                     continue;
@@ -4975,7 +4988,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunDaemonHeartbeatLoopAsync(CancellationToken ct) {
-        var loop = new DaemonHeartbeatLoop(_server, PingDeadline, _logger);
+        var loop = new DaemonHeartbeatLoop(_server, PingDeadline, _logger, _time);
 
         while (await _daemonHeartbeat.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but we
@@ -4993,7 +5006,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
-        var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval);
+        var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval, _time);
 
         while (await _tokenRefresh.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but this runs as an
@@ -5014,9 +5027,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _configRoot,
             _http,
             _config.ServerUrl,
-            new HookSpool(_configRoot),
-            new TranscriptSpool(_configRoot),
+            new HookSpool(_configRoot, _time),
+            new TranscriptSpool(_configRoot, _time),
             _logger,
+            _time,
             onWhatsDoneRequested: SpawnWhatsDoneGenerator);
 
         while (await _spoolDrain.WaitForNextTickAsync(ct)) {
@@ -5040,7 +5054,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             new TitleServerPort(_http, _config.ServerUrl),
             NativeTitleFor,
             GenerateTitleForAsync,
-            TimeProvider.System,
+            _time,
             _logger);
 
         while (await _titleResolve.WaitForNextTickAsync(ct)) {
@@ -5070,7 +5084,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task<string?> GenerateTitleForAsync(TitleAgentView agent, CancellationToken ct) {
         var result = await TitleGeneration.GenerateAsync(
-            agent.Prompt!, null, msg => _logger.LogDebug("Title generation ({AgentId}): {Message}", agent.Id, msg),
+            agent.Prompt!, null, _time, msg => _logger.LogDebug("Title generation ({AgentId}): {Message}", agent.Id, msg),
             _config.Profiles.Resolution.Profile, _harnesses,
             vendor: agent.Vendor == "codex" ? "codex" : "claude", ct: ct);
 
@@ -5115,7 +5129,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // RemoveAsync would Directory.Delete / `git worktree remove --force` + `branch -D`.
         // This is the spec's top safety invariant.
         if (agent.Work == WorkLocation.OwnedWorktree) {
-            try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+            try { await WorktreeManager.RemoveAsync(agent.Worktree, _time); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
 
         try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
@@ -5182,7 +5196,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (live.Count == 0) return;
 
-        using var budget = new CancellationTokenSource(ShutdownReportBudget);
+        using var budget = new CancellationTokenSource(ShutdownReportBudget, _time);
 
         LogShutdownReportStarted(live.Count, ShutdownReportBudget.TotalSeconds);
 
