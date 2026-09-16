@@ -5,36 +5,36 @@ could not run (see its status line below and `findings.md`).
 
 | Entry | Version tested | Modes | Native root | Roots consumed | Startup mechanism proven | Exclusion preserving load | Vendor-isolated destination | Reload path | GUI status | Minimum version |
 | -- | -- | -- | -- | -- | -- | -- | -- | -- | -- | -- |
-| agy | not-installed | print | .agents/skills |  | — | — | — | — | Antigravity IDE: untested (manual procedure in findings.md) | — |
-| agy-clidir | not-installed | print | .agents/skills |  | — | — | — | — | Antigravity IDE: untested (manual procedure in findings.md) | — |
-| agy-dirlayout | not-installed | print | .agents/skills |  | — | — | — | — | Antigravity IDE: untested (manual procedure in findings.md) | — |
+| agy | 1.2.4, not-installed | print | .agents/skills | — | — | — | — | — | Antigravity IDE: untested (manual procedure in findings.md) | — |
+| agy-clidir | 1.2.4 | print | .agents/skills | .agent/skills, .agents/skills | n/a (not run) | gitignore, info-exclude | none | n/a (not run) | Antigravity IDE: untested (manual procedure in findings.md) | 1.2.4 |
+| agy-dirlayout | 1.2.4 | print | .agents/skills | .agent/skills, .agents/skills | none | gitignore, info-exclude | none | none | Antigravity IDE: untested (manual procedure in findings.md) | 1.2.4 |
 | claude | 2.1.273 (Claude Code) | print | .claude/skills | .claude/skills | none | gitignore, info-exclude | none | none | n/a | 2.1.273 (Claude Code) |
-| codex | codex-cli 0.154.0 | daemon, print | .agents/skills | .agents/skills, .codex/skills | none | gitignore, info-exclude | .codex/skills | none | n/a | codex-cli 0.154.0 |
+| codex | codex-cli 0.154.0 | daemon, print | .agents/skills | .agents/skills, .codex/skills | none | gitignore, info-exclude | none | none | n/a | codex-cli 0.154.0 |
 | copilot | GitHub Copilot CLI 1.0.85. | daemon, print | .github/skills | .agents/skills, .claude/skills, .github/skills | none | gitignore, info-exclude | .github/skills | none | n/a | GitHub Copilot CLI 1.0.85. |
-| cursor | not-installed | daemon, print | .cursor/skills |  | — | — | — | — | Cursor desktop: untested (manual procedure in findings.md) | — |
-| gemini | 0.60.0 | daemon, print | .gemini/skills |  | — | — | — | — | n/a | — |
-| kiro | kiro-cli 2.21.4 | daemon, print | .kiro/skills |  | — | — | — | — | Kiro IDE: untested (manual procedure in findings.md) | — |
-| kiro-agent-bare | kiro-cli 2.21.4 | daemon, print | .kiro/skills |  | — | — | — | — | n/a | — |
-| kiro-agent-skills | kiro-cli 2.21.4 | daemon, print | .kiro/skills |  | — | — | — | — | n/a | — |
-| opencode-v1 | 1.18.31 | daemon, print | .opencode/skills |  | — | — | — | — | n/a | — |
-| opencode-v2 | opencode v2.0.4 | daemon, print | .opencode/skills |  | — | — | — | — | n/a | — |
-| opencode-v2-prompt | opencode v2.0.4 | daemon, print | .opencode/skills |  | — | — | — | — | n/a | — |
+| cursor | 2026.09.15-d2fe57e | daemon, print | .cursor/skills | .agents/skills, .claude/skills, .codex/skills, .cursor/skills | none | gitignore, info-exclude | .cursor/skills | none | Cursor desktop: untested (manual procedure in findings.md) | 2026.09.15-d2fe57e |
+| cursor-userhooks | 2026.09.15-d2fe57e | daemon, print | .cursor/skills | n/a (not run) | none | n/a (not run) | n/a (not run) | none | n/a | 2026.09.15-d2fe57e |
+| gemini | 0.60.0 | daemon, print | .gemini/skills | — | — | — | — | — | n/a | — |
+| kiro | kiro-cli 2.21.4 | daemon, print | .kiro/skills | .kiro/skills | agent hooks.agentSpawn (cli 2.x) (daemon); agent hooks.agentSpawn (cli 2.x) (print) | gitignore, info-exclude | .kiro/skills | none | Kiro IDE: untested (manual procedure in findings.md) | kiro-cli 2.21.4 |
+| kiro-agent-bare | kiro-cli 2.21.4 | daemon, print | .kiro/skills | n/a (not run) | n/a (not run) | n/a (not run) | n/a (not run) | n/a (not run) | n/a | kiro-cli 2.21.4 |
+| kiro-agent-skills | kiro-cli 2.21.4 | daemon, print | .kiro/skills | n/a (not run) | n/a (not run) | n/a (not run) | n/a (not run) | n/a (not run) | n/a | kiro-cli 2.21.4 |
+| opencode-v1 | 1.18.31 | daemon, print | .opencode/skills | .agents/skills, .claude/skills, .opencode/skills | plugin event session.created (print) | gitignore, info-exclude | none | none | n/a | 1.18.31 |
+| opencode-v2 | opencode v2.0.4 | daemon, print | .opencode/skills | .agents/skills, .claude/skills, .opencode/skills | n/a (not run) | gitignore, info-exclude | none | n/a (not run) | n/a | opencode v2.0.4 |
 | pi | 0.85.1 | daemon, print | .pi/skills | .agents/skills, .pi/skills | extension session_start + resources_discover skillPaths (daemon); extension session_start + resources_discover skillPaths (print) | gitignore, info-exclude | .pi/skills | extension session_start + resources_discover skillPaths | n/a | 0.85.1 |
 
 ## Status per entry
 
-- `agy`: untested: binary not installed
-- `agy-clidir`: untested: binary not installed
-- `agy-dirlayout`: untested: binary not installed
+- `agy`: S1 failed: the native root's skill was not loaded
+- `agy-clidir`: measured
+- `agy-dirlayout`: measured
 - `claude`: measured
 - `codex`: measured
 - `copilot`: measured
-- `cursor`: untested: binary not installed
+- `cursor`: measured
+- `cursor-userhooks`: measured
 - `gemini`: untested: exception=RuntimeError("vendor exit 1 with no reply; extract failed: JSONDecodeE; exception=RuntimeError('vendor exit -9 with no reply; session/new failed: {"json
-- `kiro`: untested: auth_ok false in isolated root
-- `kiro-agent-bare`: untested: auth_ok false in isolated root
-- `kiro-agent-skills`: untested: auth_ok false in isolated root
-- `opencode-v1`: untested: auth_ok false in isolated root
-- `opencode-v2`: untested: auth_ok false in isolated root
-- `opencode-v2-prompt`: untested: auth_ok false in isolated root
+- `kiro`: measured
+- `kiro-agent-bare`: measured
+- `kiro-agent-skills`: measured
+- `opencode-v1`: measured
+- `opencode-v2`: measured
 - `pi`: measured

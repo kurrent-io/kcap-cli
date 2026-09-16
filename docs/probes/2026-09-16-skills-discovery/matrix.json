@@ -2,40 +2,42 @@
   {
     "entry": "agy",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S0",
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy/print/S0/S0_none/run1.json"
+      "out/agy/print/S0/S0_none/run1.json",
+      "out/agy/print/S0/S0_none/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-58df4b"
   },
   {
     "entry": "agy",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S1",
     "arm": "S1/native",
     "root": ".agents/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy/print/S1/S1_native/run1.json"
+      "out/agy/print/S1/S1_native/run1.json",
+      "out/agy/print/S1/S1_native/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-929e9c; slash=/kcap-probe-f1b555"
   },
   {
     "entry": "agy",
@@ -154,45 +156,47 @@
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S0",
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-clidir/print/S0/S0_none/run1.json"
+      "out/agy-clidir/print/S0/S0_none/run1.json",
+      "out/agy-clidir/print/S0/S0_none/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-db9de1; slash=/kcap-probe-8156d7"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S1",
     "arm": "S1/native",
     "root": ".agents/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-clidir/print/S1/S1_native/run1.json"
+      "out/agy-clidir/print/S1/S1_native/run1.json",
+      "out/agy-clidir/print/S1/S1_native/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-842287; slash=/kcap-probe-eefbb5"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
@@ -201,17 +205,18 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "~/.gemini/antigravity-cli/plugins PreInvocation",
     "evidence": [
-      "out/agy-clidir/print/S2/S2_hook-adds-skill/run1.json"
+      "out/agy-clidir/print/S2/S2_hook-adds-skill/run1.json",
+      "out/agy-clidir/print/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "hook never fired skill file absent after the turn slash=/kcap-probe-fa85ff; hook never fired skill file absent after the turn slash=/kcap-probe-84de58"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
@@ -220,17 +225,18 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "~/.gemini/antigravity-cli/plugins PreInvocation",
     "evidence": [
-      "out/agy-clidir/print/S2/S2_hook-creates-root/run1.json"
+      "out/agy-clidir/print/S2/S2_hook-creates-root/run1.json",
+      "out/agy-clidir/print/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "hook never fired skill file absent after the turn slash=/kcap-probe-207740; hook never fired skill file absent after the turn slash=/kcap-probe-d6ffe0"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
@@ -244,145 +250,484 @@
     "evidence": [
       "out/agy-clidir/print/S2/S2_registration/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "no registration mechanism for this entry"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
     "arm": "S3/gitignore",
     "root": ".agents/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-clidir/print/S3/S3_gitignore/run1.json"
+      "out/agy-clidir/print/S3/S3_gitignore/run1.json",
+      "out/agy-clidir/print/S3/S3_gitignore/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-0037cf; slash=/kcap-probe-af8f98"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".agents/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-clidir/print/S3/S3_info-exclude/run1.json"
+      "out/agy-clidir/print/S3/S3_info-exclude/run1.json",
+      "out/agy-clidir/print/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-630e0b; slash=/kcap-probe-8df12d"
   },
   {
     "entry": "agy-clidir",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run10.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run12.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run1.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run13.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run14.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run16.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run15.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run17.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run19.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_all-roots/run18.json",
+      "out/agy-clidir/print/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-claude",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/agy-clidir/print/S4/S4_all-roots/run1.json"
+      "out/agy-clidir/print/S4/S4_confirm-claude/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-456006"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-f8199f"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-3a0644"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-61136d"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-1c3a57"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-1ebd45"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-6d1857"
+  },
+  {
+    "entry": "agy-clidir",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-clidir/print/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-0d46d0"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S0",
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-dirlayout/print/S0/S0_none/run1.json"
+      "out/agy-dirlayout/print/S0/S0_none/run1.json",
+      "out/agy-dirlayout/print/S0/S0_none/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-598b65; slash=/kcap-probe-f000c0"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S1",
     "arm": "S1/native",
     "root": ".agents/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-dirlayout/print/S1/S1_native/run1.json"
+      "out/agy-dirlayout/print/S1/S1_native/run1.json",
+      "out/agy-dirlayout/print/S1/S1_native/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-051be9; slash=/kcap-probe-1f8282"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
     "arm": "S2/hook-adds-skill",
     "root": ".agents/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "workspace .agents/plugins PreInvocation",
     "evidence": [
-      "out/agy-dirlayout/print/S2/S2_hook-adds-skill/run1.json"
+      "out/agy-dirlayout/print/S2/S2_hook-adds-skill/run1.json",
+      "out/agy-dirlayout/print/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-9d4a41; slash=/kcap-probe-4d6f9e"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
     "arm": "S2/hook-creates-root",
     "root": ".agents/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "workspace .agents/plugins PreInvocation",
     "evidence": [
-      "out/agy-dirlayout/print/S2/S2_hook-creates-root/run1.json"
+      "out/agy-dirlayout/print/S2/S2_hook-creates-root/run1.json",
+      "out/agy-dirlayout/print/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-22702b; slash=/kcap-probe-bf4489"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
@@ -396,64 +741,399 @@
     "evidence": [
       "out/agy-dirlayout/print/S2/S2_registration/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "no registration mechanism for this entry"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
     "arm": "S3/gitignore",
     "root": ".agents/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-dirlayout/print/S3/S3_gitignore/run1.json"
+      "out/agy-dirlayout/print/S3/S3_gitignore/run1.json",
+      "out/agy-dirlayout/print/S3/S3_gitignore/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-9d6f7a; slash=/kcap-probe-84fb44"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".agents/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/agy-dirlayout/print/S3/S3_info-exclude/run1.json"
+      "out/agy-dirlayout/print/S3/S3_info-exclude/run1.json",
+      "out/agy-dirlayout/print/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-740721; slash=/kcap-probe-08f5c0"
   },
   {
     "entry": "agy-dirlayout",
     "harness": "antigravity",
-    "version": "not-installed",
+    "version": "1.2.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run10.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run12.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run1.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run13.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run14.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run16.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run15.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run17.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run19.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_all-roots/run18.json",
+      "out/agy-dirlayout/print/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agent', 'agents'] leaked=[]"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-claude",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/agy-dirlayout/print/S4/S4_all-roots/run1.json"
+      "out/agy-dirlayout/print/S4/S4_confirm-claude/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "slash=/kcap-probe-032124"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-830422"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-ba67ba"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-f0b350"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-521bf6"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-8472e2"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-c1ebe8"
+  },
+  {
+    "entry": "agy-dirlayout",
+    "harness": "antigravity",
+    "version": "1.2.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/agy-dirlayout/print/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "slash=/kcap-probe-7fa958"
   },
   {
     "entry": "claude",
@@ -2894,45 +3574,47 @@
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S0",
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/daemon/S0/S0_none/run1.json"
+      "out/cursor/daemon/S0/S0_none/run1.json",
+      "out/cursor/daemon/S0/S0_none/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "stopReason=end_turn tools_used=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S1",
     "arm": "S1/native",
     "root": ".cursor/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/daemon/S1/S1_native/run1.json"
+      "out/cursor/daemon/S1/S1_native/run1.json",
+      "out/cursor/daemon/S1/S1_native/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "stopReason=end_turn tools_used=1"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S2",
@@ -2941,17 +3623,18 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "project .cursor/hooks.json sessionStart",
     "evidence": [
-      "out/cursor/daemon/S2/S2_hook-adds-skill/run1.json"
+      "out/cursor/daemon/S2/S2_hook-adds-skill/run1.json",
+      "out/cursor/daemon/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S2",
@@ -2960,17 +3643,18 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "project .cursor/hooks.json sessionStart",
     "evidence": [
-      "out/cursor/daemon/S2/S2_hook-creates-root/run1.json"
+      "out/cursor/daemon/S2/S2_hook-creates-root/run1.json",
+      "out/cursor/daemon/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S2",
@@ -2980,149 +3664,450 @@
     "verdict": "untested",
     "flaky": false,
     "runs": 1,
-    "mechanism": null,
+    "mechanism": "project .cursor/hooks.json workspaceOpen pluginPaths",
     "evidence": [
       "out/cursor/daemon/S2/S2_registration/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "skill file absent after the turn stopReason=end_turn tools_used=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S3",
     "arm": "S3/gitignore",
     "root": ".cursor/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/daemon/S3/S3_gitignore/run1.json"
+      "out/cursor/daemon/S3/S3_gitignore/run1.json",
+      "out/cursor/daemon/S3/S3_gitignore/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "stopReason=end_turn tools_used=1"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".cursor/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/daemon/S3/S3_info-exclude/run1.json"
+      "out/cursor/daemon/S3/S3_info-exclude/run1.json",
+      "out/cursor/daemon/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "stopReason=end_turn tools_used=1"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "daemon",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/daemon/S4/S4_all-roots/run1.json"
+      "out/cursor/daemon/S4/S4_all-roots/run10.json",
+      "out/cursor/daemon/S4/S4_all-roots/run20.json"
     ],
-    "notes": "binary not installed"
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run12.json",
+      "out/cursor/daemon/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run1.json",
+      "out/cursor/daemon/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run13.json",
+      "out/cursor/daemon/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run14.json",
+      "out/cursor/daemon/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run16.json",
+      "out/cursor/daemon/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run15.json",
+      "out/cursor/daemon/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run17.json",
+      "out/cursor/daemon/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run19.json",
+      "out/cursor/daemon/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_all-roots/run18.json",
+      "out/cursor/daemon/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] stopReason=end_turn tools_used=4"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_confirm-agent/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/daemon/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S0",
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/print/S0/S0_none/run1.json"
+      "out/cursor/print/S0/S0_none/run1.json",
+      "out/cursor/print/S0/S0_none/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S1",
     "arm": "S1/native",
     "root": ".cursor/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/print/S1/S1_native/run1.json"
+      "out/cursor/print/S1/S1_native/run1.json",
+      "out/cursor/print/S1/S1_native/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
     "arm": "S2/hook-adds-skill",
     "root": ".cursor/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "project .cursor/hooks.json sessionStart",
     "evidence": [
-      "out/cursor/print/S2/S2_hook-adds-skill/run1.json"
+      "out/cursor/print/S2/S2_hook-adds-skill/run1.json",
+      "out/cursor/print/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
     "arm": "S2/hook-creates-root",
     "root": ".cursor/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "project .cursor/hooks.json sessionStart",
     "evidence": [
-      "out/cursor/print/S2/S2_hook-creates-root/run1.json"
+      "out/cursor/print/S2/S2_hook-creates-root/run1.json",
+      "out/cursor/print/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S2",
@@ -3132,68 +4117,524 @@
     "verdict": "untested",
     "flaky": false,
     "runs": 1,
-    "mechanism": null,
+    "mechanism": "project .cursor/hooks.json workspaceOpen pluginPaths",
     "evidence": [
       "out/cursor/print/S2/S2_registration/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "skill file absent after the turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
     "arm": "S3/gitignore",
     "root": ".cursor/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/print/S3/S3_gitignore/run1.json"
+      "out/cursor/print/S3/S3_gitignore/run1.json",
+      "out/cursor/print/S3/S3_gitignore/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S3",
     "arm": "S3/info-exclude",
     "root": ".cursor/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/cursor/print/S3/S3_info-exclude/run1.json"
+      "out/cursor/print/S3/S3_info-exclude/run1.json",
+      "out/cursor/print/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "cursor",
     "harness": "cursor",
-    "version": "not-installed",
+    "version": "2026.09.15-d2fe57e",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run10.json",
+      "out/cursor/print/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run12.json",
+      "out/cursor/print/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run1.json",
+      "out/cursor/print/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run13.json",
+      "out/cursor/print/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run14.json",
+      "out/cursor/print/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run16.json",
+      "out/cursor/print/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run15.json",
+      "out/cursor/print/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run17.json",
+      "out/cursor/print/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run19.json",
+      "out/cursor/print/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_all-roots/run18.json",
+      "out/cursor/print/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agents', 'claude', 'codex', 'cursor'] leaked=[] tools_used=0 skill_reads=4 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/cursor/print/S4/S4_all-roots/run1.json"
+      "out/cursor/print/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "binary not installed"
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor/print/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S1",
+    "arm": "S1/native",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor-userhooks/daemon/S1/S1_native/run1.json",
+      "out/cursor-userhooks/daemon/S1/S1_native/run2.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S2",
+    "arm": "S2/hook-adds-skill",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "untested",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": "user ~/.cursor/hooks.json sessionStart",
+    "evidence": [
+      "out/cursor-userhooks/daemon/S2/S2_hook-adds-skill/run1.json",
+      "out/cursor-userhooks/daemon/S2/S2_hook-adds-skill/run2.json"
+    ],
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S2",
+    "arm": "S2/hook-creates-root",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "untested",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": "user ~/.cursor/hooks.json sessionStart",
+    "evidence": [
+      "out/cursor-userhooks/daemon/S2/S2_hook-creates-root/run1.json",
+      "out/cursor-userhooks/daemon/S2/S2_hook-creates-root/run2.json"
+    ],
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S2",
+    "arm": "S2/registration",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "untested",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": "user ~/.cursor/hooks.json workspaceOpen",
+    "evidence": [
+      "out/cursor-userhooks/daemon/S2/S2_registration/run1.json"
+    ],
+    "notes": "skill file absent after the turn stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S1",
+    "arm": "S1/native",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/cursor-userhooks/print/S1/S1_native/run1.json",
+      "out/cursor-userhooks/print/S1/S1_native/run2.json"
+    ],
+    "notes": "tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S2",
+    "arm": "S2/hook-adds-skill",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": "user ~/.cursor/hooks.json sessionStart",
+    "evidence": [
+      "out/cursor-userhooks/print/S2/S2_hook-adds-skill/run1.json",
+      "out/cursor-userhooks/print/S2/S2_hook-adds-skill/run2.json"
+    ],
+    "notes": "tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S2",
+    "arm": "S2/hook-creates-root",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": "user ~/.cursor/hooks.json sessionStart",
+    "evidence": [
+      "out/cursor-userhooks/print/S2/S2_hook-creates-root/run1.json",
+      "out/cursor-userhooks/print/S2/S2_hook-creates-root/run2.json",
+      "out/cursor-userhooks/print/S2/S2_hook-creates-root/run3.json"
+    ],
+    "notes": "tools_used=3 skill_reads=1 searches=3; tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "cursor-userhooks",
+    "harness": "cursor",
+    "version": "2026.09.15-d2fe57e",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S2",
+    "arm": "S2/registration",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "untested",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": "user ~/.cursor/hooks.json workspaceOpen",
+    "evidence": [
+      "out/cursor-userhooks/print/S2/S2_registration/run1.json"
+    ],
+    "notes": "skill file absent after the turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "gemini",
@@ -3513,14 +4954,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/daemon/S0/S0_none/run1.json"
+      "out/kiro/daemon/S0/S0_none/run1.json",
+      "out/kiro/daemon/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0; stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "kiro",
@@ -3532,14 +4974,15 @@
     "arm": "S1/native",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/daemon/S1/S1_native/run1.json"
+      "out/kiro/daemon/S1/S1_native/run1.json",
+      "out/kiro/daemon/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=1; stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro",
@@ -3551,14 +4994,15 @@
     "arm": "S2/hook-adds-skill",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "agent hooks.agentSpawn (cli 2.x)",
     "evidence": [
-      "out/kiro/daemon/S2/S2_hook-adds-skill/run1.json"
+      "out/kiro/daemon/S2/S2_hook-adds-skill/run1.json",
+      "out/kiro/daemon/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro",
@@ -3570,14 +5014,15 @@
     "arm": "S2/hook-creates-root",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "agent hooks.agentSpawn (cli 2.x)",
     "evidence": [
-      "out/kiro/daemon/S2/S2_hook-creates-root/run1.json"
+      "out/kiro/daemon/S2/S2_hook-creates-root/run1.json",
+      "out/kiro/daemon/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro",
@@ -3596,7 +5041,7 @@
     "evidence": [
       "out/kiro/daemon/S2/S2_registration/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "no registration mechanism for this entry"
   },
   {
     "entry": "kiro",
@@ -3608,14 +5053,15 @@
     "arm": "S3/gitignore",
     "root": ".kiro/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/daemon/S3/S3_gitignore/run1.json"
+      "out/kiro/daemon/S3/S3_gitignore/run1.json",
+      "out/kiro/daemon/S3/S3_gitignore/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro",
@@ -3627,14 +5073,15 @@
     "arm": "S3/info-exclude",
     "root": ".kiro/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/daemon/S3/S3_info-exclude/run1.json"
+      "out/kiro/daemon/S3/S3_info-exclude/run1.json",
+      "out/kiro/daemon/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro",
@@ -3644,16 +5091,368 @@
     "mode": "daemon",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run10.json",
+      "out/kiro/daemon/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run12.json",
+      "out/kiro/daemon/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run1.json",
+      "out/kiro/daemon/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run13.json",
+      "out/kiro/daemon/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run14.json",
+      "out/kiro/daemon/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run16.json",
+      "out/kiro/daemon/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run15.json",
+      "out/kiro/daemon/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run17.json",
+      "out/kiro/daemon/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run19.json",
+      "out/kiro/daemon/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_all-roots/run18.json",
+      "out/kiro/daemon/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['kiro'] leaked=[] stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/kiro/daemon/S4/S4_all-roots/run1.json"
+      "out/kiro/daemon/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-agents/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-claude",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-claude/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/daemon/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "kiro",
@@ -3665,14 +5464,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/print/S0/S0_none/run1.json"
+      "out/kiro/print/S0/S0_none/run1.json",
+      "out/kiro/print/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": ""
   },
   {
     "entry": "kiro",
@@ -3684,14 +5484,15 @@
     "arm": "S1/native",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/print/S1/S1_native/run1.json"
+      "out/kiro/print/S1/S1_native/run1.json",
+      "out/kiro/print/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": ""
   },
   {
     "entry": "kiro",
@@ -3703,14 +5504,15 @@
     "arm": "S2/hook-adds-skill",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "agent hooks.agentSpawn (cli 2.x)",
     "evidence": [
-      "out/kiro/print/S2/S2_hook-adds-skill/run1.json"
+      "out/kiro/print/S2/S2_hook-adds-skill/run1.json",
+      "out/kiro/print/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "kiro",
@@ -3722,14 +5524,15 @@
     "arm": "S2/hook-creates-root",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "agent hooks.agentSpawn (cli 2.x)",
     "evidence": [
-      "out/kiro/print/S2/S2_hook-creates-root/run1.json"
+      "out/kiro/print/S2/S2_hook-creates-root/run1.json",
+      "out/kiro/print/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "kiro",
@@ -3748,7 +5551,7 @@
     "evidence": [
       "out/kiro/print/S2/S2_registration/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "no registration mechanism for this entry"
   },
   {
     "entry": "kiro",
@@ -3760,14 +5563,15 @@
     "arm": "S3/gitignore",
     "root": ".kiro/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/print/S3/S3_gitignore/run1.json"
+      "out/kiro/print/S3/S3_gitignore/run1.json",
+      "out/kiro/print/S3/S3_gitignore/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": ""
   },
   {
     "entry": "kiro",
@@ -3779,14 +5583,15 @@
     "arm": "S3/info-exclude",
     "root": ".kiro/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro/print/S3/S3_info-exclude/run1.json"
+      "out/kiro/print/S3/S3_info-exclude/run1.json",
+      "out/kiro/print/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": ""
   },
   {
     "entry": "kiro",
@@ -3796,16 +5601,368 @@
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run10.json",
+      "out/kiro/print/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run12.json",
+      "out/kiro/print/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run1.json",
+      "out/kiro/print/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run13.json",
+      "out/kiro/print/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run14.json",
+      "out/kiro/print/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run16.json",
+      "out/kiro/print/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run15.json",
+      "out/kiro/print/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run17.json",
+      "out/kiro/print/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run19.json",
+      "out/kiro/print/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_all-roots/run18.json",
+      "out/kiro/print/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['kiro'] leaked=[]"
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/kiro/print/S4/S4_all-roots/run1.json"
+      "out/kiro/print/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-agents/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-claude",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-claude/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": ""
+  },
+  {
+    "entry": "kiro",
+    "harness": "kiro",
+    "version": "kiro-cli 2.21.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/kiro/print/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": ""
   },
   {
     "entry": "kiro-agent-bare",
@@ -3817,14 +5974,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-bare/daemon/S0/S0_none/run1.json"
+      "out/kiro-agent-bare/daemon/S0/S0_none/run1.json",
+      "out/kiro-agent-bare/daemon/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "kiro-agent-bare",
@@ -3836,128 +5994,15 @@
     "arm": "S1/native",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-bare/daemon/S1/S1_native/run1.json"
+      "out/kiro-agent-bare/daemon/S1/S1_native/run1.json",
+      "out/kiro-agent-bare/daemon/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/hook-adds-skill",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/daemon/S2/S2_hook-adds-skill/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/hook-creates-root",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/daemon/S2/S2_hook-creates-root/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/registration",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/daemon/S2/S2_registration/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S3",
-    "arm": "S3/gitignore",
-    "root": ".kiro/skills",
-    "exclusion": "gitignore",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/daemon/S3/S3_gitignore/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S3",
-    "arm": "S3/info-exclude",
-    "root": ".kiro/skills",
-    "exclusion": "info-exclude",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/daemon/S3/S3_info-exclude/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S4",
-    "arm": "S4/all-roots",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/daemon/S4/S4_all-roots/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro-agent-bare",
@@ -3969,14 +6014,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-bare/print/S0/S0_none/run1.json"
+      "out/kiro-agent-bare/print/S0/S0_none/run1.json",
+      "out/kiro-agent-bare/print/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "kiro-agent-bare",
@@ -3988,128 +6034,15 @@
     "arm": "S1/native",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-bare/print/S1/S1_native/run1.json"
+      "out/kiro-agent-bare/print/S1/S1_native/run1.json",
+      "out/kiro-agent-bare/print/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/hook-adds-skill",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/print/S2/S2_hook-adds-skill/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/hook-creates-root",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/print/S2/S2_hook-creates-root/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/registration",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/print/S2/S2_registration/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S3",
-    "arm": "S3/gitignore",
-    "root": ".kiro/skills",
-    "exclusion": "gitignore",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/print/S3/S3_gitignore/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S3",
-    "arm": "S3/info-exclude",
-    "root": ".kiro/skills",
-    "exclusion": "info-exclude",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/print/S3/S3_info-exclude/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-bare",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S4",
-    "arm": "S4/all-roots",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-bare/print/S4/S4_all-roots/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "kiro-agent-skills",
@@ -4121,14 +6054,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-skills/daemon/S0/S0_none/run1.json"
+      "out/kiro-agent-skills/daemon/S0/S0_none/run1.json",
+      "out/kiro-agent-skills/daemon/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=0 searches=0"
   },
   {
     "entry": "kiro-agent-skills",
@@ -4140,128 +6074,15 @@
     "arm": "S1/native",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-skills/daemon/S1/S1_native/run1.json"
+      "out/kiro-agent-skills/daemon/S1/S1_native/run1.json",
+      "out/kiro-agent-skills/daemon/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/hook-adds-skill",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/daemon/S2/S2_hook-adds-skill/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/hook-creates-root",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/daemon/S2/S2_hook-creates-root/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/registration",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/daemon/S2/S2_registration/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S3",
-    "arm": "S3/gitignore",
-    "root": ".kiro/skills",
-    "exclusion": "gitignore",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/daemon/S3/S3_gitignore/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S3",
-    "arm": "S3/info-exclude",
-    "root": ".kiro/skills",
-    "exclusion": "info-exclude",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/daemon/S3/S3_info-exclude/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S4",
-    "arm": "S4/all-roots",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/daemon/S4/S4_all-roots/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_reads=1 searches=0"
   },
   {
     "entry": "kiro-agent-skills",
@@ -4273,14 +6094,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-skills/print/S0/S0_none/run1.json"
+      "out/kiro-agent-skills/print/S0/S0_none/run1.json",
+      "out/kiro-agent-skills/print/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "kiro-agent-skills",
@@ -4292,128 +6114,15 @@
     "arm": "S1/native",
     "root": ".kiro/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/kiro-agent-skills/print/S1/S1_native/run1.json"
+      "out/kiro-agent-skills/print/S1/S1_native/run1.json",
+      "out/kiro-agent-skills/print/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/hook-adds-skill",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/print/S2/S2_hook-adds-skill/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/hook-creates-root",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/print/S2/S2_hook-creates-root/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/registration",
-    "root": ".kiro/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/print/S2/S2_registration/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S3",
-    "arm": "S3/gitignore",
-    "root": ".kiro/skills",
-    "exclusion": "gitignore",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/print/S3/S3_gitignore/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S3",
-    "arm": "S3/info-exclude",
-    "root": ".kiro/skills",
-    "exclusion": "info-exclude",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/print/S3/S3_info-exclude/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "kiro-agent-skills",
-    "harness": "kiro",
-    "version": "kiro-cli 2.21.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S4",
-    "arm": "S4/all-roots",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/kiro-agent-skills/print/S4/S4_all-roots/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools=unobserved"
   },
   {
     "entry": "opencode-v1",
@@ -4425,14 +6134,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/daemon/S0/S0_none/run1.json"
+      "out/opencode-v1/daemon/S0/S0_none/run1.json",
+      "out/opencode-v1/daemon/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0; stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4444,14 +6154,15 @@
     "arm": "S1/native",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/daemon/S1/S1_native/run1.json"
+      "out/opencode-v1/daemon/S1/S1_native/run1.json",
+      "out/opencode-v1/daemon/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=1; stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4463,14 +6174,15 @@
     "arm": "S2/hook-adds-skill",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin event session.created",
     "evidence": [
-      "out/opencode-v1/daemon/S2/S2_hook-adds-skill/run1.json"
+      "out/opencode-v1/daemon/S2/S2_hook-adds-skill/run1.json",
+      "out/opencode-v1/daemon/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4482,14 +6194,16 @@
     "arm": "S2/hook-creates-root",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "verdict": "not_visible",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": "plugin event session.created",
     "evidence": [
-      "out/opencode-v1/daemon/S2/S2_hook-creates-root/run1.json"
+      "out/opencode-v1/daemon/S2/S2_hook-creates-root/run1.json",
+      "out/opencode-v1/daemon/S2/S2_hook-creates-root/run2.json",
+      "out/opencode-v1/daemon/S2/S2_hook-creates-root/run3.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0; exception=RuntimeError('vendor exit -15 with no reply; exception=TimeoutError() tools_used=0 skill_loads=0 searches=0; stderr: ')"
   },
   {
     "entry": "opencode-v1",
@@ -4501,14 +6215,15 @@
     "arm": "S2/registration",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin experimental.chat.system.transform",
     "evidence": [
-      "out/opencode-v1/daemon/S2/S2_registration/run1.json"
+      "out/opencode-v1/daemon/S2/S2_registration/run1.json",
+      "out/opencode-v1/daemon/S2/S2_registration/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4520,14 +6235,15 @@
     "arm": "S3/gitignore",
     "root": ".opencode/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/daemon/S3/S3_gitignore/run1.json"
+      "out/opencode-v1/daemon/S3/S3_gitignore/run1.json",
+      "out/opencode-v1/daemon/S3/S3_gitignore/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4539,14 +6255,15 @@
     "arm": "S3/info-exclude",
     "root": ".opencode/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/daemon/S3/S3_info-exclude/run1.json"
+      "out/opencode-v1/daemon/S3/S3_info-exclude/run1.json",
+      "out/opencode-v1/daemon/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4556,16 +6273,330 @@
     "mode": "daemon",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run10.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run12.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run1.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run13.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run14.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run16.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run15.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run17.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run19.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_all-roots/run18.json",
+      "out/opencode-v1/daemon/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=3 skill_loads=0 searches=3"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/daemon/S4/S4_all-roots/run1.json"
+      "out/opencode-v1/daemon/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/daemon/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4577,14 +6608,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/print/S0/S0_none/run1.json"
+      "out/opencode-v1/print/S0/S0_none/run1.json",
+      "out/opencode-v1/print/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4596,14 +6628,15 @@
     "arm": "S1/native",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/print/S1/S1_native/run1.json"
+      "out/opencode-v1/print/S1/S1_native/run1.json",
+      "out/opencode-v1/print/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4615,14 +6648,15 @@
     "arm": "S2/hook-adds-skill",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin event session.created",
     "evidence": [
-      "out/opencode-v1/print/S2/S2_hook-adds-skill/run1.json"
+      "out/opencode-v1/print/S2/S2_hook-adds-skill/run1.json",
+      "out/opencode-v1/print/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4634,14 +6668,15 @@
     "arm": "S2/hook-creates-root",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin event session.created",
     "evidence": [
-      "out/opencode-v1/print/S2/S2_hook-creates-root/run1.json"
+      "out/opencode-v1/print/S2/S2_hook-creates-root/run1.json",
+      "out/opencode-v1/print/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4653,14 +6688,15 @@
     "arm": "S2/registration",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin experimental.chat.system.transform",
     "evidence": [
-      "out/opencode-v1/print/S2/S2_registration/run1.json"
+      "out/opencode-v1/print/S2/S2_registration/run1.json",
+      "out/opencode-v1/print/S2/S2_registration/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4672,14 +6708,15 @@
     "arm": "S3/gitignore",
     "root": ".opencode/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/print/S3/S3_gitignore/run1.json"
+      "out/opencode-v1/print/S3/S3_gitignore/run1.json",
+      "out/opencode-v1/print/S3/S3_gitignore/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4691,14 +6728,15 @@
     "arm": "S3/info-exclude",
     "root": ".opencode/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/print/S3/S3_info-exclude/run1.json"
+      "out/opencode-v1/print/S3/S3_info-exclude/run1.json",
+      "out/opencode-v1/print/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v1",
@@ -4708,16 +6746,330 @@
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run10.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run20.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run12.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run2.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run1.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run11.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run13.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run14.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run16.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run15.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run17.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run19.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 2,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_all-roots/run18.json",
+      "out/opencode-v1/print/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v1/print/S4/S4_all-roots/run1.json"
+      "out/opencode-v1/print/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v1",
+    "harness": "opencode",
+    "version": "1.18.31",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v1/print/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4729,14 +7081,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/daemon/S0/S0_none/run1.json"
+      "out/opencode-v2/daemon/S0/S0_none/run1.json",
+      "out/opencode-v2/daemon/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4748,14 +7101,15 @@
     "arm": "S1/native",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/daemon/S1/S1_native/run1.json"
+      "out/opencode-v2/daemon/S1/S1_native/run1.json",
+      "out/opencode-v2/daemon/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4769,12 +7123,13 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin setup (no reload)",
     "evidence": [
-      "out/opencode-v2/daemon/S2/S2_hook-adds-skill/run1.json"
+      "out/opencode-v2/daemon/S2/S2_hook-adds-skill/run1.json",
+      "out/opencode-v2/daemon/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4788,12 +7143,13 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin setup (no reload)",
     "evidence": [
-      "out/opencode-v2/daemon/S2/S2_hook-creates-root/run1.json"
+      "out/opencode-v2/daemon/S2/S2_hook-creates-root/run1.json",
+      "out/opencode-v2/daemon/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "hook never fired skill file absent after the turn stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4808,11 +7164,11 @@
     "verdict": "untested",
     "flaky": false,
     "runs": 1,
-    "mechanism": null,
+    "mechanism": "plugin setup + skill.reload",
     "evidence": [
       "out/opencode-v2/daemon/S2/S2_registration/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "skill file absent after the turn stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4824,14 +7180,15 @@
     "arm": "S3/gitignore",
     "root": ".opencode/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/daemon/S3/S3_gitignore/run1.json"
+      "out/opencode-v2/daemon/S3/S3_gitignore/run1.json",
+      "out/opencode-v2/daemon/S3/S3_gitignore/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4843,14 +7200,15 @@
     "arm": "S3/info-exclude",
     "root": ".opencode/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/daemon/S3/S3_info-exclude/run1.json"
+      "out/opencode-v2/daemon/S3/S3_info-exclude/run1.json",
+      "out/opencode-v2/daemon/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4860,16 +7218,397 @@
     "mode": "daemon",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run10.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run20.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run30.json"
+    ],
+    "notes": "found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0; found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run12.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run2.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run22.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run1.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run11.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run21.json"
+    ],
+    "notes": "found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0; found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run13.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run23.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run14.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run24.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run16.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run26.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run15.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run25.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run17.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run27.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run19.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run29.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_all-roots/run18.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run28.json",
+      "out/opencode-v2/daemon/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] stopReason=end_turn tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/daemon/S4/S4_all-roots/run1.json"
+      "out/opencode-v2/daemon/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-agents/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-claude",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-claude/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "daemon",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/daemon/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "stopReason=end_turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4881,14 +7620,15 @@
     "arm": "S0/none",
     "root": null,
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/print/S0/S0_none/run1.json"
+      "out/opencode-v2/print/S0/S0_none/run1.json",
+      "out/opencode-v2/print/S0/S0_none/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4900,14 +7640,15 @@
     "arm": "S1/native",
     "root": ".opencode/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/print/S1/S1_native/run1.json"
+      "out/opencode-v2/print/S1/S1_native/run1.json",
+      "out/opencode-v2/print/S1/S1_native/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0; tools_used=7 skill_loads=1 searches=5"
   },
   {
     "entry": "opencode-v2",
@@ -4921,12 +7662,13 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin setup (no reload)",
     "evidence": [
-      "out/opencode-v2/print/S2/S2_hook-adds-skill/run1.json"
+      "out/opencode-v2/print/S2/S2_hook-adds-skill/run1.json",
+      "out/opencode-v2/print/S2/S2_hook-adds-skill/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "hook never fired skill file absent after the turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4940,12 +7682,13 @@
     "exclusion": "none",
     "verdict": "untested",
     "flaky": false,
-    "runs": 1,
-    "mechanism": null,
+    "runs": 2,
+    "mechanism": "plugin setup (no reload)",
     "evidence": [
-      "out/opencode-v2/print/S2/S2_hook-creates-root/run1.json"
+      "out/opencode-v2/print/S2/S2_hook-creates-root/run1.json",
+      "out/opencode-v2/print/S2/S2_hook-creates-root/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "hook never fired skill file absent after the turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4960,11 +7703,11 @@
     "verdict": "untested",
     "flaky": false,
     "runs": 1,
-    "mechanism": null,
+    "mechanism": "plugin setup + skill.reload",
     "evidence": [
       "out/opencode-v2/print/S2/S2_registration/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "skill file absent after the turn tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4976,14 +7719,15 @@
     "arm": "S3/gitignore",
     "root": ".opencode/skills",
     "exclusion": "gitignore",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/print/S3/S3_gitignore/run1.json"
+      "out/opencode-v2/print/S3/S3_gitignore/run1.json",
+      "out/opencode-v2/print/S3/S3_gitignore/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -4995,14 +7739,15 @@
     "arm": "S3/info-exclude",
     "root": ".opencode/skills",
     "exclusion": "info-exclude",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
     "flaky": false,
-    "runs": 1,
+    "runs": 2,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/print/S3/S3_info-exclude/run1.json"
+      "out/opencode-v2/print/S3/S3_info-exclude/run1.json",
+      "out/opencode-v2/print/S3/S3_info-exclude/run2.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=1 searches=0"
   },
   {
     "entry": "opencode-v2",
@@ -5012,320 +7757,397 @@
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agent/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "not_visible",
     "flaky": false,
-    "runs": 1,
+    "runs": 3,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2/print/S4/S4_all-roots/run1.json"
+      "out/opencode-v2/print/S4/S4_all-roots/run10.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run20.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run30.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "found=[] leaked=[] tools_used=1 skill_loads=0 searches=0; found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
   },
   {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S0",
-    "arm": "S0/none",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S0/S0_none/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S1",
-    "arm": "S1/native",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S1/S1_native/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/hook-adds-skill",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S2/S2_hook-adds-skill/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/hook-creates-root",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S2/S2_hook-creates-root/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S2",
-    "arm": "S2/registration",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S2/S2_registration/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S3",
-    "arm": "S3/gitignore",
-    "root": ".opencode/skills",
-    "exclusion": "gitignore",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S3/S3_gitignore/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S3",
-    "arm": "S3/info-exclude",
-    "root": ".opencode/skills",
-    "exclusion": "info-exclude",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S3/S3_info-exclude/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "daemon",
-    "scenario": "S4",
-    "arm": "S4/all-roots",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/daemon/S4/S4_all-roots/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S0",
-    "arm": "S0/none",
-    "root": null,
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S0/S0_none/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S1",
-    "arm": "S1/native",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S1/S1_native/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/hook-adds-skill",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S2/S2_hook-adds-skill/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/hook-creates-root",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S2/S2_hook-creates-root/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S2",
-    "arm": "S2/registration",
-    "root": ".opencode/skills",
-    "exclusion": "none",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S2/S2_registration/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S3",
-    "arm": "S3/gitignore",
-    "root": ".opencode/skills",
-    "exclusion": "gitignore",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S3/S3_gitignore/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
-    "harness": "opencode",
-    "version": "opencode v2.0.4",
-    "os": "macOS 26.6.2 arm64",
-    "mode": "print",
-    "scenario": "S3",
-    "arm": "S3/info-exclude",
-    "root": ".opencode/skills",
-    "exclusion": "info-exclude",
-    "verdict": "untested",
-    "flaky": false,
-    "runs": 1,
-    "mechanism": null,
-    "evidence": [
-      "out/opencode-v2-prompt/print/S3/S3_info-exclude/run1.json"
-    ],
-    "notes": "auth_ok false in isolated root"
-  },
-  {
-    "entry": "opencode-v2-prompt",
+    "entry": "opencode-v2",
     "harness": "opencode",
     "version": "opencode v2.0.4",
     "os": "macOS 26.6.2 arm64",
     "mode": "print",
     "scenario": "S4",
     "arm": "S4/all-roots",
-    "root": null,
+    "root": ".agents/skills",
     "exclusion": "none",
-    "verdict": "untested",
+    "verdict": "visible_first_turn",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run12.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run2.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run22.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run1.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run11.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run21.json"
+    ],
+    "notes": "found=[] leaked=[] tools_used=1 skill_loads=0 searches=0; found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run13.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run23.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run3.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run14.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run24.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run4.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run16.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run26.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run6.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run15.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run25.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run5.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run17.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run27.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run7.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": true,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run19.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run29.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run9.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/all-roots",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 3,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_all-roots/run18.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run28.json",
+      "out/opencode-v2/print/S4/S4_all-roots/run8.json"
+    ],
+    "notes": "found=['agents', 'claude', 'opencode'] leaked=[] tools_used=0 skill_loads=3 searches=0; found=[] leaked=[] tools_used=1 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-agent",
+    "root": ".agent/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
     "flaky": false,
     "runs": 1,
     "mechanism": null,
     "evidence": [
-      "out/opencode-v2-prompt/print/S4/S4_all-roots/run1.json"
+      "out/opencode-v2/print/S4/S4_confirm-agent/run1.json"
     ],
-    "notes": "auth_ok false in isolated root"
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-agents",
+    "root": ".agents/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-agents/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-claude",
+    "root": ".claude/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-claude/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-codex",
+    "root": ".codex/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-codex/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-cursor",
+    "root": ".cursor/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-cursor/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-gemini",
+    "root": ".gemini/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-gemini/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-github",
+    "root": ".github/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-github/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-kiro",
+    "root": ".kiro/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-kiro/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-opencode",
+    "root": ".opencode/skills",
+    "exclusion": "none",
+    "verdict": "visible_first_turn",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-opencode/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=1 searches=0"
+  },
+  {
+    "entry": "opencode-v2",
+    "harness": "opencode",
+    "version": "opencode v2.0.4",
+    "os": "macOS 26.6.2 arm64",
+    "mode": "print",
+    "scenario": "S4",
+    "arm": "S4/confirm-pi",
+    "root": ".pi/skills",
+    "exclusion": "none",
+    "verdict": "not_visible",
+    "flaky": false,
+    "runs": 1,
+    "mechanism": null,
+    "evidence": [
+      "out/opencode-v2/print/S4/S4_confirm-pi/run1.json"
+    ],
+    "notes": "tools_used=0 skill_loads=0 searches=0"
   },
   {
     "entry": "pi",

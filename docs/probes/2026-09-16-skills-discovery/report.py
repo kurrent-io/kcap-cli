@@ -54,19 +54,38 @@ def summarise(rows: list[dict]) -> list[dict]:
         untested = sorted({r["notes"][:80] for r in rs if r["verdict"] == "untested" and r["scenario"] == "S1"})
         isolated = [root for root in roots if consumed_by[root] == {entry}]
         s1 = {r["verdict"] for r in rs if r["scenario"] == "S1"}
-        status = "measured" if s1 & set(VISIBLE) else ("untested: " + "; ".join(untested) if untested else "no S1 row")
+        if s1 & set(VISIBLE):
+            status = "measured"
+        elif untested:
+            status = "untested: " + "; ".join(untested)
+        elif s1:
+            status = "S1 failed: the native root's skill was not loaded"
+        else:
+            status = "no S1 row"
+        measured = status == "measured"
+        ran = {r["scenario"] for r in rs if r["verdict"] != "untested"}
+
+        def cell(values: list[str], scenario: str) -> str:
+            # A scenario the entry never ran says so, instead of reading as a measured "none".
+            if values:
+                return "; ".join(values)
+            if not measured:
+                return "—"
+            return "none" if scenario in ran else "n/a (not run)"
+
         out.append({
             "Entry": entry,
             "Version tested": ", ".join(versions),
             "Modes": ", ".join(modes),
             "Native root": native,
-            "Roots consumed": ", ".join(roots) + (f" (undocumented: {', '.join(leaked)})" if leaked else ""),
-            "Startup mechanism proven": "; ".join(mechanisms) if mechanisms else ("none" if status == "measured" else "—"),
-            "Exclusion preserving load": ", ".join(exclusions) if exclusions else ("none" if status == "measured" else "—"),
-            "Vendor-isolated destination": ", ".join(isolated) if isolated else ("none" if status == "measured" else "—"),
-            "Reload path": "; ".join(reload) if reload else ("none" if status == "measured" else "—"),
+            "Roots consumed": cell([", ".join(roots) + (f" (undocumented: {', '.join(leaked)})" if leaked else "")]
+                                   if roots else [], "S4"),
+            "Startup mechanism proven": cell(mechanisms, "S2"),
+            "Exclusion preserving load": cell([", ".join(exclusions)] if exclusions else [], "S3"),
+            "Vendor-isolated destination": cell([", ".join(isolated)] if isolated else [], "S4"),
+            "Reload path": cell(reload, "S2"),
             "GUI status": GUI_STATUS.get(entry, "n/a"),
-            "Minimum version": ", ".join(versions) if status == "measured" else "—",
+            "Minimum version": ", ".join(versions) if measured else "—",
             "_status": status,
         })
     return out

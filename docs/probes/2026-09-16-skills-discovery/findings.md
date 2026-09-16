@@ -8,8 +8,8 @@ GitHub Copilot CLI 1.0.85 (npm `@github/copilot`), kiro-cli 2.21.4 (brew cask), 
 **Driver:** `probe.py` (scenarios S0–S4, two runs per arm, a third on disagreement, one single-run
 confirmation per root the multi prompt missed); `report.py` renders `capability-matrix.md` from
 `matrix.json`; `selftest.py` covers the kit with no vendor binary.
-**Cost:** the free phase issues zero model requests. Pass 1 recorded roughly 450 model turns across
-the measured entries, plus about 60 spent on re-measurements while adapters were being corrected.
+**Cost:** the free phase issues zero model requests. The recorded matrix holds 397 model turns (361 single-turn
+runs plus 36 S4 passes); re-measurements while adapters were being corrected added about 60 more.
 
 Every verdict below is the starting session's own reply. A skill counts as *discovered* when the model
 names it and as *loaded* when the reply carries the token that exists only in the skill body. A file on
@@ -153,7 +153,11 @@ the real one: Claude (config directory), Cursor and agy (HOME). They run against
   `opencode.json`, or with a `package.json`, never ran its `setup` (a marker-writing plugin left no
   marker at service start or during a `run`), and `opencode plugin add <local dir>` fails with a stack
   trace. The `setup`, `skill.reload()` and `prompt`-hook arms wait for a working local plugin route.
-- **S3** and **S4** as recorded in `matrix.json` (both exclusions load; the same three roots as 1.x).
+- **S3** both exclusions `visible_first_turn` ×2 in both modes.
+- **S4** consumes `.opencode/skills`, `.agents/skills` and `.claude/skills`, as 1.x does; the multi
+  prompt was inconsistent across its three passes and every root was settled by its own confirmation.
+- The `opencode-v2-prompt` entry (an awaited `prompt` hook plus `ctx.skill.reload()`) has no rows: it
+  cannot run until a local plugin loads.
 
 ## Cursor CLI 2026.09.15 (print `cursor-agent -p`; daemon `cursor-agent acp`)
 
