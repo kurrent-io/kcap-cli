@@ -104,7 +104,7 @@ public class McpWorkItemsServerTests {
         var tools = McpWorkItemsServer.BuildToolsList();
 
         await Assert.That(tools.Select(t => t.Name).ToArray()).IsEquivalentTo(new[] {
-            "declare_work_item", "get_session_work_items",
+            "declare_work_item", "get_session_work_items", "declare_loose_end",
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
@@ -151,6 +151,44 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
+    public async Task Loose_end_body_carries_session_id_and_text() {
+        var body = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Add the retry test"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
+    }
+
+    [Test]
+    public async Task Loose_end_body_requires_text() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1"}""")))
+            .Throws<ArgumentException>()
+            .WithMessageContaining("'text' is required");
+    }
+
+    [Test]
+    public async Task Loose_end_body_rejects_a_blank_text() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"   "}""")))
+            .Throws<ArgumentException>()
+            .WithMessageContaining("'text' must not be blank");
+    }
+
+    /// <summary>Pins that the loose end takes its session from McpSessionId like every other
+    /// session-scoped tool here, rather than reading the argument itself — the refusal when no
+    /// session resolves at all is that resolver's, and McpSessionIdTests pins it.</summary>
+    [Test]
+    public async Task Loose_end_body_rejects_a_non_string_session_id_as_a_field_error() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":42,"text":"Add the retry test"}""")))
+            .Throws<ArgumentException>().WithMessageContaining("session_id");
+    }
+
+    [Test]
+    public async Task Declare_loose_end_requires_text_and_defaults_the_session() {
+        var tool = McpWorkItemsServer.BuildToolsList().Single(t => t.Name == "declare_loose_end");
+
+        await Assert.That(tool.InputSchema.Required).IsEquivalentTo(new[] { "text" });
+        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "session_id" });
+    }
+
+    [Test]
     public async Task Server_instructions_steer_duplicates_to_merge_not_breakdown() {
         await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("merge_work_item");
         await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("detach_work_item");
@@ -165,6 +203,14 @@ public class McpWorkItemsServerTests {
         await Assert.That(instructions).Contains("declare_work_breakdown");
         await Assert.That(instructions).Contains("declare_work_relation");
         await Assert.That(instructions).Contains("never");   // "declared, never inferred"
+    }
+
+    [Test]
+    public async Task Server_instructions_steer_unfinished_work_to_declare_loose_end() {
+        var instructions = McpWorkItemsServer.ServerInstructions;
+
+        await Assert.That(instructions).Contains("declare_loose_end");
+        await Assert.That(instructions).Contains("unfinished");
     }
 
     // ── declared breakdown + relations ───────────────────────────────────────
@@ -484,6 +530,16 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
         await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/topology");
         await Assert.That(h.Body).IsNull();
+    }
+
+    [Test]
+    public async Task Dispatch_declare_loose_end_posts_to_the_loose_ends_route() {
+        var h = await DispatchAsync("declare_loose_end", """{"session_id":"s1","text":"Add the retry test"}""");
+
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/declare");
+        await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
     }
 
     [Test]
