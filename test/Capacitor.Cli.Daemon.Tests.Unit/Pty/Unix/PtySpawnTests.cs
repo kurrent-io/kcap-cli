@@ -118,20 +118,36 @@ public class PtySpawnTests {
 
     [Test, RunOn(OS.Linux | OS.MacOs)]
     public async Task Capture_binding_a_fast_exiting_child_never_yields_a_recycled_identity() {
-        // Spawn something that exits IMMEDIATELY (`sleep 0` — used instead of /bin/true so
-        // this runs identically on both platforms: this environment's macOS has no /bin/true
-        // at all, only /usr/bin/true, while /bin/sleep is present on both). The captured
-        // identity must describe the ORIGINAL incarnation. This is exactly what the
-        // capture-binding rule (capture pre-reap, inside pty_spawn) is supposed to guarantee:
-        // nothing has waited on the child before pty_spawn captured its identity, so a
-        // well-formed, non-empty token always comes back even though the child may have
-        // already exited by the time we read it back out.
+        // `sleep 0` exits immediately (/bin/true is /usr/bin/true on macOS; /bin/sleep exists on
+        // both platforms). Nothing waits on the child before pty_spawn captures its identity, so
+        // the token can only describe THIS incarnation: the pid cannot have been recycled yet.
+        //
+        // Whether a token comes back at all differs by platform. Linux reads /proc, which still
+        // answers for a zombie, so the token is always present. macOS reads proc_pidinfo, which
+        // does not see a zombie: a child that has already exited by the time the capture runs
+        // yields the shim's deliberate empty "uncapturable" marker, and whether it exits in time
+        // is scheduling — a loaded runner loses that race routinely. Either outcome is the
+        // contract; a token for some other process, or a failed spawn, is not.
         var plan = Preflight("/bin/sleep", ["sleep", "0"]);
         try {
             var rc = Spawn(plan, out var result);
-            await Assert.That(rc).IsEqualTo(0);
-            await Assert.That(result.StartIdentityString).IsNotEmpty();
-            UnixPtyInterop.waitpid(result.Pid, out _, 0); // reap the exited child
+            try {
+                await Assert.That(rc).IsEqualTo(0);
+                await Assert.That(result.FailedStep).IsEqualTo(0);
+
+                var identity = result.StartIdentityString;
+                if (OperatingSystem.IsLinux())
+                    await Assert.That(identity).StartsWith("lx:");
+                else
+                    await Assert.That(identity == "" || identity.StartsWith("mac:", StringComparison.Ordinal)).IsTrue()
+                        .Because($"macOS yields the empty uncapturable marker or a mac: token, never '{identity}'");
+            } finally {
+                // Guarded, not gated: a failing assertion must still reap the child. The sentinels
+                // matter because pty_spawn zero-fills result on failure (Pid 0, MasterFd -1), and
+                // waitpid(0) would wait on the whole process group.
+                if (result.MasterFd >= 0) UnixPtyInterop.close(result.MasterFd);
+                if (result.Pid > 0) UnixPtyInterop.waitpid(result.Pid, out _, 0); // the child has exited; this only reaps
+            }
         } finally { Free(plan); }
     }
 
