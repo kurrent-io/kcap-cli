@@ -5,7 +5,7 @@ from harness.base import Adapter
 from harness.claude import ClaudeAdapter
 from harness.codex import CodexAdapter
 from harness.copilot import CopilotAdapter
-from harness.cursor import CursorAdapter
+from harness.cursor import CursorAdapter, CursorUserHooksAdapter
 from harness.fake import FakeAdapter
 from harness.gemini import GeminiAdapter
 from harness.kiro import KiroAdapter, KiroAgentBareAdapter, KiroAgentSkillsAdapter
@@ -20,6 +20,7 @@ ENTRIES: dict[str, type[Adapter]] = {
     "gemini": GeminiAdapter,
     "pi": PiAdapter,
     "cursor": CursorAdapter,
+    "cursor-userhooks": CursorUserHooksAdapter,
     "copilot": CopilotAdapter,
     "kiro": KiroAdapter,
     "kiro-agent-bare": KiroAgentBareAdapter,

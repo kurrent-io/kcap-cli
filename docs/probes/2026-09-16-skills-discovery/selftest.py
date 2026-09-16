@@ -968,7 +968,7 @@ class AdapterHookFilesTests(unittest.TestCase):
             if name == "fake":
                 continue
             with self.subTest(entry=name), tempfile.TemporaryDirectory() as d, \
-                    mock.patch.dict(os.environ, ADAPTER_TEST_ENV):
+                    mock.patch.dict(os.environ, dict(ADAPTER_TEST_ENV, HOME=d)):
                 a = cls()
                 sb = new_sandbox(a.lever, None, [], base=Path(d))
                 a.prepare(sb)
@@ -1106,6 +1106,22 @@ class CursorAdapterTests(unittest.TestCase):
             upd(sessionUpdate="agent_message_chunk", content={"type": "text", "text": "hi"}),
         ]
         self.assertEqual(classify_cursor_tools(json.dumps(frames)), "tools_used=1 skill_reads=1 searches=1")
+
+    def test_user_hooks_variant_restores_the_real_file(self):
+        from harness.cursor import CursorUserHooksAdapter
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"HOME": d}):
+            hooks = Path(d) / ".cursor" / "hooks.json"
+            hooks.parent.mkdir(parents=True)
+            original = json.dumps({"version": 1, "hooks": {"sessionStart": [{"command": "kcap hook --cursor"}]}})
+            hooks.write_text(original)
+            a = CursorUserHooksAdapter()
+            sb = new_sandbox(a.lever, None, [], base=Path(d))
+            info = a.install_startup_hook(sb, sb.config_root / "probe-hook.sh")
+            merged = json.loads(Path(info.config_path).read_text())
+            self.assertEqual([h["command"] for h in merged["hooks"]["sessionStart"]],
+                             ["kcap hook --cursor", str(sb.config_root / "probe-hook.sh")])
+            a.cleanup_hook(sb)
+            self.assertEqual(hooks.read_text(), original)
 
 
 class PiAdapterTests(unittest.TestCase):

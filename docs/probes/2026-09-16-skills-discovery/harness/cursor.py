@@ -97,6 +97,59 @@ class CursorAdapter(Adapter):
         return res
 
 
+class CursorUserHooksAdapter(CursorAdapter):
+    """The user-level `~/.cursor/hooks.json`, where kcap installs its own hooks: the probe entry is
+    merged into the real file for one turn and the original file is restored afterwards."""
+
+    entry = "cursor-userhooks"
+
+    def __init__(self) -> None:
+        self._backup: bytes | None = None
+        self._touched = False
+
+    def _user_hooks(self) -> Path:
+        return Path.home() / ".cursor" / "hooks.json"
+
+    def _merge(self, sb: Sandbox, event: str, command: str) -> HookInfo:
+        path = self._user_hooks()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._backup = path.read_bytes() if path.exists() else None
+        self._touched = True
+        try:
+            data = json.loads(self._backup.decode()) if self._backup else {}
+        except json.JSONDecodeError:
+            data = {}
+        data.setdefault("version", 1)
+        data.setdefault("hooks", {}).setdefault(event, []).append({"command": command})
+        path.write_text(json.dumps(data, indent=2) + "\n")
+        return HookInfo(mechanism=f"user ~/.cursor/hooks.json {event}", config_path=str(path))
+
+    def install_startup_hook(self, sb: Sandbox, script: Path) -> HookInfo:
+        return self._merge(sb, "sessionStart", str(script))
+
+    def install_registration(self, sb: Sandbox, skill_file: Path, body: str) -> HookInfo | None:
+        info = super().install_registration(sb, skill_file, body)
+        script = json.loads(Path(info.config_path).read_text())["hooks"]["workspaceOpen"][0]["command"]
+        Path(info.config_path).unlink()
+        return self._merge(sb, "workspaceOpen", script)
+
+    def cleanup_hook(self, sb: Sandbox) -> None:
+        if not self._touched:
+            return
+        path = self._user_hooks()
+        if self._backup is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(self._backup)
+        self._touched = False
+
+    def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
+        try:
+            return super().ask(sb, mode, prompt)
+        finally:
+            self.cleanup_hook(sb)
+
+
 def classify_cursor_tools(raw: str) -> str:
     """Cursor lists a skill with its path and the model reads that file, so a read of a SKILL.md
     path is the native mechanism; a shell or search tool is what makes a sighting inconclusive."""
