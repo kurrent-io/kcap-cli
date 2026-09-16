@@ -43,9 +43,9 @@ public class OneExecutionDomainProcessorTests {
             epoch, _ => AgentLiveness.Live,
             a => { lock (Acks) Acks.Add(a); return Task.CompletedTask; },
             r => { lock (Rejects) Rejects.Add(r); return Task.CompletedTask; },
-            Logger, bound,
+            Logger, Time, bound,
             isKnownStopTarget: id => { lock (KnownTargets) return KnownTargets.Contains(id); },
-            time: Time, startBarrier: startBarrier);
+            startBarrier: startBarrier);
 
         public static SequencedItem SeqLaunch(long seq, string agent, string epoch = "e1") =>
             new(SequencedKind.Launch, epoch, seq, "cmd" + seq, agent);
@@ -768,7 +768,8 @@ public class OneExecutionDomainProcessorTests {
     public async Task A_throwing_stop_admission_probe_admits_rather_than_drops() {
         await using var p = new SequencedCommandProcessor(
             "e1", _ => AgentLiveness.Live, _ => Task.CompletedTask, _ => Task.CompletedTask,
-            NullLogger.Instance, isKnownStopTarget: _ => throw new InvalidOperationException("registry read blew up"));
+            NullLogger.Instance, TimeProvider.System,
+            isKnownStopTarget: _ => throw new InvalidOperationException("registry read blew up"));
 
         var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await Assert.That(p.SubmitUnsequenced(new UnsequencedItem(UnsequencedKind.Stop, "x", "stop",

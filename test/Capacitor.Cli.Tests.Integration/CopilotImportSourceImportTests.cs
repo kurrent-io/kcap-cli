@@ -63,7 +63,7 @@ public class CopilotImportSourceImportTests : IDisposable {
 
         using var client = new HttpClient();
         var source = new CopilotImportSource(Config.Root, CopilotLayout,
-            router: new GitProviderRouter());
+            new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);

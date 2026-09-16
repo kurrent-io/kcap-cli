@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 public class CursorWatcherSpawnTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    CursorMarkers Markers => new(Config.Root);
+    CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -116,7 +116,7 @@ public class CursorWatcherSpawnTests {
         // drive a NON-lifecycle hook: the self-heal spawn path a real child actually reaches.
         Markers.MarkSubagentStartAcked(child);
 
-        var spool = new HookSpool(tmp.PathTo("spool"));
+        var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
         await Hook(Config.Root, spawner).HandleSubagentChildEventAsync(
             client, spool, child, "afterAgentThought", childFile, parent, "task",
             budgetExpired: () => false, ct: CancellationToken.None);
@@ -156,7 +156,7 @@ public class CursorWatcherSpawnTests {
                 : new HttpResponseMessage(HttpStatusCode.OK);
         });
         using var client = new HttpClient(handler);
-        var spool = new HookSpool(tmp.PathTo("spool"));
+        var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
         // Seed the undelivered subagent-start DIRECTLY (as a prior transient POST failure
         // would have left it), rather than producing one by driving the child's own
@@ -226,7 +226,7 @@ public class CursorWatcherSpawnTests {
                 : new HttpResponseMessage(HttpStatusCode.OK);
         });
         using var client = new HttpClient(handler);
-        var spool = new HookSpool(tmp.PathTo("spool"));
+        var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
         var childFileEscaped = childFile.Replace(@"\", @"\\");
 
@@ -279,7 +279,7 @@ public class CursorWatcherSpawnTests {
 
         using var handler = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK));
         using var client  = new HttpClient(handler);
-        var spool = new HookSpool(tmp.PathTo("spool"));
+        var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
         await Hook(Config.Root, spawner).HandleSubagentChildEventAsync(
             client, spool, child, "postToolUse", childFile, parent, "task",
@@ -304,7 +304,7 @@ public class CursorWatcherSpawnTests {
 
         using var handler = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK));
         using var client  = new HttpClient(handler);
-        var spool = new HookSpool(tmp.PathTo("spool"));
+        var spool = new HookSpool(tmp.PathTo("spool"), time: TimeProvider.System);
 
         await Hook(Config.Root, spawner).HandleSubagentChildEventAsync(
             client, spool, child, "postToolUse", childFile, parent, "task",

@@ -14,13 +14,13 @@ public class DaemonCommandsServiceInstallTests {
 
     [Test]
     public async Task Verify_flag_is_rejected_on_a_non_launchd_manager() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--verify"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--verify"], true);
         await Assert.That(exit).IsEqualTo(1);
     }
 
     [Test]
     public async Task Verify_flag_is_rejected_on_the_windows_manager_too() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new WindowsScheduledTaskServiceManager(Config.Root), "test-id", Home).Install(["--verify"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new WindowsScheduledTaskServiceManager(Config.Root), "test-id", Home, TimeProvider.System).Install(["--verify"], true);
         await Assert.That(exit).IsEqualTo(1);
     }
 
@@ -31,14 +31,14 @@ public class DaemonCommandsServiceInstallTests {
     /// reason).</summary>
     [Test]
     public async Task Replace_without_verify_is_rejected() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace"], true);
         await Assert.That(exit).IsEqualTo(1);
     }
 
     [Test, NotInParallel]
     public async Task Retire_missing_a_value_at_the_end_of_args_is_rejected() {
         using var err = ConsoleOutput.StartErrorCapture();
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace", "--verify", "--retire"], true);
         await Assert.That(exit).IsEqualTo(1);
         var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines.Any(l => l.Contains("--retire"))).IsTrue();
@@ -47,7 +47,7 @@ public class DaemonCommandsServiceInstallTests {
     [Test, NotInParallel]
     public async Task Retire_followed_by_another_flag_is_rejected() {
         using var err = ConsoleOutput.StartErrorCapture();
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "--verify"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace", "--verify", "--retire", "--verify"], true);
         await Assert.That(exit).IsEqualTo(1);
         var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines.Any(l => l.Contains("--retire"))).IsTrue();
@@ -56,7 +56,7 @@ public class DaemonCommandsServiceInstallTests {
     [Test, NotInParallel]
     public async Task Retire_without_replace_and_verify_is_rejected() {
         using var err = ConsoleOutput.StartErrorCapture();
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--verify", "--retire", "old"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--verify", "--retire", "old"], true);
         await Assert.That(exit).IsEqualTo(1);
         var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines).Contains("install --retire requires --replace --verify.");
@@ -66,7 +66,7 @@ public class DaemonCommandsServiceInstallTests {
     [Test, NotInParallel]
     public async Task Retire_naming_the_target_itself_is_rejected() {
         using var err = ConsoleOutput.StartErrorCapture();
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "Test-ID"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace", "--verify", "--retire", "Test-ID"], true);
         await Assert.That(exit).IsEqualTo(1);
         var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines).Contains("--retire names the service being installed; nothing to retire.");
@@ -75,7 +75,7 @@ public class DaemonCommandsServiceInstallTests {
     [Test, NotInParallel]
     public async Task Retire_value_that_sanitizes_to_the_fallback_is_rejected() {
         using var err = ConsoleOutput.StartErrorCapture();
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--replace", "--verify", "--retire", "***"], true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace", "--verify", "--retire", "***"], true);
         await Assert.That(exit).IsEqualTo(1);
         var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines).Contains("--retire value '***' is not a service id.");
@@ -86,7 +86,7 @@ public class DaemonCommandsServiceInstallTests {
     /// --no-start).</summary>
     [Test]
     public async Task No_start_with_verify_is_rejected() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home).Install(["--verify", "--no-start"], startNow: false);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--verify", "--no-start"], startNow: false);
         await Assert.That(exit).IsEqualTo(1);
     }
 
@@ -96,13 +96,13 @@ public class DaemonCommandsServiceInstallTests {
     [Test]
     public async Task Plain_install_bails_on_a_held_service_lock_without_calling_install() {
         const string id = "svc-plain-install-lock";
-        using var held = ServiceTxnLock.TryAcquire(Daemons.Store, id, TimeSpan.FromSeconds(1));
+        using var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, id, TimeSpan.FromSeconds(1), TimeProvider.System);
         await Assert.That(held).IsNotNull();
 
         var manager = new CountingManager();
         var spec = new ServiceSpec(id, "/x/kcap-daemon", "/x/log", new Dictionary<string, string>(), []);
 
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home).InstallPlain(spec, startNow: true);
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System).InstallPlain(spec, startNow: true);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(manager.InstallCalls).IsEqualTo(0);

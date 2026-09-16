@@ -65,7 +65,7 @@ public class AntigravityUserTurnTests {
         // The stock completion grace bounds the writer against a hung disk, which turns an assertion
         // over fifty fsynced appends into a throughput race the suite's own load can lose.
         var journal = new TranscriptJournal(
-            tmp.PathTo("journal.jsonl"), NullLogger.Instance, completeGrace: TimeSpan.FromMinutes(1));
+            tmp.PathTo("journal.jsonl"), NullLogger.Instance, TimeProvider.System, completeGrace: TimeSpan.FromMinutes(1));
         journal.Open("/w", null);
         await using var rt = AntigravityRuntimeFakes.FakeRuntime(FakeTurn.NeverEnds, queueCap: 1, time: Time, journal: journal);
         await rt.SendUserInputAsync("first");

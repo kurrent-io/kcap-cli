@@ -41,7 +41,11 @@ public class AgentOrchestratorStopDiagnosticsTests {
         orch.RegisterAgentForTest(new AgentInstance(
             $"agent-{vendor}", null, "", null, WorktreePath, vendor,
             new FakeHostedAgentRuntime(vendor, emitsTerminalOutput: false),
-            new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource()));
+            new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
 
         await orch.HandleStopAgent($"agent-{vendor}");
 
@@ -62,7 +66,11 @@ public class AgentOrchestratorStopDiagnosticsTests {
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-claude", null, "", null, WorktreePath, "claude",
             new FakeHostedAgentRuntime("claude", emitsTerminalOutput: false),
-            new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource()));
+            new WorktreeInfo(WorktreePath, "", WorktreePath, IsStandalone: true), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
 
         await orch.HandleStopAgent("agent-claude");
 

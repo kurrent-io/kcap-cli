@@ -11,6 +11,9 @@ public class AgentOrchestratorPermissionAttributionTests {
     static AgentInstance Agent(string id, string worktree, string? sessionId = null, PolicySnapshot? policy = null) =>
         new(id, null, "", null, "/repo", "claude", new FakeHostedAgentRuntime("claude", true),
             new WorktreeInfo(worktree, "b", "/repo"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             SessionId = sessionId, PolicySnapshot = policy
         };
 
@@ -116,5 +119,5 @@ public class AgentOrchestratorPermissionAttributionTests {
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
         UnusedTokenStore.Create(),
         Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
-        Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerConnection>.Instance);
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerConnection>.Instance, TimeProvider.System);
 }

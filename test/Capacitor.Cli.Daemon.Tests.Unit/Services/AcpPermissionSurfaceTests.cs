@@ -51,7 +51,7 @@ public class AcpPermissionSurfaceTests {
     public async Task DesktopAllow_MapsToTheAgentsAllowOption() {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
-        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer());
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
 
@@ -69,7 +69,7 @@ public class AcpPermissionSurfaceTests {
     public async Task DesktopDeny_MapsToADenyOutcome() {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
-        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer());
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
         var pending = await NextPending(reader);
@@ -86,7 +86,7 @@ public class AcpPermissionSurfaceTests {
         AcpInteractionOption[] alwaysOnly = [new("opt-always", "Always allow", null, "allow_always"), new("opt-reject", "Reject", null, "reject_once")];
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
-        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer());
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System);
 
         var task = surface.RequestAsync(Request(options: alwaysOnly), CancellationToken.None);
         var pending = await NextPending(reader);
@@ -105,7 +105,7 @@ public class AcpPermissionSurfaceTests {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
         var surface = new AcpPermissionSurface(
-            broker, "copilot", BlockingServer(serverRequestId: "srv-7"),
+            broker, "copilot", BlockingServer(serverRequestId: "srv-7"), TimeProvider.System,
             resolveServer: (s, r, d) => { resolutions.Add(new ServerResolution(s, r, d)); return Task.CompletedTask; });
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
@@ -126,7 +126,7 @@ public class AcpPermissionSurfaceTests {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
         var surface = new AcpPermissionSurface(
-            broker, "copilot", BlockingServer(serverRequestId: "srv-8"),
+            broker, "copilot", BlockingServer(serverRequestId: "srv-8"), TimeProvider.System,
             resolveServer: (s, r, d) => { resolutions.Add(new ServerResolution(s, r, d)); return Task.CompletedTask; });
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
@@ -146,7 +146,7 @@ public class AcpPermissionSurfaceTests {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
         var surface = new AcpPermissionSurface(
-            broker, "copilot", BlockingServer(serverRequestId: "srv-9"),
+            broker, "copilot", BlockingServer(serverRequestId: "srv-9"), TimeProvider.System,
             resolveServer: (s, r, d) => { resolutions.Add(new ServerResolution(s, r, d)); return Task.CompletedTask; });
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
@@ -161,7 +161,7 @@ public class AcpPermissionSurfaceTests {
     public async Task ServerRequestId_IsCorrelatedOntoTheLocalCard() {
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
-        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(serverRequestId: "srv-99"));
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(serverRequestId: "srv-99"), TimeProvider.System);
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
 
@@ -179,7 +179,7 @@ public class AcpPermissionSurfaceTests {
         var log = new PermissionDecisionLog(tmp.Path, NullLogger.Instance);
         var broker = new PermissionPromptBroker();
         var (_, reader) = broker.Subscribe();
-        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), decisionLog: log);
+        var surface = new AcpPermissionSurface(broker, "copilot", BlockingServer(), TimeProvider.System, decisionLog: log);
 
         var task = surface.RequestAsync(Request(), CancellationToken.None);
         var pending = await NextPending(reader);
@@ -200,7 +200,7 @@ public class AcpPermissionSurfaceTests {
     public async Task OversizedToolName_SkipsTheDesktopCard_ServerOnly() {
         var broker = new PermissionPromptBroker();
         var surface = new AcpPermissionSurface(
-            broker, "copilot", AnsweringServer(new AcpInteractionDecision("allow_once", "opt-allow", "Allow", null, null, null)));
+            broker, "copilot", AnsweringServer(new AcpInteractionDecision("allow_once", "opt-allow", "Allow", null, null, null)), TimeProvider.System);
 
         var giantToolName = new string('x', 4096);
         var decision = await surface.RequestAsync(Request(toolName: giantToolName), CancellationToken.None);
@@ -213,7 +213,7 @@ public class AcpPermissionSurfaceTests {
     public async Task ServerAnswer_IsReturned_AndDismissesTheDesktopCard() {
         var broker  = new PermissionPromptBroker();
         var surface = new AcpPermissionSurface(
-            broker, "copilot", AnsweringServer(new AcpInteractionDecision("allow_once", "opt-allow", "Allow", null, null, null)));
+            broker, "copilot", AnsweringServer(new AcpInteractionDecision("allow_once", "opt-allow", "Allow", null, null, null)), TimeProvider.System);
 
         var decision = await surface.RequestAsync(Request(), CancellationToken.None);
 
@@ -225,7 +225,7 @@ public class AcpPermissionSurfaceTests {
     public async Task Elicitation_GoesStraightToTheServer_WithNoDesktopCard() {
         var broker  = new PermissionPromptBroker();
         var surface = new AcpPermissionSurface(
-            broker, "copilot", AnsweringServer(new AcpInteractionDecision("answered", "opt-allow", "Allow", null, null, null)));
+            broker, "copilot", AnsweringServer(new AcpInteractionDecision("answered", "opt-allow", "Allow", null, null, null)), TimeProvider.System);
 
         var decision = await surface.RequestAsync(Request("elicitation"), CancellationToken.None);
 

@@ -58,7 +58,7 @@ public class CursorSessionStartVisibilityTests : IDisposable {
             """;
 
         using var client = new HttpClient();
-        var spool = new HookSpool(tmp.CreateDir("spool").Path);
+        var spool = new HookSpool(tmp.CreateDir("spool").Path, time: TimeProvider.System);
 
         var exit = await new CursorHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(client, new StringReader(body), spool);
         await Assert.That(exit).IsEqualTo(0);

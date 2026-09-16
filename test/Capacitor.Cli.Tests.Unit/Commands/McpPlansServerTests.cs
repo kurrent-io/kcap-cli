@@ -382,7 +382,7 @@ public class McpPlansServerTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpPlansServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup,
-            new WorkingDirectory(AppContext.BaseDirectory));
+            new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
 
     async Task<(ScriptedHandler Handler, string Response)> DispatchAsync(
             string toolName, string argsJson, ScriptedHandler? handler = null, string? cwd = null, string? repoRoot = null) {

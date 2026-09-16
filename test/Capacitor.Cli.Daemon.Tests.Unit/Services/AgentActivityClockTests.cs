@@ -291,7 +291,7 @@ public class ActivityClockTurnAndEnvelopeWiringTests {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance) {
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance, TimeProvider.System) {
                 // Liveness-supervision spec §1: production wires this from AgentOrchestrator right
                 // after the runtime is obtained; a bare test construction (like this one) must do the
                 // same assignment itself.
@@ -397,7 +397,7 @@ public class LocalPermissionBridgeActivityWiringTests {
     [Test]
     public async Task Reviewer_tool_call_advances_the_bound_activity_clock() {
         var server = new FakeServerConnection((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
-        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
+        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
         var clock  = new AgentActivityClock(TimeProvider.System);
 
         try {

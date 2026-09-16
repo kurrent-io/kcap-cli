@@ -17,9 +17,9 @@ public class OpenCodeExtractorTests {
     [Test]
     public async Task TryExtractUserText_OpenCode_JoinsTextParts_OnlyUserRole() {
         var two = """{"info":{"role":"user"},"parts":[{"type":"text","text":"first"},{"type":"text","text":"second"}]}""";
-        await Assert.That(WatchCommand.TryExtractUserText(two, "opencode")).IsEqualTo("first\nsecond");
-        await Assert.That(WatchCommand.TryExtractUserText(UserLine, "opencode")).IsEqualTo("summarize the files");
-        await Assert.That(WatchCommand.TryExtractUserText(AssistantLine, "opencode")).IsNull();
+        await Assert.That(WatchCommand.TryExtractUserText(two, TimeProvider.System, "opencode")).IsEqualTo("first\nsecond");
+        await Assert.That(WatchCommand.TryExtractUserText(UserLine, TimeProvider.System, "opencode")).IsEqualTo("summarize the files");
+        await Assert.That(WatchCommand.TryExtractUserText(AssistantLine, TimeProvider.System, "opencode")).IsNull();
     }
 
     [Test]
@@ -31,10 +31,10 @@ public class OpenCodeExtractorTests {
     [Test]
     public async Task Extractors_SkipSyntheticAndIgnoredParts() {
         var synthetic = """{"info":{"role":"user"},"parts":[{"type":"text","text":"injected","synthetic":true},{"type":"text","text":"real prompt"}]}""";
-        await Assert.That(WatchCommand.TryExtractUserText(synthetic, "opencode")).IsEqualTo("real prompt");
+        await Assert.That(WatchCommand.TryExtractUserText(synthetic, TimeProvider.System, "opencode")).IsEqualTo("real prompt");
 
         var ignored = """{"info":{"role":"user"},"parts":[{"type":"text","text":"elided","ignored":true}]}""";
-        await Assert.That(WatchCommand.TryExtractUserText(ignored, "opencode")).IsNull();
+        await Assert.That(WatchCommand.TryExtractUserText(ignored, TimeProvider.System, "opencode")).IsNull();
     }
 
     [Test]

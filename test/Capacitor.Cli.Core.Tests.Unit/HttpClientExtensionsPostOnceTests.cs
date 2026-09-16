@@ -10,7 +10,7 @@ public class HttpClientExtensionsPostOnceTests {
         using var client  = new HttpClient(handler);
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
-        var resp = await client.PostOnceAsync("http://localhost/x", content, TimeSpan.FromSeconds(1));
+        var resp = await client.PostOnceAsync("http://localhost/x", content, TimeProvider.System, TimeSpan.FromSeconds(1));
 
         await Assert.That(resp.StatusCode).IsEqualTo(HttpStatusCode.OK);
     }
@@ -30,7 +30,7 @@ public class HttpClientExtensionsPostOnceTests {
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         await Assert.That(async () =>
-                await client.PostOnceAsync("http://localhost/x", content, TimeSpan.FromSeconds(1))
+                await client.PostOnceAsync("http://localhost/x", content, TimeProvider.System, TimeSpan.FromSeconds(1))
             )
             .Throws<HttpRequestException>();
         await Assert.That(attempts).IsEqualTo(1);
@@ -45,7 +45,7 @@ public class HttpClientExtensionsPostOnceTests {
         using var content = new StringContent("{}", Encoding.UTF8, "application/json");
 
         await Assert.That(async () =>
-                await client.PostOnceAsync("http://localhost/x", content, TimeSpan.FromSeconds(1), cts.Token)
+                await client.PostOnceAsync("http://localhost/x", content, TimeProvider.System, TimeSpan.FromSeconds(1), cts.Token)
             )
             .Throws<OperationCanceledException>();
     }
@@ -64,7 +64,7 @@ public class HttpClientExtensionsPostOnceTests {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         await Assert.That(async () =>
-                await client.PostOnceAsync("http://localhost/x", content, TimeSpan.FromMilliseconds(100))
+                await client.PostOnceAsync("http://localhost/x", content, TimeProvider.System, TimeSpan.FromMilliseconds(100))
             )
             .Throws<OperationCanceledException>();
         sw.Stop();

@@ -68,7 +68,7 @@ public class PermissionRequestWatcherSelfHealTests {
             ["cwd"]             = "/tmp/test"
         };
 
-        await new PermissionRequestCommand(Root, Profiles, HostedAgent.Terminal, new FixedCapacitorHttpClient(), Watchers).TryEnsureWatcher(sessionId, node);
+        await new PermissionRequestCommand(Root, Profiles, HostedAgent.Terminal, new FixedCapacitorHttpClient(), Watchers, TimeProvider.System).TryEnsureWatcher(sessionId, node);
 
         await Assert.That(File.Exists(pidFile)).IsTrue();
         var lines = await File.ReadAllLinesAsync(pidFile);
@@ -88,7 +88,7 @@ public class PermissionRequestWatcherSelfHealTests {
             ["agent_id"]        = "agent-123"
         };
 
-        await new PermissionRequestCommand(Root, Profiles, HostedAgent.Terminal, new FixedCapacitorHttpClient(), Watchers).TryEnsureWatcher(sessionId, node);
+        await new PermissionRequestCommand(Root, Profiles, HostedAgent.Terminal, new FixedCapacitorHttpClient(), Watchers, TimeProvider.System).TryEnsureWatcher(sessionId, node);
 
         await Assert.That(File.Exists(pidFile)).IsFalse();
 
@@ -103,7 +103,7 @@ public class PermissionRequestWatcherSelfHealTests {
             ["cwd"] = "/tmp/test"
         };
 
-        await new PermissionRequestCommand(Root, Profiles, HostedAgent.Terminal, new FixedCapacitorHttpClient(), Watchers).TryEnsureWatcher(sessionId, node);
+        await new PermissionRequestCommand(Root, Profiles, HostedAgent.Terminal, new FixedCapacitorHttpClient(), Watchers, TimeProvider.System).TryEnsureWatcher(sessionId, node);
 
         await Assert.That(File.Exists(pidFile)).IsFalse();
 

@@ -24,7 +24,7 @@ public class StatusWaitArgumentTests {
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpFlowsServer Server() =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System);
 
     static readonly TimeSpan PollInterval       = TimeSpan.FromSeconds(3);
     static readonly TimeSpan PollCap            = TimeSpan.FromMinutes(8);

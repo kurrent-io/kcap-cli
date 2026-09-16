@@ -14,7 +14,7 @@ public class DaemonLockAwaitTests {
         var releaser = Task.Run(async () => { await Task.Delay(300); first!.Dispose(); });
 
         var sw     = Stopwatch.StartNew();
-        var second = DaemonLock.TryAcquire(daemons.Store, "await-test", TimeSpan.FromSeconds(5));
+        var second = await DaemonLock.TryAcquireAsync(daemons.Store, "await-test", TimeSpan.FromSeconds(5), TimeProvider.System);
         sw.Stop();
 
         await Assert.That(second).IsNotNull();
@@ -30,7 +30,7 @@ public class DaemonLockAwaitTests {
         var first = DaemonLock.TryAcquire(daemons.Store, "held");
         await Assert.That(first).IsNotNull();
 
-        var second = DaemonLock.TryAcquire(daemons.Store, "held", TimeSpan.FromMilliseconds(500));
+        var second = await DaemonLock.TryAcquireAsync(daemons.Store, "held", TimeSpan.FromMilliseconds(500), TimeProvider.System);
         await Assert.That(second).IsNull();
 
         first!.Dispose();

@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 public class CursorTopLevelStreamingTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter());
+    WatchCommand Watch => field ??= new(Config.Root, Resolutions.None(Config.Root), TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new FixedCredentialSource(), TestWatchers.For(Config.Root, Resolutions.None(Config.Root), new FixedCapacitorHttpClient()), new GitProviderRouter(), TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -39,7 +39,7 @@ public class CursorTopLevelStreamingTests {
         // What RunWatch's startup now does for Cursor (review fix #4): ThresholdReached is
         // already true before the main loop's very first poll, regardless of line count.
         var state = new WatchState { ThresholdReached = true };
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         await using var hub = UnconnectedHub();
 
         var result = await Watch.DrainNewLines(
@@ -66,7 +66,7 @@ public class CursorTopLevelStreamingTests {
         await File.WriteAllTextAsync(transcriptPath, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
 
         var state = new WatchState(); // ThresholdReached defaults false
-        var guard = new CursorRewriteGuard(Config.Root, sid);
+        var guard = new CursorRewriteGuard(Config.Root, sid, TimeProvider.System);
         await using var hub = UnconnectedHub();
 
         var result = await Watch.DrainNewLines(

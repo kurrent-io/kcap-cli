@@ -27,7 +27,7 @@ public class HookSpoolTests {
     [Test]
     public async Task drains_current_session_first_then_others_in_fifo() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         spool.Append(SidB, "session-start", """{"n":"b1"}""");
         spool.Append(SidA, "session-start", """{"n":"a1"}""");
         spool.Append(SidA, "session-end",   """{"n":"a2"}""");
@@ -50,7 +50,7 @@ public class HookSpoolTests {
     [Test]
     public async Task transient_stop_keeps_remainder_drop_advances() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         spool.Append(SidA, "session-start", """{"n":1}"""); // Delivered
         spool.Append(SidA, "session-start", """{"n":2}"""); // Drop (permanent)
         spool.Append(SidA, "session-end",   """{"n":3}"""); // TransientStop
@@ -72,7 +72,7 @@ public class HookSpoolTests {
     [Test]
     public async Task concurrent_append_during_drain_is_not_lost() {
         using var tmp = new TempDir();
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         spool.Append(SidA, "session-start", """{"n":"old"}""");
 
         // Poster appends a NEW entry while the OLD one is being drained (live file
@@ -93,7 +93,7 @@ public class HookSpoolTests {
         tmp.CreateFile($"{SidA}.jsonl",
             "{\"hook_event_name\":\"sessionEnd\",\"body\":\"x\"}\n");
         var count = 0;
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         await spool.DrainAllAsync(SidA, (_, _) => { count++; return Task.FromResult(DrainOutcome.Delivered); },
             TimeSpan.FromSeconds(5), CancellationToken.None);
         await Assert.That(count).IsEqualTo(0); // skipped, not posted
@@ -106,7 +106,7 @@ public class HookSpoolTests {
         tmp.CreateFile($"{SidA}.123-1.draining",
             "{\"route\":\"session-start\",\"body\":\"old\"}\n");
         await Task.Delay(10);
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         spool.Append(SidA, "session-end", """{"n":"newlive"}""");
 
         var seen = new List<string>();
@@ -130,7 +130,7 @@ public class HookSpoolTests {
         // right alongside a fresh route-agnostic append for the SAME session.
         tmp.CreateFile($"{SidA}.ordered-123-1",
             "{\"route\":\"session-end\",\"body\":\"withheld\"}\n");
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
         spool.Append(SidA, "session-start", """{"n":"fresh"}""");
 
         var seen = new List<string>();
@@ -150,7 +150,7 @@ public class HookSpoolTests {
         using var tmp = new TempDir();
         tmp.CreateFile($"{SidA}.ordered-1-1",
             "{\"route\":\"session-end\",\"body\":\"x\"}\n");
-        var spool = new HookSpool(tmp.Path);
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
 
         // Ordering guards (ClaudeHookCommand.CurrentSessionHasBacklog / CursorHookCommand) must
         // see this as backlog so they defer their OWN fresh post rather than race ahead of a
@@ -164,7 +164,7 @@ public class HookSpoolTests {
         var f = tmp.PathTo($"{SidA}.jsonl");
         await File.WriteAllTextAsync(f, "{\"route\":\"x\",\"body\":\"y\"}\n");
         File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddDays(-40));
-        new HookSpool(tmp.Path).ReapOlderThan(TimeSpan.FromDays(30));
+        new HookSpool(tmp.Path, time: TimeProvider.System).ReapOlderThan(TimeSpan.FromDays(30));
         await Assert.That(File.Exists(f)).IsFalse();
     }
 
@@ -173,7 +173,7 @@ public class HookSpoolTests {
         using var tmp = new TempDir();
         // Multi-byte UTF-8 bodies: char-count under-counts bytes, so a char-based cap would
         // let the file grow past capBytes. With byte-based counting the file stays bounded.
-        var spool = new HookSpool(tmp.Path, capBytes: 400);
+        var spool = new HookSpool(tmp.Path, capBytes: 400, time: TimeProvider.System);
         for (var i = 0; i < 30; i++)
             spool.Append(SidA, "session-end", $$"""{"i":{{i}},"t":"日本語テキスト😀"}""");
 

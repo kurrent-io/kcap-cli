@@ -38,7 +38,7 @@ public class BorrowedSnapshotExclusionScopeTests {
 
     static WorktreeManager NewManager(Fixture fixture) =>
         new(new DaemonConfig { WorktreeRoot = fixture.SnapshotRoot.Path },
-            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
 
     static async Task<WorktreeInfo> SnapshotAsync(Fixture fixture, string relativeCwd) =>
         await NewManager(fixture).CreateBorrowedSnapshotAsync(
@@ -73,7 +73,7 @@ public class BorrowedSnapshotExclusionScopeTests {
             await Assert.That(ExistsInSnapshot(snapshot, "src/.codex/config.toml")).IsFalse()
                 .Because("Codex layers .codex/config.toml from the repository root down to the cwd, so a "
                        + "root-scoped list leaves the cwd's own layer live");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -85,7 +85,7 @@ public class BorrowedSnapshotExclusionScopeTests {
             await Assert.That(ExistsInSnapshot(snapshot, "src/.codex/config.toml")).IsTrue()
                 .Because("without this the exclusion test above could pass because the fixture never "
                        + "produced the file, or because sub-directories are dropped for some other reason");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 2. .github/mcp.json at the root ----------
@@ -108,7 +108,7 @@ public class BorrowedSnapshotExclusionScopeTests {
                        + "a different path, so this was unprotected at every snapshot root");
             await Assert.That(ExistsInSnapshot(snapshot, ".github/workflows/ci.yml")).IsTrue()
                 .Because("the exclusion is path-scoped, not a blanket drop of .github/");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 3. an intermediate directory on the chain ----------
@@ -121,7 +121,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         try {
             await Assert.That(ExistsInSnapshot(snapshot, "a/.mcp.json")).IsFalse()
                 .Because("the whole chain root..cwd is covered, not just its two endpoints");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -131,7 +131,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         var snapshot = await SnapshotAsync(fixture, "");
         try {
             await Assert.That(ExistsInSnapshot(snapshot, "a/.mcp.json")).IsTrue();
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 4. a sibling of the cwd is NOT excluded ----------
@@ -146,7 +146,7 @@ public class BorrowedSnapshotExclusionScopeTests {
                 .Because("no supported vendor discovers config in a sibling of its cwd. Excluding it "
                        + "anyway would strip content the launch cannot reach — this repository's own "
                        + "committed kcap/.mcp.json among it");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 5. case-sensitive sibling and the collision case-folding would cause ----------
@@ -170,7 +170,7 @@ public class BorrowedSnapshotExclusionScopeTests {
             await Assert.That(ExistsInSnapshot(snapshot, "a/.mcp.json")).IsFalse();
             await Assert.That(ExistsInSnapshot(snapshot, "A/.mcp.json")).IsTrue()
                 .Because("on a case-sensitive volume A/ is a genuine sibling the vendor cannot discover");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 7. --show-prefix framing, against real git ----------
@@ -181,7 +181,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         var cwd = fixture.Source.PathTo("src", "cli");
 
         var prefix = await WorktreeManager.ReadGitRelativeCwdAsync(
-            fixture.Source, cwd, CancellationToken.None);
+            fixture.Source, cwd, TimeProvider.System, CancellationToken.None);
 
         // The oracle is git's OWN listing, not our plan builder — a builder validated against itself
         // would pass with an identically wrong derivation.
@@ -194,7 +194,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         using var fixture = NewFixture();
 
         var prefix = await WorktreeManager.ReadGitRelativeCwdAsync(
-            fixture.Source, fixture.Source, CancellationToken.None);
+            fixture.Source, fixture.Source, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(prefix).IsEqualTo("");
     }
@@ -290,7 +290,7 @@ public class BorrowedSnapshotExclusionScopeTests {
             // reviewer sees a deletion kcap performed and can legitimately file a finding about it.
             await Assert.That(GitRepo.At(snapshot.SnapshotRoot!).Try("status", "--porcelain").Text.Trim())
                 .IsEqualTo("");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     [Test]
@@ -305,7 +305,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         var snapshot = await SnapshotAsync(fixture, "src");
         try {
             await Assert.That(ExistsInSnapshot(snapshot, "src/.mcp.json")).IsFalse();
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 14. review context and containment move together ----------
@@ -330,7 +330,7 @@ public class BorrowedSnapshotExclusionScopeTests {
                 .Single();
             await Assert.That(manifest).Contains("src/.kiro/settings/mcp.json");
             await Assert.That(manifest).Contains(Convert.ToBase64String(Encoding.UTF8.GetBytes(hostile)));
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 15. rooted / escaping cwd ----------
@@ -365,7 +365,7 @@ public class BorrowedSnapshotExclusionScopeTests {
         await Assert.That(link.StartsWith(fixture.Source, StringComparison.Ordinal)).IsFalse();
 
         var manager = new WorktreeManager(
-            new DaemonConfig { WorktreeRoot = link }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
+            new DaemonConfig { WorktreeRoot = link }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         await Assert.That(async () => await manager.CreateBorrowedSnapshotAsync(
                 fixture.Source, fixture.Source, null, CancellationToken.None))
             .Throws<InvalidOperationException>()
@@ -414,7 +414,7 @@ public class BorrowedSnapshotExclusionScopeTests {
 
             await Assert.That(File.Exists(Path.Combine(target, ".mcp.json", "child"))).IsFalse();
             await Assert.That(GitRepo.At(target).Try("status", "--porcelain").Text.Trim()).IsEqualTo("");
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- the prefix must belong to the repository whose manifest it filters ----------
@@ -454,7 +454,7 @@ public class BorrowedSnapshotExclusionScopeTests {
 
         var manager = new WorktreeManager(
             new DaemonConfig { WorktreeRoot = Path.Combine(link, "existing") },
-            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         await Assert.That(async () => await manager.CreateBorrowedSnapshotAsync(
                 fixture.Source, fixture.Source, null, CancellationToken.None))
             .Throws<InvalidOperationException>();
@@ -477,7 +477,7 @@ public class BorrowedSnapshotExclusionScopeTests {
 
             await Assert.That(ExistsInSnapshot(snapshot, "src/.mcp.json")).IsFalse();
             await Assert.That(ExistsInSnapshot(snapshot, "src/keep.txt")).IsTrue();
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 
     // ---------- 18. the refresh path carries the persisted prefix ----------
@@ -505,6 +505,6 @@ public class BorrowedSnapshotExclusionScopeTests {
             await Assert.That(ExistsInSnapshot(snapshot, "src/.mcp.json")).IsFalse();
             await Assert.That(ExistsInSnapshot(snapshot, ".mcp.json")).IsFalse();
             await Assert.That(ExistsInSnapshot(snapshot, "src/keep.txt")).IsTrue();
-        } finally { await WorktreeManager.RemoveAsync(snapshot); }
+        } finally { await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System); }
     }
 }

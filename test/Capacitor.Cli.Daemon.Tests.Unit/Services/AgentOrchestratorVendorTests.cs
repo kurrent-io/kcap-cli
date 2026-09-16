@@ -70,8 +70,12 @@ public class AgentOrchestratorVendorTests {
 
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-rereg", null, "", null, worktreePath, "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
-        ));
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
 
         // The orchestrator wires ReRegisterAgentsHook in its ctor; invoking it runs the same
         // path RegisterDaemon awaits on reconnect.
@@ -93,8 +97,12 @@ public class AgentOrchestratorVendorTests {
 
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-codex-pty", null, "", null, worktreePath, "codex",
-            new PtyHostedAgentRuntime("codex", new StubPtyProcess()), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
-        ));
+            new PtyHostedAgentRuntime("codex", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
 
         await server.ReRegisterAgentsHook!();
 
@@ -556,9 +564,12 @@ public class AgentOrchestratorVendorTests {
 
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-rereg-posture", null, "", null, worktreePath, "codex",
-            new PtyHostedAgentRuntime("codex", new StubPtyProcess()),
+            new PtyHostedAgentRuntime("codex", new StubPtyProcess(), TimeProvider.System),
             new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow,
             SandboxPolicy = "danger-full-access", ApprovalPolicy = "never"
         });
 

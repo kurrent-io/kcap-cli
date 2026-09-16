@@ -272,7 +272,8 @@ public class AntigravityReviewerLaunchTests {
             bool binaryExists = true,
             string? version = "1.1.10",
             bool posixHost = true) =>
-        new(config, NullLoggerFactory.Instance, turnSource, _ => binaryExists, _ => version, posixHost);
+        new(config, NullLoggerFactory.Instance, TimeProvider.System, turnSource, _ => binaryExists, _ => version,
+            posixHost);
 
     /// <summary>The platform arm itself — assertable from POSIX only because the seam above exists,
     /// which is the point of having it. The reviewer's per-launch home holds review context and
@@ -422,7 +423,7 @@ public class AntigravityReviewerLaunchTests {
 
         var probes = 0;
         var factory = new AntigravityHostedAgentRuntimeFactory(
-            config, NullLoggerFactory.Instance, turnSource: null, binaryExists: _ => true,
+            config, NullLoggerFactory.Instance, TimeProvider.System, turnSource: null, binaryExists: _ => true,
             resolveVersion: _ => { probes++; return "0.0.1"; });
 
         await Assert.That(factory.DescribeUnattendedSupport().Supported).IsFalse();
@@ -442,7 +443,7 @@ public class AntigravityReviewerLaunchTests {
 
         var seen   = new List<string>();
         var factory = new AntigravityHostedAgentRuntimeFactory(
-            config, NullLoggerFactory.Instance, turnSource: null, binaryExists: _ => true,
+            config, NullLoggerFactory.Instance, TimeProvider.System, turnSource: null, binaryExists: _ => true,
             resolveVersion: path => { seen.Add(path); return "1.1.8"; });
 
         factory.DescribeUnattendedSupport();

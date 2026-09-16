@@ -78,7 +78,7 @@ public class AgentOrchestratorJournalTests {
         await Assert.That(File.Exists(factory.LastJournal!.Path)).IsFalse();
 
         // A pre-existing file (a rebind whose factory fails) keeps the prior incarnation's bytes.
-        var existing = TranscriptJournal.ForAgent(orch.PidRecordRootForTest, "agent-fail-rebind", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var existing = TranscriptJournal.ForAgent(orch.PidRecordRootForTest, "agent-fail-rebind", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, TimeProvider.System);
         existing.Open("/w", null); await existing.CompleteAsync();
         await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("agent-fail-rebind", repoPath));
         await Assert.That(File.Exists(existing.Path)).IsTrue();

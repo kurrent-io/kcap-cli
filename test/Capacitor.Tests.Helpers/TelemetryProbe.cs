@@ -32,7 +32,7 @@ public sealed class TelemetryProbe {
 
     public static TelemetryProbe Start(TelemetryStartup startup, ConfigRoot config, bool loggedIn = false) {
         var sink      = new RecordingTelemetrySink();
-        var telemetry = CliTelemetry.Start(startup, config, () => sink);
+        var telemetry = CliTelemetry.Start(startup, config, TimeProvider.System, () => sink);
 
         // Program.cs completes the bag before announcing, so a probe does too — every event a test
         // reads back then carries what a real run's would.

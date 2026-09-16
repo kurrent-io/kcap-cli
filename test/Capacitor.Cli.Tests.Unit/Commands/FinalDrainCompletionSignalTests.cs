@@ -62,7 +62,7 @@ public class WaitForFinalLineCompletionAsyncTests {
     public async Task already_complete_returns_true_immediately() {
         using var tmp  = new TempDir();
         var       path = tmp.CreateFile("transcript.tmp", "{\"a\":1}\n");
-        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 4, delayMs: 20);
+        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 4, delayMs: 20);
         await Assert.That(result).IsTrue();
     }
 
@@ -79,7 +79,7 @@ public class WaitForFinalLineCompletionAsyncTests {
             await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
         });
 
-        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 6, delayMs: 20);
+        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 6, delayMs: 20);
         await writer;
 
         await Assert.That(result).IsTrue();
@@ -91,14 +91,14 @@ public class WaitForFinalLineCompletionAsyncTests {
 
         // Length-stable AND unparseable for the entire window — must never flip to "complete".
         await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writ");
-        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 3, delayMs: 10);
+        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 3, delayMs: 10);
         await Assert.That(result).IsFalse();
     }
 
     [Test]
     public async Task missing_file_returns_false() {
         var result = await WatchCommand.WaitForFinalLineCompletionAsync(
-            "/tmp/nonexistent_" + Guid.NewGuid(), attempts: 2, delayMs: 10);
+            "/tmp/nonexistent_" + Guid.NewGuid(), TimeProvider.System, attempts: 2, delayMs: 10);
         await Assert.That(result).IsFalse();
     }
 
@@ -116,7 +116,7 @@ public class WaitForFinalLineCompletionAsyncTests {
         // agent appending to its own transcript does.
         await using var writer = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
 
-        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 3, delayMs: 10);
+        var result = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 3, delayMs: 10);
 
         await Assert.That(result).IsTrue();
     }

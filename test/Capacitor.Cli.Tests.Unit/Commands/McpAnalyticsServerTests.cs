@@ -11,7 +11,7 @@ public class McpAnalyticsServerTests {
 
     // Resolutions.None: these tests exercise routing, not profile selection.
     McpAnalyticsServer Server() =>
-        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System);
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 

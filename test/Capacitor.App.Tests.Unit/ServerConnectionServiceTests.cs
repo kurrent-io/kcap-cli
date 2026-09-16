@@ -13,12 +13,12 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel(nameof(HubTestHost))]
 public class ServerConnectionServiceTests {
     static ServerConnectionService Lane(HubTestHost host, string? token = null) =>
-        new(host.Url, () => Task.FromResult(token));
+        new(TimeProvider.System, host.Url, () => Task.FromResult(token));
 
     /// A lane whose SignalR reconnect ladder is the caller's, for the one test whose bound is
     /// that ladder rather than the behaviour under it.
     static ServerConnectionService Lane(HubTestHost host, TimeSpan[] reconnectDelays) =>
-        new(host.Url, () => Task.FromResult<string?>(null), reconnectDelays);
+        new(TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), reconnectDelays);
 
     static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 10) =>
         await source.Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
@@ -54,7 +54,7 @@ public class ServerConnectionServiceTests {
 
     [Test]
     public async Task NoServerMeansDormantForever() {
-        await using var lane = new ServerConnectionService(serverUrl: null, () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, serverUrl: null, () => Task.FromResult<string?>(null));
         lane.Start();
         var status = await lane.Status.Take(1).ToTask();
         await Assert.That(status.State).IsEqualTo(ServerLaneState.Dormant);
@@ -69,7 +69,7 @@ public class ServerConnectionServiceTests {
         var url = host.Url;
         await host.StopAsync();
 
-        await using var lane = new ServerConnectionService(url, () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, url, () => Task.FromResult<string?>(null));
         lane.Start();
         await Next(lane.Status, s => s.State == ServerLaneState.Retrying, seconds: 15);
     }
@@ -128,7 +128,7 @@ public class ServerConnectionServiceTests {
 
     [Test]
     public async Task LaunchWhileDisconnectedFailsWithoutThrowing() {
-        await using var lane = new ServerConnectionService("http://127.0.0.1:1", () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, "http://127.0.0.1:1", () => Task.FromResult<string?>(null));
         lane.Start();
         var outcome = await ((ILaunchClient)lane).StartAsync(
             new LaunchRequest("d", "/r", "claude", null), CancellationToken.None);
@@ -140,7 +140,7 @@ public class ServerConnectionServiceTests {
     public async Task UnauthorizedNegotiateSurfacesSignedOutAndStaysThere() {
         await using var host = await HubTestHost.StartAsync(requireAuth: true);
         string? token = null;
-        await using var lane = new ServerConnectionService(host.Url, () => Task.FromResult(token));
+        await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => Task.FromResult(token));
         lane.Start();
 
         await Next(lane.Status, s => s.State == ServerLaneState.SignedOut);
@@ -235,7 +235,7 @@ public class ServerConnectionServiceTests {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = new ServerConnectionService(host.Url, () => {
+        await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
             return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
         });
@@ -292,7 +292,7 @@ public class ServerConnectionServiceTests {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
-        await using var lane = new ServerConnectionService(host.Url, () => {
+        await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
             return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
         });
@@ -430,7 +430,7 @@ public class ServerConnectionServiceTests {
 
     [Test]
     public async Task InvokesReportNotConnectedWithoutALiveHub() {
-        await using var lane = new ServerConnectionService(serverUrl: null, () => Task.FromResult<string?>(null));
+        await using var lane = new ServerConnectionService(TimeProvider.System, serverUrl: null, () => Task.FromResult<string?>(null));
         lane.Start();
         await Assert.That((await lane.RequestStopAgentAsync("a1", CancellationToken.None)).Result).IsEqualTo(HubCallResult.NotConnected);
 

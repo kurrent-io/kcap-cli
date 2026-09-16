@@ -18,15 +18,15 @@ public class NudgeLeaseTests {
     [Test]
     public async Task the_first_claim_wins_and_repeats_are_refused() {
         using var root = new TempDir();
-        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "kiro-session", Budget)).IsTrue();
-        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "kiro-session", Budget)).IsFalse();
+        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "kiro-session", Budget, TimeProvider.System)).IsTrue();
+        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "kiro-session", Budget, TimeProvider.System)).IsFalse();
     }
 
     [Test]
     public async Task distinct_sessions_claim_independently() {
         using var root = new TempDir();
-        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "session-a", Budget)).IsTrue();
-        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "session-b", Budget)).IsTrue();
+        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "session-a", Budget, TimeProvider.System)).IsTrue();
+        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "session-b", Budget, TimeProvider.System)).IsTrue();
     }
 
     // Kiro session ids are GUIDs the identity normaliser canonicalises; two spellings of one session
@@ -35,9 +35,9 @@ public class NudgeLeaseTests {
     public async Task guid_spellings_collapse_to_one_claim() {
         using var root = new TempDir();
         await Assert.That(await NudgeLease.TryClaimAsync(
-            Store(root), HarnessId.Kiro, "6f9619ff-8b86-d011-b42d-00cf4fc964ff", Budget)).IsTrue();
+            Store(root), HarnessId.Kiro, "6f9619ff-8b86-d011-b42d-00cf4fc964ff", Budget, TimeProvider.System)).IsTrue();
         await Assert.That(await NudgeLease.TryClaimAsync(
-            Store(root), HarnessId.Kiro, "6F9619FF8B86D011B42D00CF4FC964FF", Budget)).IsFalse();
+            Store(root), HarnessId.Kiro, "6F9619FF8B86D011B42D00CF4FC964FF", Budget, TimeProvider.System)).IsFalse();
     }
 
     // The claim lives in the shared store under its own key domain: claiming the nudge must never
@@ -46,7 +46,7 @@ public class NudgeLeaseTests {
     public async Task the_nudge_claim_does_not_collide_with_the_memory_lease() {
         using var root = new TempDir();
         var store = Store(root);
-        await Assert.That(await NudgeLease.TryClaimAsync(store, HarnessId.Kiro, "kiro-session", Budget)).IsTrue();
+        await Assert.That(await NudgeLease.TryClaimAsync(store, HarnessId.Kiro, "kiro-session", Budget, TimeProvider.System)).IsTrue();
 
         var memoryKey = SessionStartMemoryIdentity.Create(HarnessId.Kiro, "kiro-session", null);
         await Assert.That(await store.TryBeginAsync(memoryKey, Budget)).IsNotNull();
@@ -55,7 +55,7 @@ public class NudgeLeaseTests {
     [Test]
     public async Task an_unusable_session_id_never_claims() {
         using var root = new TempDir();
-        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "", Budget)).IsFalse();
+        await Assert.That(await NudgeLease.TryClaimAsync(Store(root), HarnessId.Kiro, "", Budget, TimeProvider.System)).IsFalse();
     }
 
     // Store construction sits inside the claim's failure boundary: a config dir whose store root

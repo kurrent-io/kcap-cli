@@ -44,7 +44,7 @@ public class HomeViewModelTests {
         store = new AppStateStore(statePath);
         var daemon = new FakeDaemonClientService();
         Connect(daemon);
-        return new HomeViewModel(daemon, store, launch, Known());
+        return new HomeViewModel(daemon, store, launch, Known(), TimeProvider.System);
     }
 
     /// The launcher's model list prefers the server catalog per vendor and falls back to the
@@ -61,7 +61,7 @@ public class HomeViewModelTests {
                 ["gemini"] = [new("gemini-3-pro", "Gemini 3 Pro")],
             };
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 modelCatalog: Observable.Return<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>(catalog));
 
             await Assert.That(vm.ModelChoicesFor("gemini").Select(m => m.Slug)).Contains("gemini-3-pro");
@@ -276,7 +276,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.ChooseHarnessAsync("codex");
@@ -302,7 +302,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/Alpha");
             await vm.ChooseHarnessAsync("codex");
@@ -327,7 +327,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(new[] { "/repo/kcap-cli/" }));
+                () => Task.FromResult(new[] { "/repo/kcap-cli/" }), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/kcap-cli");
             daemon.Agents.AddOrUpdate(Agent("x", "/repo/kcap-cli/"));
@@ -346,7 +346,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             var empty = await vm.ListRepositoriesAsync();
             await Assert.That(empty.Count).IsEqualTo(1);
@@ -370,7 +370,7 @@ public class HomeViewModelTests {
             // GetSortedPathsAsync is last-used first — index 0 is the most recent.
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                Known("/repo/newer", "/repo/older"));
+                Known("/repo/newer", "/repo/older"), TimeProvider.System);
 
             await vm.EnsureDefaultRepositoryAsync();
 
@@ -393,7 +393,7 @@ public class HomeViewModelTests {
                 async () => {
                     await release.Task;
                     return ["/repo/default"];
-                });
+                }, TimeProvider.System);
 
             var ensure = vm.EnsureDefaultRepositoryAsync();
             await vm.SelectRepositoryAsync("/repo/user-picked");
@@ -410,7 +410,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.Agents.AddOrUpdate(Agent("x", null));
 
@@ -429,7 +429,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/fresh");
 
@@ -446,7 +446,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.Agents.AddOrUpdate(Agent("x", "/x/bravo"));
             daemon.Agents.AddOrUpdate(Agent("y", "/y/alpha"));
@@ -466,7 +466,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.Agents.AddOrUpdate(Agent("x", "/repo/a/.claude/worktrees/leafy"));
 
@@ -487,7 +487,7 @@ public class HomeViewModelTests {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             using var vm = new HomeViewModel(
                 new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(),
-                Known("/repo/recorded"));
+                Known("/repo/recorded"), TimeProvider.System);
 
             var repos = await vm.ListRepositoriesAsync();
 
@@ -504,7 +504,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                Known("/repo/alpha", "/repo/beta"));
+                Known("/repo/alpha", "/repo/beta"), TimeProvider.System);
 
             await vm.SelectRepositoryAsync("/repo/Alpha");
             await vm.ChooseHarnessAsync("codex");
@@ -530,7 +530,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             // Before any snapshot: capability unknown, so everything is offered.
             var piBefore = vm.Harnesses.Single(h => h.Vendor == "pi").Available;
@@ -554,7 +554,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
             await vm.SelectRepositoryAsync("/repo/a");
 
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
@@ -573,7 +573,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             Connect(daemon);
             await vm.SelectRepositoryAsync("/repo/a");
@@ -603,7 +603,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), laneStatus: lane.Status);
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System, laneStatus: lane.Status);
 
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "not running", null));
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
@@ -630,7 +630,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
@@ -660,7 +660,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
@@ -686,7 +686,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 laneStatus: lane.Status, appServerUrl: "HTTP://LOCALHOST:9999/");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
@@ -727,7 +727,7 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 laneStatus: lane.Status, appServerUrl: appServerUrl);
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
                 serverUrl: daemonServerUrl, connection: "disconnected"));
@@ -759,7 +759,7 @@ public class HomeViewModelTests {
                 new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
                 laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
             Connect(daemon, "disconnected");
@@ -803,7 +803,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known());
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
 
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "not running", null));
 
@@ -833,7 +833,7 @@ public class HomeViewModelTests {
             ]);
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
@@ -884,7 +884,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient();
             var signInRequests = 0;
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), requestSignIn: () => signInRequests++);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, requestSignIn: () => signInRequests++);
             Connect(daemon);
             await vm.SelectRepositoryAsync("/repo/a");
             launch.Next = new LaunchOutcome(
@@ -912,7 +912,7 @@ public class HomeViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 appServerUrl: "http://localhost:9999");
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
@@ -969,7 +969,7 @@ public class HomeViewModelTests {
                 new DaemonInfo { Name = daemon.DaemonName, OwnerUserId = "u1", MachineId = "m1", Connected = true },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), localMachineId: "m1");
 
             var options = await vm.ListMachinesAsync();
@@ -993,7 +993,7 @@ public class HomeViewModelTests {
             remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true }]);
             // No viewerId supplied — the ctor default never guesses ownership.
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), daemons: remote.Daemons);
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System, daemons: remote.Daemons);
 
             var options = await vm.ListMachinesAsync();
 
@@ -1019,7 +1019,7 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("work", isLocal: false);
@@ -1047,7 +1047,7 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, store, new RecordingLaunchClient(), Known(),
+                daemon, store, new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1088,7 +1088,7 @@ public class HomeViewModelTests {
             var lane = new FakeServerLane();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1115,7 +1115,7 @@ public class HomeViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             var opened = new List<(string AgentId, int Generation)>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 openSessionIfCurrent: (id, generation) => opened.Add((id, generation)),
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
@@ -1136,7 +1136,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient();
             var opened = new List<(string AgentId, int Generation)>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 openSessionIfCurrent: (id, generation) => opened.Add((id, generation)));
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1156,7 +1156,7 @@ public class HomeViewModelTests {
             Connect(daemon);
             var launch = new RecordingLaunchClient();
             using var directory = new FakeAgentDirectory();
-            using var vm = new HomeViewModel(daemon, new AppStateStore(path), launch, Known(), directory: directory);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
             vm.Goal = "Fix the flaky test\nand more";
@@ -1186,7 +1186,7 @@ public class HomeViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             using var directory = new FakeAgentDirectory();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status, directory: directory);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1207,7 +1207,7 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new FakeAgentDirectory();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures, directory: directory);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1234,7 +1234,7 @@ public class HomeViewModelTests {
                 Vendor = "claude", RepoOwner = "o", RepoName = "r",
             }));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures, directory: directory);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1258,7 +1258,7 @@ public class HomeViewModelTests {
             var failures = new Subject<LaunchFailure>();
             using var directory = new FakeAgentDirectory();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures, directory: directory);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1284,7 +1284,7 @@ public class HomeViewModelTests {
                 new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1318,7 +1318,7 @@ public class HomeViewModelTests {
             var lane = new FakeServerLane();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1344,7 +1344,7 @@ public class HomeViewModelTests {
             var remote = new FakeRemoteAgents();
             remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "work-mac", OwnerUserId = "u2", Connected = true }]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
             await vm.SelectRepositoryAsync("/repo/a");
 
@@ -1373,7 +1373,7 @@ public class HomeViewModelTests {
             var lane = new FakeServerLane();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1412,7 +1412,7 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known("/repo/local"),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known("/repo/local"), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1463,7 +1463,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
             var failures = new Subject<LaunchFailure>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1485,7 +1485,7 @@ public class HomeViewModelTests {
                 Failures = failures, AgentId = "agent-9", Reason = "launch_denied_by_owner: default",
             };
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1504,7 +1504,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
             var failures = new Subject<LaunchFailure>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1527,7 +1527,7 @@ public class HomeViewModelTests {
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
                 p => p, null, null);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1553,7 +1553,7 @@ public class HomeViewModelTests {
             var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, dashed, null) };
             var failures = new Subject<LaunchFailure>();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), launchFailures: failures);
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
@@ -1579,7 +1579,7 @@ public class HomeViewModelTests {
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
                 p => p, null, null);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1617,7 +1617,7 @@ public class HomeViewModelTests {
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
                 p => p, null, null);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1645,7 +1645,7 @@ public class HomeViewModelTests {
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
                 p => p, null, null);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1688,7 +1688,7 @@ public class HomeViewModelTests {
                 daemon, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
                 p => p, null, null);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1760,7 +1760,7 @@ public class HomeViewModelTests {
                 Directory = directory, Failures = failures, AgentId = "agent-9",
             };
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(),
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
                 launchFailures: failures, directory: directory);
 
             await vm.SelectRepositoryAsync("/repo/a");
@@ -1787,7 +1787,7 @@ public class HomeViewModelTests {
             ]);
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
             using var startMessage = new BehaviorSubject<string?>(startMessageText);
             vm.AttachDaemonRecovery(

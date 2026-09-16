@@ -62,6 +62,7 @@ public class SetupDaemonServiceTests {
             new ConfigRoot("/nonexistent-config-root"),
             new ProfileContext(new(ServerUrl, "default", null, null), new ProfileConfig()),
             new UserHome("/nonexistent-home"),
+            TimeProvider.System,
             ladder ?? (() => Task.FromResult<ServiceEnsureJson?>(null)));
 
     /// <summary>Nothing asked, so nothing runs — and nothing is reported, which is what keeps a flow that

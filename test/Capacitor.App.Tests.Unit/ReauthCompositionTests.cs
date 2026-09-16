@@ -27,12 +27,13 @@ public class ReauthCompositionTests {
 
             var graph = ReauthComposition.Build(
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
-                new AuthProxyClient(new HttpClient()), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory()),
+                new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
+                TimeProvider.System,
                 _ => (intent, _) => {
                     seen = intent;
                     return Task.FromResult<AuthResult>(Committed());
@@ -54,12 +55,13 @@ public class ReauthCompositionTests {
 
             var graph = ReauthComposition.Build(
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
-                new AuthProxyClient(new HttpClient()), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory()),
+                new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
+                TimeProvider.System,
                 _ => async (_, ct) => {
                     started.TrySetResult();
                     await Task.Delay(Timeout.Infinite, ct);
@@ -86,12 +88,13 @@ public class ReauthCompositionTests {
             using var config = new TempConfigRoot();
             var graph = ReauthComposition.Build(
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
-                new AuthProxyClient(new HttpClient()), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory()),
+                new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
+                TimeProvider.System,
                 _ => (_, _) => Task.FromResult<AuthResult>(Committed()));
 
             var window = new SignInWindow { DataContext = graph.SignIn };

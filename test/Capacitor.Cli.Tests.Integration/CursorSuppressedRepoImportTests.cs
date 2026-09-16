@@ -67,7 +67,7 @@ public class CursorSuppressedRepoImportTests : IDisposable {
             WriteOneCursorSessionWithWorkspace(),
             WorkspaceStorageDir,
             repoDetector: _ => Task.FromResult<RepositoryPayload?>(
-                new RepositoryPayload { Owner = "acme", RepoName = "widgets" }), router: new GitProviderRouter());
+                new RepositoryPayload { Owner = "acme", RepoName = "widgets" }), router: new GitProviderRouter(), time: TimeProvider.System);
 
         using var client = new HttpClient();
 

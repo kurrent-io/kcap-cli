@@ -80,7 +80,7 @@ public class WorkspaceNavigationTests {
         gate ??= new NavigationGate();
 
         var vm = new MainWindowViewModel(
-            daemon, CancellationToken.None, TestActivity.New(),
+            daemon, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             navigation: gate,
             trackWorkspaceTeardown: track ?? tracker.Track,
             workspaceFactory: agentId => {
@@ -110,6 +110,7 @@ public class WorkspaceNavigationTests {
         nav.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
         nav.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         return new(nav.Daemon, new AppStateStore(statePath), launch, () => Task.FromResult(Array.Empty<string>()),
+            TimeProvider.System,
             openSession: id => nav.Vm.OpenSession(id),
             navigationGeneration: () => nav.Vm.NavigationGeneration,
             openSessionIfCurrent: nav.Vm.OpenSessionIfCurrent);

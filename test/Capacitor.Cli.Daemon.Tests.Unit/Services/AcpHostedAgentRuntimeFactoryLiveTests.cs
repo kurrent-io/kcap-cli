@@ -52,7 +52,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance
-        ) {
+        , TimeProvider.System) {
         public bool RequestAcpInteractionAsyncCalled { get; private set; }
 
         public override Task<AcpInteractionDecision> RequestAcpInteractionAsync(AcpInteractionRequest request, CancellationToken ct = default) {
@@ -92,7 +92,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             loggerFactory: liveLoggerFactory,
             connection: connection,
             connectionSource: null // real cursor-agent acp spawn — the production path
-        );
+        , timeProvider: TimeProvider.System);
 
         var ctx = new RuntimeStartContext(
             AgentId: "ai-688-live-gap1",
@@ -194,7 +194,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             Home = Home,
             DebugFrames = true
         };
-        var manager = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
+        var manager = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var snapshot = await manager.CreateBorrowedSnapshotAsync(
             source.Path, "live-review", CancellationToken.None);
         var factory = new AcpHostedAgentRuntimeFactory(
@@ -202,7 +202,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
             config: config,
             loggerFactory: liveLoggerFactory,
             connection: connection,
-            connectionSource: null);
+            connectionSource: null, timeProvider: TimeProvider.System);
         var ctx = new RuntimeStartContext(
             AgentId: markerPath,
             Vendor: "cursor",
@@ -277,7 +277,7 @@ public class AcpHostedAgentRuntimeFactoryLiveTests {
         } finally {
             startCts.Cancel();
             await runtime.DisposeAsync();
-            await WorktreeManager.RemoveAsync(snapshot);
+            await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System);
         }
     }
 

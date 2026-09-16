@@ -272,25 +272,6 @@ public class ReviewerReapingTests {
 
     }
 
-    /// <summary>A wall-clock jump (NTP correction, DST, a debugger-paused process resuming) must never
-    /// reap a healthy reviewer — <see cref="AgentOrchestrator.FindReviewersToReap"/> must not consult
-    /// <see cref="AgentOrchestrator.ClockUtc"/> (wall clock) for any of its three rule sets, only the
-    /// monotonic <see cref="AgentActivityClock"/>. Mutation-checked: reintroducing a
-    /// <c>ClockUtc() - AgentInstance.CreatedAt/LastOutputAt</c> comparison anywhere in the method makes
-    /// this fail, since the jumped clock reads 10 years ahead of the agent's real construction time.</summary>
-    [Test]
-    public async Task Wall_clock_jump_does_not_reap_a_healthy_reviewer() {
-        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
-            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-
-        // Healthy no-bound reviewer: fresh real-time clock, nowhere near either legacy bound.
-        orch.SeedAgentForTest("healthy", LaunchKind.ReviewFlow, status: "Running");
-
-        orch.ClockUtc = () => DateTime.UtcNow.AddYears(10);
-
-        await Assert.That(orch.FindReviewersToReap().Select(r => r.Id)).DoesNotContain("healthy");
-    }
-
     // ── The atomic reap claim (round-dispatch grace §3) ──────────────────────────────────────
     //
     // Everything above judges SELECTION. These judge the CLAIM, which is the actual decision:

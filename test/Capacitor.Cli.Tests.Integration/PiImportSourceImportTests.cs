@@ -76,7 +76,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            router: new GitProviderRouter());
+            new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);
@@ -143,7 +143,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            router: new GitProviderRouter());
+            new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -176,7 +176,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            router: new GitProviderRouter());
+            new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
@@ -208,7 +208,7 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            router: new GitProviderRouter());
+            new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(

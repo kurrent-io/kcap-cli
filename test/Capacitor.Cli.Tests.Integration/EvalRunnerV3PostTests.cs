@@ -44,7 +44,7 @@ public class EvalRunnerV3PostTests : IDisposable {
 
         var ok = await EvalService.PersistAggregateV3Async(
             httpClient: httpClient, baseUrl: _server.Url!, encodedSessionId: "sess-1",
-            aggregate: aggregate, observer: observer, ct: CancellationToken.None);
+            aggregate: aggregate, observer: observer, ct: CancellationToken.None, time: TimeProvider.System);
 
         await Assert.That(ok).IsTrue();
 

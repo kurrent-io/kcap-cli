@@ -37,7 +37,7 @@ public class EvalCatalogClientTests {
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, CatalogJson));
         var observer = new CapturingObserver();
 
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(catalog).IsNotNull();
         await Assert.That(catalog!.RetrospectivePrompt).IsEqualTo("retro {TRACE_JSON}");
@@ -50,7 +50,7 @@ public class EvalCatalogClientTests {
     public async Task Returns_null_and_reports_on_401() {
         using var http = new HttpClient(new StubHandler(HttpStatusCode.Unauthorized, ""));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("kcap login");
     }
@@ -59,7 +59,7 @@ public class EvalCatalogClientTests {
     public async Task Returns_null_and_reports_on_5xx() {
         using var http = new HttpClient(new StubHandler(HttpStatusCode.InternalServerError, ""));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("500");
     }
@@ -70,7 +70,7 @@ public class EvalCatalogClientTests {
         const string body = """{"retrospective_prompt":"r","retrospective_prompt_version":"1","questions":[]}""";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("empty");
     }
@@ -82,7 +82,7 @@ public class EvalCatalogClientTests {
         const string body = """{"retrospective_prompt":"r","retrospective_prompt_version":"1","questions":null}""";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("questions");
     }
@@ -94,7 +94,7 @@ public class EvalCatalogClientTests {
         const string body = """{"retrospective_prompt":"r","retrospective_prompt_version":"1","questions":[null]}""";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("null question");
     }
@@ -105,7 +105,7 @@ public class EvalCatalogClientTests {
             "\"questions\":[{\"category\":\"safety\",\"id\":\"k1\",\"title\":\"t\",\"question_text\":\"raw\",\"prompt\":\"p\",\"prompt_version\":\"1\",\"needs_tools\":false}]}";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("retrospective");
     }
@@ -116,7 +116,7 @@ public class EvalCatalogClientTests {
             "\"questions\":[{\"category\":\"safety\",\"id\":\"k1\",\"title\":\"t\",\"question_text\":\"raw\",\"prompt\":\"p\",\"prompt_version\":\"\",\"needs_tools\":false}]}";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("prompt_version");
     }
@@ -131,7 +131,7 @@ public class EvalCatalogClientTests {
             """;
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("duplicate");
     }
@@ -143,7 +143,7 @@ public class EvalCatalogClientTests {
             "\"questions\":[{\"category\":\"\",\"id\":\"k1\",\"title\":\"t\",\"question_text\":\"raw\",\"prompt\":\"p\",\"prompt_version\":\"1\",\"needs_tools\":false}]}";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("category");
     }
@@ -155,7 +155,7 @@ public class EvalCatalogClientTests {
             "\"questions\":[{\"category\":\"safety\",\"id\":\"k1\",\"title\":\"\",\"question_text\":\"raw\",\"prompt\":\"p\",\"prompt_version\":\"1\",\"needs_tools\":false}]}";
         using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
         var observer = new CapturingObserver();
-        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, TimeProvider.System, CancellationToken.None);
         await Assert.That(catalog).IsNull();
         await Assert.That(observer.FailReason).Contains("title");
     }

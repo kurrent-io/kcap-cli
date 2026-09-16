@@ -160,7 +160,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance
-        ) {
+        , TimeProvider.System) {
         public bool RequestAcpInteractionAsyncCalled { get; private set; }
         public AcpInteractionRequest? LastRequest     { get; private set; }
 
@@ -211,7 +211,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
                 connection: new CaptureServerConnection(),
                 // Never spawns: this test only reads a capability property, never calls StartAsync.
                 connectionSource: _ => throw new InvalidOperationException(
-                    "SupportsModelSelection must not spawn a process."));
+                    "SupportsModelSelection must not spawn a process."), timeProvider: TimeProvider.System);
 
         // Kiro reports true since the probe that verified session/set_model at effect level
         // (docs/probes/2026-08-05-kiro-model-override/); Gemini keeps the false arm of this
@@ -233,7 +233,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -300,7 +300,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -333,7 +333,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task StartAsync_IfRequestInteractionWereNull_PermissionRequestWouldGetMethodNotFound() {
         var fake = new FakeAcpAgent();
         var conn = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
-        var runtime = new AcpHostedAgentRuntime(conn, new FakeAcpProcess(), NullLogger.Instance); // no requestInteraction — default behavior
+        var runtime = new AcpHostedAgentRuntime(conn, new FakeAcpProcess(), NullLogger.Instance, TimeProvider.System); // no requestInteraction — default behavior
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -407,7 +407,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: loggerFactory,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts   = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -472,7 +472,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: loggerFactory,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts   = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -511,7 +511,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: loggerFactory,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts   = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -595,7 +595,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig { CursorPath = "cursor-agent" },
             loggerFactory: loggerFactory,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts   = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -622,7 +622,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: loggerFactory,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -678,7 +678,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -817,7 +817,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         return await factory.StartAsync(ctx, ct).WaitAsync(HangGuard, ct);
     }
@@ -944,7 +944,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -983,7 +983,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -1021,7 +1021,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -1059,7 +1059,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
-        );
+        , timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -1108,7 +1108,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => { Interlocked.Increment(ref spawns); return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()); });
+            connectionSource: _ => { Interlocked.Increment(ref spawns); return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()); }, timeProvider: TimeProvider.System);
 
         return (factory, () => Volatile.Read(ref spawns));
     }
@@ -1311,7 +1311,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -1346,7 +1346,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -1622,7 +1622,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -1666,7 +1666,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: connection,
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -2044,7 +2044,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             connectionSource: _ => {
                 Interlocked.Increment(ref spawns);
                 return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
-            });
+            }, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -2100,7 +2100,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig { CursorPath = binaryPath },
             loggerFactory: loggerFactory,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -2248,7 +2248,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             // of the connection source, StartAsync resolves a version before this seam is reached — so
             // without both halves this test depends on which gemini happens to be installed: green on a dev
             // machine, red on CI where the gate refuses as version-unresolved and `seen` stays null.
-            resolveVendorVersion: _ => GeminiBuild);
+            resolveVendorVersion: _ => GeminiBuild, timeProvider: TimeProvider.System);
 
         var ctx = ReviewContext() with { Vendor = "gemini", LaunchIdentity = attacker };
 
@@ -2300,13 +2300,13 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         // would have kept passing if advertisement stopped honouring the flag entirely.
         IHostedAgentRuntimeFactory disabled = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, BareConfig(), NullLoggerFactory.Instance,
-            new CaptureServerConnection(), resolveVendorVersion: _ => GeminiBuild);
+            new CaptureServerConnection(), TimeProvider.System, resolveVendorVersion: _ => GeminiBuild);
 
         await Assert.That(disabled.SupportsUnattended).IsFalse();
 
         IHostedAgentRuntimeFactory enabled = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => GeminiBuild);
 
         await Assert.That(enabled.SupportsUnattended).IsTrue()
@@ -2324,7 +2324,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task Gemini_AnEnabledDaemonBelowTheMinimum_DoesNotAdvertise() {
         IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(affirmed: "0.55.0"),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => GeminiBuild);
 
         await Assert.That(factory.SupportsUnattended).IsFalse();
@@ -2336,7 +2336,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task Gemini_AnEnabledDaemonWithNoAffirmation_DoesNotAdvertise() {
         IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(affirmed: null),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => GeminiBuild);
 
         await Assert.That(factory.SupportsUnattended).IsFalse();
@@ -2359,7 +2359,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             // and is asserted separately.
             new DaemonConfig { GeminiUnattendedReviewerEnabled = false },
             NullLoggerFactory.Instance,
-            new CaptureServerConnection(), resolveVendorVersion: _ => GeminiBuild);
+            new CaptureServerConnection(), TimeProvider.System, resolveVendorVersion: _ => GeminiBuild);
 
         var support = disabled.DescribeUnattendedSupport();
 
@@ -2381,7 +2381,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task Gemini_ADefaultDaemon_IsNotWithheldForLackOfAnOptIn() {
         IHostedAgentRuntimeFactory standard = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, BareConfig(), NullLoggerFactory.Instance,
-            new CaptureServerConnection(), resolveVendorVersion: _ => GeminiBuild);
+            new CaptureServerConnection(), TimeProvider.System, resolveVendorVersion: _ => GeminiBuild);
 
         var reason = standard.DescribeUnattendedSupport().WithheldReason;
 
@@ -2395,7 +2395,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task Gemini_ABuildNewerThanTheMinimum_IsAdvertised() {
         IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(affirmed: "0.53.0"),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => GeminiBuild);
 
         var support = factory.DescribeUnattendedSupport();
@@ -2412,7 +2412,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task Gemini_ABuildOlderThanTheMinimum_IsNamedInTheWithheldReason() {
         IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(affirmed: "0.55.0"),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => GeminiBuild);
 
         var support = factory.DescribeUnattendedSupport();
@@ -2430,7 +2430,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task AnAdvertisedVendor_CarriesNoWithheldReason() {
         IHostedAgentRuntimeFactory gemini = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => GeminiBuild);
 
         var support = gemini.DescribeUnattendedSupport();
@@ -2459,7 +2459,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             SupportsMcpServers:  true);
 
         IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
-            neverUnattended, new DaemonConfig(), NullLoggerFactory.Instance, new CaptureServerConnection());
+            neverUnattended, new DaemonConfig(), NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System);
 
         var support = factory.DescribeUnattendedSupport();
 
@@ -2480,7 +2480,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
 
         IHostedAgentRuntimeFactory factory = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Gemini, GeminiEnabledConfig(affirmed: "0.53.0"),
-            NullLoggerFactory.Instance, new CaptureServerConnection(),
+            NullLoggerFactory.Instance, new CaptureServerConnection(), TimeProvider.System,
             resolveVendorVersion: _ => { probes++; return GeminiBuild; });
 
         _ = factory.DescribeUnattendedSupport();
@@ -2493,7 +2493,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     public async Task OtherVendorsAdvertisement_IsUnaffectedByTheGeminiGate() {
         IHostedAgentRuntimeFactory cursor = new AcpHostedAgentRuntimeFactory(
             AcpVendorDescriptors.Cursor, new DaemonConfig(), NullLoggerFactory.Instance,
-            new CaptureServerConnection());
+            new CaptureServerConnection(), TimeProvider.System);
 
         await Assert.That(cursor.SupportsUnattended).IsTrue();
     }
@@ -2518,7 +2518,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
                 Interlocked.Increment(ref reached);
                 return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
             },
-            resolveVendorVersion: _ => GeminiBuild);
+            resolveVendorVersion: _ => GeminiBuild, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
@@ -2545,7 +2545,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
                 Interlocked.Increment(ref reached);
                 return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
             },
-            resolveVendorVersion: _ => GeminiBuild);
+            resolveVendorVersion: _ => GeminiBuild, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try { await factory.StartAsync(ReviewContext() with { Vendor = "gemini" }, cts.Token); }
@@ -2579,7 +2579,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
                 atSeam = ctx;
                 return (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess());
             },
-            resolveVendorVersion: _ => GeminiBuild);
+            resolveVendorVersion: _ => GeminiBuild, timeProvider: TimeProvider.System);
 
         // fake.RunAsync is what serves the handshake — without it StartAsync waits on `initialize` and the
         // token cancels before session/new is ever sent.
@@ -2666,7 +2666,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -2735,7 +2735,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()),
-            resolveVendorVersion: _ => OpenCodeBuild);
+            resolveVendorVersion: _ => OpenCodeBuild, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -2776,7 +2776,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -2842,7 +2842,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process), timeProvider: TimeProvider.System);
 
         var fakeRunTask = fake.RunAsync(cts.Token);
 
@@ -2898,6 +2898,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
+            timeProvider: TimeProvider.System,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process));
 
         using var cts = new CancellationTokenSource();
@@ -2963,6 +2964,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: OpenCodeEnabledConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
+            timeProvider: TimeProvider.System,
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, process),
             resolveVendorVersion: _ => OpenCodeBuild);
 
@@ -3012,7 +3014,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig { CursorPath = "cursor-agent" },
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -3066,7 +3068,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
             connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()),
-            resolveVendorVersion: _ => OpenCodeBuild);
+            resolveVendorVersion: _ => OpenCodeBuild, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -3125,7 +3127,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig { CursorPath = "cursor-agent" },
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => throw new InvalidOperationException("   "));
+            connectionSource: _ => throw new InvalidOperationException("   "), timeProvider: TimeProvider.System);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => factory.StartAsync(MakeContext("agent-1"), CancellationToken.None).WaitAsync(HangGuard));
@@ -3165,7 +3167,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
             config: new DaemonConfig(),
             loggerFactory: NullLoggerFactory.Instance,
             connection: new CaptureServerConnection(),
-            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new ThrowingDisposeAcpProcess()));
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new ThrowingDisposeAcpProcess()), timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);

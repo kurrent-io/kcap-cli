@@ -58,7 +58,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         using var http     = new HttpClient();
         var       observer = new RecordingObserver();
-        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Length).IsEqualTo(2);
@@ -74,7 +74,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         using var http     = new HttpClient();
         var       observer = new RecordingObserver();
-        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.FailureMessages).Count().IsEqualTo(1);
@@ -88,7 +88,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         using var http     = new HttpClient();
         var       observer = new RecordingObserver();
-        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.FailureMessages).Count().IsEqualTo(1);
@@ -107,7 +107,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         using var http     = new HttpClient();
         var       observer = new RecordingObserver();
-        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.FailureMessages).Count().IsEqualTo(1);
@@ -132,7 +132,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         using var http     = new HttpClient();
         var       observer = new RecordingObserver();
-        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.FailureMessages).Count().IsEqualTo(1);
@@ -151,7 +151,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         using var http     = new HttpClient();
         var       observer = new RecordingObserver();
-        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, CancellationToken.None);
+        var       result   = await EvalQuestionCatalogClient.FetchAsync(_server.Url!, http, observer, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.FailureMessages).Count().IsEqualTo(1);

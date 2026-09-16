@@ -19,7 +19,7 @@ public class CodexApprovalBridgeTests {
     static CodexApprovalBridge Bridge(
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
             TimeSpan? timeout = null) =>
-        new(requestInteraction, AgentId, NullLogger.Instance, timeout ?? LongTimeout);
+        new(requestInteraction, AgentId, NullLogger.Instance, timeout ?? LongTimeout, TimeProvider.System);
 
     static CodexApprovalBridge Deciding(AcpInteractionDecision decision, TimeSpan? timeout = null) =>
         Bridge((_, _) => Task.FromResult(decision), timeout);

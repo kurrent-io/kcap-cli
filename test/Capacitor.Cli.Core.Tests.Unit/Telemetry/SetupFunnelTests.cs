@@ -131,7 +131,7 @@ public class SetupFunnelTests {
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
             proxy, Substitute.For<ITenantPicker>(), probe.Telemetry.Funnel,
             ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
-            (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
+            (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), TimeProvider.System);
 
         // No provisioner passed -> the legacy "ask your admin" dead-end -> NoTenants, even though
         // sign-in itself worked fine.

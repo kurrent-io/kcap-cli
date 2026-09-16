@@ -57,7 +57,7 @@ public class MainWindowSmokeTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
             var (actions, _) = NewActions(service);
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(),
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
                 tenantName: "kurrent");
             var window = new MainWindow { DataContext = vm };
             window.Show();
@@ -106,7 +106,7 @@ public class MainWindowSmokeTests {
         var (thrown, startEnabledAfter) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, _) = NewActions(service);
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New());
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -161,7 +161,7 @@ public class MainWindowSmokeTests {
 
             var shutdown = new CancellationTokenSource();
             var (actions, _) = NewActions(service);
-            var vm = new MainWindowViewModel(service, shutdown.Token, TestActivity.New());
+            var vm = new MainWindowViewModel(service, shutdown.Token, TestActivity.New(), TimeProvider.System);
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -214,8 +214,8 @@ public class MainWindowSmokeTests {
                 var service = new FakeDaemonClientService();
                 var home = new HomeViewModel(
                     service, new AppStateStore(path), new NeverLaunchClient(),
-                    () => Task.FromResult(Array.Empty<string>()));
-                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), home: home);
+                    () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, home: home);
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
@@ -258,7 +258,7 @@ public class MainWindowSmokeTests {
         var rendered = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New());
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
             var window = new MainWindow { DataContext = vm, Notifier = notifier };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -301,7 +301,7 @@ public class MainWindowSmokeTests {
             var activity = new ActivityViewModel(reader.Read, () => "k", new FakeTicker());
             var attach = new FakeTerminalAttachClientFactory();
             var vm = new MainWindowViewModel(
-                service, CancellationToken.None, activity,
+                service, CancellationToken.None, activity, TimeProvider.System,
                 workspaceFactory: agentId => new WorkspaceViewModel(
                     agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
                     new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
@@ -399,7 +399,7 @@ public class MainWindowSmokeTests {
             var source = new FakePullRequestSource(time);
             var attach = new FakeTerminalAttachClientFactory();
             var vm = new MainWindowViewModel(
-                service, CancellationToken.None, TestActivity.New(),
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
                 workspaceFactory: agentId => new WorkspaceViewModel(
                     agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
                     new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: source));
@@ -453,7 +453,7 @@ public class MainWindowSmokeTests {
                 var (actions, _) = NewActions(service);
                 var attach = new FakeTerminalAttachClientFactory();
                 var vm = new MainWindowViewModel(
-                    service, CancellationToken.None, TestActivity.New(),
+                    service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
                     workspaceFactory: agentId => new WorkspaceViewModel(
                         agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
                         new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
@@ -525,8 +525,8 @@ public class MainWindowSmokeTests {
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
             resolveRepoRoot, null, null);
         var rail = new SessionRailViewModel(
-            directory, id => vm!.OpenSession(id), _ => { }, resolveRepoRoot);
-        vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(),
+            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot);
+        vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
         var window = new MainWindow { DataContext = vm };
         window.Show();
@@ -625,7 +625,7 @@ public class MainWindowSmokeTests {
                 var service = new FakeDaemonClientService();
                 var (actions, _) = NewActions(service);
                 var vm = new MainWindowViewModel(
-                    service, CancellationToken.None, TestActivity.New(),
+                    service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
                     workspaceFactory: id => NewWorkspace(service, actions, id));
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
@@ -667,7 +667,7 @@ public class MainWindowSmokeTests {
                 var service = new FakeDaemonClientService();
                 service.SnapshotsSubject.OnNext(Snap());
                 var (actions, _) = NewActions(service);
-                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New());
+                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
@@ -690,7 +690,7 @@ public class MainWindowSmokeTests {
     public Task Rail_footer_offers_help_with_docs_always_and_reports_only_with_a_server() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
-        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), openFeedback: null);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, openFeedback: null);
         var window = new MainWindow { DataContext = vm };
         try {
             window.Show();
@@ -735,7 +735,7 @@ public class MainWindowSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task MainWindow_pins_its_minimum_width_to_the_default_width() {
         await AvaloniaSession.RunOnUiAsync(async () => {
-            var window = new MainWindow { DataContext = new MainWindowViewModel(new FakeDaemonClientService(), CancellationToken.None, TestActivity.New()) };
+            var window = new MainWindow { DataContext = new MainWindowViewModel(new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System) };
 
             await Assert.That(window.MinWidth).IsEqualTo(1200);
             await Assert.That(window.Width).IsEqualTo(1200);

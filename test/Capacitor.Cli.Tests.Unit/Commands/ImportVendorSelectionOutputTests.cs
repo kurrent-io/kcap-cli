@@ -39,7 +39,7 @@ public class ImportVendorSelectionOutputTests : IDisposable {
     }
 
     Task<int> Run(params IImportSource[] sources) =>
-        new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter())
+        new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
             .HandleImport(
             filterCwd:               null,
             sources:                 sources,

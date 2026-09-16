@@ -9,7 +9,7 @@ public class PolicyDecisionEmitterTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();
     public void Dispose() => _server.Stop();
 
-    PolicyDecisionEmitter Emitter => new(Config.Root);
+    PolicyDecisionEmitter Emitter => new(Config.Root, TimeProvider.System);
 
     /// <summary>Points the config's active profile at the stub server, so "no request reached it" is
     /// a live guard: any inline POST reintroduced here would resolve this URL and be logged.</summary>

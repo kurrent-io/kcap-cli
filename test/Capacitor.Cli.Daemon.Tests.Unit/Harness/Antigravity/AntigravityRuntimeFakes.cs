@@ -141,7 +141,7 @@ internal static class AntigravityRuntimeFakes {
             spawnTurn: spawn,
             logger: NullLogger.Instance,
             pendingTurnsCapacity: queueCap,
-            timeProvider: time,
+            timeProvider: time ?? TimeProvider.System,
             journal: journal);
     }
 }

@@ -60,7 +60,7 @@ public class DaemonStopSelfPidTests {
         // CI, as a random UninstallCommandTests failure.
         var exit = await new DaemonCommands(
                 Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
-                TestHarnesses.All(), TestBinaries.None)
+                TestHarnesses.All(), TestBinaries.None, TimeProvider.System)
             .HandleAsync(["daemon", "stop", "--name", "self", "--yes"]);
 
         await Assert.That(exit).IsEqualTo(1);

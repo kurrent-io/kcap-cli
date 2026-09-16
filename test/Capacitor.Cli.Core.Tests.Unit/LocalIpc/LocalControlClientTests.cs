@@ -157,7 +157,7 @@ public class LocalControlClientTests {
         using var daemons = new TempDaemonStore();
         const string name = "client";
         await using var server = new ScriptedServer(daemons.Store.SocketPath(name), scripts);
-        var client = new LocalControlClient(daemons.Store, name, time) {
+        var client = new LocalControlClient(daemons.Store, name, time ?? TimeProvider.System) {
             RetryDelays = [TimeSpan.FromMilliseconds(1)],
             ConnectTimeout = TimeSpan.FromSeconds(2),
             HelloReplyTimeout = TimeSpan.FromMilliseconds(300),
@@ -220,7 +220,7 @@ public class LocalControlClientTests {
     [Test]
     public async Task Missing_socket_classifies_as_unreachable() {
         using var daemons = new TempDaemonStore();
-        var client = new LocalControlClient(daemons.Store, "none") { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
+        var client = new LocalControlClient(daemons.Store, "none", TimeProvider.System) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
         var events = new List<LocalControlEvent>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await foreach (var e in client.RunAsync(cts.Token)) {
@@ -348,7 +348,7 @@ public class LocalControlClientTests {
     [Test] // a transport failure never read a hello reply, so no version is ever known
     public async Task Transport_failure_has_null_daemon_version() {
         using var daemons = new TempDaemonStore();
-        var client = new LocalControlClient(daemons.Store, "none-v") { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
+        var client = new LocalControlClient(daemons.Store, "none-v", TimeProvider.System) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
         var events = new List<LocalControlEvent>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await foreach (var e in client.RunAsync(cts.Token)) {
@@ -379,7 +379,7 @@ public class LocalControlClientTests {
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var server = new ScriptedServer(daemons.Store.SocketPath(name),
             HelloThen(GoodHello("status/1")), SubscribePushThenObserveClose(closed, ValidStatusJson("m", "a1")));
-        var client = new LocalControlClient(daemons.Store, name) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
+        var client = new LocalControlClient(daemons.Store, name, TimeProvider.System) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
         await foreach (var e in client.RunAsync(cts.Token)) {
@@ -405,7 +405,7 @@ public class LocalControlClientTests {
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var server = new ScriptedServer(daemons.Store.SocketPath(name),
             HelloThen(GoodHello("status/1")), SubscribePushThenObserveClose(closed, ValidStatusJson("m", "a1")));
-        var client = new LocalControlClient(daemons.Store, name) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
+        var client = new LocalControlClient(daemons.Store, name, TimeProvider.System) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         // Fires after RunCycleAsync has already returned success (the first valid snapshot
         // was read) but before RunAsync's ct checkpoint/yield — exactly the race the fix
@@ -427,7 +427,7 @@ public class LocalControlClientTests {
     [Test] // clean cancellation mid-backoff-wait, no fabricated events
     public async Task Cancellation_ends_the_enumeration_cleanly() {
         using var daemons = new TempDaemonStore();
-        var client = new LocalControlClient(daemons.Store, "cxl") { RetryDelays = [TimeSpan.FromSeconds(30)] };
+        var client = new LocalControlClient(daemons.Store, "cxl", TimeProvider.System) { RetryDelays = [TimeSpan.FromSeconds(30)] };
         using var cts = new CancellationTokenSource();
         var gate = new object();
         var events = new List<LocalControlEvent>();
@@ -452,7 +452,7 @@ public class LocalControlClientTests {
         const string name = "client";
         await using var server = new ScriptedServer(daemons.Store.SocketPath(name),
             HelloThen(GoodHello("status/1")), SubscribePush(ValidStatusJson("m", "a1")));
-        var client = new LocalControlClient(daemons.Store, name) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
+        var client = new LocalControlClient(daemons.Store, name, TimeProvider.System) { RetryDelays = [TimeSpan.FromMilliseconds(1)] };
         using var cts = new CancellationTokenSource();
         var gate = new object();
         var events = new List<LocalControlEvent>();
@@ -496,7 +496,7 @@ public class LocalControlClientTests {
             HelloThen(GoodHello("status/1")), SubscribePushThenClose(ValidStatusJson("m", "a1")),
             HelloThen(GoodHello("status/1")), SubscribePush(ValidStatusJson("m", "a1", "a2")));
 
-        var client = new LocalControlClient(daemons.Store, name) {
+        var client = new LocalControlClient(daemons.Store, name, TimeProvider.System) {
             // index0/index1 exercise "advances"; index2 is deliberately far outside the
             // poll deadline below so an un-reset schedule (which would land on index2,
             // since Math.Min(attempt, length-1) caps there once attempt=2) times out.

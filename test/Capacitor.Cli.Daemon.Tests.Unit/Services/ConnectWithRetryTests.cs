@@ -22,6 +22,7 @@ public class ConnectWithRetryTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance,
+        TimeProvider.System,
         notifier
     ) {
         public HubConnectionState State { get; set; } = HubConnectionState.Disconnected;

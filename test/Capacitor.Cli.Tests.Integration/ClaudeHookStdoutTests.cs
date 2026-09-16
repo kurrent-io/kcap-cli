@@ -44,7 +44,7 @@ public class ClaudeHookStdoutTests : IDisposable {
     // none — these tests assert on the envelope alone, so they claim the window themselves.
     [Before(Test)]
     public void ThrottleHarnessNudge() =>
-        new HarnessOfferStore(Config.Root).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
+        new HarnessOfferStore(Config.Root, TimeProvider.System).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
 
     static string SessionStartPayloadWithoutTranscriptPath() =>
         // No transcript_path, no session_id → WatcherManager spawn is skipped.

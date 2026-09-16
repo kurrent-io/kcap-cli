@@ -16,7 +16,7 @@ public class UnixPtyProcessSpawnTests {
         // whole test-host process never exits (confirmed empirically: an earlier version of this
         // test that let UnixPtyProcessFactory own an undisposed static singleton hung indefinitely).
         using var spawner = new UnixSpawnerThread();
-        var       factory = new UnixPtyProcessFactory(spawner);
+        var       factory = new UnixPtyProcessFactory(spawner, TimeProvider.System);
         var       proc    = factory.Spawn("sleep", ["5"], AppContext.BaseDirectory);
         try {
             await Assert.That(proc.Pid).IsGreaterThan(0);
@@ -57,7 +57,7 @@ public class UnixPtyProcessSpawnTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       factory = new UnixPtyProcessFactory(spawner);
+        var       factory = new UnixPtyProcessFactory(spawner, TimeProvider.System);
         // The helper IGNORES SIGHUP (trap '' HUP survives the exec): a plain background sleep dies
         // to the controlling terminal's leader-exit SIGHUP even under a leader-only kill, which let
         // exactly that mutation pass this test — a helper that shrugs off HUP is also the shape

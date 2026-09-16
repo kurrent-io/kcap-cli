@@ -46,7 +46,7 @@ public class CursorCaptureScopeTests : IDisposable {
 
         using var tmp    = new TempDir();
         using var client = new HttpClient();
-        var       spool  = new HookSpool(tmp.CreateDir("spool").Path);
+        var       spool  = new HookSpool(tmp.CreateDir("spool").Path, TimeProvider.System);
 
         return await new CursorHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root),
             new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal,

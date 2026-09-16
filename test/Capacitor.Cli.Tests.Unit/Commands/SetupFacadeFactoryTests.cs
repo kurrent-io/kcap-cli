@@ -20,9 +20,9 @@ public class SetupFacadeFactoryTests {
 
         return new SetupFacadeFactory(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root), http,
-            new AuthProxyClient(http.CreateClient(CapacitorClients.Anonymous)),
-            new GitHubOAuthClient(http), new WorkOSClient(http), new RecordingBrowser(),
-            NoTelemetry.Facade, AuthEndpoints.Defaults);
+            new AuthProxyClient(http.CreateClient(CapacitorClients.Anonymous), TimeProvider.System),
+            new GitHubOAuthClient(http), new WorkOSClient(http, TimeProvider.System), new RecordingBrowser(),
+            NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System);
     }
 
     static AuthHttpScript TwoTenants() =>

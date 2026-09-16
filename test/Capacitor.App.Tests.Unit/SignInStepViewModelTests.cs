@@ -41,7 +41,7 @@ public class SignInStepViewModelTests {
     static DiscoveredTenant Tenant(string login) => new() { OrgLogin = login, Origin = $"https://{login}.kcap.ai" };
 
     static WorkOSTokenSource Tokens() =>
-        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
+        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), time: TimeProvider.System);
 
     static AuthResult.Committed Committed(string provider = AuthProvider.GitHubApp, string? username = "sam") =>
         new("acme", "https://acme.kcap.ai:443", provider, username, [new AuthIdentity("acme", "https://acme.kcap.ai:443")]);
@@ -83,10 +83,10 @@ public class SignInStepViewModelTests {
             Claims = new ConsentFlipClaims(_config.Root);
 
             var bridges = new WizardBridges(
-                action => action(), CliTelemetry.Disabled(), AuthEndpoints.Defaults,
+                action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults,
                 progress => new WizardTenantProvisioner(
                     new TenantProvisioningClient(new HttpClient(Signup)), "https://signup.example", progress,
-                    CliTelemetry.Disabled(), Time));
+                    CliTelemetry.Disabled(TimeProvider.System), Time));
 
             Picker      = bridges.Picker;
             Progress    = bridges.Progress;

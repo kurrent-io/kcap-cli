@@ -47,7 +47,7 @@ public class AcpHostedAgentRuntimeModelSelectionTests {
             Process = new FakeAcpProcess();
             // null keeps the runtime's legacy ConfigOptionModelSelector default, preserving every
             // existing test unchanged; the set_model composition test passes SetModelSelector.
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance, modelSelector: modelSelector);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance, TimeProvider.System, modelSelector: modelSelector);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);

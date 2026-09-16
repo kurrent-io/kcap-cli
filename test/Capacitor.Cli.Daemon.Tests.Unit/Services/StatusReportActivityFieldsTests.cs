@@ -182,7 +182,7 @@ public class StatusReportActivityFieldsTests {
         UnusedTokenStore.Create(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
-    ) {
+    , TimeProvider.System) {
         int _sendCount;
         public int SendCount => Volatile.Read(ref _sendCount);
 

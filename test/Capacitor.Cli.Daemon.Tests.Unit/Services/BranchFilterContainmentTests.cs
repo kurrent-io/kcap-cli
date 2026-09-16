@@ -40,7 +40,7 @@ public class BranchFilterContainmentTests {
         using var repo = NewRepo();
         repo.Do("config", "filter.custom.smudge", command);
 
-        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo);
+        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System);
 
         await Assert.That(overrides).Contains(new GitConfigOverride("filter.custom.smudge", ""));
         await Assert.That(overrides).Contains(new GitConfigOverride("filter.custom.required", "false"));
@@ -59,7 +59,7 @@ public class BranchFilterContainmentTests {
         repo.Do("config", "filter.lfs.process", "git-lfs filter-process");
         repo.Do("config", "filter.lfs.required", "true");
 
-        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo);
+        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System);
 
         await Assert.That(overrides).Contains(new GitConfigOverride("filter.lfs.smudge", ""));
         await Assert.That(overrides).Contains(new GitConfigOverride("filter.lfs.required", "false"));
@@ -79,7 +79,7 @@ public class BranchFilterContainmentTests {
         repo.Do("config", "filter.custom.smudge", "./tools/f");
 
         var expected = EffectiveDriverNames(repo);
-        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo);
+        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System);
 
         await Assert.That(expected).Contains("custom");          // the fixture's own driver is in scope
         foreach (var driver in expected)
@@ -118,7 +118,7 @@ public class BranchFilterContainmentTests {
         // Precondition: git really does resolve the value under the canonical spelling.
         await Assert.That(EffectiveDriverNames(repo)).Contains(subsection);
 
-        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo);
+        var overrides = await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System);
         var prefix = canonical[..canonical.LastIndexOf('.')];
 
         await Assert.That(overrides).Contains(new GitConfigOverride($"{prefix}.clean", ""));
@@ -153,7 +153,7 @@ public class BranchFilterContainmentTests {
         using var repo = NewRepo();
         repo.Do("config", "filter.my.tool.smudge", "./tools/f");
 
-        await Assert.That(await WorktreeManager.BranchFilterOverridesAsync(repo))
+        await Assert.That(await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System))
             .Contains(new GitConfigOverride("filter.my.tool.smudge", ""));
     }
 
@@ -165,7 +165,7 @@ public class BranchFilterContainmentTests {
         using var repo = NewRepo();
         repo.Do("config", "filter.sneaky.smudge", "cat\n./tools/f");
 
-        await Assert.That(await WorktreeManager.BranchFilterOverridesAsync(repo))
+        await Assert.That(await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System))
             .Contains(new GitConfigOverride("filter.sneaky.smudge", ""));
     }
 
@@ -206,7 +206,7 @@ public class BranchFilterContainmentTests {
 
         File.Delete(marker);
 
-        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance)
+        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System)
             .CreateAsync(repo);
 
         await Assert.That(File.Exists(marker)).IsFalse();
@@ -247,7 +247,7 @@ public class BranchFilterContainmentTests {
 
         File.Delete(marker);
 
-        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance)
+        var info = await new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System)
             .CreateAsync(repo);
 
         await Assert.That(File.Exists(marker)).IsFalse();
@@ -304,7 +304,7 @@ public class BranchFilterContainmentTests {
         File.Delete(marker);
 
         await Assert.ThrowsAsync<BranchFilterInventoryException>(async () =>
-            await WorktreeManager.BranchFilterOverridesAsync(repo));
+            await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System));
 
         await Assert.That(File.Exists(marker)).IsFalse();
     }
@@ -335,7 +335,7 @@ public class BranchFilterContainmentTests {
             .Because("git must report the key, or there is nothing for the guard to refuse");
 
         await Assert.ThrowsAsync<BranchFilterInventoryException>(async () =>
-            await WorktreeManager.BranchFilterOverridesAsync(repo));
+            await WorktreeManager.BranchFilterOverridesAsync(repo, TimeProvider.System));
     }
 
     // ── fixture ──

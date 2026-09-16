@@ -41,7 +41,7 @@ public class AuthProgressTests {
         using var capture = ConsoleOutput.StartCapture();
 
         var token = await OAuthLoginFlow.RunDeviceFlowAsync(
-            github, "client_id", new RecordingBrowser(), progress: progress);
+            github, "client_id", new RecordingBrowser(), TimeProvider.System, progress: progress);
 
         await Assert.That(token).IsEqualTo("tok");
         await Assert.That(progress.DeviceCodes).Count().IsEqualTo(1);
@@ -68,7 +68,7 @@ public class AuthProgressTests {
             proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
             orglessLogin: () => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch: (_, _) => Task.FromResult<WorkOSAuthResponse?>(null),
-            progress: progress);
+            progress: progress, time: TimeProvider.System);
 
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.NoTenants>();
         // Today's code writes this line to stderr — pinned so a future stream swap is deliberate.

@@ -14,7 +14,7 @@ public class JwtExpiryTests {
     [Test]
     public async Task Reads_exp_claim_from_workos_access_token() {
         var exp    = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
-        var result = TokenStore.JwtExpiry(TokenWithExp(exp));
+        var result = TokenStore.JwtExpiry(TokenWithExp(exp), TimeProvider.System);
 
         await Assert.That(result.ToUnixTimeSeconds()).IsEqualTo(exp);
     }
@@ -22,7 +22,7 @@ public class JwtExpiryTests {
     [Test]
     public async Task Malformed_token_falls_back_to_short_lifetime() {
         var now    = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var result = TokenStore.JwtExpiry("not-a-jwt").ToUnixTimeSeconds();
+        var result = TokenStore.JwtExpiry("not-a-jwt", TimeProvider.System).ToUnixTimeSeconds();
 
         // ~5 minute conservative default.
         await Assert.That(result).IsGreaterThanOrEqualTo(now + 240);

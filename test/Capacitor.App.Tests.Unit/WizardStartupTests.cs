@@ -108,9 +108,9 @@ static class WizardFixtures {
         public readonly WizardBridges Bridges;
         public readonly WizardLifecycleSurface Surface;
         public readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
-        public readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+        public readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
         public readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
-        public readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient());
+        public readonly IAuthProxyClient Proxy = new AuthProxyClient(new HttpClient(), TimeProvider.System);
         public readonly List<LifecyclePrompt> Prompts = [];
 
         public int CliFactoryCalls;
@@ -139,7 +139,7 @@ static class WizardFixtures {
         public GraphHarness(ConfigRoot root) {
             Root    = root;
             Claims  = new ConsentFlipClaims(_config.Root);
-            Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
+            Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
             Surface = new WizardLifecycleSurface((prompt, _) => {
                 Prompts.Add(prompt);
                 return Task.FromResult(false);
@@ -231,7 +231,7 @@ public class WizardStartupTests {
             var attempt = graph.Auth.Begin(new ConnectIntent.Discover(AuthProvider.GitHubApp));
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, new OutcomeChannel())
+            await AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(await attempt.Result).IsTypeOf<AuthResult.Cancelled>();
@@ -266,7 +266,7 @@ public class WizardStartupTests {
                 channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
                 WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, wizardCts.Token));
 
-            var handoff = AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, channel);
+            var handoff = AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
             await Task.Delay(50);
 
             await Assert.That(handoff.IsCompleted).IsFalse(); // the graph build waits on the terminal answer
@@ -295,7 +295,7 @@ public class WizardStartupTests {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         var quiesced = await AppUnderTest
-            .HandoffAfterWizardAsync(auth: null, () => never.Task, TimeSpan.FromMilliseconds(50), channel)
+            .HandoffAfterWizardAsync(auth: null, () => never.Task, TimeSpan.FromMilliseconds(50), channel, TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(sw.ElapsedMilliseconds).IsLessThan(5000);
@@ -308,7 +308,7 @@ public class WizardStartupTests {
     [Test]
     public async Task Handoff_within_the_cap_reports_a_quiesced_lane_and_leaves_auto_actions_open() {
         var quiesced = await AppUnderTest
-            .HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, new OutcomeChannel())
+            .HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(quiesced).IsTrue();
@@ -344,7 +344,7 @@ public class WizardStartupTests {
             WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, cts.Token);
 
         var handoff = AppUnderTest.HandoffAfterWizardAsync(
-            auth: null, () => quiesce.Task, TimeSpan.FromSeconds(30), channel);
+            auth: null, () => quiesce.Task, TimeSpan.FromSeconds(30), channel, TimeProvider.System);
         await Task.Delay(50);
 
         await Assert.That(handoff.IsCompleted).IsFalse();
@@ -367,7 +367,7 @@ public class WizardStartupTests {
             channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
             WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, cts.Token);
 
-        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel)
+        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         _ = channel.ConsumeAsync(CancellationToken.None);
@@ -429,7 +429,7 @@ public class WizardStartupTests {
         channel.Enqueue(WizardFixtures.Envelope("internal_error"));
         await WizardFixtures.WaitUntilAsync(() => wizardSurface.Entered == 1, what: "the wizard consumer's presentation");
 
-        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel);
+        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
         var rootConsumer = AppUnderTest.ConsumeMutationOutcomesAsync(
             channel, rootSurface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
             () => null, cts.Token);
@@ -456,7 +456,7 @@ public class WizardStartupTests {
             channel, wizardSurface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
             () => null, cts.Token);
 
-        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel);
+        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
         var rootConsumer = AppUnderTest.ConsumeMutationOutcomesAsync(
             channel, rootSurface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
             () => null, cts.Token);
@@ -489,7 +489,7 @@ public class WizardStartupTests {
             var attempt = graph.Auth.Begin(new ConnectIntent.Create());
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.QuiesceAppAsync(graph.Auth, import: null, lifecycle: null, lane: null, Cap)
+            await AppUnderTest.QuiesceAppAsync(graph.Auth, import: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(attempt.Result.IsCompleted).IsTrue();
@@ -501,7 +501,7 @@ public class WizardStartupTests {
 
     [Test]
     public async Task Shutdown_quiesce_with_no_wizard_is_the_existing_lifecycle_and_lane_wait() {
-        await AppUnderTest.QuiesceAppAsync(auth: null, import: null, lifecycle: null, lane: null, Cap)
+        await AppUnderTest.QuiesceAppAsync(auth: null, import: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
     }
 
@@ -524,7 +524,8 @@ public class WizardStartupTests {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             var quiesce = AppUnderTest.QuiesceAppAsync(
-                graph.Auth, import: null, lifecycle: null, lane: null, TimeSpan.FromMilliseconds(20));
+                graph.Auth, import: null, lifecycle: null, lane: null, cap: TimeSpan.FromMilliseconds(20),
+                time: TimeProvider.System);
             await Task.Delay(400); // twenty cap windows
 
             await Assert.That(quiesce.IsCompleted).IsFalse();
@@ -555,7 +556,7 @@ public class WizardStartupTests {
             CancellationToken.None);
 
         await AppUnderTest
-            .QuiesceAppAsync(auth: null, import: null, lifecycle: null, lane, TimeSpan.FromMilliseconds(50))
+            .QuiesceAppAsync(auth: null, import: null, lifecycle: null, lane, TimeSpan.FromMilliseconds(50), TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         gate.SetResult("9.9.9");
@@ -593,7 +594,8 @@ public class WizardStartupTests {
                 channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
                 WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, wizardCts.Token));
 
-            var handoff = AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, import);
+            var handoff = AppUnderTest.HandoffAfterWizardAsync(
+                auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System, import);
             await cancelObserved.Task.WaitAsync(TimeSpan.FromSeconds(5)); // CancelActiveRunAsync reached the CLI's own ct
             await Task.Delay(50);
 
@@ -632,7 +634,7 @@ public class WizardStartupTests {
             _ = import.RunAsync();
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.QuiesceAppAsync(auth: null, import, lifecycle: null, lane: null, Cap)
+            await AppUnderTest.QuiesceAppAsync(auth: null, import, lifecycle: null, lane: null, Cap, TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(import.Busy).IsFalse();
@@ -799,7 +801,7 @@ public class WizardStartupTests {
     public async Task The_production_bridges_marshal_through_the_avalonia_dispatcher() {
         var (marshalled, hasProvisioner) = await AvaloniaSession.DispatchAsync(async () => {
             var bridges = WizardComposition.BuildBridges(
-            action => Dispatcher.UIThread.Post(action), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
+            action => Dispatcher.UIThread.Post(action), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
             var posted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Posted from a background thread, exactly as the façade's flows raise their events.
@@ -1233,7 +1235,7 @@ public class WizardStartupResolutionTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
-    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory());
+    static readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
 
     const string ProfileName = "acme";
 
@@ -1252,7 +1254,7 @@ public class WizardStartupResolutionTests {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
 
         var (before, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
 
         // What a committed wizard sign-in leaves behind: a real server plus its provider stamp.
         WriteConfig(SingleProfileConfig(new Profile {
@@ -1261,7 +1263,7 @@ public class WizardStartupResolutionTests {
         }));
 
         var (after, afterProfiles) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(before).IsTypeOf<GateResult.Incomplete>();
         await Assert.That(((GateResult.Incomplete)before).Reason).IsEqualTo(GateReason.InvalidServerUrl);
@@ -1350,11 +1352,11 @@ public class WizardStartupResolutionTests {
             // Abandon: the window closes without a single step being driven.
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel())
+                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
 
             await Assert.That(harness.Lane.Requests).IsEmpty();
             await Assert.That(harness.Ops.GetCalls).IsEqualTo(0);
@@ -1391,11 +1393,11 @@ public class WizardStartupResolutionTests {
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel())
+                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
 
             await Assert.That(await attempt.Result).IsTypeOf<AuthResult.Cancelled>();
             await Assert.That(await File.ReadAllTextAsync(ConfigPath)).IsEqualTo(configBefore);
@@ -1416,16 +1418,16 @@ public class WizardStartupResolutionTests {
 
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
+        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
         using var handler = new StubAuthHandler();
 
         var operation = WizardComposition.BuildOperation(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root), new PlainHttpClientFactory(handler),
-            new AuthProxyClient(new HttpClient(handler, disposeHandler: false)), Github, Workos, ProfileName,
-            bridges, claims,
+            new AuthProxyClient(new HttpClient(handler, disposeHandler: false), TimeProvider.System), Github, Workos, ProfileName,
+            bridges, claims, TimeProvider.System,
             spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
+                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints, TimeProvider.System,
                 spec.BeforeCommit), spec.Profile));
 
         var result = await operation(new ConnectIntent.Paste("https://acme.example"), CancellationToken.None)
@@ -1448,7 +1450,7 @@ public class WizardStartupResolutionTests {
     public async Task Create_and_workos_discovery_route_through_the_auth_proxy(string intentName) {
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(), AuthEndpoints.Defaults);
+        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
         using var handler = new StubAuthHandler { Status = HttpStatusCode.ServiceUnavailable };
         ConnectIntent intent = intentName == "create"
             ? new ConnectIntent.Create()
@@ -1457,13 +1459,13 @@ public class WizardStartupResolutionTests {
         WizardFacadeSpec? spec = null;
         var operation = WizardComposition.BuildOperation(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root), new PlainHttpClientFactory(handler),
-            new AuthProxyClient(new HttpClient(handler, disposeHandler: false)), Github, Workos, ProfileName,
-            bridges, claims,
+            new AuthProxyClient(new HttpClient(handler, disposeHandler: false), TimeProvider.System), Github, Workos, ProfileName,
+            bridges, claims, TimeProvider.System,
             s => {
                 spec = s;
                 return WizardSignInOperation.For(new OnboardingFacade(
                     s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
-                    new RecordingBrowser(), s.Picker, s.Provisioner, s.Telemetry, s.Endpoints, s.BeforeCommit), s.Profile);
+                    new RecordingBrowser(), s.Picker, s.Provisioner, s.Telemetry, s.Endpoints, TimeProvider.System, s.BeforeCommit), s.Profile);
             });
 
         var result = await operation(intent, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));

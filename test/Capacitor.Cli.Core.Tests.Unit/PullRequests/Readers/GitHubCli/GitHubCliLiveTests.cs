@@ -8,9 +8,9 @@ namespace Capacitor.Cli.Core.Tests.Unit.PullRequests.Readers.GitHubCli;
 public class GitHubCliLiveTests {
     [Test]
     public async Task The_installed_gh_reads_a_public_pull_request_end_to_end() {
-        using var runner = new GitHubCliRunner(new ProcessRunner(), null, Environment.GetEnvironmentVariable);
+        using var runner = new GitHubCliRunner(new ProcessRunner(TimeProvider.System), null, Environment.GetEnvironmentVariable);
         if (await runner.LocateAsync(false, default) is null) Skip.Test("GitHub CLI is not installed");
-        using var provider = new GitHubCliReaderProvider(runner);
+        using var provider = new GitHubCliReaderProvider(runner, TimeProvider.System);
         var status = await provider.ProbeAsync(false, default);
         if (!provider.Serves("github", "github.com")) Skip.Test($"GitHub CLI is not signed in to github.com ({status.Kind})");
         var subject = new PullRequestSubjectDto { Provider = "github", Host = "github.com", RepoHash = RepoHashHelper.ComputeRepoHash("kurrent-io", "kcap-cli"),

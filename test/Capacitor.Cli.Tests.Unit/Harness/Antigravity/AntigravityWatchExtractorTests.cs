@@ -20,7 +20,7 @@ public class AntigravityWatchExtractorTests {
 
     [Test]
     public async Task User_text_strips_the_USER_REQUEST_envelope_and_metadata() {
-        await Assert.That(WatchCommand.TryExtractUserText(UserLine, "antigravity"))
+        await Assert.That(WatchCommand.TryExtractUserText(UserLine, TimeProvider.System, "antigravity"))
             .IsEqualTo("Add a health endpoint");
     }
 
@@ -28,7 +28,7 @@ public class AntigravityWatchExtractorTests {
     public async Task User_text_falls_back_to_raw_content_without_envelope() {
         const string bare =
             """{"type":"USER_INPUT","content":"just do it"}""";
-        await Assert.That(WatchCommand.TryExtractUserText(bare, "antigravity"))
+        await Assert.That(WatchCommand.TryExtractUserText(bare, TimeProvider.System, "antigravity"))
             .IsEqualTo("just do it");
     }
 
@@ -41,10 +41,10 @@ public class AntigravityWatchExtractorTests {
     [Test]
     public async Task Extractors_ignore_the_wrong_role_and_plumbing_lines() {
         // A tool step is neither a user nor an assistant title event.
-        await Assert.That(WatchCommand.TryExtractUserText(ToolLine, "antigravity")).IsNull();
+        await Assert.That(WatchCommand.TryExtractUserText(ToolLine, TimeProvider.System, "antigravity")).IsNull();
         await Assert.That(WatchCommand.TryExtractAssistantText(ToolLine, "antigravity")).IsNull();
         // A PLANNER_RESPONSE is not user text; a USER_INPUT is not assistant text.
-        await Assert.That(WatchCommand.TryExtractUserText(AssistantLine, "antigravity")).IsNull();
+        await Assert.That(WatchCommand.TryExtractUserText(AssistantLine, TimeProvider.System, "antigravity")).IsNull();
         await Assert.That(WatchCommand.TryExtractAssistantText(UserLine, "antigravity")).IsNull();
     }
 

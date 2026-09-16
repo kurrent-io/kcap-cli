@@ -140,7 +140,7 @@ public class AntigravityRuntimeLifecycleTests {
             return process;
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
 
@@ -222,7 +222,7 @@ public class AntigravityRuntimeLifecycleTests {
             return Task.FromResult<IAgyTurnProcess>(new FakeAgyTurnProcess(kind, FixedConversationId));
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("one").WaitAsync(HangGuard);
         await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -285,7 +285,7 @@ public class AntigravityRuntimeLifecycleTests {
                 : new FakeAgyTurnProcess(FakeTurn.Normal, FixedConversationId));
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("first").WaitAsync(HangGuard);
 
@@ -481,7 +481,7 @@ public class AntigravityRuntimeLifecycleTests {
             return Task.FromResult<IAgyTurnProcess>(spawned);
         };
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
         await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -512,7 +512,7 @@ public class AntigravityRuntimeLifecycleTests {
             Task.FromResult<IAgyTurnProcess>(new FakeAgyTurnProcess(
                 FakeTurn.Normal, FixedConversationId, pid: 5000 + Interlocked.Increment(ref spawns)));
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         rt.PidCallbacks = new AgyPidRecordCallbacks(
             Record: pid => { lock (recorded) recorded.Add(pid); },
             Clear:  () => Interlocked.Increment(ref cleared));
@@ -546,7 +546,7 @@ public class AntigravityRuntimeLifecycleTests {
 
         await using var rt = new AntigravityHostedAgentRuntime(
             spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
-            logger: NullLogger.Instance);
+            logger: NullLogger.Instance, timeProvider: TimeProvider.System);
 
         rt.PidCallbacks = new AgyPidRecordCallbacks(
             Record: _ => throw new InvalidOperationException("pid record store is unavailable"),
@@ -593,7 +593,7 @@ public class AntigravityRuntimeLifecycleTests {
                 spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
                 logger: logger,
                 agentId: "agy-survivor",
-                onDisposed: () => Interlocked.Increment(ref invoked))) {
+                onDisposed: () => Interlocked.Increment(ref invoked), timeProvider: TimeProvider.System)) {
             await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
 
             // The turn genuinely spawned a child, so "unconfirmed" is a fact about a real process
@@ -617,7 +617,7 @@ public class AntigravityRuntimeLifecycleTests {
                     new FakeAgyTurnProcess(FakeTurn.Normal, FixedConversationId)),
                 logger: NullLogger.Instance,
                 agentId: "agy-clean",
-                onDisposed: () => Interlocked.Increment(ref invoked))) {
+                onDisposed: () => Interlocked.Increment(ref invoked), timeProvider: TimeProvider.System)) {
             await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
             await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
             await rt.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
@@ -652,7 +652,7 @@ public class AntigravityRuntimeLifecycleTests {
                 spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
                 logger: NullLogger.Instance,
                 agentId: "agy-lingerer",
-                onDisposed: () => Interlocked.Increment(ref invoked))) {
+                onDisposed: () => Interlocked.Increment(ref invoked), timeProvider: TimeProvider.System)) {
             rt.PidCallbacks = new AgyPidRecordCallbacks(
                 Record: _ => { },
                 Clear:  () => Interlocked.Increment(ref cleared));
@@ -760,7 +760,7 @@ public class AntigravityRuntimeLifecycleTests {
         Func<string, string?, CancellationToken, Task<IAgyTurnProcess>> spawn = (_, _, _) =>
             Task.FromResult<IAgyTurnProcess>(new ThrowingWaitForExitTurnProcess());
 
-        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance);
+        await using var rt = new AntigravityHostedAgentRuntime(spawnTurn: spawn, logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         var read = Task.Run(async () => { await foreach (var _ in rt.ReadOutputAsync()) { } });
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);

@@ -239,7 +239,7 @@ public class KiroReviewerLaunchTests {
             loggerFactory: NullLoggerFactory.Instance,
             connection: new SilentServerConnection(),
             connectionSource: _ => (silentIn.Writer.AsStream(), silentOut.Reader.AsStream(), process),
-            resolveVendorVersion: _ => InstalledVersion);
+            resolveVendorVersion: _ => InstalledVersion, timeProvider: TimeProvider.System);
 
         var ex = await Assert.That(async () =>
             await factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None))
@@ -256,7 +256,7 @@ public class KiroReviewerLaunchTests {
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
-            NullLogger<ServerConnection>.Instance) { }
+            NullLogger<ServerConnection>.Instance, TimeProvider.System) { }
 
     sealed class AliveSilentProcess : IAcpProcess {
         readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -308,7 +308,7 @@ public class KiroReviewerLaunchTests {
             loggerFactory: NullLoggerFactory.Instance,
             connection: conn,
             connectionSource: _ => (agent.ClientWriteStream, agent.ClientReadStream, new AliveSilentProcess()),
-            resolveVendorVersion: _ => InstalledVersion);
+            resolveVendorVersion: _ => InstalledVersion, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         _ = agent.RunAsync(cts.Token);
@@ -363,7 +363,7 @@ public class KiroReviewerLaunchTests {
             loggerFactory: NullLoggerFactory.Instance,
             connection: conn,
             connectionSource: _ => (agent.ClientWriteStream, agent.ClientReadStream, child),
-            resolveVendorVersion: _ => InstalledVersion);
+            resolveVendorVersion: _ => InstalledVersion, timeProvider: TimeProvider.System);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         _ = agent.RunAsync(cts.Token);
@@ -392,7 +392,7 @@ public class KiroReviewerLaunchTests {
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
-            NullLogger<ServerConnection>.Instance) {
+            NullLogger<ServerConnection>.Instance, TimeProvider.System) {
         public bool RequestAcpInteractionAsyncCalled { get; private set; }
 
         public override Task<AcpInteractionDecision> RequestAcpInteractionAsync(

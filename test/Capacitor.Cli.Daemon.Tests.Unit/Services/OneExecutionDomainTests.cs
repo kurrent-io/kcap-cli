@@ -127,7 +127,7 @@ public class OneExecutionDomainTests {
 
     static (LaunchConsentGate gate, ParkingPrompter prompter) PromptGateWithParkingPrompter(
             string stateDir, int promptTimeoutSeconds = 60) {
-        var store = new LaunchConsentStore(stateDir, NullLogger.Instance);
+        var store = new LaunchConsentStore(stateDir, NullLogger.Instance, TimeProvider.System);
         store.TryReplace(new LaunchConsentPolicy(LaunchConsentDefault.Prompt, promptTimeoutSeconds, []), out _);
         var prompter = new ParkingPrompter();
         var gate = new LaunchConsentGate(store, new LaunchConsentDecisionLog(stateDir, NullLogger.Instance),
@@ -275,7 +275,7 @@ public class OneExecutionDomainTests {
     [Test]
     public async Task Settlement_gate_cancellation_settles_as_lane_failure_with_no_double_answer() {
         using var tmp = new TempDir();
-        var store = new LaunchConsentStore(tmp.Path, NullLogger.Instance);
+        var store = new LaunchConsentStore(tmp.Path, NullLogger.Instance, TimeProvider.System);
         store.TryReplace(new LaunchConsentPolicy(LaunchConsentDefault.Prompt, 60, []), out _);
         var gate = new LaunchConsentGate(store, new LaunchConsentDecisionLog(tmp.Path, NullLogger.Instance),
             new CancelingPrompter(), new FakeTimeProvider(), NullLogger<LaunchConsentGate>.Instance);
@@ -609,7 +609,7 @@ public class OneExecutionDomainTests {
 
         // The NEXT boot: same daemon id + record root, a FRESH epoch. Two passes, because on macOS the
         // first kill may observe a not-yet-parent-reaped zombie as alive and defer record deletion.
-        var nextBoot = new OrphanReaper(store, daemonId, currentEpoch: "next-boot-epoch", NullLogger.Instance);
+        var nextBoot = new OrphanReaper(store, daemonId, currentEpoch: "next-boot-epoch", NullLogger.Instance, time: TimeProvider.System);
         await nextBoot.ReapOnceAsync();
         survivor.WaitForExit(TimeSpan.FromSeconds(10));
         await nextBoot.ReapOnceAsync();

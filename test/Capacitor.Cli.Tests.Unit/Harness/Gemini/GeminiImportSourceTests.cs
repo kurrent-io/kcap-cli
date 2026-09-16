@@ -27,7 +27,7 @@ public class GeminiImportSourceTests {
             "11111111-1111-1111-1111-111111111111",
             """{"id":"u1","timestamp":"t","type":"user","content":[{"text":"hi"}]}""");
 
-        var source = new GeminiImportSource(tmp.Path);
+        var source = new GeminiImportSource(tmp.Path, TimeProvider.System);
         await Assert.That(source.IsAvailable).IsTrue();
 
         var found = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 1), CancellationToken.None);
@@ -44,7 +44,7 @@ public class GeminiImportSourceTests {
         WriteSession(tmp.Path, "proj", "session-a-22222222.jsonl", "22222222-2222-2222-2222-222222222222");
         WriteSession(tmp.Path, "proj", "session-b-33333333.jsonl", "33333333-3333-3333-3333-333333333333");
 
-        var source = new GeminiImportSource(tmp.Path);
+        var source = new GeminiImportSource(tmp.Path, TimeProvider.System);
         var found  = await source.DiscoverAsync(
             new DiscoveryFilters(null, "22222222-2222-2222-2222-222222222222", null, 1), CancellationToken.None);
 
@@ -67,7 +67,7 @@ public class GeminiImportSourceTests {
         WriteSession(tmp.Path, "proj", "session-2026-06-17T14-10-44444444.jsonl",
             "44444444-4444-4444-4444-444444444444", BootstrapSeed());
 
-        var found = await new GeminiImportSource(tmp.Path)
+        var found = await new GeminiImportSource(tmp.Path, TimeProvider.System)
             .DiscoverAsync(new DiscoveryFilters(null, null, null, 1), CancellationToken.None);
 
         await Assert.That(found.Count).IsEqualTo(1);
@@ -81,7 +81,7 @@ public class GeminiImportSourceTests {
             "55555555-5555-5555-5555-555555555555",
             """{"id":"u1","timestamp":"t","type":"user","content":[{"text":"hi"}]}""");
 
-        var found = await new GeminiImportSource(tmp.Path)
+        var found = await new GeminiImportSource(tmp.Path, TimeProvider.System)
             .DiscoverAsync(new DiscoveryFilters(null, null, null, 1), CancellationToken.None);
 
         await Assert.That(found.Count).IsEqualTo(1);
@@ -97,7 +97,7 @@ public class GeminiImportSourceTests {
             "77777777-7777-7777-7777-777777777777",
             """{"id":"u1","timestamp":"t","type":"user","content":[{"text":"hi"}]}""");
 
-        var source = new GeminiImportSource(tmp.Path);
+        var source = new GeminiImportSource(tmp.Path, TimeProvider.System);
 
         var matched = await source.DiscoverAsync(
             new DiscoveryFilters("/work/demo", null, null, 1), CancellationToken.None);
@@ -113,7 +113,7 @@ public class GeminiImportSourceTests {
     [Test]
     public async Task unavailable_when_tmp_dir_missing() {
         using var tmp = new TempDir();
-        var source = new GeminiImportSource(tmp.PathTo("does-not-exist"));
+        var source = new GeminiImportSource(tmp.PathTo("does-not-exist"), TimeProvider.System);
         await Assert.That(source.IsAvailable).IsFalse();
     }
 

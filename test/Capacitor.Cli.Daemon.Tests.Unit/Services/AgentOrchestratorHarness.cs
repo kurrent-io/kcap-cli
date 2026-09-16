@@ -67,12 +67,12 @@ internal static class AgentOrchestratorHarness {
 
         configure?.Invoke(config); // Lets a test tweak the config (e.g. reviewer TTL bounds)
 
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
-        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
         var httpFactory      = httpClientFactory ?? new StubHttpClientFactory();
         var http             = new FixedCapacitorHttpClient();
         var tokens           = AuthFixtures.NewTokenStore(configRoot.Root);
-        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
+        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
 
         // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
         // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
@@ -83,12 +83,12 @@ internal static class AgentOrchestratorHarness {
         // test that still needs that vendor's launcher registered for the local-spawn path.
         var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
         foreach (var l in launchers.Values)
-            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance);
+            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
         foreach (var f in extraRuntimeFactories ?? [])
             runtimeFactories[f.Vendor] = f;
 
         consentGate ??= new LaunchConsentGate(
-            new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance),
+            new LaunchConsentStore(config.Store.StateDirectory(config.Name), NullLogger.Instance, TimeProvider.System),
             new LaunchConsentDecisionLog(config.Store.StateDirectory(config.Name), NullLogger.Instance),
             prompter: null, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
 
@@ -159,6 +159,7 @@ internal static class AgentOrchestratorHarness {
             lifetime,
             logger,
             consentGate,
+            TimeProvider.System,
             deferProcessorPublication,
             // Wired unconditionally so the launch path builds a snapshot exactly as production does.
             // The scratch config root and a fresh checkout carry no approval documents, so every test
@@ -189,7 +190,7 @@ internal static class AgentOrchestratorHarness {
     }
 
     internal static LaunchConsentGate DenyDefaultGate(string dir) {
-        var store = new LaunchConsentStore(dir, NullLogger.Instance);
+        var store = new LaunchConsentStore(dir, NullLogger.Instance, TimeProvider.System);
         store.TryReplace(new LaunchConsentPolicy(LaunchConsentDefault.Deny, 5, []), out _);
         return new LaunchConsentGate(store, new LaunchConsentDecisionLog(dir, NullLogger.Instance),
             prompter: null, TimeProvider.System, NullLogger<LaunchConsentGate>.Instance);
@@ -227,6 +228,8 @@ internal static class AgentOrchestratorHarness {
             runtime,
             new WorktreeInfo(worktreePath ?? "/repo", "b", "/repo"),
             new CancellationTokenSource()) {
+            CreatedAt     = TimeProvider.System.GetUtcNow().UtcDateTime,
+            LastOutputAt  = TimeProvider.System.GetUtcNow().UtcDateTime,
             Status = status,
             ActivityClock = activityClock ?? new AgentActivityClock(TimeProvider.System),
             Kind = kind,
@@ -260,6 +263,8 @@ internal static class AgentOrchestratorHarness {
             runtime,
             new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
+            CreatedAt              = TimeProvider.System.GetUtcNow().UtcDateTime,
+            LastOutputAt           = TimeProvider.System.GetUtcNow().UtcDateTime,
             Status                 = status,
             ActivityClock          = activityClock ?? new AgentActivityClock(TimeProvider.System),
             Work                   = WorkLocation.BorrowedCwd,

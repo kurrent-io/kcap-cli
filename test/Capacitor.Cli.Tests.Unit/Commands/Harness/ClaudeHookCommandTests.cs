@@ -29,9 +29,10 @@ public class ClaudeHookCommandTests {
 
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
 
-    /// <summary>A hook clock that has notionally been running for <paramref name="elapsed"/>. The
-    /// waits themselves still run on the real timer — only the budget arithmetic comes off the wall
-    /// clock, which is what lets a near-exhausted ceiling be asserted without sleeping into it.</summary>
+    /// <summary>A hook clock frozen <paramref name="elapsed"/> into its ceiling, so a near-exhausted
+    /// budget can be asserted without sleeping into it. Only for the paths that give up on the
+    /// arithmetic alone: a wait bounded by this budget can never come due, because nothing advances
+    /// it.</summary>
     static HookClock Aged(TimeSpan elapsed) {
         var time  = new FakeTimeProvider();
         var clock = new HookClock(time);
@@ -43,7 +44,7 @@ public class ClaudeHookCommandTests {
     // none — these tests assert on the memory fragment alone. Claim the window explicitly instead of
     // relying on whichever sibling test happened to claim it in the shared config dir first.
     static void ThrottleHarnessNudge(ConfigRoot root) =>
-        new HarnessOfferStore(root).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
+        new HarnessOfferStore(root, TimeProvider.System).TryClaimCheck(HarnessNudgeEmitter.CheckThrottle);
 
     [Before(Test)]
     public void ThrottleNudgeForThisRoot() => ThrottleHarnessNudge(Config.Root);
@@ -75,7 +76,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stdout.ToString()).Contains("\"permissionDecision\":\"deny\"");
         // Spool-first: the decision is a local line, and nothing reached the network.
-        await Assert.That(new HookSpool(Config.Root).HasBacklog(Sid)).IsTrue();
+        await Assert.That(new HookSpool(Config.Root, time: TimeProvider.System).HasBacklog(Sid)).IsTrue();
         await Assert.That(fx.ServerRequestCount).IsEqualTo(0);
         await Assert.That(fx.RouteOrder).IsEmpty();
     }
@@ -693,7 +694,7 @@ public class ClaudeHookCommandTests {
     public async Task hard_cap_returns_zero_when_inner_ignores_cancellation() {
         var inner = Task.Run(async () => { await Task.Delay(TimeSpan.FromSeconds(10)); return 42; });
         var sw    = System.Diagnostics.Stopwatch.StartNew();
-        var exit  = await ClaudeHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
+        var exit  = await ClaudeHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50), TimeProvider.System);
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
         // The property is that the cap beat the inner, not what scheduling latency the cap's own
@@ -703,7 +704,7 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
-        var exit = await ClaudeHookCommand.WithHardCap(Task.FromResult(7), TimeSpan.FromSeconds(2));
+        var exit = await ClaudeHookCommand.WithHardCap(Task.FromResult(7), TimeSpan.FromSeconds(2), TimeProvider.System);
         await Assert.That(exit).IsEqualTo(7);
     }
 
@@ -818,7 +819,7 @@ public class ClaudeHookCommandTests {
         using var fx  = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         using var tmp = new TempDir();
         tmp.CreateFile("blocker");
-        var unwritable = new HookSpool(tmp.PathTo("blocker", "spool")); // a directory under a file
+        var unwritable = new HookSpool(tmp.PathTo("blocker", "spool"), time: TimeProvider.System); // a directory under a file
         using var capture = ConsoleOutput.StartErrorCapture("\n");
 
         await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
@@ -881,20 +882,22 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task session_end_spooled_when_client_creation_exceeds_budget() {
         using var fx = new Fixture(Config.Root);
-        // Slow factory: never completes within the cap (30s) so the budget elapses first.
+        // Never invoked if the budget gate holds — a hook that reaches for a client anyway waits
+        // it out, and the elapsed assertion below catches that.
         Func<Task<AuthAttempt>> slowFactory = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
 
-        // 13.4s already elapsed → session-end remaining = 15 - 13.4 - 1.5 ≈ 0.1s cap.
+        // Past the 15s ceiling: no budget remains to reach for a client with, and the event must
+        // still land in the spool — spooling is a local disk write that needs no client.
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(13.4)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(20)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             fx.Spool,
             new StringReader($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
             slowFactory);
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(10)); // well under the 15s ceiling, not the 30s factory
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(10)); // the factory was never awaited
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
         var content = await File.ReadAllTextAsync(files[0]);
@@ -906,7 +909,7 @@ public class ClaudeHookCommandTests {
         Func<Task<AuthAttempt>> slow = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
         var sw     = System.Diagnostics.Stopwatch.StartNew();
-        var result = await BoundedAuth.CreateClientWithinAsync(slow, TimeSpan.FromMilliseconds(50));
+        var result = await BoundedAuth.CreateClientWithinAsync(slow, TimeSpan.FromMilliseconds(50), TimeProvider.System);
         sw.Stop();
         await Assert.That(result).IsNull();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
@@ -915,7 +918,7 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task create_client_within_budget_returns_client_when_factory_fast() {
         var made   = new HttpClient();
-        var result = await BoundedAuth.CreateClientWithinAsync(() => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2));
+        var result = await BoundedAuth.CreateClientWithinAsync(() => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2), TimeProvider.System);
         await Assert.That(result).IsNotNull();
         await Assert.That(ReferenceEquals(result!.Value.Client, made)).IsTrue();
         result.Value.Client.Dispose();
@@ -928,13 +931,13 @@ public class ClaudeHookCommandTests {
         var abandoned = 0;
         var never     = new TaskCompletionSource<AuthAttempt>();
 
-        var slow = await BoundedAuth.CreateClientWithinAsync(() => never.Task, TimeSpan.FromMilliseconds(50), () => abandoned++);
+        var slow = await BoundedAuth.CreateClientWithinAsync(() => never.Task, TimeSpan.FromMilliseconds(50), TimeProvider.System, () => abandoned++);
         await Assert.That(slow).IsNull();
         await Assert.That(abandoned).IsEqualTo(1);
 
         var made = new HttpClient();
         var fast = await BoundedAuth.CreateClientWithinAsync(
-            () => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2), () => abandoned++);
+            () => Task.FromResult(new AuthAttempt(made, AuthStatus.Ok)), TimeSpan.FromSeconds(2), TimeProvider.System, () => abandoned++);
         await Assert.That(fast).IsNotNull();
         await Assert.That(abandoned).IsEqualTo(1);
         made.Dispose();
@@ -1007,9 +1010,10 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         Func<Task<AuthAttempt>> slowFactory = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new AuthAttempt(new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
-        // 3.4s already elapsed → subagent-stop remaining = 5 - 3.4 - 1.5 ≈ 0.1s cap.
+        // Past the 5s ceiling: no budget remains to reach for a client with, and the event must
+        // still land in the spool.
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(3.4)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(8)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
             fx.Spool,
             new StringReader($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}"""),
             slowFactory);
@@ -1244,7 +1248,7 @@ public class ClaudeHookCommandTests {
             Profiles    = profile is null
                 ? Resolutions.At(_memoryServer.Url!, config)
                 : Resolutions.Of(profile, serverUrl: _memoryServer.Url);
-            Spool = new HookSpool(_spoolPath);
+            Spool = new HookSpool(_spoolPath, time: TimeProvider.System);
             Client = new HttpClient(new StubHandler(async (req, ct) => {
                 var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync(ct);
                 var path = req.RequestUri!.AbsolutePath;
@@ -1258,10 +1262,16 @@ public class ClaudeHookCommandTests {
             }));
         }
 
+        /// <summary>One hook invocation. A fresh budget runs on the real clock, so its waits are
+        /// bounded by the same clock a test measures elapsed time on; <paramref name="elapsed"/>
+        /// freezes the budget partway into its ceiling instead, for the paths that give up on the
+        /// arithmetic alone.</summary>
         public Task<int> HandleAsync(string stdin, TimeSpan elapsed = default) {
             StubMemoryServer();
 
-            return new ClaudeHookCommand(Config, Profiles, Aged(elapsed), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+            var clock = elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
+
+            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin));
         }
 

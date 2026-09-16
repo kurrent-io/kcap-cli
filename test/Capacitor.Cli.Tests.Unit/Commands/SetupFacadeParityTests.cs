@@ -64,7 +64,7 @@ public class SetupFacadeParityTests {
     // Never reached: these tests drive the import and discovery steps, which do not provision.
     static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
-    static readonly AuthProviderDiscovery Discovery = new(HttpFactory);
+    static readonly AuthProviderDiscovery Discovery = new(HttpFactory, TimeProvider.System);
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome] public required TempHome Home { get; init; }
@@ -84,7 +84,7 @@ public class SetupFacadeParityTests {
             Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
             Provisioning, Discovery, telemetry, AuthEndpoints.Defaults, facades,
             FakeImportRunner.Throwing(new InvalidOperationException("these tests stop before the import step")),
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 

@@ -15,7 +15,7 @@ public class SequencedCommandProcessorTests {
             epoch, _ => AgentLiveness.Live,
             a => { lock (Acks) Acks.Add(a); return Task.CompletedTask; },
             r => { lock (Rejects) Rejects.Add(r); return Task.CompletedTask; },
-            NullLogger.Instance, bound);
+            NullLogger.Instance, TimeProvider.System, bound);
         public static SequencedItem Launch(long seq, string epoch = "e1", string id = "cmd", string agent = "a")
             => new(SequencedKind.Launch, epoch, seq, id + seq, agent + seq);
     }
@@ -122,7 +122,7 @@ public class SequencedCommandProcessorTests {
         await using var p = new SequencedCommandProcessor(
             "e1", _ => AgentLiveness.Live,
             _ => { acks++; throw new InvalidOperationException("server gone"); },
-            _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         await p.SubmitAsync(new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1"),
             () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
@@ -253,7 +253,7 @@ public class SequencedCommandProcessorTests {
                 if (proc!.LockHeldByCurrentThreadForTest) readsUnderLock++;
                 return AgentLiveness.Live;
             },
-            _ => Task.CompletedTask, _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         var item = new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1");
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a1", "sess")));
@@ -277,7 +277,7 @@ public class SequencedCommandProcessorTests {
         await using var p = proc = new SequencedCommandProcessor(
             "e1",
             _ => { watermarkAtAckTime = proc!.LastProcessedSeq; return AgentLiveness.Live; },
-            _ => Task.CompletedTask, _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         await p.SubmitAsync(new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1"),
             () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
@@ -299,7 +299,7 @@ public class SequencedCommandProcessorTests {
             _ => throw new InvalidOperationException("liveness read blew up"),
             a => { lock (h.Acks) h.Acks.Add(a); return Task.CompletedTask; },
             r => { lock (h.Rejects) h.Rejects.Add(r); return Task.CompletedTask; },
-            NullLogger.Instance);
+            NullLogger.Instance, TimeProvider.System);
 
         // Bounded, deliberately: without the fix this does not FAIL, it HANGS — the lane faults on the
         // throw and never resolves Done. Verified by reverting the fix, where an unbounded await pinned
@@ -331,7 +331,7 @@ public class SequencedCommandProcessorTests {
             _ => throwOnRead ? throw new InvalidOperationException("liveness read blew up") : AgentLiveness.Live,
             a => { lock (h.Acks) h.Acks.Add(a); return Task.CompletedTask; },
             r => { lock (h.Rejects) h.Rejects.Add(r); return Task.CompletedTask; },
-            NullLogger.Instance);
+            NullLogger.Instance, TimeProvider.System);
 
         var item = Harness.Launch(1);
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
@@ -350,7 +350,7 @@ public class SequencedCommandProcessorTests {
         await using var p = new SequencedCommandProcessor(
             "e1", _ => AgentLiveness.Live,
             _ => { sends++; throw new InvalidOperationException("send blew up"); },
-            _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         var item = new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1");
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted)));
@@ -369,7 +369,7 @@ public class SequencedCommandProcessorTests {
             "e1", _ => AgentLiveness.Live,
             a => { lock (h.Acks) h.Acks.Add(a); return Task.CompletedTask; },
             _ => throw new InvalidOperationException("rejection send blew up"),
-            NullLogger.Instance);
+            NullLogger.Instance, TimeProvider.System);
 
         // A LaunchRejected outcome takes the rejection-send path.
         var settled = p.SubmitAsync(Harness.Launch(1), () => Task.FromResult(
@@ -395,7 +395,7 @@ public class SequencedCommandProcessorTests {
         await using var p = new SequencedCommandProcessor(
             "e1", _ => AgentLiveness.Live,
             _ => throw new InvalidOperationException("ack send blew up"),
-            _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         var item = new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1");
         var first = p.SubmitAsync(item, async () => {
@@ -430,7 +430,7 @@ public class SequencedCommandProcessorTests {
             "e1", _ => AgentLiveness.Live,
             a => { lock (h.Acks) h.Acks.Add(a); return Task.CompletedTask; },
             _ => Task.CompletedTask,
-            new ThrowingLogger());
+            new ThrowingLogger(), TimeProvider.System);
 
         // An execution fault takes the LogWarning path, where the logger throws.
         var settled  = p.SubmitAsync(Harness.Launch(1), () => throw new InvalidOperationException("boom"));
@@ -461,7 +461,7 @@ public class SequencedCommandProcessorTests {
             _ => { if (Interlocked.Exchange(ref throwLiveness, 0) == 1) throw new InvalidOperationException("liveness blip"); return AgentLiveness.Live; },
             a => { lock (acks) acks.Add(a); return Task.CompletedTask; },
             _ => Task.CompletedTask,
-            new ThrowingLogger());
+            new ThrowingLogger(), TimeProvider.System);
 
         // Proactive freeze: liveness throws → the deferred-freeze catch logs through the THROWING logger.
         // Neither the lane nor the submitter may fault.
@@ -487,7 +487,7 @@ public class SequencedCommandProcessorTests {
             "e1", _ => AgentLiveness.Live,
             _ => Task.CompletedTask,
             _ => { sends++; if (proc!.LockHeldByCurrentThreadForTest) sendsUnderLock++; return Task.CompletedTask; },
-            NullLogger.Instance);
+            NullLogger.Instance, TimeProvider.System);
 
         // Stale epoch, then a gap -- two DIFFERENT locked reject paths.
         await p.SubmitAsync(new SequencedItem(SequencedKind.Launch, "other-epoch", 1, "c1", "a1"),
@@ -514,7 +514,7 @@ public class SequencedCommandProcessorTests {
             "e1", _ => AgentLiveness.Live,
             _ => throw new InvalidOperationException("ack send blew up"),
             _ => throw new InvalidOperationException("rejection send blew up"),
-            new ThrowingLogger());
+            new ThrowingLogger(), TimeProvider.System);
 
         // Stale epoch and a gap: two locked reject paths, both reached straight from SubmitAsync.
         await p.SubmitAsync(new SequencedItem(SequencedKind.Launch, "other-epoch", 1, "c1", "a1"),
@@ -553,7 +553,7 @@ public class SequencedCommandProcessorTests {
             "e1",
             _ => livenesses.Count > 0 ? livenesses.Dequeue() : AgentLiveness.NotFound,
             a => { lock (acks) acks.Add(a); return Task.CompletedTask; },
-            _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         var item = new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1");
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a1", "sess")));
@@ -578,7 +578,7 @@ public class SequencedCommandProcessorTests {
             "e1",
             _ => { if (Interlocked.Exchange(ref throwOnce, 0) == 1) throw new InvalidOperationException("liveness blip"); return AgentLiveness.Live; },
             a => { lock (acks) acks.Add(a); return Task.CompletedTask; },
-            _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         var item = new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1");
         await p.SubmitAsync(item, () => Task.FromResult(new CommandOutcome(CommandOutcomeKind.LaunchExecuted, "a1", "sess")));
@@ -633,7 +633,7 @@ public class SequencedCommandProcessorTests {
         await using var p = new SequencedCommandProcessor(
             "e1", _ => AgentLiveness.Live,
             a => { if (Volatile.Read(ref fail)) throw new InvalidOperationException("transport down"); lock (acks) acks.Add(a); return Task.CompletedTask; },
-            _ => Task.CompletedTask, NullLogger.Instance);
+            _ => Task.CompletedTask, NullLogger.Instance, TimeProvider.System);
 
         // Proactive settle: the send throws but is contained, so the submit completes and the ack freezes.
         await p.SubmitAsync(new SequencedItem(SequencedKind.Launch, "e1", 1, "cmd1", "a1"),

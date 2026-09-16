@@ -29,7 +29,7 @@ public class CaptureScopeTests {
             string[]? allowedRepos = null, string[]? excludedRepos = null,
             Func<string, Task<RepositoryPayload?>>? repoDetector = null) =>
         new(new GitProviderRouter(), Config.Root, Home,
-            allowedPaths, excludedPaths, allowedRepos, excludedRepos, repoDetector);
+            allowedPaths, excludedPaths, allowedRepos, excludedRepos, TimeProvider.System, repoDetector);
 
     static Func<string, Task<RepositoryPayload?>> Detects(string owner, string repoName) =>
         _ => Task.FromResult<RepositoryPayload?>(new RepositoryPayload { Owner = owner, RepoName = repoName });

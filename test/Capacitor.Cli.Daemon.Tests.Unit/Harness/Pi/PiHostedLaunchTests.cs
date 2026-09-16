@@ -156,6 +156,7 @@ public class PiHostedLaunchTests {
         string? probed = null;
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig { PiPath = "/opt/pi/bin/pi" }, NullLoggerFactory.Instance,
+            TimeProvider.System,
             binaryExists: p => { probed = p; return true; });
 
         var result = factory.IsAvailable();
@@ -167,7 +168,7 @@ public class PiHostedLaunchTests {
     [Test]
     public async Task IsAvailable_FalseWhenSeamReportsMissing() {
         var factory = new PiRpcHostedAgentRuntimeFactory(
-            new DaemonConfig(), NullLoggerFactory.Instance, binaryExists: _ => false);
+            new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System, binaryExists: _ => false);
 
         await Assert.That(factory.IsAvailable()).IsFalse();
     }
@@ -176,14 +177,14 @@ public class PiHostedLaunchTests {
 
     [Test]
     public async Task Vendor_IsPi() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance);
+        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
 
         await Assert.That(factory.Vendor).IsEqualTo("pi");
     }
 
     [Test]
     public async Task SupportsUnattended_IsFalse_InPr1() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance);
+        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
 
         await Assert.That(factory.SupportsUnattended).IsFalse();
     }
@@ -195,7 +196,7 @@ public class PiHostedLaunchTests {
         // (no override here) must report null, not a reason. A prior revision's override reported a
         // non-null reason, which made every daemon with pi installed log a false "restart to enable"
         // operator instruction at boot.
-        IHostedAgentRuntimeFactory factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance);
+        IHostedAgentRuntimeFactory factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
 
         // A default interface member is only reachable through the interface type — there is no
         // override on the concrete class to call directly, which is the whole point of this fix.
@@ -207,7 +208,7 @@ public class PiHostedLaunchTests {
 
     [Test]
     public async Task SupportsModelSelection_IsTrue() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance);
+        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
 
         await Assert.That(factory.SupportsModelSelection).IsTrue();
     }
@@ -218,6 +219,7 @@ public class PiHostedLaunchTests {
     public async Task StartAsync_RefusesAPrReview() {
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), NullLoggerFactory.Instance,
+            TimeProvider.System,
             processSource: (_, _) => throw new InvalidOperationException("must not spawn"));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -230,6 +232,7 @@ public class PiHostedLaunchTests {
     public async Task StartAsync_RefusesAReviewFlowLaunch() {
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), NullLoggerFactory.Instance,
+            TimeProvider.System,
             processSource: (_, _) => throw new InvalidOperationException("must not spawn"));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -242,6 +245,7 @@ public class PiHostedLaunchTests {
     public async Task StartAsync_RefusesABorrowedWorkspace() {
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), NullLoggerFactory.Instance,
+            TimeProvider.System,
             processSource: (_, _) => throw new InvalidOperationException("must not spawn"));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -291,6 +295,7 @@ public class PiHostedLaunchTests {
         var fake = new FakeProcess();
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), NullLoggerFactory.Instance,
+            TimeProvider.System,
             processSource: (_, _) => Task.FromResult<IPiRpcProcess>(fake));
 
         var start = await factory.StartAsync(Ctx(prompt: "hello"), CancellationToken.None);
@@ -309,6 +314,7 @@ public class PiHostedLaunchTests {
         var fake = new FakeProcess();
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), NullLoggerFactory.Instance,
+            TimeProvider.System,
             processSource: (_, _) => Task.FromResult<IPiRpcProcess>(fake));
 
         var start = await factory.StartAsync(Ctx(prompt: ""), CancellationToken.None);
@@ -348,6 +354,7 @@ public class PiHostedLaunchTests {
         var silent  = new SilentProcess();
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), NullLoggerFactory.Instance,
+            TimeProvider.System,
             processSource: (_, _) => Task.FromResult<IPiRpcProcess>(silent),
             // A short test-only deadline (see the factory ctor's readyDeadline param) instead of
             // burning the real 30s DefaultReadyDeadline this launch would otherwise wait out.
@@ -370,6 +377,7 @@ public class PiHostedLaunchTests {
         var loggerFactory = new CaptureLoggerFactory();
         var factory = new PiRpcHostedAgentRuntimeFactory(
             new DaemonConfig(), loggerFactory,
+            TimeProvider.System,
             processSource: (_, _) => Task.FromResult<IPiRpcProcess>(silent),
             readyDeadline: TimeSpan.FromMilliseconds(500));
 
@@ -425,7 +433,8 @@ public class PiHostedLaunchTests {
             new PiRpcHostedAgentRuntimeFactory(
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>()
-            )
+            ,
+            TimeProvider.System)
         );
 
         services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp =>

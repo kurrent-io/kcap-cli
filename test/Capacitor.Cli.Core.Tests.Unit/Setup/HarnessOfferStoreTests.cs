@@ -7,7 +7,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task Missing_file_loads_empty_ledger() {
         using var config = new TempConfigRoot();
-        var ledger = new HarnessOfferStore(config.Root).Load();
+        var ledger = new HarnessOfferStore(config.Root, TimeProvider.System).Load();
         await Assert.That(ledger.Version).IsEqualTo(1);
         await Assert.That(ledger.Vendors).IsEmpty();
     }
@@ -16,7 +16,7 @@ public class HarnessOfferStoreTests {
     public async Task Corrupt_file_loads_empty_ledger() {
         using var config = new TempConfigRoot();
         config.CreateFile("harness-offers-v1.json", "{ this is not json ");
-        var ledger = new HarnessOfferStore(config.Root).Load();
+        var ledger = new HarnessOfferStore(config.Root, TimeProvider.System).Load();
         await Assert.That(ledger.Vendors).IsEmpty();
     }
 
@@ -26,7 +26,7 @@ public class HarnessOfferStoreTests {
     public async Task Null_vendors_member_normalizes_to_empty() {
         using var config = new TempConfigRoot();
         config.CreateFile("harness-offers-v1.json", """{"version":1,"vendors":null}""");
-        var ledger = new HarnessOfferStore(config.Root).Load();
+        var ledger = new HarnessOfferStore(config.Root, TimeProvider.System).Load();
         await Assert.That(ledger.Vendors).IsNotNull();
         await Assert.That(ledger.Vendors).IsEmpty();
         await Assert.That(ledger.Entry(HarnessId.Antigravity)).IsNull();
@@ -35,7 +35,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task Save_then_load_round_trips_entry() {
         using var config = new TempConfigRoot();
-        var       store  = new HarnessOfferStore(config.Root);
+        var       store  = new HarnessOfferStore(config.Root, TimeProvider.System);
         var       when   = new DateTimeOffset(2026, 8, 19, 10, 0, 0, TimeSpan.Zero);
 
         store.Save(new HarnessOfferLedger {
@@ -51,7 +51,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task Update_mutates_and_persists() {
         using var config = new TempConfigRoot();
-        var store = new HarnessOfferStore(config.Root);
+        var store = new HarnessOfferStore(config.Root, TimeProvider.System);
 
         store.Update(l => l with {
             Vendors = new(l.Vendors) { ["kiro"] = new HarnessOfferEntry { Declined = true } }
@@ -63,7 +63,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task TryClaimCheck_claims_once_then_blocks_within_window() {
         using var config = new TempConfigRoot();
-        var store = new HarnessOfferStore(config.Root);
+        var store = new HarnessOfferStore(config.Root, TimeProvider.System);
 
         await Assert.That(store.TryClaimCheck(TimeSpan.FromHours(6))).IsTrue();
         await Assert.That(store.TryClaimCheck(TimeSpan.FromHours(6))).IsFalse();
@@ -72,7 +72,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task TryClaimCheck_zero_throttle_always_claims() {
         using var config = new TempConfigRoot();
-        var store = new HarnessOfferStore(config.Root);
+        var store = new HarnessOfferStore(config.Root, TimeProvider.System);
 
         await Assert.That(store.TryClaimCheck(TimeSpan.Zero)).IsTrue();
         await Assert.That(store.TryClaimCheck(TimeSpan.Zero)).IsTrue();
@@ -83,7 +83,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task StampOffered_sets_last_offered_and_first_seen() {
         using var config = new TempConfigRoot();
-        var store = new HarnessOfferStore(config.Root);
+        var store = new HarnessOfferStore(config.Root, TimeProvider.System);
 
         store.StampOffered([HarnessId.Antigravity], Now);
 
@@ -96,7 +96,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task StampOffered_preserves_earlier_first_seen() {
         using var config  = new TempConfigRoot();
-        var       store   = new HarnessOfferStore(config.Root);
+        var       store   = new HarnessOfferStore(config.Root, TimeProvider.System);
         var       earlier = Now.AddDays(-30);
 
         store.Save(new HarnessOfferLedger { Vendors = { ["kiro"] = new HarnessOfferEntry { FirstSeen = earlier, LastOffered = earlier } } });
@@ -112,7 +112,7 @@ public class HarnessOfferStoreTests {
     [Test]
     public async Task StampOffered_never_overwrites_an_existing_dismissal() {
         using var config = new TempConfigRoot();
-        var store = new HarnessOfferStore(config.Root);
+        var store = new HarnessOfferStore(config.Root, TimeProvider.System);
 
         store.Save(new HarnessOfferLedger { Vendors = { ["cursor"] = new HarnessOfferEntry { Declined = true } } });
         store.StampOffered([HarnessId.Cursor], Now);

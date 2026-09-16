@@ -31,7 +31,7 @@ public class ValidatePlanCommandTests : IDisposable {
     public void Dispose() => _server.Stop();
 
     ISessionsApi Api() =>
-        new SessionsApi(new FixedCapacitorHttpClient(), new CapacitorServer(_server.Url!, Config.Root, Resolutions.At(_server.Url!, Config.Root)));
+        new SessionsApi(new FixedCapacitorHttpClient(), new CapacitorServer(_server.Url!, Config.Root, Resolutions.At(_server.Url!, Config.Root)), TimeProvider.System);
 
     static async Task<string> CaptureStdoutAsync(Func<Task> action) {
         using var capture = ConsoleOutput.StartCapture();

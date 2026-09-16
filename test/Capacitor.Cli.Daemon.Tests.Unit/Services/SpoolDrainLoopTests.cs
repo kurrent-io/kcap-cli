@@ -11,7 +11,7 @@ public class SpoolDrainLoopTests {
 
     SpoolDrainLoop MakeLoop(ICapacitorHttpClient http, ILogger logger) =>
         new(Config.Root, http, "https://example.invalid",
-            new HookSpool(Config.PathTo("lifecycle")), new TranscriptSpool(Config.PathTo("transcript")), logger);
+            new HookSpool(Config.PathTo("lifecycle"), time: TimeProvider.System), new TranscriptSpool(Config.PathTo("transcript"), time: TimeProvider.System), logger, TimeProvider.System);
 
     [Test]
     public async Task Tick_treats_UnusableServerUrl_as_a_lapse_and_skips_the_pass() {

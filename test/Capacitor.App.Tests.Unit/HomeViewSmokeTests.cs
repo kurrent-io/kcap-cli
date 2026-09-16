@@ -48,7 +48,7 @@ public class HomeViewSmokeTests {
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         var launch = new RecordingLaunchClient();
-        var vm = new HomeViewModel(service, new AppStateStore(path), launch, () => Task.FromResult(Array.Empty<string>()));
+        var vm = new HomeViewModel(service, new AppStateStore(path), launch, () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
         return (new HomeView { DataContext = vm }, vm, service, launch, tmp);
     }
 
@@ -140,7 +140,7 @@ public class HomeViewSmokeTests {
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(Array.Empty<string>()), laneStatus: lane.Status,
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, laneStatus: lane.Status,
                 appServerUrl: "http://localhost:9999");
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
@@ -522,7 +522,7 @@ public class HomeViewSmokeTests {
             var opened = new List<string>();
             var vm = new HomeViewModel(
                 service, new AppStateStore(path), new RecordingLaunchClient(),
-                () => Task.FromResult(Array.Empty<string>()), openSession: opened.Add);
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, openSession: opened.Add);
             var window = new Window { Content = new HomeView { DataContext = vm } };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -613,7 +613,7 @@ public class HomeViewSmokeTests {
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["input/1", "input/2"]));
         var vm = new HomeViewModel(
             service, new AppStateStore(path), new RecordingLaunchClient(),
-            () => Task.FromResult(Array.Empty<string>()),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
             laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
             uploader: uploader);
         return (vm, tmp);

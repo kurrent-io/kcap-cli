@@ -54,7 +54,7 @@ public class LaunchConsentIpcTests {
         ) {
         var daemons = new TempDaemonStore();
         var stateRoot = daemons.Store.StateDirectory(daemonName);
-        var store = new LaunchConsentStore(stateRoot, NullLogger.Instance);
+        var store = new LaunchConsentStore(stateRoot, NullLogger.Instance, TimeProvider.System);
         store.TryReplace(new LaunchConsentPolicy(def, promptTimeoutSeconds, []), out _);
         var broker = new LaunchConsentBroker();
         var decisionLog = new LaunchConsentDecisionLog(stateRoot, NullLogger.Instance);
@@ -69,10 +69,10 @@ public class LaunchConsentIpcTests {
         var consentIpc = new LaunchConsentIpc(broker, store, config, NullLogger<LaunchConsentIpc>.Instance);
 
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
-        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance);
-        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance);
-        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
-        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance);
+        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
+        var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
 
         var orchestrator = new AgentOrchestrator(
             config, Config.Root, TestHarnesses.Under(Home), connection, worktreeManager, repoMatcher,
@@ -80,13 +80,13 @@ public class LaunchConsentIpcTests {
             tokens,
             permissionBridge, new Dictionary<string, IHostedAgentLauncher>(),
             new Dictionary<string, IHostedAgentRuntimeFactory>(), new NoopHostLifetime(),
-            NullLogger<AgentOrchestrator>.Instance, gate);
+            NullLogger<AgentOrchestrator>.Instance, gate, TimeProvider.System);
 
         var permissionIpc = new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance);
         var notifier = new DaemonStatusNotifier();
-        var statusIpc = new DaemonStatusIpc(config, orchestrator, connection, notifier);
+        var statusIpc = new DaemonStatusIpc(config, orchestrator, connection, notifier, TimeProvider.System);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
-        var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy());
+        var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy(), TimeProvider.System);
         var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(ct);
 

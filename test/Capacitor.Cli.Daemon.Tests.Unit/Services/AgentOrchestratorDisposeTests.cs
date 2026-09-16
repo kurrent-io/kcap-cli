@@ -46,7 +46,11 @@ public class AgentOrchestratorDisposeTests {
         var runtime = new FakeHostedAgentRuntime("claude", emitsTerminalOutput: false);
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-cb", null, "", null, worktree, "claude", runtime,
-            new WorktreeInfo(worktree, "", worktree, IsStandalone: true), new CancellationTokenSource()));
+            new WorktreeInfo(worktree, "", worktree, IsStandalone: true), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
 
         // A faulted cancellation must still drain the processor and clean up children;
         // the run-once guard prevents a later disposal from retrying skipped work.

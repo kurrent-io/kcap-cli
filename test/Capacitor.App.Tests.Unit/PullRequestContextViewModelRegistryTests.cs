@@ -177,7 +177,7 @@ public class PullRequestContextViewModelRegistryTests {
         internal Harness(string host, PullRequestRepository? primary = null) {
             Links = new(Time);
             Provider = new(Time, host);
-            Registry = new(Links, [Provider]);
+            Registry = new(Links, [Provider], TimeProvider.System);
             Vm = new(Presence, Registry, Time, Opener, () => { }, primaryRepo: () => primary);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));

@@ -11,7 +11,7 @@ public class ServerConnectionAbandonedInteractionTests {
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
             UnusedTokenStore.Create(),
             NullLoggerFactory.Instance,
-            NullLogger<ServerConnection>.Instance) {
+            NullLogger<ServerConnection>.Instance, TimeProvider.System) {
         public readonly List<(string SessionId, string RequestId, string Behavior)> Responded = [];
         public readonly TaskCompletionSource RespondedOnce = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

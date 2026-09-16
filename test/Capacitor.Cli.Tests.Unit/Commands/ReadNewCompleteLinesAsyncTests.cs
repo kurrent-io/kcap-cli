@@ -105,7 +105,7 @@ public class ReadNewCompleteLinesAsyncTests {
     public async Task Final_drain_holds_a_line_that_grew_into_an_incomplete_record_after_the_completeness_check() {
         var path = WriteTemp("{\"a\":1}\n");
         // Step 1: the bounded completeness probe sees a fully complete file.
-        await Assert.That(await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 1, delayMs: 1)).IsTrue();
+        await Assert.That(await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 1, delayMs: 1)).IsTrue();
 
         // Step 2: the writer RESUMES, appending a new partial record (no newline, unparseable)
         // in the gap before the consuming read — the exact TOCTOU the fix must close.

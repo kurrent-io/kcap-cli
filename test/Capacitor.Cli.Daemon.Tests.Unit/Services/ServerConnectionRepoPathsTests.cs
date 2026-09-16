@@ -12,7 +12,7 @@ public class ServerConnectionRepoPathsTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     sealed class RepoPathsServerConnection(DaemonConfig config) : ServerConnection(
-        config, UnusedTokenStore.Create(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance) {
+        config, UnusedTokenStore.Create(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
         public readonly List<string[]>       Sent        = [];
         public readonly TaskCompletionSource SendEntered = new();
         public          TaskCompletionSource? SendGate;
@@ -33,7 +33,7 @@ public class ServerConnectionRepoPathsTests {
 
     [Test]
     public async Task A_send_carries_the_persisted_paths_and_records_the_file_it_read() {
-        var store = new RepoPathStore(Config.Root);
+        var store = new RepoPathStore(Config.Root, TimeProvider.System);
         await store.AddAsync("/tmp/project-a");
         await using var conn = new RepoPathsServerConnection(NewConfig());
 
@@ -46,7 +46,7 @@ public class ServerConnectionRepoPathsTests {
 
     [Test]
     public async Task A_failed_send_records_nothing() {
-        await new RepoPathStore(Config.Root).AddAsync("/tmp/project-a");
+        await new RepoPathStore(Config.Root, TimeProvider.System).AddAsync("/tmp/project-a");
         await using var conn = new RepoPathsServerConnection(NewConfig()) { SendThrow = new IOException("hub down") };
 
         await conn.UpdateRepoPathsAsync();
@@ -59,7 +59,7 @@ public class ServerConnectionRepoPathsTests {
     /// newer fingerprint recorded last, would leave the server stale with nothing left to repair it.
     [Test]
     public async Task Overlapping_sends_run_one_at_a_time() {
-        var store = new RepoPathStore(Config.Root);
+        var store = new RepoPathStore(Config.Root, TimeProvider.System);
         await store.AddAsync("/tmp/project-a");
         var gate = new TaskCompletionSource();
         await using var conn = new RepoPathsServerConnection(NewConfig()) { SendGate = gate };
@@ -87,12 +87,12 @@ public class ServerConnectionRepoPathsTests {
     public async Task The_watcher_sends_a_write_from_another_process_exactly_once() {
         var config = NewConfig();
         await using var conn    = new RepoPathsServerConnection(config);
-        using var       watcher = new RepoStoreWatcher(config, conn, NullLogger<RepoStoreWatcher>.Instance);
+        using var       watcher = new RepoStoreWatcher(config, conn, NullLogger<RepoStoreWatcher>.Instance, TimeProvider.System);
 
         await watcher.TickAsync();
         await Assert.That(conn.Sent).IsEmpty();
 
-        await new RepoPathStore(Config.Root).AddAsync("/tmp/project-a");
+        await new RepoPathStore(Config.Root, TimeProvider.System).AddAsync("/tmp/project-a");
         await watcher.TickAsync();
         await watcher.TickAsync();
 
