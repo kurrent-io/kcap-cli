@@ -28,9 +28,15 @@ public static class PlanEntitlementStore {
     /// a paying tenant's nudges permanently with no way back.</summary>
     public static readonly TimeSpan StaleAfter = TimeSpan.FromDays(7);
 
-    // Per-process memo, so a long-lived process (the daemon, an MCP server) making many requests
-    // doesn't rewrite the same file on every response.
-    static readonly ConcurrentDictionary<string, string> WrittenThisProcess = new();
+    /// <summary>How long the in-process memo suppresses an identical rewrite. Bounded well below
+    /// <see cref="StaleAfter"/> deliberately: a long-lived process (the daemon, an MCP server) that
+    /// keeps observing the same denial must still refresh <c>seen_at</c>, or its own write dedupe
+    /// would age out the very record it is confirming.</summary>
+    public static readonly TimeSpan RefreshAfter = TimeSpan.FromHours(1);
+
+    // Per-process memo, so a long-lived process making many requests doesn't rewrite the same file on
+    // every response — bounded by RefreshAfter so suppression can never outlive the freshness horizon.
+    static readonly ConcurrentDictionary<string, (string Rendered, DateTimeOffset At)> WrittenThisProcess = new();
 
     /// <summary>
     /// Records the entitlements observed for <paramref name="serverUrl"/> from a raw
@@ -46,14 +52,17 @@ public static class PlanEntitlementStore {
         var rendered = PlanEntitlements.Parse(headerValue).Render();
         var key      = Normalize(serverUrl);
         var path     = PathFor(key, config);
+        var at       = now ?? DateTimeOffset.UtcNow;
 
-        if (WrittenThisProcess.TryGetValue(path, out var prev) && prev == rendered) return;
+        if (WrittenThisProcess.TryGetValue(path, out var prev)
+                && prev.Rendered == rendered
+                && at - prev.At < RefreshAfter) return;
 
         try {
             var obj = new JsonObject {
                 ["url"]     = key,
                 ["plan"]    = rendered,
-                ["seen_at"] = now ?? DateTimeOffset.UtcNow,
+                ["seen_at"] = at,
             };
 
             var tempPath = $"{path}.tmp";
@@ -61,7 +70,7 @@ public static class PlanEntitlementStore {
             File.WriteAllText(tempPath, obj.ToJsonString());
             File.Move(tempPath, path, overwrite: true);
 
-            WrittenThisProcess[path] = rendered;
+            WrittenThisProcess[path] = (rendered, at);
         } catch {
             // Best-effort — a cache write must never break the request it rides on.
         }

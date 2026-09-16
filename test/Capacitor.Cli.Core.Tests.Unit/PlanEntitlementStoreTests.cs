@@ -82,6 +82,37 @@ public class PlanEntitlementStoreTests {
     }
 
     [Test]
+    public async Task Repeating_TheSameAnswer_KeepsItFresh() {
+        // A long-lived process (the daemon, an MCP server) keeps seeing the same denial. The write
+        // dedupe must not let the record it is confirming age past StaleAfter.
+        var url = Url("repeat");
+        var t0  = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+
+        PlanEntitlementStore.Set(url, "work_items=0", Config.Root, now: t0);
+        for (var day = 1; day <= 10; day++)
+            PlanEntitlementStore.Set(url, "work_items=0", Config.Root, now: t0 + TimeSpan.FromDays(day));
+
+        await Assert.That(PlanEntitlementStore.Get(url, Config.Root).Allows(PlanFeature.WorkItems)).IsFalse();
+    }
+
+    [Test]
+    public async Task AnIdenticalAnswer_InsideTheRefreshWindow_IsNotRewritten() {
+        // The hot path still touches disk at most once per RefreshAfter per distinct value.
+        var url = Url("dedupe");
+        var t0  = DateTimeOffset.UtcNow;
+
+        PlanEntitlementStore.Set(url, "work_items=0", Config.Root, now: t0);
+        var firstWrite = File.GetLastWriteTimeUtc(
+            Directory.EnumerateFiles(Config.Directory, "plan-entitlements-*.json").Single());
+
+        PlanEntitlementStore.Set(url, "work_items=0", Config.Root, now: t0 + TimeSpan.FromMinutes(1));
+
+        await Assert.That(File.GetLastWriteTimeUtc(
+            Directory.EnumerateFiles(Config.Directory, "plan-entitlements-*.json").Single()))
+            .IsEqualTo(firstWrite);
+    }
+
+    [Test]
     public async Task Get_ACorruptFile_AllowsEverything() {
         var url = Url("corrupt");
         PlanEntitlementStore.Set(url, "work_items=0", Config.Root);
