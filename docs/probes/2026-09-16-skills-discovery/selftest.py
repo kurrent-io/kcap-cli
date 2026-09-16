@@ -291,6 +291,19 @@ class HookScriptTests(unittest.TestCase):
             self.assertAlmostEqual(stamped["fired_at_mtime"], stamp.stat().st_mtime, places=3)
             self.assertEqual(Path(str(stamp) + ".stdin").read_text(), '{"hook_event_name":"SessionStart"}')
 
+    def test_script_tolerates_a_closed_stdin(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "cfg"
+            cfg.mkdir()
+            skill = ProbeSkill.fresh()
+            target = Path(d) / "repo" / ".x" / skill.name / "SKILL.md"
+            script = write_hook_script(cfg, target, skill.render(), stamp_path(cfg))
+            proc = subprocess.run(["sh", "-c", f"exec 0<&-; '{script}'"], capture_output=True, text=True, timeout=15)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stderr, "")
+            self.assertEqual(target.read_text(), skill.render())
+            self.assertIsNotNone(read_stamp(stamp_path(cfg)))
+
     def test_script_survives_open_stdin_and_can_delete(self):
         with tempfile.TemporaryDirectory() as d:
             cfg = Path(d) / "cfg"
@@ -438,6 +451,25 @@ class _NoBinaryAdapter(FakeAdapter):
 
     def binary_path(self):
         return None
+
+
+class _RaisingStderrAdapter(FakeAdapter):
+    """The vendor wrote its complaint to stderr before the driver gave up."""
+
+    def ask(self, sb, mode, prompt):
+        (sb.root / "fake.stderr.log").write_text("boom\n")
+        raise RuntimeError("vendor exploded")
+
+
+class _OddLogNameAdapter(FakeAdapter):
+    """A driver that names its stderr file outside the *.stderr.log pattern."""
+
+    def ask(self, sb, mode, prompt):
+        log = sb.root / "vendor.log"
+        log.write_text("odd noise\n")
+        res = super().ask(sb, mode, prompt)
+        res.stderr_path = str(log)
+        return res
 
 
 class _LeakyControlAdapter(FakeAdapter):
@@ -596,6 +628,70 @@ class RunnerTests(unittest.TestCase):
             probe.Runner(a, out, runs=2, base=Path(d), rerun=True).run_scenario("print", "S1")
             self.assertEqual(a.calls, 4)
             self.assertEqual(len(_load(out)), 2)
+
+    def test_untested_arm_is_rerun_not_latched(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            probe.Runner(_RaisingAdapter(), out, runs=2, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual({x.verdict for x in _load(out)}, {"untested"})
+            a = _CountingAdapter()
+            recs = probe.Runner(a, out, runs=2, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual([x.verdict for x in recs], ["visible_first_turn"] * 2)
+            self.assertEqual(a.calls, 2)
+            self.assertEqual(len(_load(out)), 2)
+
+    def test_partial_arm_is_completed_on_resume(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            a = _CountingAdapter()
+            probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual(a.calls, 1)
+            recs = probe.Runner(a, out, runs=2, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual(a.calls, 2)
+            self.assertEqual(len(recs), 2)
+            self.assertEqual(len(_load(out)), 2)
+
+    def test_gated_rows_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            for _ in range(2):
+                r = probe.Runner(FakeAdapter(), out, runs=2, base=Path(d))
+                r.s1_ok["print"] = False
+                recs = r.run_scenario("print", "S3")
+                self.assertEqual([x.verdict for x in recs], ["untested", "untested"])
+            self.assertEqual(len(_load(out)), 2)
+
+    def test_exception_path_keeps_stderr_and_tears_down(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            recs = probe.Runner(_RaisingStderrAdapter(), out, runs=1, base=Path(d)).run_scenario("print", "S1")
+            copied = out / "fake" / "print" / "S1" / "S1_native" / "run1.fake.stderr.log"
+            self.assertEqual(copied.read_text(), "boom\n")
+            self.assertEqual(recs[0].stderr_path, str(copied))
+            self.assertEqual([p.name for p in Path(d).iterdir() if p.name.startswith("skprobe-")], [])
+
+    def test_odd_log_name_is_still_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            recs = probe.Runner(_OddLogNameAdapter(), out, runs=1, base=Path(d)).run_scenario("print", "S1")
+            copied = out / "fake" / "print" / "S1" / "S1_native" / "run1.vendor.log"
+            self.assertEqual(copied.read_text(), "odd noise\n")
+            self.assertEqual(recs[0].stderr_path, str(copied))
+
+    def test_s4_partial_pass_is_redone(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            a = _CountingAdapter()
+            probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("print", "S4")
+            arm_dir = out / "fake" / "print" / "S4" / "S4_all-roots"
+            files = sorted(arm_dir.glob("run*.json"))
+            self.assertEqual(len(files), len(probe.ALL_ROOTS) + 1)
+            for f in files[1:]:
+                f.unlink()
+            calls = a.calls
+            probe.Runner(a, out, runs=1, base=Path(d)).run_scenario("print", "S4")
+            self.assertEqual(len(list(arm_dir.glob("run*.json"))), len(files))
+            self.assertEqual(a.calls, calls + 1)
 
     def test_s0_prompt_design_failure_keeps_evidence(self):
         with tempfile.TemporaryDirectory() as d:

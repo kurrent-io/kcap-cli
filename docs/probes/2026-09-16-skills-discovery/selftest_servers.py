@@ -89,9 +89,12 @@ def pirpc() -> None:
         if msg.get("type") == "prompt":
             send({"id": msg.get("id"), "type": "response", "success": True})
             send({"type": "agent_start"})
+            content = [{"type": "text", "text": answer()}]
             if uses_tool():
+                # A real Pi tool call shows up twice: as a toolCall part and as a tool_execution_end.
+                content.insert(0, {"type": "toolCall", "id": "t1", "name": "read", "arguments": {}})
                 send({"type": "tool_execution_end", "toolCallId": "t1", "status": "success"})
-            send({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": answer()}]}})
+            send({"type": "message_end", "message": {"role": "assistant", "content": content}})
             send({"type": "agent_settled"})
 
 

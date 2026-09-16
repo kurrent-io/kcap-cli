@@ -29,11 +29,10 @@ def pirpc_ask(argv: list[str], cwd: Path, env: dict, prompt: str, stderr_path: P
                 for part in (msg["message"].get("content") or []):
                     if isinstance(part, dict) and part.get("type") == "text":
                         texts.append(part.get("text", ""))
-                    elif isinstance(part, dict) and part.get("type") == "toolCall":
-                        tools += 1
                 if msg["message"].get("stopReason") == "error":
                     notes.append(f"error={msg['message'].get('errorMessage')}")
             elif t == "tool_execution_end":
+                # A tool call also appears as a toolCall part of the message; count it once.
                 tools += 1
             elif t == "response" and msg.get("success") is False:
                 notes.append(f"prompt rejected: {json.dumps(msg)[:300]}")

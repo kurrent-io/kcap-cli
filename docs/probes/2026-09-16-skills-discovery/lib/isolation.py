@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ENV_ALLOWLIST = ("PATH", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "SHELL", "USER", "LOGNAME")
@@ -35,6 +35,9 @@ class Sandbox:
     config_root: Path
     env: dict[str, str]
     keep: bool = False
+    # Logs already copied out of this sandbox, source path to destination, so a sandbox that
+    # yields several rows copies each log once.
+    copied_logs: dict[str, str] = field(default_factory=dict)
 
     def cleanup(self) -> None:
         if not self.keep:
