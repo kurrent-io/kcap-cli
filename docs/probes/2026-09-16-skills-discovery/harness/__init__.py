@@ -6,6 +6,9 @@ from harness.codex import CodexAdapter
 from harness.copilot import CopilotAdapter
 from harness.fake import FakeAdapter
 from harness.gemini import GeminiAdapter
+from harness.kiro import KiroAdapter, KiroAgentBareAdapter, KiroAgentSkillsAdapter
+from harness.opencode_v1 import OpenCodeV1Adapter
+from harness.opencode_v2 import OpenCodeV2Adapter, OpenCodeV2PromptHookAdapter
 from harness.pi import PiAdapter
 
 ENTRIES: dict[str, type[Adapter]] = {
@@ -15,4 +18,10 @@ ENTRIES: dict[str, type[Adapter]] = {
     "gemini": GeminiAdapter,
     "pi": PiAdapter,
     "copilot": CopilotAdapter,
+    "kiro": KiroAdapter,
+    "kiro-agent-bare": KiroAgentBareAdapter,
+    "kiro-agent-skills": KiroAgentSkillsAdapter,
+    "opencode-v1": OpenCodeV1Adapter,
+    "opencode-v2": OpenCodeV2Adapter,
+    "opencode-v2-prompt": OpenCodeV2PromptHookAdapter,
 }
