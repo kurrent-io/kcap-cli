@@ -4,11 +4,10 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// <c>kcap allow</c> — the allowlist half of the profile's capture scope. While it is empty every
-/// path is capturable, which is the default and what every profile predating it does. Add one root
-/// and capture narrows to it and its descendants; <see cref="IgnoreCommand"/> still subtracts
-/// within. Removing the last entry widens capture back to everything, so the last
-/// <c>--remove</c> is the one to think about.
+/// <c>kcap allow</c> — the allowlist half of the profile's capture scope. An absent or empty list
+/// admits every path, which is the default. Add one root and capture narrows to it and its
+/// descendants; <see cref="IgnoreCommand"/> still subtracts within. Removing the last entry widens
+/// capture back to everything, so the last <c>--remove</c> is the one to think about.
 /// </summary>
 public sealed class AllowCommand(ConfigRoot root, ProfileContext profiles, UserHome home) {
     internal static readonly ProfilePathList List = new(

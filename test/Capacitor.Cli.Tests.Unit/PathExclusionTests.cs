@@ -232,10 +232,8 @@ public class PathExclusionTests {
     [Test]
     public async Task IsOutsideAllowlist_does_not_admit_sibling_with_shared_prefix() {
         using var tmp    = new TempDir();
-        var       foo    = tmp.PathTo("foo");
-        var       foobar = tmp.PathTo("foobar");
-        Directory.CreateDirectory(foo);
-        Directory.CreateDirectory(foobar);
+        var       foo    = tmp.CreateDir("foo");
+        var       foobar = tmp.CreateDir("foobar");
 
         await Assert.That(PathExclusion.IsOutsideAllowlist(foobar, [foo], Home)).IsTrue();
     }

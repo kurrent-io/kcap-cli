@@ -354,15 +354,11 @@ sealed class CodexHookCommand(
         // DisabledSessions so subsequent Stop / PermissionRequest events
         // take the existing disabled-session fast path at the top of Handle
         // without paying any git cost.
-        var repoScope = await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                              activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos);
-
-        if (repoScope.OutOfScope) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
             var excludedSessionId = TryGetString(node, "session_id");
 
-            // Only a verdict we could actually place is persisted: marking an unresolved one would
-            // turn a transient detection failure into a permanently dropped session.
-            if (excludedSessionId is not null && repoScope.Resolved) DisabledSessions.Mark(excludedSessionId, config);
+            if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);
 
             WriteSessionScopedOutput(Console.Out);
             return 0;

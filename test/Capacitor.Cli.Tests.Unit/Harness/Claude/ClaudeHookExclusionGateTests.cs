@@ -235,37 +235,4 @@ public class ClaudeHookExclusionGateTests {
         await Assert.That(await Hook().IsSessionExcludedAsync(profile, insideBoth, Budget())).IsFalse();
         await Assert.That(await Hook().IsSessionExcludedAsync(profile, rightRepoWrongPath, Budget())).IsTrue();
     }
-
-    // The Resolved half of the verdict is what keeps a transient failure from being persisted as a
-    // DisabledSessions marker, so it is pinned separately from the OutOfScope half.
-    [Test]
-    public async Task UnresolvableRepo_UnderAllowlist_IsOutOfScope_ButNotResolved() {
-        using var tmp = new TempDir();
-
-        var verdict = await RepoExclusion.IsOutOfScopeAsync(
-            new GitProviderRouter(), Config.Root, Body(tmp.Path), ["acme/widgets"], null);
-
-        await Assert.That(verdict.OutOfScope).IsTrue();
-        await Assert.That(verdict.Resolved).IsFalse();
-    }
-
-    [Test]
-    public async Task RejectedRepo_UnderAllowlist_IsOutOfScope_AndResolved() {
-        var verdict = await RepoExclusion.IsOutOfScopeAsync(
-            new GitProviderRouter(), Config.Root, BodyWithRepo("someone", "personal"), ["acme/widgets"], null);
-
-        await Assert.That(verdict.OutOfScope).IsTrue();
-        await Assert.That(verdict.Resolved).IsTrue();
-    }
-
-    [Test]
-    public async Task UnresolvableRepo_WithDenylistOnly_StaysInScope() {
-        using var tmp = new TempDir();
-
-        var verdict = await RepoExclusion.IsOutOfScopeAsync(
-            new GitProviderRouter(), Config.Root, Body(tmp.Path), null, ["acme/widgets"]);
-
-        await Assert.That(verdict.OutOfScope).IsFalse();
-    }
 }
-

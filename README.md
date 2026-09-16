@@ -2034,7 +2034,7 @@ kcap allow --list                   # show all allowed paths
 kcap allow --remove ~/dev           # removing the last entry re-admits everything
 ```
 
-**Gemini and Antigravity are the exception**, because their transcripts record no working directory. `kcap import` cannot place those sessions, so `excluded_paths` and `excluded_repos` never match them — and because an allow list does not admit what it cannot place, setting one skips every Gemini and Antigravity session. Live hooks are unaffected: they read the cwd from the running harness and scope all nine vendors correctly.
+**Gemini and Antigravity are the exception**, because their transcripts record no working directory. `kcap import` cannot place those sessions, so `excluded_paths` and `excluded_repos` never match them — and because an allow list does not admit what it cannot place, setting one skips every Gemini and Antigravity session. Live hooks are unaffected: every harness scopes them from the working directory the running agent reports.
 
 The two lists compose: the allow list decides what is capturable, and `kcap ignore` still subtracts within it. So `kcap allow ~/dev` with `kcap ignore ~/dev/client-x` records everything under `~/dev` except that one subtree.
 

@@ -145,13 +145,9 @@ sealed class PiHookCommand(
         SessionStartInventory.Stamp(forwarded, config, harnesses);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
 
-        var repoScope = await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                              activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos);
-
-        if (repoScope.OutOfScope) {
-            // Only a verdict we could actually place is persisted: marking an unresolved one would
-            // turn a transient detection failure into a permanently dropped session.
-            if (repoScope.Resolved) DisabledSessions.Mark(sessionId, config);
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
+            DisabledSessions.Mark(sessionId, config);
             return 0;
         }
 

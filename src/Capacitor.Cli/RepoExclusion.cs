@@ -11,43 +11,31 @@ namespace Capacitor.Cli;
 /// </summary>
 static class RepoExclusion {
     /// <summary>
-    /// Whether the session's repo is out of the profile's capture scope, and whether that verdict
-    /// rests on a repo we actually identified.
-    /// </summary>
-    /// <param name="OutOfScope">True when the session should not be captured.</param>
-    /// <param name="Resolved">
-    /// False when the repo could not be identified at all. A caller that persists the verdict — a
-    /// <c>DisabledSessions</c> marker, say — must not persist an unresolved one: a one-off git
-    /// failure or an exhausted budget would otherwise cost the whole session rather than the event,
-    /// in a repo that is on the allow list.
-    /// </param>
-    public readonly record struct RepoScopeVerdict(bool OutOfScope, bool Resolved);
-
-    /// <summary>
     /// True when the session's repo should not be captured. The allowlist gates and the denylist
     /// subtracts within it. Resolves the repo once, so configuring both costs one detection.
+    ///
+    /// <para>A repo that cannot be resolved — detection failed, the budget ran out, or the session
+    /// is not in a git repo at all — is outside a configured allowlist. Callers persist that
+    /// verdict like any other: the repo gate runs at session start and later events read the
+    /// marker, so a verdict that is not recorded is a session whose later events go uninspected.
+    /// The cost is that a transient failure drops the session rather than an event, which is the
+    /// direction to fail in when the alternative is uploading what the list excludes.</para>
     /// </summary>
-    public static async Task<RepoScopeVerdict> IsOutOfScopeAsync(
+    public static async Task<bool> IsOutOfScopeAsync(
             GitProviderRouter router, ConfigRoot config, string body,
             string[]? allowedRepos, string[]? excludedRepos, TimeSpan? budget = null) {
         var hasAllowlist = allowedRepos  is { Length: > 0 };
         var hasDenylist  = excludedRepos is { Length: > 0 };
 
-        if (!hasAllowlist && !hasDenylist) return new(false, Resolved: true);
+        if (!hasAllowlist && !hasDenylist) return false;
 
         var key = await ResolveKeyAsync(router, config, body, budget);
 
-        // Nothing to match on — detection failed, the budget ran out, or the session is not in a
-        // repo at all. A denylist keeps capturing; an allowlist has nothing to admit it by, and one
-        // that admitted what it could not identify would not be restricting anything. The
-        // consequence is worth stating: while allowed_repos is set, work outside any repo is never
-        // captured.
-        if (key is null) return new(hasAllowlist, Resolved: false);
+        if (key is null) return hasAllowlist;
 
-        if (hasAllowlist && !allowedRepos!.Contains(key, StringComparer.OrdinalIgnoreCase))
-            return new(true, Resolved: true);
+        if (hasAllowlist && !allowedRepos!.Contains(key, StringComparer.OrdinalIgnoreCase)) return true;
 
-        return new(hasDenylist && excludedRepos!.Contains(key, StringComparer.OrdinalIgnoreCase), Resolved: true);
+        return hasDenylist && excludedRepos!.Contains(key, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
