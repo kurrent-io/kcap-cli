@@ -95,6 +95,22 @@ class IsolationTests(unittest.TestCase):
                 sb.cleanup()
             self.assertFalse(sb.root.exists())
 
+    def test_git_ignores_the_developer_global_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            excludes = Path(d) / "excludes"
+            excludes.write_text(".claude/\n")
+            cfg = Path(d) / "gitconfig"
+            cfg.write_text(f"[core]\n\texcludesFile = {excludes}\n")
+            with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(cfg)}):
+                sb = new_sandbox("HOME", None, [], base=Path(d))
+                try:
+                    rel = ".claude/skills/kcap-probe-abc123"
+                    (sb.repo / rel).mkdir(parents=True)
+                    (sb.repo / rel / "SKILL.md").write_text("x")
+                    self.assertIn("??", assert_untracked_state(sb.repo, rel, "none"))
+                finally:
+                    sb.cleanup()
+
     def test_home_lever_and_passthrough(self):
         with tempfile.TemporaryDirectory() as d:
             with mock.patch.dict(os.environ, {"GH_TOKEN": "t", "OTHER": "o"}):
@@ -126,6 +142,11 @@ class GitExclusionTests(unittest.TestCase):
             self.assertIn("??", out)
             with self.assertRaises(AssertionError):
                 assert_untracked_state(sb.repo, ".claude/skills/kcap-probe-abc123", "gitignore")
+            with self.assertRaises(AssertionError):
+                assert_untracked_state(sb.repo, ".claude/skills/kcap-probe-absent", "none")
+            (sb.repo / ".claude/skills/kcap-probe-empty").mkdir()
+            with self.assertRaises(AssertionError):
+                assert_untracked_state(sb.repo, ".claude/skills/kcap-probe-empty", "none")
 
     def test_gitignore_and_info_exclude(self):
         for exclusion in ("gitignore", "info-exclude"):
@@ -342,6 +363,11 @@ class AdapterTests(unittest.TestCase):
     def test_adapter_defaults(self):
         self.assertIsNone(Adapter.check_auth(FakeAdapter(), None))
         self.assertIsNone(Adapter.install_registration(FakeAdapter(), None, None, None))
+        self.assertIsNone(Adapter.install_startup_hook(FakeAdapter(), None, None))
+        self.assertEqual(Adapter.credential_files, ())
+        self.assertEqual(Adapter.passthrough_env, ())
+        with self.assertRaises(TypeError):
+            Adapter.extra_env["leak"] = "1"
 
 
 import probe  # noqa: E402
@@ -368,6 +394,34 @@ class _CountingAdapter(FakeAdapter):
 class _RaisingAdapter(FakeAdapter):
     def ask(self, sb, mode, prompt):
         raise RuntimeError("vendor exploded")
+
+
+class _NoHookAdapter(FakeAdapter):
+    def install_startup_hook(self, sb, script):
+        return None
+
+
+class _LeakyReaderAdapter(FakeAdapter):
+    """Reads .agents/skills without documenting it."""
+
+    documented_roots = frozenset({".fake/skills"})
+
+
+class _PreIgnoredAdapter(FakeAdapter):
+    """The native root is already ignored, so the none arm cannot prove the path is inside the repo."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def prepare(self, sb):
+        (sb.repo / ".gitignore").write_text(".fake/skills/\n")
+        git(sb.repo, "add", ".gitignore")
+        git(sb.repo, "commit", "-q", "-m", "ignore the skills root")
+
+    def ask(self, sb, mode, prompt):
+        self.calls += 1
+        return super().ask(sb, mode, prompt)
 
 
 class _StderrAdapter(FakeAdapter):
@@ -462,6 +516,33 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(by_root[".claude/skills"], "not_visible")
             self.assertNotIn(".fake/skills", by_root)
             self.assertNotIn(".agents/skills", by_root)
+
+    def test_s4_leaked_root_gets_its_own_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = probe.Runner(_LeakyReaderAdapter(), Path(d) / "out", runs=1, base=Path(d))
+            recs = r.run_scenario("print", "S4")
+            rows = {x.root: x for x in recs if x.arm == "S4/all-roots"}
+            self.assertEqual(rows[".agents/skills"].verdict, "leaked")
+            self.assertEqual(rows[".fake/skills"].verdict, "visible_first_turn")
+            self.assertIn("leaked=['agents']", rows[".agents/skills"].notes)
+            self.assertNotIn(".agents/skills", {x.root for x in recs if x.arm.startswith("S4/confirm-")})
+
+    def test_s1_skips_the_turn_when_the_skill_is_already_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _PreIgnoredAdapter()
+            r = probe.Runner(a, Path(d) / "out", runs=2, base=Path(d))
+            recs = r.run_scenario("print", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested", "untested"])
+            self.assertIn("git state:", recs[0].notes)
+            self.assertEqual(a.calls, 0)
+            self.assertFalse(r.s1_ok["print"])
+
+    def test_s2_without_a_startup_hook_is_untested(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = probe.Runner(_NoHookAdapter(), Path(d) / "out", runs=1, base=Path(d))
+            recs = r.run_scenario("print", "S2", arms=["hook-creates-root"])
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertEqual(recs[0].notes, "no startup hook mechanism for this entry")
 
     def test_s1_gate_blocks_later_scenarios(self):
         with tempfile.TemporaryDirectory() as d:

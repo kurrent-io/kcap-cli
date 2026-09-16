@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 from lib.isolation import Sandbox
 
@@ -31,9 +33,11 @@ class Adapter:
     harness: str = ""
     binary: str = ""
     lever: str = ""
-    credential_files: list[str] = []
-    passthrough_env: list[str] = []
-    extra_env: dict[str, str] = {}
+    # Class-level defaults are shared by every adapter, so they are immutable: a subclass that
+    # appended to a list default would extend it for all of them.
+    credential_files: tuple[str, ...] = ()
+    passthrough_env: tuple[str, ...] = ()
+    extra_env: Mapping[str, str] = MappingProxyType({})
     native_root: str = ""
     documented_roots: frozenset[str] = frozenset()
     flat_skill_layout: bool = False
@@ -60,8 +64,8 @@ class Adapter:
     def check_auth(self, sb: Sandbox) -> bool | None:
         return None
 
-    def install_startup_hook(self, sb: Sandbox, script: Path) -> HookInfo:
-        raise NotImplementedError
+    def install_startup_hook(self, sb: Sandbox, script: Path) -> HookInfo | None:
+        return None
 
     def install_registration(self, sb: Sandbox, skill_file: Path, body: str) -> HookInfo | None:
         return None

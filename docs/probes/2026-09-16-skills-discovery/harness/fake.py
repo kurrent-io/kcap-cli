@@ -16,6 +16,8 @@ class FakeAdapter(Adapter):
     lever = "FAKE_HOME"
     native_root = ".fake/skills"
     documented_roots = frozenset({".fake/skills", ".agents/skills"})
+    # What the fake vendor actually loads, which a subclass keeps while narrowing what it documents.
+    read_roots = (".agents/skills", ".fake/skills")
 
     def __init__(self) -> None:
         self._hook: Path | None = None
@@ -32,7 +34,7 @@ class FakeAdapter(Adapter):
         if self._hook is not None:
             subprocess.run([str(self._hook)], input="{}", capture_output=True, text=True, timeout=10)
         lines = []
-        for root in sorted(self.documented_roots):
+        for root in self.read_roots:
             for skill_md in sorted((sb.repo / root).glob("kcap-probe-*/SKILL.md")):
                 m = TOKEN_RE.search(skill_md.read_text())
                 if m:

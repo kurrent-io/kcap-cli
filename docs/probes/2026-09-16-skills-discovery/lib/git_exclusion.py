@@ -30,6 +30,13 @@ def apply(repo: Path, exclusion: str, rel_dir: str) -> Path | None:
 
 
 def assert_untracked_state(repo: Path, rel_dir: str, exclusion: str) -> str:
+    # An empty status is the pass condition for the excluded arms, and a skill that was never
+    # written produces exactly that: prove the file is there before reading anything into it.
+    target = repo / rel_dir
+    if not target.exists():
+        raise AssertionError(f"{rel_dir} does not exist under {repo}")
+    if not any(p.is_file() for p in target.rglob("*")) and not target.is_file():
+        raise AssertionError(f"{rel_dir} holds no file")
     out = git(repo, "status", "--porcelain", "--untracked-files=all", "--", rel_dir)
     if exclusion == "none":
         if "??" not in out:

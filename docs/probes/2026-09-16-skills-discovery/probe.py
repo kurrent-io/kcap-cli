@@ -79,7 +79,7 @@ class Runner:
 
     def sandbox(self) -> Sandbox:
         a = self.adapter
-        sb = new_sandbox(a.lever, a.real_root(), a.credential_files, a.passthrough_env,
+        sb = new_sandbox(a.lever, a.real_root(), list(a.credential_files), list(a.passthrough_env),
                          dict(a.extra_env), keep=self.keep, base=self.base)
         try:
             a.prepare(sb)
@@ -207,18 +207,18 @@ class Runner:
             write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
             rel = str(a.skill_dir(sb, root, skill.name).relative_to(sb.repo))
             apply_exclusion(sb.repo, exclusion, rel)
-            notes = ""
+            arm = "S1/native" if scenario == "S1" else f"S3/{exclusion}"
             try:
                 assert_untracked_state(sb.repo, rel, exclusion)
             except AssertionError as ex:
-                notes = f"git state: {ex}"
+                # The arm cannot say anything about this exclusion, so it does not spend a turn.
+                return self.record(mode, scenario, arm, root, exclusion, None, "untested",
+                                   {"native": skill.token}, sb=sb, started=started,
+                                   notes=f"git state: {ex}")
             res = self._ask(sb, mode, single_prompt(skill))
             verdict = judge_single(skill.token, parse_reply(res.reply_text, res.raw))
-            if notes:
-                verdict = "untested"
-            arm = "S1/native" if scenario == "S1" else f"S3/{exclusion}"
             return self.record(mode, scenario, arm, root, exclusion, res, verdict,
-                               {"native": skill.token}, sb=sb, started=started, notes=notes)
+                               {"native": skill.token}, sb=sb, started=started)
         finally:
             sb.cleanup()
 
@@ -242,6 +242,10 @@ class Runner:
             else:
                 script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
                 info = a.install_startup_hook(sb, script)
+                if info is None:
+                    return self.record(mode, "S2", f"S2/{arm}", root, "none", None, "untested", {},
+                                       sb=sb, notes="no startup hook mechanism for this entry",
+                                       started=started)
                 reload_used = False
             res = self._ask(sb, mode, single_prompt(skill))
             verdict = judge_single(skill.token, parse_reply(res.reply_text, res.raw), reload_used=reload_used)
@@ -368,8 +372,8 @@ class Runner:
 
 
 def free_phase(adapter: Adapter, outdir: Path, mode: str, base: Path | None) -> dict:
-    sb = new_sandbox(adapter.lever, adapter.real_root(), adapter.credential_files, adapter.passthrough_env,
-                     dict(adapter.extra_env), base=base)
+    sb = new_sandbox(adapter.lever, adapter.real_root(), list(adapter.credential_files),
+                     list(adapter.passthrough_env), dict(adapter.extra_env), base=base)
     try:
         adapter.prepare(sb)
         info = {

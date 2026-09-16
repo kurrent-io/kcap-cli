@@ -8,11 +8,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ENV_ALLOWLIST = ("PATH", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "SHELL", "USER", "LOGNAME")
+GIT_ENV_ALLOWLIST = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME")
+
+
+def git_env() -> dict[str, str]:
+    """The sandbox's own Git environment: a developer's global core.excludesFile would otherwise
+    hide the probe skill from `git status` and turn a real exclusion result into a false one."""
+    env = {k: os.environ[k] for k in GIT_ENV_ALLOWLIST if k in os.environ}
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
 
 
 def git(repo: Path, *args: str, env: dict | None = None) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env,
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
+        env=env if env is not None else git_env(),
     ).stdout
 
 
