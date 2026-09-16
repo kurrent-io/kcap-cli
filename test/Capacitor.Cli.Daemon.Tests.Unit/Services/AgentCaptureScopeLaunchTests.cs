@@ -202,4 +202,85 @@ public class AgentCaptureScopeLaunchTests {
             .Contains("out_of_capture_scope");
         await Assert.That(factory.LastContext).IsNull();
     }
+
+    // Tony's case on #977: a borrow may sit BELOW its repository root. Judging the root would
+    // find /work/repo unexcluded and run the reviewer inside /work/repo/private anyway, so the
+    // path lists have to see the directory the runtime actually uses.
+    [Test]
+    public async Task A_borrow_in_an_excluded_subdirectory_is_refused_though_its_repo_root_is_not() {
+        using var cwd = GitRepo.CreateWithCommit();
+
+        var privateDir = cwd.CreateDir("private");
+        var server     = new CaptureServerConnection();
+        var factory    = new SpyHostedAgentRuntimeFactory("cursor") {
+            SupportsUnattended                        = true,
+            SupportsBorrowedReviewFlow                = true,
+            BorrowedReviewRequiresIndependentSnapshot = true
+        };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [factory],
+            // The repository root is admitted; only the subdirectory is excluded.
+            configure: c => File.WriteAllText(c.ConfigRoot.Path("config.json"), $$"""
+                {
+                  "version": 2,
+                  "active_profile": "default",
+                  "profiles": { "default": { "excluded_paths": ["{{privateDir.Path.Replace("\\", "/")}}"] } },
+                  "profile_bindings": {}
+                }
+                """));
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            "borrow-sub", "review", "default", null, cwd, null, null,
+            Vendor: "cursor", Kind: LaunchKind.ReviewFlow, Borrowed: true, BorrowCwd: privateDir.Path));
+
+        await Assert.That(server.LaunchFailedCalls.Single(c => c.AgentId == "borrow-sub").Reason)
+            .Contains("out_of_capture_scope");
+        await Assert.That(factory.LastContext).IsNull();
+    }
+
+    // A config that cannot be read is not evidence that nothing is scoped — LoadProfileConfig
+    // answers a broken one with an empty profile, which would otherwise open the gate on exactly
+    // the checkout an existing list was excluding.
+    [Test]
+    public async Task An_unreadable_config_refuses_rather_than_admitting_the_launch() {
+        using var repoPath = GitRepo.CreateWithCommit();
+
+        var server = new CaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("codex"),
+            allowedRepoPath: repoPath,
+            configure: c => File.WriteAllText(c.ConfigRoot.Path("config.json"), "{ not json at all"));
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "broken-1", Prompt: "review", Model: "default", Effort: null,
+            RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "codex",
+            Kind: LaunchKind.ReviewFlow));
+
+        await Assert.That(server.LaunchFailedCalls.Single(c => c.AgentId == "broken-1").Reason)
+            .Contains("could not be read");
+    }
+
+    // The counterpart: no config file at all is a real answer, not a failed read, so the default
+    // install is not refused.
+    [Test]
+    public async Task A_missing_config_is_not_treated_as_an_unreadable_one() {
+        using var repoPath = GitRepo.CreateWithCommit();
+
+        var server = new CaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("codex"),
+            allowedRepoPath: repoPath);
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "nocfg-1", Prompt: "review", Model: "default", Effort: null,
+            RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "codex",
+            Kind: LaunchKind.ReviewFlow));
+
+        await Assert.That(server.LaunchFailedCalls.Where(c => c.AgentId == "nocfg-1")
+            .Any(c => c.Reason.Contains("out_of_capture_scope"))).IsFalse();
+    }
 }

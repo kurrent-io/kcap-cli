@@ -24,6 +24,15 @@ internal static class AgentCaptureScope {
         "out_of_capture_scope: this checkout is outside the profile's capture scope";
 
     /// <summary>
+    /// Sent when the profile's capture scope cannot be read at all. Distinct from
+    /// <see cref="RefusalReason"/> because the cause is a broken config rather than a checkout the
+    /// lists exclude, and whoever sees the flow fail can act on only one of those. Shares the
+    /// prefix so anything keyed on it treats both as the same refusal.
+    /// </summary>
+    internal const string UnreadableReason =
+        "out_of_capture_scope: the profile's capture scope could not be read, so the launch is not reported";
+
+    /// <summary>
     /// Whether the profile scopes anything at all. Checked before <see cref="IsOutOfScope"/> so a
     /// profile with no lists — the default — costs nothing on the launch path and never resolves a
     /// home directory or a repository it has no use for.

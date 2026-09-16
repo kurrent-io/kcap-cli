@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Acp;
@@ -2174,12 +2175,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
                 }
 
-                // The canonical path is the one that will actually be run, and it is only known
-                // here: a symlink retargeted between the request and this resolution would
-                // otherwise hand the runtime a checkout no list was ever compared against. Before
-                // the snapshot, so a refusal never copies a checkout it is about to discard.
+                // The canonical cwd is the one that will actually be run — a borrow may sit below
+                // its repository root, and judging the root would miss a list entry naming the
+                // subdirectory itself. It is only known here, too: a symlink retargeted between the
+                // request and this resolution would otherwise hand the runtime a checkout no list
+                // was compared against. Before the snapshot, so a refusal copies nothing.
+                // The repo key still resolves from here, since it walks up to the root.
                 if ((isReview || isReviewFlow)
-                 && await RefuseOutOfCaptureScopeAsync(agentId, auth.CanonicalGitRoot ?? auth.CanonicalCwd)
+                 && await RefuseOutOfCaptureScopeAsync(agentId, auth.CanonicalCwd)
                         is { } borrowScopeRefusal) {
                     return borrowScopeRefusal;
                 }
@@ -5378,13 +5381,27 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Refusing unattended agent {AgentId}: {Origin} is outside the profile's capture scope")]
     partial void LogLaunchOutOfCaptureScope(string agentId, string origin);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refusing unattended agent {AgentId}: the profile's capture scope could not be read")]
+    partial void LogLaunchCaptureScopeUnreadable(string agentId);
+
     /// <summary>
     /// The refusal for an unattended launch whose originating checkout falls outside the profile's
     /// capture scope, or null to proceed. Only the daemon's own log names the checkout; what
     /// reaches the server does not.
     /// </summary>
     async Task<CommandOutcome?> RefuseOutOfCaptureScopeAsync(string agentId, string? origin) {
-        var profile = await CurrentCaptureProfileAsync();
+        var (profile, readable) = await CurrentCaptureProfileAsync();
+
+        // A config that could not be read is not evidence that nothing is scoped. Proceeding on
+        // an empty profile here would let a transient read error open the gate on exactly the
+        // checkout an existing list was excluding.
+        if (!readable) {
+            LogLaunchCaptureScopeUnreadable(agentId);
+            await _server.LaunchFailedAsync(agentId, AgentCaptureScope.UnreadableReason);
+
+            return new CommandOutcome(
+                CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
 
         if (!AgentCaptureScope.Configured(profile)) return null;
         if (!AgentCaptureScope.IsOutOfScope(origin, profile, _config.Home)) return null;
@@ -5406,14 +5423,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para>A read that fails falls back to the boot resolution, which still restricts. Treating
     /// it as "no lists" would turn a transient disk error into an open gate.</para>
     /// </summary>
-    async Task<Profile?> CurrentCaptureProfileAsync() {
-        try {
-            var snapshot = await AppConfig.LoadProfileConfig(_config.ConfigRoot);
+    async Task<(Profile? Profile, bool Readable)> CurrentCaptureProfileAsync() {
+        var path = AppConfig.GetConfigPath(_config.ConfigRoot);
 
-            return snapshot.Profiles.GetValueOrDefault(_config.Profiles.Name) ?? _config.Profiles.Effective;
+        // No config file at all is a real answer rather than a failure: nothing is configured,
+        // so nothing is scoped, which is the default every install starts in.
+        if (!File.Exists(path)) return (null, true);
+
+        try {
+            // Proven readable before the result is trusted. LoadProfileConfig answers an
+            // unreadable or invalid config with ProfileConfig.Fresh() rather than an error, and
+            // Fresh() carries a default profile with empty lists — which for a privacy gate is
+            // indistinguishable from a profile that genuinely scopes nothing.
+            using var _ = JsonDocument.Parse(await File.ReadAllTextAsync(path));
         } catch {
-            return _config.Profiles.Effective;
+            return (null, false);
         }
+
+        var snapshot = await AppConfig.LoadProfileConfig(_config.ConfigRoot);
+
+        return (snapshot.Profiles.GetValueOrDefault(_config.Profiles.Name) ?? _config.Profiles.Effective, true);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Vendor '{Vendor}' cannot apply a requested model; launching with its default and reporting no model instead of '{RequestedModel}', so the dashboard and analytics are not told a model is live that isn't.")]
