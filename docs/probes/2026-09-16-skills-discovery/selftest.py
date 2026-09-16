@@ -195,5 +195,48 @@ class VerdictTests(unittest.TestCase):
             self.assertEqual(combine([v]), (v, False))
 
 
+import json  # noqa: E402
+
+from lib.recorder import RunRecord, emit_matrix, load_runs, os_label, run_dir, write_run  # noqa: E402
+
+
+def _rec(**over):
+    base = dict(
+        entry="fake", harness="fake", binary="/bin/fake", version="1.0", os=os_label(), mode="print",
+        argv=["fake", "-p"], isolation_lever="FAKE_HOME", credential_files=[], auth_ok=True,
+        scenario="S1", arm="S1/native", root=".fake/skills", exclusion="none",
+        hook=None, first_request_at=1.0, reply="tok", tokens_found=["a" * 12], skill_named=True,
+        stderr_path=None, verdict="visible_first_turn", duration_ms=10, expected_tokens={"native": "a" * 12},
+    )
+    base.update(over)
+    return RunRecord(**base)
+
+
+class RecorderTests(unittest.TestCase):
+    def test_write_load_emit(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            p1 = write_run(out, _rec())
+            p2 = write_run(out, _rec(verdict="not_visible"))
+            self.assertEqual(p1.name, "run1.json")
+            self.assertEqual(p2.name, "run2.json")
+            self.assertEqual(p1.parent, run_dir(out, "fake", "print", "S1", "S1/native"))
+            write_run(out, _rec(verdict="visible_first_turn"))
+            write_run(out, _rec(version="0.9", verdict="not_visible", arm="S0/none", scenario="S0"))
+            self.assertEqual(len(load_runs(out)), 4)
+            rows = emit_matrix(out, Path(d) / "matrix.json")
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row["verdict"], "visible_first_turn")
+            self.assertTrue(row["flaky"])
+            self.assertEqual(row["runs"], 3)
+            self.assertEqual(row["version"], "1.0")
+            self.assertTrue(all(e.startswith("out/") for e in row["evidence"]))
+            self.assertEqual(json.loads((Path(d) / "matrix.json").read_text())[0]["entry"], "fake")
+
+    def test_os_label(self):
+        self.assertRegex(os_label(), r"^\S+ \S+ \S+$")
+
+
 if __name__ == "__main__":
     unittest.main()
