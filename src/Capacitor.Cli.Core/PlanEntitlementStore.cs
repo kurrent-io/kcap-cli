@@ -36,12 +36,17 @@ public static class PlanEntitlementStore {
 
     // Per-process memo, so a long-lived process making many requests doesn't rewrite the same file on
     // every response — bounded by RefreshAfter so suppression can never outlive the freshness horizon.
+    //
+    // It records what we wrote, which is NOT the same as what the file holds: the cache is shared by
+    // independent kcap processes, so a peer can overwrite it between our writes. Suppression therefore
+    // re-reads before trusting the memo (see ShouldSkip) — a small read on the hot path in place of a
+    // write, and the only thing that makes the memo safe across processes.
     static readonly ConcurrentDictionary<string, (string Rendered, DateTimeOffset At)> WrittenThisProcess = new();
 
     /// <summary>
     /// Records the entitlements observed for <paramref name="serverUrl"/> from a raw
-    /// <c>X-Kcap-Plan</c> value. No-op for a blank URL, or when the same answer was already written
-    /// this process. Never throws.
+    /// <c>X-Kcap-Plan</c> value. No-op for a blank URL, or when the cache already holds this answer
+    /// and was refreshed within <see cref="RefreshAfter"/>. Never throws.
     /// </summary>
     public static void Set(string? serverUrl, string? headerValue, ConfigRoot config, DateTimeOffset? now = null) {
         if (string.IsNullOrWhiteSpace(serverUrl)) return;
@@ -54,9 +59,14 @@ public static class PlanEntitlementStore {
         var path     = PathFor(key, config);
         var at       = now ?? DateTimeOffset.UtcNow;
 
-        if (WrittenThisProcess.TryGetValue(path, out var prev)
-                && prev.Rendered == rendered
-                && at - prev.At < RefreshAfter) return;
+        if (ShouldSkip(path, rendered, at)) return;
+
+        // A temp name unique to this write. A shared one lets a peer's bytes be moved into place by
+        // US: both processes write the same temp path, whoever moves first publishes whichever copy
+        // landed there last, and the loser's move then fails against a file that is already gone. The
+        // publisher would go on to memo a value the cache does not hold, and suppress the corrections
+        // that would have fixed it.
+        var tempPath = $"{path}.{Environment.ProcessId:x}.{Guid.NewGuid():N}.tmp";
 
         try {
             var obj = new JsonObject {
@@ -65,14 +75,34 @@ public static class PlanEntitlementStore {
                 ["seen_at"] = at,
             };
 
-            var tempPath = $"{path}.tmp";
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
             File.WriteAllText(tempPath, obj.ToJsonString());
+            // Atomic publish. Last writer wins, which is the semantics we want: the newest observation
+            // of a tenant's plan is the right one, whichever process made it.
             File.Move(tempPath, path, overwrite: true);
 
             WrittenThisProcess[path] = (rendered, at);
         } catch {
             // Best-effort — a cache write must never break the request it rides on.
+            try { File.Delete(tempPath); } catch { /* nothing to clean up, or not ours to */ }
+        }
+    }
+
+    /// <summary>
+    /// Whether this write can be skipped: we wrote the same answer recently AND the file still holds
+    /// it. The second half is what survives a peer process — a memo alone would let us suppress our
+    /// own correction while the cache carried someone else's newer, or stale, answer.
+    /// </summary>
+    static bool ShouldSkip(string path, string rendered, DateTimeOffset at) {
+        if (!WrittenThisProcess.TryGetValue(path, out var prev)) return false;
+        if (prev.Rendered != rendered || at - prev.At >= RefreshAfter) return false;
+
+        try {
+            var node = JsonNode.Parse(File.ReadAllText(path));
+            return node?["plan"]?.GetValue<string>() == rendered;
+        } catch {
+            // Missing, unreadable or corrupt — rewriting is both cheap and the repair.
+            return false;
         }
     }
 

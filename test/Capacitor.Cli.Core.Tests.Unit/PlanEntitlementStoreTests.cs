@@ -113,6 +113,47 @@ public class PlanEntitlementStoreTests {
     }
 
     [Test]
+    public async Task APeerOverwritingTheFile_IsCorrectedRatherThanSuppressed() {
+        // The cache is shared by independent kcap processes. Our memo records what WE wrote, so it
+        // must not be trusted on its own: a peer that published a different answer has to be corrected
+        // by our next observation, not suppressed by it for RefreshAfter.
+        var url = Url("peer");
+        var t0  = DateTimeOffset.UtcNow;
+        PlanEntitlementStore.Set(url, "work_items=0", Config.Root, now: t0);
+
+        // Stand in for the peer process publishing an allowance.
+        var file = Directory.EnumerateFiles(Config.Directory, "plan-entitlements-*.json").Single();
+        await File.WriteAllTextAsync(file,
+            $$"""{"url":"x","plan":"","seen_at":"{{t0:o}}"}""");
+
+        PlanEntitlementStore.Set(url, "work_items=0", Config.Root, now: t0 + TimeSpan.FromSeconds(1));
+
+        await Assert.That(PlanEntitlementStore.Get(url, Config.Root).Allows(PlanFeature.WorkItems)).IsFalse();
+    }
+
+    [Test]
+    public async Task ConcurrentWriters_LeaveAWholeFileAndNoTempFiles() {
+        // Each write publishes through its OWN temp name, so no writer can move a peer's bytes into
+        // place. Whichever lands last wins; what must never happen is a torn or absent file.
+        var url = Url("concurrent");
+        var now = DateTimeOffset.UtcNow;
+
+        await Parallel.ForEachAsync(Enumerable.Range(0, 64), async (i, _) => {
+            // Distinct values and timestamps so nothing is deduped away.
+            PlanEntitlementStore.Set(url, i % 2 == 0 ? "work_items=0" : "work_items=1",
+                                     Config.Root, now: now + TimeSpan.FromHours(i));
+            await Task.Yield();
+        });
+
+        var file = Directory.EnumerateFiles(Config.Directory, "plan-entitlements-*.json").Single();
+        var plan = PlanEntitlements.Parse(
+            System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(file))?["plan"]?.GetValue<string>());
+
+        await Assert.That(plan.Denied.Count).IsLessThanOrEqualTo(1);
+        await Assert.That(Directory.EnumerateFiles(Config.Directory, "*.tmp")).IsEmpty();
+    }
+
+    [Test]
     public async Task Get_ACorruptFile_AllowsEverything() {
         var url = Url("corrupt");
         PlanEntitlementStore.Set(url, "work_items=0", Config.Root);
