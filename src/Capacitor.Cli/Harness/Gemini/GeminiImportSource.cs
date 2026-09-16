@@ -450,7 +450,9 @@ internal sealed class GeminiImportSource : IImportSource {
         var             scanned   = 0;
 
         try {
-            foreach (var line in File.ReadLines(path)) {
+            // Shared, because this scan runs while Gemini may still own the file: File.ReadLines
+            // opens FileShare.Read, which on Windows denies the agent its own append.
+            foreach (var line in File.ReadLinesShared(path)) {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 if (scanned == 0) {
