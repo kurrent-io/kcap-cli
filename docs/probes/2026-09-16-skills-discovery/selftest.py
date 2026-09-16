@@ -1137,6 +1137,34 @@ class CursorAdapterTests(unittest.TestCase):
             self.assertEqual(hooks.read_text(), original)
 
 
+class KiroAdapterTests(unittest.TestCase):
+    def test_acp_read_of_the_listed_file_is_the_native_load(self):
+        from harness.kiro import classify_kiro_tools
+        def upd(**u):
+            return {"frame": {"method": "session/update", "params": {"update": u}}}
+        frames = [
+            upd(sessionUpdate="tool_call", toolCallId="a", kind="read", title="Reading SKILL.md:1",
+                locations=[{"path": "/r/.kiro/skills/x/SKILL.md"}]),
+            upd(sessionUpdate="tool_call_update", toolCallId="a", status="completed"),
+            upd(sessionUpdate="tool_call", toolCallId="b", kind="execute", title="find / -name SKILL.md"),
+        ]
+        self.assertEqual(classify_kiro_tools(json.dumps(frames)), "tools_used=1 skill_reads=1 searches=1")
+
+    def test_version_picks_the_hook_generation(self):
+        from harness.kiro import KiroAdapter
+        with tempfile.TemporaryDirectory() as d:
+            a = KiroAdapter()
+            a.version = lambda env=None: "kiro-cli 2.21.4"
+            sb = new_sandbox(a.lever, None, [], base=Path(d))
+            info = a.install_startup_hook(sb, sb.config_root / "probe-hook.sh")
+            self.assertIn("agentSpawn", info.mechanism)
+            self.assertEqual(json.loads((sb.config_root / "settings" / "cli.json").read_text())["chat.defaultAgent"], "probe")
+            a.version = lambda env=None: "kiro-cli 3.0.1"
+            info = a.install_startup_hook(sb, sb.config_root / "probe-hook.sh")
+            self.assertIn("SessionStart", info.mechanism)
+            self.assertEqual(json.loads(Path(info.config_path).read_text())["hooks"][0]["trigger"], "SessionStart")
+
+
 class PiAdapterTests(unittest.TestCase):
     def test_registration_extension_names_the_root(self):
         from harness.pi import PiAdapter

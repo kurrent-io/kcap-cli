@@ -75,10 +75,47 @@ class KiroAdapter(Adapter):
         binary = self.binary_path() or self.binary
         agent = ["--agent", self.agent_name] if self.agent_name else []
         if mode == "daemon":
-            return acp_ask([binary, "acp", "--trust-all-tools", *agent], sb.repo, sb.env, prompt,
-                           sb.root / "kiro-acp.stderr.log", self.turn_timeout)
+            res = acp_ask([binary, "acp", "--trust-all-tools", *agent], sb.repo, sb.env, prompt,
+                          sb.root / "kiro-acp.stderr.log", self.turn_timeout)
+            generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
+            res.notes = (generic + " " + classify_kiro_tools(res.raw)).strip()
+            return res
         argv = [binary, "chat", "--no-interactive", "--trust-all-tools", *agent, prompt]
-        return print_ask(argv, sb.repo, sb.env, sb.root / "kiro.stderr.log", self.turn_timeout)
+        res = print_ask(argv, sb.repo, sb.env, sb.root / "kiro.stderr.log", self.turn_timeout)
+        # Plain chat output carries the answer only, so tool use is unobservable in this mode.
+        res.notes = (res.notes + " tools=unobserved").strip()
+        return res
+
+
+def classify_kiro_tools(raw: str) -> str:
+    """Kiro lists a skill with its path and the model reads that file, so a read whose location
+    is a SKILL.md path is the native mechanism; a shell or search tool makes a sighting
+    inconclusive."""
+    calls: dict[str, dict] = {}
+    try:
+        frames = json.loads(raw)
+    except json.JSONDecodeError:
+        frames = []
+    for f in frames:
+        fr = f.get("frame") or {}
+        if fr.get("method") != "session/update":
+            continue
+        upd = (fr.get("params") or {}).get("update") or {}
+        if not upd.get("sessionUpdate", "").startswith("tool_call"):
+            continue
+        call = calls.setdefault(upd.get("toolCallId") or "", {"kind": "", "paths": []})
+        if upd.get("kind"):
+            call["kind"] = upd["kind"]
+        call["paths"] += [loc.get("path", "") for loc in upd.get("locations") or [] if isinstance(loc, dict)]
+    skill_reads = searches = other = 0
+    for call in calls.values():
+        if call["kind"] == "read" and any(p.endswith("SKILL.md") for p in call["paths"]):
+            skill_reads += 1
+        elif call["kind"] in ("execute", "search", "fetch"):
+            searches += 1
+        else:
+            other += 1
+    return f"tools_used={searches + other} skill_reads={skill_reads} searches={searches}"
 
 
 class KiroAgentBareAdapter(KiroAdapter):
