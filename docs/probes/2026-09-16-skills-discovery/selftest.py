@@ -1107,6 +1107,19 @@ class CursorAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(classify_cursor_tools(json.dumps(frames)), "tools_used=1 skill_reads=1 searches=1")
 
+    def test_print_stream_read_of_the_listed_file_is_the_native_load(self):
+        from harness.cursor import classify_cursor_stream
+        lines = [
+            json.dumps({"type": "tool_call", "subtype": "started", "call_id": "a",
+                        "tool_call": {"readToolCall": {"args": {"path": "/r/.cursor/skills/x/SKILL.md"}}}}),
+            json.dumps({"type": "tool_call", "subtype": "completed", "call_id": "a",
+                        "tool_call": {"readToolCall": {"args": {"path": "/r/.cursor/skills/x/SKILL.md"}}}}),
+            json.dumps({"type": "tool_call", "subtype": "started", "call_id": "b",
+                        "tool_call": {"shellToolCall": {"args": {"command": "find / -name SKILL.md"}}}}),
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}),
+        ]
+        self.assertEqual(classify_cursor_stream("\n".join(lines)), "tools_used=1 skill_reads=1 searches=1")
+
     def test_user_hooks_variant_restores_the_real_file(self):
         from harness.cursor import CursorUserHooksAdapter
         with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"HOME": d}):

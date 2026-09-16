@@ -81,19 +81,20 @@ class CursorAdapter(Adapter):
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if obj.get("type") == "result" and isinstance(obj.get("result"), str):
-                    texts.append(obj["result"])
-                elif obj.get("type") == "assistant":
-                    msg = obj.get("message") or {}
-                    for part in msg.get("content") or []:
+                if obj.get("type") == "assistant":
+                    for part in (obj.get("message") or {}).get("content") or []:
                         if isinstance(part, dict) and isinstance(part.get("text"), str):
                             texts.append(part["text"])
+                elif obj.get("type") == "result" and isinstance(obj.get("result"), str):
+                    texts.append(obj["result"])
             return "\n".join(texts)
 
-        argv = [binary, "-p", "--output-format", "json", "--trust", "--force", prompt]
+        # Print mode ends every tool-using turn with "WritableIterable is closed" and exit 1; the
+        # json and text formats then print nothing, while stream-json has already streamed the
+        # answer, so the answer is read from the stream and the exit code is recorded beside it.
+        argv = [binary, "-p", "--output-format", "stream-json", "--trust", "--force", prompt]
         res = print_ask(argv, sb.repo, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
-        # The json output format carries the final result only, so tool use is not observable here.
-        res.notes = (res.notes + " tools=unobserved").strip()
+        res.notes = (res.notes + " " + classify_cursor_stream(res.raw)).strip()
         return res
 
 
@@ -148,6 +149,27 @@ class CursorUserHooksAdapter(CursorAdapter):
             return super().ask(sb, mode, prompt)
         finally:
             self.cleanup_hook(sb)
+
+
+def classify_cursor_stream(raw: str) -> str:
+    """The stream-json events of print mode: a tool_call whose input names a SKILL.md path is the
+    native load; any shell or search tool call makes a sighting inconclusive."""
+    skill_reads = searches = other = 0
+    for line in raw.splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") != "tool_call" or obj.get("subtype") not in (None, "started"):
+            continue
+        call = json.dumps(obj.get("tool_call") or obj)
+        if "SKILL.md" in call and ("read" in call.lower()):
+            skill_reads += 1
+        elif any(k in call for k in ("shellToolCall", "grep", "glob", "find", "ls")):
+            searches += 1
+        else:
+            other += 1
+    return f"tools_used={searches + other} skill_reads={skill_reads} searches={searches}"
 
 
 def classify_cursor_tools(raw: str) -> str:
