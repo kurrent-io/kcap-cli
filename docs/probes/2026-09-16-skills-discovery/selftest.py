@@ -158,5 +158,42 @@ class GitExclusionTests(unittest.TestCase):
             self.assertIn(EXCLUSIONS[2], "info-exclude")
 
 
+from lib.probe_skill import Reply  # noqa: E402
+from lib.verdict import (  # noqa: E402
+    VERDICTS, PromptDesignFailure, combine, judge_control, judge_root, judge_single, needs_third_run,
+)
+
+
+class VerdictTests(unittest.TestCase):
+    def test_judge_single(self):
+        found = Reply(frozenset({"a" * 12}), True, False)
+        self.assertEqual(judge_single("a" * 12, found), "visible_first_turn")
+        self.assertEqual(judge_single("a" * 12, found, reload_used=True), "visible_after_reload")
+        self.assertEqual(judge_single("b" * 12, Reply(frozenset(), True, False)), "catalogue_only")
+        self.assertEqual(judge_single("b" * 12, Reply(frozenset(), False, True)), "not_visible")
+
+    def test_judge_control(self):
+        self.assertEqual(judge_control(Reply(frozenset(), False, True)), "not_visible")
+        with self.assertRaises(PromptDesignFailure):
+            judge_control(Reply(frozenset({"c" * 12}), False, False))
+
+    def test_judge_root(self):
+        r = Reply(frozenset({"d" * 12}), True, False)
+        self.assertEqual(judge_root("d" * 12, True, r), "visible_first_turn")
+        self.assertEqual(judge_root("d" * 12, False, r), "leaked")
+        self.assertEqual(judge_root("e" * 12, True, r), "not_visible")
+
+    def test_combine(self):
+        self.assertEqual(combine([]), ("untested", False))
+        self.assertEqual(combine(["visible_first_turn", "visible_first_turn"]), ("visible_first_turn", False))
+        self.assertEqual(combine(["visible_first_turn", "not_visible", "visible_first_turn"]),
+                         ("visible_first_turn", True))
+        self.assertTrue(needs_third_run(["visible_first_turn", "not_visible"]))
+        self.assertFalse(needs_third_run(["not_visible", "not_visible"]))
+        self.assertFalse(needs_third_run(["not_visible"]))
+        for v in VERDICTS:
+            self.assertEqual(combine([v]), (v, False))
+
+
 if __name__ == "__main__":
     unittest.main()
