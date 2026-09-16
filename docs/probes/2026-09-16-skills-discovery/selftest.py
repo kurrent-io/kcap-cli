@@ -469,6 +469,16 @@ class _RaisingStderrAdapter(FakeAdapter):
         raise RuntimeError("vendor exploded")
 
 
+class _FailingVendorAdapter(FakeAdapter):
+    """The vendor exited non-zero without answering; its stderr carries the reason."""
+
+    def ask(self, sb, mode, prompt):
+        log = sb.root / "fake.stderr.log"
+        log.write_text("IneligibleTierError: this client is no longer supported\n")
+        return AskResult(reply_text="", raw="", argv=["fake"], started_at=0.0, first_request_at=0.0,
+                         stderr_path=str(log), exit_code=41)
+
+
 class _OddLogNameAdapter(FakeAdapter):
     """A driver that names its stderr file outside the *.stderr.log pattern."""
 
@@ -677,6 +687,15 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(copied.read_text(), "boom\n")
             self.assertEqual(recs[0].stderr_path, str(copied))
             self.assertEqual([p.name for p in Path(d).iterdir() if p.name.startswith("skprobe-")], [])
+
+    def test_failed_vendor_run_is_untested_with_its_stderr(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            recs = probe.Runner(_FailingVendorAdapter(), out, runs=1, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual(recs[0].verdict, "untested")
+            self.assertIn("vendor exit 41", recs[0].notes)
+            self.assertIn("IneligibleTierError", recs[0].notes)
+            self.assertTrue(Path(recs[0].stderr_path).exists())
 
     def test_odd_log_name_is_still_kept(self):
         with tempfile.TemporaryDirectory() as d:

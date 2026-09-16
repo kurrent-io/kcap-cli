@@ -73,7 +73,11 @@ def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: P
         rpc = _Rpc(child)
         init = {"clientInfo": {"name": "kcap-probe", "version": "1"}, "capabilities": {}}
         rpc.request("initialize", init, 60)
-        hooks = (rpc.request("hooks/list", {}, 60).get("result") or {}).get("hooks") or []
+        listed = rpc.request("hooks/list", {}, 60).get("result") or {}
+        # The app-server groups hooks per cwd under `data`; a flat `hooks` list is kept for safety.
+        hooks = list(listed.get("hooks") or [])
+        for group in listed.get("data") or []:
+            hooks += list(group.get("hooks") or [])
         override = hook_state_override(hooks)
         if override:
             child.stop()

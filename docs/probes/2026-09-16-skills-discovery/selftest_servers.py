@@ -68,7 +68,9 @@ def appserver() -> None:
         if m == "initialize":
             send({"jsonrpc": "2.0", "id": i, "result": {}})
         elif m == "hooks/list":
-            send({"jsonrpc": "2.0", "id": i, "result": {"hooks": hooks_list()}})
+            # The real app-server groups hooks per working directory under `data`.
+            send({"jsonrpc": "2.0", "id": i, "result": {"data": [
+                {"cwd": str(Path.cwd()), "hooks": hooks_list(), "warnings": [], "errors": []}]}})
         elif m == "thread/start":
             send({"jsonrpc": "2.0", "id": i, "result": {"thread": {"id": "t1"}, "model": "fake"}})
         elif m == "turn/start":

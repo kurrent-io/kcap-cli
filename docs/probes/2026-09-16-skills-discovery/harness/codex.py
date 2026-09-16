@@ -16,7 +16,7 @@ class CodexAdapter(Adapter):
     lever = "CODEX_HOME"
     credential_files = ("auth.json",)
     native_root = ".agents/skills"
-    documented_roots = frozenset({".agents/skills"})
+    documented_roots = frozenset({".agents/skills", ".codex/skills"})
 
     def real_root(self) -> Path | None:
         return Path.home() / ".codex"
