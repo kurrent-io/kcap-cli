@@ -466,5 +466,41 @@ class AcpDriverTests(unittest.TestCase):
             self.assertEqual(res.argv[-1], "acp")
 
 
+from lib.appserver_driver import appserver_ask  # noqa: E402
+from lib.pirpc_driver import pirpc_ask  # noqa: E402
+from lib.jsonl_child import JsonlChild  # noqa: E402
+
+
+class JsonlDriversTests(unittest.TestCase):
+    def test_jsonl_child_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = JsonlChild([sys.executable, str(SERVERS), "pirpc"], Path(d), dict(os.environ), Path(d) / "c.stderr.log")
+            c.start()
+            c.send({"id": "1", "type": "prompt", "message": "x", "streamingBehavior": "followUp"})
+            first = c.recv(10)
+            self.assertEqual(first["type"], "response")
+            c.close_stdin()
+            c.stop()
+            self.assertGreaterEqual(len(c.frames), 2)
+
+    def test_appserver_turn(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            res = appserver_ask(str(SERVERS), repo, dict(os.environ), single_prompt(skill),
+                                Path(d) / "as.stderr.log", timeout=30)
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertIn("hook_trust=none", res.notes)
+            self.assertEqual(res.argv[:2], [str(SERVERS), "app-server"])
+
+    def test_pirpc_turn(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            res = pirpc_ask([sys.executable, str(SERVERS), "pirpc"], repo, dict(os.environ), single_prompt(skill),
+                            Path(d) / "pi.stderr.log", timeout=30)
+            self.assertIn(skill.body_token, res.reply_text)
+
+
 if __name__ == "__main__":
     unittest.main()
