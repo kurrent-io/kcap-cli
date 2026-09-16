@@ -99,7 +99,9 @@ internal sealed class ClaudeImportSource(
             ctx.ExcludedRepos?.ToArray(),
             ct,
             vendor: Vendor,
-            excludedPaths: ctx.ExcludedPaths?.ToArray()
+            excludedPaths: ctx.ExcludedPaths?.ToArray(),
+            allowedPaths: ctx.AllowedPaths?.ToArray(),
+            allowedRepos: ctx.AllowedRepos?.ToArray()
         );
     }
 

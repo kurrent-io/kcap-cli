@@ -155,8 +155,19 @@ public sealed class ProfileCommand(ConfigRoot config, ICapacitorHttpClient http)
                 await Console.Out.WriteLineAsync($"    - {r}");
         }
 
+        if (profile.AllowedRepos is { Length: > 0 }) {
+            await Console.Out.WriteLineAsync($"  allowed_repos: {string.Join(", ", profile.AllowedRepos)}");
+        }
+
         if (profile.ExcludedRepos is { Length: > 0 }) {
             await Console.Out.WriteLineAsync($"  excluded_repos: {string.Join(", ", profile.ExcludedRepos)}");
+        }
+
+        if (profile.AllowedPaths is { Length: > 0 }) {
+            await Console.Out.WriteLineAsync("  allowed_paths:");
+
+            foreach (var p in profile.AllowedPaths)
+                await Console.Out.WriteLineAsync($"    - {p}");
         }
 
         if (profile.ExcludedPaths is { Length: > 0 }) {

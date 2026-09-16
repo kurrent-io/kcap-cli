@@ -131,7 +131,7 @@ internal sealed class KiroImportSource : IImportSource {
         ) {
         var results     = new List<ImportCommand.SessionClassification>(sessions.Count);
         var repoCache   = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var hasExcludes = ctx.ExcludedRepos is { Count: > 0 };
+        var hasExcludes = ctx.ExcludedRepos is { Count: > 0 } || ctx.AllowedRepos is { Count: > 0 };
 
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
@@ -189,7 +189,7 @@ internal sealed class KiroImportSource : IImportSource {
                 }
             }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
+            var (excludedRepoKey, excludedPathKey, outsideAllowlist) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -217,6 +217,7 @@ internal sealed class KiroImportSource : IImportSource {
                 ResumeFromLine  = resumeFromLn,
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
+                OutsideAllowlist = outsideAllowlist,
                 TotalLines      = nonBlankCount,
                 SourceMeta      = s.SourceMeta,
             });
@@ -449,7 +450,7 @@ internal sealed class KiroImportSource : IImportSource {
             : null;
     }
 
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
+    static (string? ExcludedRepoKey, string? ExcludedPathKey, bool OutsideAllowlist) ResolveExclusions(
         string? cwd, string? repoKey, ClassifyContext ctx
     ) {
         string? excludedRepoKey = null;
@@ -467,7 +468,9 @@ internal sealed class KiroImportSource : IImportSource {
                 }
             }
         }
-        return (excludedRepoKey, excludedPathKey);
+        return (excludedRepoKey, excludedPathKey,
+                PathExclusion.IsOutsideAllowlist(cwd, ctx.AllowedPaths, ctx.Home)
+             || RepoExclusion.IsOutsideAllowlist(repoKey, ctx.AllowedRepos));
     }
 }
 

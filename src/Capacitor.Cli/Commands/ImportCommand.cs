@@ -353,6 +353,14 @@ class ImportCommand(
         /// </summary>
         public string? ExcludedPathKey { get; init; }
 
+        /// <summary>
+        /// Set when an allow list is configured and the session is not admitted by it — its cwd
+        /// under no <c>allowed_paths</c> root, or its repo not on <c>allowed_repos</c>, a cwd or
+        /// repo that was never resolved included. Unlike the excluded-* keys there is no matching
+        /// entry to name, so these group under one prompt.
+        /// </summary>
+        public bool OutsideAllowlist { get; init; }
+
         /// <summary>Total transcript line count (cached so we don't re-read the file downstream).</summary>
         public int TotalLines { get; init; }
 
@@ -1094,6 +1102,8 @@ class ImportCommand(
         // --- Classification (parallel fan-out per source) ---
         var excludedRepos = profile?.ExcludedRepos;
         var excludedPaths = profile?.ExcludedPaths;
+        var allowedPaths  = profile?.AllowedPaths;
+        var allowedRepos  = profile?.AllowedRepos;
 
         var classifyCtx = new ClassifyContext(
             HttpClient: httpClient,
@@ -1102,7 +1112,9 @@ class ImportCommand(
             ExcludedRepos: excludedRepos,
             ExcludedPaths: excludedPaths,
             Home: home,
-            Reimport: reimport
+            Reimport: reimport,
+            AllowedPaths: allowedPaths,
+            AllowedRepos: allowedRepos
         );
 
         IReadOnlyList<SessionClassification>[] classificationsPerSource;
@@ -1188,9 +1200,15 @@ class ImportCommand(
             .GroupBy(c => c.ExcludedPathKey!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
-        if (excludedByRepo.Count > 0 || excludedByPath.Count > 0) {
-            var includedRepoKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var includedPathKeys = new HashSet<string>(StringComparer.Ordinal);
+        // Not grouped by key: an allow list excludes by admitting nothing, so there is no entry to
+        // name in a prompt. Paths and repos share the bucket — the question they put to the user is
+        // the same one, and answering it per-list would not change what it means.
+        var outsideAllowlist = classifications.Where(c => c.OutsideAllowlist).ToList();
+
+        if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
+            var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var includedPathKeys        = new HashSet<string>(StringComparer.Ordinal);
+            var includeOutsideAllowlist = false;
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
             // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
@@ -1210,13 +1228,20 @@ class ImportCommand(
                     var answer = Console.ReadLine()?.Trim();
                     if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedPathKeys.Add(key);
                 }
+
+                if (outsideAllowlist.Count > 0) {
+                    await Console.Error.WriteAsync($"{outsideAllowlist.Count} session{(outsideAllowlist.Count == 1 ? " falls" : "s fall")} outside the configured allow list. Include {(outsideAllowlist.Count == 1 ? "it" : "them")}? (y/N) ");
+                    var answer = Console.ReadLine()?.Trim();
+                    if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includeOutsideAllowlist = true;
+                }
             } else {
                 var distinctSessions = excludedByRepo.Values.SelectMany(v => v)
                     .Concat(excludedByPath.Values.SelectMany(v => v))
+                    .Concat(outsideAllowlist)
                     .Select(c => c.SessionId)
                     .Distinct()
                     .Count();
-                var totalGroups = excludedByRepo.Count + excludedByPath.Count;
+                var totalGroups = excludedByRepo.Count + excludedByPath.Count + (outsideAllowlist.Count > 0 ? 1 : 0);
                 await Console.Error.WriteLineAsync(
                     $"{display.Indented}Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
             }
@@ -1224,7 +1249,7 @@ class ImportCommand(
             for (var i = 0; i < classifications.Count; i++) {
                 var c = classifications[i];
 
-                if (ShouldExclude(c, includedRepoKeys, includedPathKeys)) {
+                if (ShouldExclude(c, includedRepoKeys, includedPathKeys, includeOutsideAllowlist)) {
                     classifications[i] = c with { Status = ClassificationStatus.Excluded };
                 }
             }
@@ -3253,10 +3278,12 @@ class ImportCommand(
     internal static bool ShouldExclude(
             SessionClassification c,
             HashSet<string>       includedRepoKeys,
-            HashSet<string>       includedPathKeys
+            HashSet<string>       includedPathKeys,
+            bool                  includeOutsideAllowlist = false
         ) {
         if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
         if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
+        if (c.OutsideAllowlist && !includeOutsideAllowlist) return true;
 
         return false;
     }

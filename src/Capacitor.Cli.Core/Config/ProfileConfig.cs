@@ -133,8 +133,26 @@ public record Profile {
     [JsonPropertyName("excluded_repos")]
     public string[] ExcludedRepos { get; init; } = [];
 
+    /// <summary>
+    /// Repos kcap captures from, as <c>owner/repo</c>. Empty admits every repo (the default);
+    /// non-empty admits only these, with <see cref="ExcludedRepos"/> still subtracting within them.
+    /// A session whose repo cannot be resolved — detection failed, or it is not in a repo at all —
+    /// is not captured while this is set.
+    /// </summary>
+    [JsonPropertyName("allowed_repos")]
+    public string[] AllowedRepos { get; init; } = [];
+
     [JsonPropertyName("excluded_paths")]
     public string[] ExcludedPaths { get; init; } = [];
+
+    /// <summary>
+    /// Roots kcap captures from. Empty admits every path, so a profile without the key behaves
+    /// as it always has; non-empty admits only sessions whose cwd is under one of these, with
+    /// <see cref="ExcludedPaths"/> still subtracting within them. A cwd that cannot be placed
+    /// against a non-empty list is not captured.
+    /// </summary>
+    [JsonPropertyName("allowed_paths")]
+    public string[] AllowedPaths { get; init; } = [];
 
     [JsonPropertyName("remotes")]
     public string[] Remotes { get; init; } = [];

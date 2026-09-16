@@ -90,6 +90,7 @@ public static class CommandServices {
         services.AddTransient<FeedbackCommand>();
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
+        services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();

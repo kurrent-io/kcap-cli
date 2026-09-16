@@ -26,13 +26,15 @@ internal static class TranscriptFileClassification {
             CancellationToken                                            ct,
             HarnessId                                                    vendor        = HarnessId.Claude,
             Action?                                                      onProbed      = null,
-            string[]?                                                    excludedPaths = null
+            string[]?                                                    excludedPaths = null,
+            string[]?                                                    allowedPaths  = null,
+            string[]?                                                    allowedRepos  = null
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<ImportCommand.SessionClassification>>(transcripts.Count);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, allowedPaths, allowedRepos, probeGate, vendor, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -52,13 +54,15 @@ internal static class TranscriptFileClassification {
             int               minLines,
             string[]?         excludedRepos,
             string[]?         excludedPaths,
+            string[]?         allowedPaths,
+            string[]?         allowedRepos,
             SemaphoreSlim     probeGate,
             HarnessId         vendor,
             Action?           onProbed,
             CancellationToken ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, ct);
+            return await ClassifyOneCoreAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, allowedPaths, allowedRepos, probeGate, vendor, ct);
         } finally {
             onProbed?.Invoke();
         }
@@ -76,6 +80,8 @@ internal static class TranscriptFileClassification {
             int               minLines,
             string[]?         excludedRepos,
             string[]?         excludedPaths,
+            string[]?         allowedPaths,
+            string[]?         allowedRepos,
             SemaphoreSlim     probeGate,
             HarnessId         vendor,
             CancellationToken ct
@@ -196,23 +202,29 @@ internal static class TranscriptFileClassification {
 
         // Flag excluded repos/paths for New/Partial sessions. Resolution (include or skip?)
         // happens later in HandleImport, where we can batch prompts by key.
-        string? excludedRepoKey = null;
-        string? excludedPathKey = null;
+        string? excludedRepoKey  = null;
+        string? excludedPathKey  = null;
+        var     outsideAllowlist = false;
 
         if (status is ImportCommand.ClassificationStatus.New or ImportCommand.ClassificationStatus.Partial) {
             var cwd = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(encodedCwd);
 
+            // Outside the null-cwd guard below: a session whose cwd we never recovered cannot be
+            // placed inside a configured allowlist, and unplaceable is outside.
+            outsideAllowlist = PathExclusion.IsOutsideAllowlist(cwd, allowedPaths, home);
+
+            string? repoKey = null;
+
             if (cwd is not null) {
-                if (excludedRepos is { Length: > 0 }) {
-                    // Classification only needs owner/repo for the exclusion key — skip PR detection.
+                if (excludedRepos is { Length: > 0 } || allowedRepos is { Length: > 0 }) {
+                    // Classification only needs owner/repo to match on — skip PR detection.
                     var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
 
-                    if (repo?.Owner is not null && repo.RepoName is not null) {
-                        var key = $"{repo.Owner}/{repo.RepoName}";
+                    if (repo?.Owner is not null && repo.RepoName is not null) repoKey = $"{repo.Owner}/{repo.RepoName}";
 
-                        if (excludedRepos.Contains(key, StringComparer.OrdinalIgnoreCase)) {
-                            excludedRepoKey = key;
-                        }
+                    if (repoKey is not null && excludedRepos is { Length: > 0 }
+                     && excludedRepos.Contains(repoKey, StringComparer.OrdinalIgnoreCase)) {
+                        excludedRepoKey = repoKey;
                     }
                 }
 
@@ -225,6 +237,8 @@ internal static class TranscriptFileClassification {
                     }
                 }
             }
+
+            outsideAllowlist |= RepoExclusion.IsOutsideAllowlist(repoKey, allowedRepos);
         }
 
         // TotalLines is only meaningful for TooShort sessions (where we know the exact
@@ -240,6 +254,7 @@ internal static class TranscriptFileClassification {
             ProbeErrorReason = probeErrorReason,
             ExcludedRepoKey  = excludedRepoKey,
             ExcludedPathKey  = excludedPathKey,
+            OutsideAllowlist = outsideAllowlist,
             Vendor           = vendor,
         };
     }

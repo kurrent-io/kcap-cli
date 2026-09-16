@@ -97,8 +97,8 @@ sealed class AntigravityHookCommand(
 
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(cwd, excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             return 0;
         }
 
@@ -173,9 +173,13 @@ sealed class AntigravityHookCommand(
         SessionStartInventory.Stamp(forwarded, config, harnesses);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
 
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
-            DisabledSessions.Mark(sessionId, config);
+        var repoScope = await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                              activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos);
+
+        if (repoScope.OutOfScope) {
+            // Only a verdict we could actually place is persisted: marking an unresolved one would
+            // turn a transient detection failure into a permanently dropped session.
+            if (repoScope.Resolved) DisabledSessions.Mark(sessionId, config);
             return 0;
         }
 

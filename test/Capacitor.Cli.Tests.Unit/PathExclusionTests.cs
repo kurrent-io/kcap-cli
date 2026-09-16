@@ -180,6 +180,117 @@ public class PathExclusionTests {
         await Assert.That(PathExclusion.Normalize(withSlash, Home))
             .DoesNotEndWith(Path.DirectorySeparatorChar.ToString());
     }
+
+    // --- allowlist (IsOutsideAllowlist) ---
+
+    [Test]
+    public async Task IsOutsideAllowlist_returns_false_when_allowedPaths_is_null() {
+        await Assert.That(PathExclusion.IsOutsideAllowlist("/some/path", null, Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_returns_false_when_allowedPaths_is_empty() {
+        // The default, and every profile written before allowed_paths existed: admit everything.
+        await Assert.That(PathExclusion.IsOutsideAllowlist("/some/path", [], Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_returns_true_when_cwd_is_null_and_a_list_is_configured() {
+        // Fails closed, the opposite of IsExcluded: a cwd we cannot place is not inside the list.
+        await Assert.That(PathExclusion.IsOutsideAllowlist(null, ["/some/path"], Home)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_returns_false_when_cwd_is_null_and_no_list_is_configured() {
+        await Assert.That(PathExclusion.IsOutsideAllowlist(null, [], Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_admits_exact_path() {
+        using var tmp = new TempDir();
+
+        await Assert.That(PathExclusion.IsOutsideAllowlist(tmp.Path, [tmp.Path], Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_admits_descendant() {
+        using var tmp = new TempDir();
+        var       sub = tmp.CreateDir("sub", "deeper");
+
+        await Assert.That(PathExclusion.IsOutsideAllowlist(sub, [tmp.Path], Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_rejects_path_outside_every_root() {
+        using var tmp   = new TempDir();
+        var       inside = tmp.CreateDir("inside");
+        var       other  = tmp.CreateDir("other");
+
+        await Assert.That(PathExclusion.IsOutsideAllowlist(other, [inside], Home)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_does_not_admit_sibling_with_shared_prefix() {
+        using var tmp    = new TempDir();
+        var       foo    = tmp.PathTo("foo");
+        var       foobar = tmp.PathTo("foobar");
+        Directory.CreateDirectory(foo);
+        Directory.CreateDirectory(foobar);
+
+        await Assert.That(PathExclusion.IsOutsideAllowlist(foobar, [foo], Home)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_admits_when_any_root_matches() {
+        using var tmp   = new TempDir();
+        var       first  = tmp.CreateDir("first");
+        var       second = tmp.CreateDir("second");
+
+        await Assert.That(PathExclusion.IsOutsideAllowlist(second, [first, second], Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutsideAllowlist_rejects_when_every_entry_is_blank() {
+        // A list of unusable entries admits nothing, and closed is the right way for that to land.
+        await Assert.That(PathExclusion.IsOutsideAllowlist("/some/path", ["", "   "], Home)).IsTrue();
+    }
+
+    // --- the composed gate (IsOutOfScope) ---
+
+    [Test]
+    public async Task IsOutOfScope_returns_false_when_neither_list_is_configured() {
+        await Assert.That(PathExclusion.IsOutOfScope("/some/path", null, null, Home)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsOutOfScope_denylist_still_subtracts_within_an_allowed_root() {
+        using var tmp     = new TempDir();
+        var       allowed = tmp.CreateDir("dev");
+        var       denied  = allowed.CreateDir("client-x");
+
+        await Assert.That(PathExclusion.IsOutOfScope(allowed.PathTo("work"), [allowed], [denied], Home)).IsFalse();
+        await Assert.That(PathExclusion.IsOutOfScope(denied, [allowed], [denied], Home)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsOutOfScope_rejects_outside_the_allowlist_even_with_an_empty_denylist() {
+        using var tmp     = new TempDir();
+        var       allowed = tmp.CreateDir("dev");
+        var       other   = tmp.CreateDir("personal");
+
+        await Assert.That(PathExclusion.IsOutOfScope(other, [allowed], [], Home)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsOutOfScope_denylist_alone_behaves_as_before() {
+        using var tmp    = new TempDir();
+        var       denied = tmp.CreateDir("secret");
+        var       other  = tmp.CreateDir("work");
+
+        await Assert.That(PathExclusion.IsOutOfScope(denied, [], [denied], Home)).IsTrue();
+        await Assert.That(PathExclusion.IsOutOfScope(other,  [], [denied], Home)).IsFalse();
+        await Assert.That(PathExclusion.IsOutOfScope(null,   [], [denied], Home)).IsFalse();
+    }
 }
 
 sealed class TempSymlink : IDisposable {

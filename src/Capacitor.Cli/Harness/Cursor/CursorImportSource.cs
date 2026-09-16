@@ -233,7 +233,7 @@ internal sealed class CursorImportSource : IImportSource {
         // unique cwd in this Classify call — sessions cluster heavily inside
         // the same workspace folder.
         var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
-        var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
+        var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 } || ctx.AllowedRepos is { Count: > 0 };
 
         // correlate subagent (child) sessions to their parent by prompt-hash across
         // all discovered transcripts. A child is ingested under the parent's AgentSubsession
@@ -396,7 +396,7 @@ internal sealed class CursorImportSource : IImportSource {
                 }
             }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
+            var (excludedRepoKey, excludedPathKey, outsideAllowlist) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -428,6 +428,7 @@ internal sealed class CursorImportSource : IImportSource {
                 ResumeFromLine  = resumeFromLn,
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
+                OutsideAllowlist = outsideAllowlist,
                 TotalLines      = nonBlankCount,
                 SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, quarantineIdentity, subagentLinks, childrenByParent),
             });
@@ -1072,7 +1073,7 @@ internal sealed class CursorImportSource : IImportSource {
     internal static bool IsRetryableWatermarkProbeStatus(HttpStatusCode? statusCode) =>
         statusCode is { } code && ((int)code >= 500 && (int)code <= 599 || code == HttpStatusCode.RequestTimeout);
 
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
+    static (string? ExcludedRepoKey, string? ExcludedPathKey, bool OutsideAllowlist) ResolveExclusions(
         string? cwd, string? repoKey, ClassifyContext ctx
     ) {
         string? excludedRepoKey = null;
@@ -1090,7 +1091,9 @@ internal sealed class CursorImportSource : IImportSource {
                 }
             }
         }
-        return (excludedRepoKey, excludedPathKey);
+        return (excludedRepoKey, excludedPathKey,
+                PathExclusion.IsOutsideAllowlist(cwd, ctx.AllowedPaths, ctx.Home)
+             || RepoExclusion.IsOutsideAllowlist(repoKey, ctx.AllowedRepos));
     }
 
     IReadOnlyDictionary<string, string?> BuildSanitizedToFolderMap() {

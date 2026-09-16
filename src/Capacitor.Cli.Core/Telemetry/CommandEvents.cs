@@ -39,7 +39,7 @@ public static partial class CommandEvents {
         "--help", "-h", "help", "--version", "-v",
         "errors", "recap", "sessions", "validate-plan", "eval", "login", "logout", "whoami",
         "daemon", "agent", "setup", "plugin", "profile", "use", "status", "config",
-        "ignore", "remap", "repos", "projects", "project", "update", "review", "mcp",
+        "ignore", "allow", "remap", "repos", "projects", "project", "update", "review", "mcp",
         "curate", "cleanup", "uninstall", "disable", "hide", "import", "watch",
         "copilot-finalize", "set-title", "hook", "cursor", "cursor-verify-appendonly",
         "generate-whats-done", "permission-request", "feedback", "refresh-token",

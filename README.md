@@ -322,6 +322,7 @@ At a glance — each links to its section below:
 | [`kcap config`](#configuration) | Show and set configuration |
 | [`kcap remap`](#renamed-repo-directories-kcap-remap) | Map renamed repo directories for import |
 | [`kcap ignore`](#configuration) | Exclude paths from recording |
+| [`kcap allow`](#configuration) | Restrict recording to named paths |
 | [`kcap update`](#other-commands) | Upgrade the CLI and refresh agent plugins |
 | [`kcap uninstall`](#uninstalling) | Remove kcap from this machine |
 | [`kcap status` / `whoami` / `login` / `logout`](#other-commands) | Health, identity, and auth |
@@ -2005,6 +2006,15 @@ kcap config set default_visibility public       # all sessions visible to others
 kcap config set excluded_repos "myorg/secret-project,personal/diary"
 ```
 
+**Repository allowances** are the same gate the other way round. Empty (the default) allows every repo; set it and only those repos are captured:
+
+```bash
+kcap config set allowed_repos "myorg/service,myorg/web"
+kcap config set allowed_repos ""      # back to allowing every repo
+```
+
+Two consequences worth knowing before you set it. A session whose repo kcap cannot resolve is **not** captured — that covers detection failing or timing out, and also **any work outside a git repo at all**, so scratch directories stop being recorded. And if you set both `allowed_repos` and `allowed_paths`, they are independent gates: a session must be admitted by *both*, mirroring the way either denylist alone can exclude one.
+
 **Path exclusions** silently skip any session whose working directory is, or sits inside, a configured path — useful for ignoring scratch dirs, worktrees, or monorepo subtrees regardless of git remote:
 
 ```bash
@@ -2015,6 +2025,20 @@ kcap ignore --remove ~/code/secret-project
 ```
 
 Entries are stored on the **active profile**, so switching profiles with `kcap use` switches the ignore list too. Symlinks are resolved on both the stored entry and the session's reported cwd, so a worktree symlink and its target match.
+
+**Path allowances** turn that around. While the allow list is empty every path is capturable, which is the default. Add a root and kcap captures only sessions under it — useful when work and personal projects share a machine and you would rather name the few directories to record than chase the ones not to:
+
+```bash
+kcap allow ~/dev                    # capture only work under ~/dev
+kcap allow --list                   # show all allowed paths
+kcap allow --remove ~/dev           # removing the last entry re-admits everything
+```
+
+Live hooks honour this for every harness. `kcap import` honours it for Claude, Codex, Cursor, Copilot, Kiro and Pi; Gemini, OpenCode and Antigravity transcripts are **not** filtered on import yet, and `excluded_paths` / `excluded_repos` have the same gap for those three today.
+
+The two lists compose: the allow list decides what is capturable, and `kcap ignore` still subtracts within it. So `kcap allow ~/dev` with `kcap ignore ~/dev/client-x` records everything under `~/dev` except that one subtree.
+
+One asymmetry is deliberate. A session whose working directory kcap cannot determine is **not** captured once an allow list is set, where with only an ignore list it would be — an allow list that admitted sessions it could not place would not be restricting anything. The same rule applies to `allowed_repos` above.
 
 **Provider API keys for headless calls.** Title generation, summaries, and judges shell out to `claude -p` / `codex exec` in the background. By default kcap scrubs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from those spawns so your subscription login (claude.ai / ChatGPT account) is used — a globally-set key would otherwise override subscription auth and fail the call. If you intentionally authenticate via API key (PAYG), opt back in:
 
