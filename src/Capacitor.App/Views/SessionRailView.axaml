@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
              x:Class="Capacitor.App.Views.SessionRailView"
              x:DataType="vm:MainWindowViewModel">
     <!-- DataContext is INHERITED from the window (never assigned here), so Rail is null on any
@@ -94,8 +95,24 @@
                     </StackPanel>
                 </ToolTip.Tip>
                 <DockPanel Margin="16,10,16,14" Background="Transparent">
-                    <TextBlock DockPanel.Dock="Right" Text="{Binding Rail.HostedText, FallbackValue=''}"
-                               FontSize="11.5" Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+                        <!-- Its own ToolTip.Tip outranks the footer Border's daemon tooltip while the
+                             pointer is over the button. -->
+                        <Button x:Name="RailHelpButton" Classes="kcapChip" Width="22" Height="22" Padding="0" CornerRadius="6"
+                                ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support" VerticalAlignment="Center">
+                            <PathIcon Width="14" Height="14" Foreground="{StaticResource KcapMutedBrush}"
+                                      Data="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zm0 3.2a3 3 0 0 0-3 3h1.8a1.2 1.2 0 1 1 1.7 1.1c-.9.4-1.4 1.1-1.4 2.2h1.8c0-.5.2-.8.7-1a3 3 0 0 0-1.6-5.3zM11 15.5v1.8h1.8v-1.8z" />
+                            <Button.Flyout>
+                                <MenuFlyout Placement="TopEdgeAlignedRight" FlyoutPresenterClasses="kcapPanel">
+                                    <MenuItem Header="Documentation" Command="{Binding OpenDocsCommand}" />
+                                    <MenuItem Header="Report a bug…" Command="{Binding OpenFeedbackCommand}" CommandParameter="{x:Static cmd:FeedbackCategory.Bug}" />
+                                    <MenuItem Header="Send feedback…" Command="{Binding OpenFeedbackCommand}" CommandParameter="{x:Static cmd:FeedbackCategory.Feedback}" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                        <TextBlock Text="{Binding Rail.HostedText, FallbackValue=''}" FontSize="11.5"
+                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="7">
                         <Ellipse Width="7" Height="7" Fill="{Binding StatusDotBrush}" VerticalAlignment="Center" />
                         <TextBlock Text="{Binding ConnectionDisplay}" FontSize="11.5"

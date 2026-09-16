@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.App.Views;
 
@@ -12,6 +13,17 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
 
     const string WindowMenuTitle = "Window";
     const string HelpMenuTitle = "Help";
+
+    Action<FeedbackCategory>? _openFeedback;
+    readonly List<ReportItems> _reportItems = [];
+
+    public void SetFeedbackAction(Action<FeedbackCategory>? open) {
+        _openFeedback = open;
+        foreach (var items in _reportItems) {
+            items.Bug.IsEnabled = open is not null;
+            items.Feedback.IsEnabled = open is not null;
+        }
+    }
 
     /// Once per process: the class handler cannot be removed.
     public void Install() => Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) => Attach(window));
@@ -28,7 +40,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
 
     public NativeMenu Build(Window window) => new() {
         new NativeMenuItem(WindowMenuTitle) { Menu = BuildWindowMenu(window) },
-        new NativeMenuItem(HelpMenuTitle) { Menu = BuildHelpMenu() },
+        new NativeMenuItem(HelpMenuTitle) { Menu = BuildHelpMenu(window) },
     };
 
     NativeMenu BuildWindowMenu(Window window) {
@@ -51,10 +63,22 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         return menu;
     }
 
-    NativeMenu BuildHelpMenu() => new() {
-        Item("Kurrent Capacitor Documentation", () => LinkPolicy.Open(opener, DocsUrl)),
-        Item("Changelog", () => LinkPolicy.Open(opener, ChangelogUrl)),
-    };
+    NativeMenu BuildHelpMenu(Window window) {
+        // Resolved at click time: an item enabled by a later SetFeedbackAction must invoke that action.
+        var bug      = Item("Report a Bug…",  () => _openFeedback?.Invoke(FeedbackCategory.Bug),      enabled: _openFeedback is not null);
+        var feedback = Item("Send Feedback…", () => _openFeedback?.Invoke(FeedbackCategory.Feedback), enabled: _openFeedback is not null);
+        var items    = new ReportItems(window, bug, feedback);
+        _reportItems.Add(items);
+        window.Closed += (_, _) => _reportItems.Remove(items);
+
+        return new NativeMenu {
+            Item("Kurrent Capacitor Documentation", () => LinkPolicy.Open(opener, DocsUrl)),
+            Item("Changelog", () => LinkPolicy.Open(opener, ChangelogUrl)),
+            new NativeMenuItemSeparator(),
+            bug,
+            feedback,
+        };
+    }
 
     static void Toggle(Window window, WindowState state) =>
         window.WindowState = window.WindowState == state ? WindowState.Normal : state;

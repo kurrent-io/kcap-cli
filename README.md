@@ -99,6 +99,8 @@ Open **Settings…** from the application menu (⌘,) or the tray to edit the da
 
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
+Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
+
 ### 2. Run setup
 
 ```bash

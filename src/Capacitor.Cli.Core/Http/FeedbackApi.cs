@@ -1,24 +1,14 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using Capacitor.Cli.Core.Commands;
 
 namespace Capacitor.Cli.Core.Http;
 
 internal sealed class FeedbackApi(ICapacitorHttpClient http, CapacitorServer server) : IFeedbackApi {
-    public async Task<FeedbackResult> SubmitAsync(string category, string message, CancellationToken ct = default) {
-        var request = new FeedbackSubmitRequest(
-            Category:        category,
-            Message:         message,
-            ClientRequestId: Guid.NewGuid(),
-            Context: new FeedbackSubmitContext(
-                Source:        "cli",
-                ClientVersion: CapacitorVersion.CurrentDisplay(),
-                Os:            RuntimeInformation.OSDescription
-            )
-        );
+    public async Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) {
+        var request = FeedbackSubmitRequest.From(submission);
 
         using var content = JsonContent.Create(request, CapacitorJsonContext.Default.FeedbackSubmitRequest);
         using var response = await CapacitorApiRequests.SendAsync(

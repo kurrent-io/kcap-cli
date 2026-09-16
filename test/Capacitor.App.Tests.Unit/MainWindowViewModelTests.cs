@@ -3,6 +3,8 @@ using System.Reactive.Threading.Tasks;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -35,13 +37,15 @@ public class MainWindowViewModelTests {
             FakeDaemonClientService service, Func<string, WorkspaceViewModel>? workspaceFactory = null,
             SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
-            Action<Func<Task>>? trackWorkspaceTeardown = null, IAgentDirectory? directory = null) {
+            Action<Func<Task>>? trackWorkspaceTeardown = null, IAgentDirectory? directory = null,
+            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null) {
         var (actions, _) = NewActions(service);
         return new MainWindowViewModel(
             service, CancellationToken.None, TestActivity.New(),
             trackWorkspaceTeardown: trackWorkspaceTeardown,
             workspaceFactory: workspaceFactory, rail: rail,
-            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: directory);
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: directory,
+            openFeedback: openFeedback, opener: opener);
     }
 
     /// The remote host's dependencies, held together so a test disposes them once. The lane is
@@ -1108,6 +1112,26 @@ public class MainWindowViewModelTests {
                 Vendor = "claude", PrTitle = "renamed", RegisteredAt = DateTime.UtcNow,
             }));
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+        });
+    }
+
+    /// The rail footer's two halves part company: Documentation opens through the link policy with
+    /// no feedback action in sight, while the report items are inert until one exists.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Footer_help_commands_follow_the_feedback_action() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var opened = new List<FeedbackCategory>();
+            var opener = new RecordingOpener();
+            var without = NewVm(new FakeDaemonClientService());
+            var with = NewVm(new FakeDaemonClientService(), openFeedback: opened.Add, opener: opener);
+
+            await Assert.That(without.CanOpenFeedback).IsFalse();
+            await Assert.That(with.CanOpenFeedback).IsTrue();
+            await with.OpenFeedbackCommand.Execute(FeedbackCategory.Feedback).ToTask();
+            await with.OpenDocsCommand.Execute().ToTask();
+            await Assert.That(opened).IsEquivalentTo([FeedbackCategory.Feedback]);
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl]);
         });
     }
 }
