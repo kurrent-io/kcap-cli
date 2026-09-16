@@ -61,12 +61,11 @@ class CopilotAdapter(Adapter):
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                for key in ("content", "text", "message", "result"):
-                    value = obj.get(key)
-                    if isinstance(value, str) and obj.get("type") not in ("user", "user.message"):
-                        texts.append(value)
-                        break
-            return "\n".join(texts) if texts else raw
+                if obj.get("type") == "assistant.message":
+                    content = (obj.get("data") or {}).get("content")
+                    if isinstance(content, str) and content.strip():
+                        texts.append(content)
+            return "\n".join(texts)
 
         res = print_ask(argv, sb.repo, sb.env, sb.root / "copilot.stderr.log", self.turn_timeout, extract=extract)
         res.notes = (res.notes + " " + classify_copilot_tools(print_tool_calls(res.raw))).strip()

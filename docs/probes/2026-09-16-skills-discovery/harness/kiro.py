@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from harness.base import Adapter, AskResult, HookInfo
@@ -23,6 +24,13 @@ class KiroAdapter(Adapter):
 
     def real_root(self) -> Path | None:
         return Path.home() / ".kiro"
+
+    def check_auth(self, sb: Sandbox) -> bool | None:
+        # An unauthenticated `chat` opens a browser login instead of answering; whoami says first.
+        out = subprocess.run([self.binary_path() or self.binary, "whoami"], env=sb.env, capture_output=True,
+                             text=True, timeout=60)
+        text = (out.stdout + out.stderr).lower()
+        return out.returncode == 0 and "not logged in" not in text and "log in" not in text
 
     def major(self) -> int:
         m = re.search(r"(\d+)\.\d+", self.version())
