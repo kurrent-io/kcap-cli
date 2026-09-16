@@ -35,7 +35,7 @@ def assert_untracked_state(repo: Path, rel_dir: str, exclusion: str) -> str:
     target = repo / rel_dir
     if not target.exists():
         raise AssertionError(f"{rel_dir} does not exist under {repo}")
-    if not any(p.is_file() for p in target.rglob("*")) and not target.is_file():
+    if target.is_dir() and not any(p.is_file() for p in target.rglob("*")):
         raise AssertionError(f"{rel_dir} holds no file")
     out = git(repo, "status", "--porcelain", "--untracked-files=all", "--", rel_dir)
     if exclusion == "none":

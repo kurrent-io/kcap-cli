@@ -166,8 +166,11 @@ class Runner:
 
     def record_blocked(self, mode: str, notes: str) -> list[RunRecord]:
         native = self.adapter.native_root
-        return [self._blocked(mode, scenario, arm, native if uses_root else None, exclusion, notes=notes)
-                for scenario, arm, uses_root, exclusion in ALL_ARMS]
+        out: list[RunRecord] = []
+        for scenario, arm, uses_root, exclusion in ALL_ARMS:
+            out += self._existing(mode, scenario, arm) or [
+                self._blocked(mode, scenario, arm, native if uses_root else None, exclusion, notes=notes)]
+        return out
 
     def _ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         return self.adapter.ask(sb, mode, prompt)
@@ -359,6 +362,7 @@ class Runner:
         existing = self._existing(mode, "S2", "S2/registration")
         if existing:
             return existing
+
         def run() -> RunRecord:
             return self.arm_s2(mode, "registration")
 

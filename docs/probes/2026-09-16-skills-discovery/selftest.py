@@ -481,6 +481,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual({x.verdict for x in by_arm["S2/hook-adds-skill"]}, {"visible_first_turn"})
             self.assertEqual({x.verdict for x in by_arm["S2/registration"]}, {"untested"})
             self.assertIsNotNone(by_arm["S2/hook-creates-root"][0].hook["fired_at"])
+            self.assertIsNotNone(by_arm["S2/hook-creates-root"][0].hook["fired_at_mtime"])
             self.assertEqual(by_arm["S2/hook-creates-root"][0].hook["mechanism"], "fake-startup")
 
     def test_s3_exclusions(self):
@@ -635,11 +636,24 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(code, 0)
             recs = _load(out)
             self.assertEqual(len(recs), 8)
+            with mock.patch.dict(probe.ENTRIES, {"nobin": _NoBinaryAdapter}):
+                probe.main(["--harness", "nobin", "--mode", "print", "--turn",
+                            "--outdir", str(out), "--base", d])
+            self.assertEqual(len(_load(out)), 8)
             self.assertEqual({r.verdict for r in recs}, {"untested"})
             self.assertEqual({r.notes for r in recs}, {"binary not installed"})
             self.assertEqual({r.arm for r in recs}, {
                 "S0/none", "S1/native", "S2/hook-creates-root", "S2/hook-adds-skill",
                 "S2/registration", "S3/gitignore", "S3/info-exclude", "S4/all-roots"})
+
+    def test_cli_stops_the_entry_on_a_prompt_design_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            with mock.patch.dict(probe.ENTRIES, {"leaky": _LeakyControlAdapter}):
+                code = probe.main(["--harness", "leaky", "--mode", "print", "--turn", "--scenario", "S0",
+                                   "--outdir", str(out), "--base", d])
+            self.assertEqual(code, 1)
+            self.assertEqual([r.verdict for r in _load(out)], ["untested"])
 
     def test_cli_free_phase_and_emit(self):
         with tempfile.TemporaryDirectory() as d:
