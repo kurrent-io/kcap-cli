@@ -267,7 +267,7 @@ sealed class CodexHookCommand(
         // Path exclusion is a string-prefix compare against the payload's cwd
         // — cheap, safe to run on every event (including Stop, which fires
         // per turn). Repo exclusion is handled inside HandleSessionStart
-        // instead: running it here would call RepoExclusion.IsExcludedAsync,
+        // instead: running it here would call RepoExclusion.IsOutOfScopeAsync,
         // which falls back to DetectRepositoryAsync (multiple git commands +
         // gh pr view) when the payload lacks a repository block — too
         // expensive for the per-turn Stop hook. Doing the repo check once at
@@ -277,8 +277,8 @@ sealed class CodexHookCommand(
         // above without paying any git cost.
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(TryGetString(node, "cwd"), activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             EmitFallbackOutput(eventName);
             return 0;
         }
@@ -354,8 +354,8 @@ sealed class CodexHookCommand(
         // DisabledSessions so subsequent Stop / PermissionRequest events
         // take the existing disabled-session fast path at the top of Handle
         // without paying any git cost.
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
             var excludedSessionId = TryGetString(node, "session_id");
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);

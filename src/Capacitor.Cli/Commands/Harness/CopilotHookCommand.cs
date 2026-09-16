@@ -199,8 +199,8 @@ sealed class CopilotHookCommand(
         // event (agentStop fires per turn). Repo exclusion runs once inside
         // sessionStart after enrichment, then marks the session disabled so
         // later events take the fast path above (same split as Codex).
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(cwd, excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             return 0;
         }
 
@@ -264,8 +264,8 @@ sealed class CopilotHookCommand(
 
         // Repo exclusion after enrichment (fast in-payload path) — mark the
         // session so per-turn agentStop events skip via DisabledSessions.
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }

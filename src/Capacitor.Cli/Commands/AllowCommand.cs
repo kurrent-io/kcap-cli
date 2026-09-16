@@ -4,16 +4,17 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// <c>kcap ignore</c> — the denylist half of the profile's capture scope. Paths listed here are
-/// never captured, including when they sit inside an <see cref="AllowCommand"/> root.
+/// <c>kcap allow</c> — the allowlist half of the profile's capture scope. An absent or empty list
+/// admits every path, which is the default. Add one root and capture narrows to it and its
+/// descendants; <see cref="IgnoreCommand"/> still subtracts within. Removing the last entry widens
+/// capture back to everything, so the last <c>--remove</c> is the one to think about.
 /// </summary>
-public sealed class IgnoreCommand(ConfigRoot root, ProfileContext profiles, UserHome home) {
-    // JSON source-gen for init-only array properties leaves the value null when the JSON key is
-    // absent, even though the C# initializer is `= []`. Treat null as empty on the way in.
+public sealed class AllowCommand(ConfigRoot root, ProfileContext profiles, UserHome home) {
     internal static readonly ProfilePathList List = new(
-        "ignore", "ignored", "Ignoring",
-        p => p.ExcludedPaths ?? [],
-        (p, v) => p with { ExcludedPaths = v });
+        "allow", "allowed", "Allowing",
+        p => p.AllowedPaths ?? [],
+        (p, v) => p with { AllowedPaths = v },
+        EmptyNote: "every path is capturable");
 
     public Task<int> HandleAsync(string[] args) => new PathListEditor(root, profiles, home, List).HandleAsync(args);
 

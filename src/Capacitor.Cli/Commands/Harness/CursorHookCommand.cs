@@ -30,6 +30,16 @@ public sealed class CursorHookCommand(
 
     string Url => profiles.Resolution.ServerUrl!;
 
+    /// <summary>
+    /// <c>workspace_roots[0]</c>, or null when absent or not a string. Safe extract:
+    /// <c>GetValue&lt;string&gt;</c> would throw and drop the whole hook through the outer catch.
+    /// </summary>
+    static string? TryWorkspaceRoot(JsonNode node) =>
+        node["workspace_roots"] is JsonArray roots && roots.Count > 0
+     && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr)
+            ? wr
+            : null;
+
     /// <summary>2s of work is what kcap promises Cursor per hook so it never blocks the agent loop
     /// — its own promise, not a Cursor timeout, which is why it is written as the
     /// work plus the reserve <see cref="HookBudget.Remaining"/> takes back off it. One ceiling for
@@ -287,6 +297,19 @@ public sealed class CursorHookCommand(
 
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId, config)) return EmptyOrNull();
 
+            var activeProfile = profiles.Effective;
+
+            // Cursor carries `workspace_roots` where every other harness carries `cwd`, so the scope
+            // gate reads roots[0]. Hoisted: the sessionStart block below reuses the raw value, and a
+            // path compare is cheap enough to run on every event — which matters because a session
+            // already under way when the lists change has no marker to stop it.
+            var workspaceRoot = TryWorkspaceRoot(node);
+
+            if (PathExclusion.IsOutOfScope(workspaceRoot, activeProfile?.AllowedPaths,
+                                           activeProfile?.ExcludedPaths, home)) {
+                return EmptyOrNull();
+            }
+
             // Subagent classification. Built to bring CursorSubagentCorrelator into the live
             // hook path (Cursor is NOT watcher-backed, so it would have to run right here in the
             // per-hook dispatcher), persisting the decision to an on-disk marker because this
@@ -336,12 +359,6 @@ public sealed class CursorHookCommand(
             }
             var isSubagentChild = subagentParentId is not null;
 
-            // Hoisted (rather than block-local) so the memory orchestration wired in
-            // at the end of this method — reached only for the same top-level, non-child
-            // sessionStart this block guards — can reuse the RAW workspace_roots[0] value as
-            // Cwd without re-deriving it.
-            string? workspaceRoot = null;
-
             // attach a `repository` node on sessionStart so the session groups
             // under its repo in the sidebar. Cursor payloads carry `workspace_roots`
             // rather than `cwd`, so the generic EnrichWithRepositoryInfo (which reads
@@ -363,11 +380,17 @@ public sealed class CursorHookCommand(
                     // fail-open — visibility is best-effort, never fatal to the hook.
                 }
 
-                // Safe extract: workspace_roots[0] may be absent or a non-string; GetValue<string>
-                // would throw and (via the outer catch) drop the whole sessionStart hook.
-                if (node["workspace_roots"] is JsonArray roots && roots.Count > 0
-                 && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
-                    workspaceRoot = wr;
+                // Repo scope needs detection, so unlike the path compare above it runs once here
+                // and is recorded — later events read the marker rather than paying for git again.
+                // Before the watcher: spawning one starts uploading the transcript, so a session
+                // this profile does not admit must not get that far.
+                if (await RepoExclusion.IsOutOfScopeAsync(
+                        router, config, new JsonObject { ["cwd"] = workspaceRoot }.ToJsonString(),
+                        activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, budget.Remaining)) {
+                    if (sessionId is not null) DisabledSessions.Mark(sessionId, config);
+
+                    return EmptyOrNull();
+                }
 
                 // Task 9: spawn (or heal) this session's tailing Cursor watcher FIRST —
                 // live transcript capture must never be lost even if the repo-enrichment call

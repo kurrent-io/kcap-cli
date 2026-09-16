@@ -74,4 +74,165 @@ public class ClaudeHookExclusionGateTests {
 
         await Assert.That(excluded).IsFalse();
     }
+
+    [Test]
+    public async Task AllowedPath_InsideRoot_ReturnsFalse() {
+        using var tmp        = new TempDir();
+        var       allowedDir = tmp.CreateDir("dev");
+
+        var profile  = new Profile { AllowedPaths = [allowedDir] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, Body(allowedDir.PathTo("project")), Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    [Test]
+    public async Task AllowedPath_OutsideRoot_ReturnsTrue() {
+        using var tmp        = new TempDir();
+        var       allowedDir = tmp.CreateDir("dev");
+        var       otherDir   = tmp.CreateDir("personal");
+
+        var profile  = new Profile { AllowedPaths = [allowedDir] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, Body(otherDir.PathTo("diary")), Budget());
+
+        await Assert.That(excluded).IsTrue();
+    }
+
+    [Test]
+    public async Task ExcludedPath_InsideAllowedRoot_ReturnsTrue() {
+        // The denylist keeps subtracting inside an admitted root.
+        using var tmp        = new TempDir();
+        var       allowedDir = tmp.CreateDir("dev");
+        var       deniedDir  = allowedDir.CreateDir("client-x");
+
+        var profile  = new Profile { AllowedPaths = [allowedDir], ExcludedPaths = [deniedDir] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, Body(deniedDir.PathTo("repo")), Budget());
+
+        await Assert.That(excluded).IsTrue();
+    }
+
+    [Test]
+    public async Task AllowedPaths_WithUnreadableBody_ReturnsTrue() {
+        // No cwd to place against a configured allowlist — the session is not admitted. The
+        // denylist-only case below keeps the opposite answer on the same body.
+        using var tmp        = new TempDir();
+        var       allowedDir = tmp.CreateDir("dev");
+
+        var profile  = new Profile { AllowedPaths = [allowedDir] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, "not json at all", Budget());
+
+        await Assert.That(excluded).IsTrue();
+    }
+
+    [Test]
+    public async Task ExcludedPathsOnly_WithUnreadableBody_ReturnsFalse() {
+        using var tmp         = new TempDir();
+        var       excludedDir = tmp.CreateDir("excl");
+
+        var profile  = new Profile { ExcludedPaths = [excludedDir] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, "not json at all", Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    [Test]
+    public async Task EmptyAllowedPaths_AdmitsEverything() {
+        var excluded = await Hook().IsSessionExcludedAsync(new Profile { AllowedPaths = [] }, Body("/tmp/anything"), Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    // The repository block is what enrichment stamps onto a real payload, so these match without
+    // paying for git detection. The unresolvable cases below take the cwd-detection path instead.
+    static string BodyWithRepo(string owner, string repoName) =>
+        new JsonObject {
+            ["cwd"]        = "/tmp/anything",
+            ["repository"] = new JsonObject { ["owner"] = owner, ["repo_name"] = repoName },
+        }.ToJsonString();
+
+    [Test]
+    public async Task AllowedRepo_OnTheList_ReturnsFalse() {
+        var profile  = new Profile { AllowedRepos = ["acme/widgets"] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, BodyWithRepo("acme", "widgets"), Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    [Test]
+    public async Task AllowedRepo_NotOnTheList_ReturnsTrue() {
+        var profile  = new Profile { AllowedRepos = ["acme/widgets"] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, BodyWithRepo("someone", "personal"), Budget());
+
+        await Assert.That(excluded).IsTrue();
+    }
+
+    [Test]
+    public async Task AllowedRepo_MatchesCaseInsensitively() {
+        var profile  = new Profile { AllowedRepos = ["ACME/Widgets"] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, BodyWithRepo("acme", "widgets"), Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    [Test]
+    public async Task ExcludedRepo_OnTheAllowList_StillReturnsTrue() {
+        // The denylist keeps subtracting inside an admitted repo, as it does for paths.
+        var profile = new Profile { AllowedRepos = ["acme/widgets"], ExcludedRepos = ["acme/widgets"] };
+
+        var excluded = await Hook().IsSessionExcludedAsync(profile, BodyWithRepo("acme", "widgets"), Budget());
+
+        await Assert.That(excluded).IsTrue();
+    }
+
+    [Test]
+    public async Task AllowedRepos_WithUnresolvableRepo_ReturnsTrue() {
+        // A cwd that is not in a repo at all: nothing to admit it by, so it is not captured.
+        using var tmp = new TempDir();
+
+        var profile  = new Profile { AllowedRepos = ["acme/widgets"] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, Body(tmp.Path), Budget());
+
+        await Assert.That(excluded).IsTrue();
+    }
+
+    [Test]
+    public async Task ExcludedReposOnly_WithUnresolvableRepo_ReturnsFalse() {
+        using var tmp = new TempDir();
+
+        var profile  = new Profile { ExcludedRepos = ["acme/widgets"] };
+        var excluded = await Hook().IsSessionExcludedAsync(profile, Body(tmp.Path), Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    [Test]
+    public async Task EmptyAllowedRepos_AdmitsEverything() {
+        var excluded = await Hook().IsSessionExcludedAsync(
+            new Profile { AllowedRepos = [] }, BodyWithRepo("someone", "personal"), Budget());
+
+        await Assert.That(excluded).IsFalse();
+    }
+
+    [Test]
+    public async Task AllowedRepos_AndAllowedPaths_BothMustAdmit() {
+        // Independent gates, the dual of the two denylists: either one can keep a session out.
+        using var tmp        = new TempDir();
+        var       allowedDir = tmp.CreateDir("dev");
+        var       otherDir   = tmp.CreateDir("personal");
+
+        var profile = new Profile { AllowedRepos = ["acme/widgets"], AllowedPaths = [allowedDir] };
+
+        var insideBoth = new JsonObject {
+            ["cwd"]        = allowedDir.PathTo("widgets"),
+            ["repository"] = new JsonObject { ["owner"] = "acme", ["repo_name"] = "widgets" },
+        }.ToJsonString();
+
+        var rightRepoWrongPath = new JsonObject {
+            ["cwd"]        = otherDir.PathTo("widgets"),
+            ["repository"] = new JsonObject { ["owner"] = "acme", ["repo_name"] = "widgets" },
+        }.ToJsonString();
+
+        await Assert.That(await Hook().IsSessionExcludedAsync(profile, insideBoth, Budget())).IsFalse();
+        await Assert.That(await Hook().IsSessionExcludedAsync(profile, rightRepoWrongPath, Budget())).IsTrue();
+    }
 }

@@ -222,11 +222,11 @@ public sealed class ClaudeHookCommand(
         try { return await enrichment; } catch { return fallbackBody; }
     }
 
-    // Repo/path exclusion gate shared by the main command path and the permission-request
-    // watcher self-heal: true when the active profile excludes this session's repo or cwd
-    // (caller should skip capture). The fallback repo detection is budgeted so a slow git/gh
-    // probe can't blow the hook deadline; if it can't resolve in time we fail open to capturing
-    // (the per-cwd cache makes subsequent sessions in an excluded repo resolve and exclude promptly).
+    // Repo/path scope gate shared by the main command path and the permission-request watcher
+    // self-heal: true when the active profile does not admit this session's repo or cwd (caller
+    // should skip capture). The fallback repo detection is budgeted so a slow git/gh probe can't
+    // blow the hook deadline. What an unresolved repo then means depends on the lists: with only a
+    // denylist it captures, but an allow list does not admit what it cannot place.
     /// <summary>
     /// The disabled-session and repo/path exclusion gates, callable from the degraded path.
     ///
@@ -277,19 +277,23 @@ public sealed class ClaudeHookCommand(
     }
 
     internal async Task<bool> IsSessionExcludedAsync(Profile? profile, string body, HookBudget budget) {
-        if (profile?.ExcludedRepos is { Length: > 0 } repos
-         && await RepoExclusion.IsExcludedAsync(router, config, body, repos, budget.Remaining)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, body,
+                                                  profile?.AllowedRepos, profile?.ExcludedRepos, budget.Remaining)) {
             return true;
         }
 
-        if (profile?.ExcludedPaths is { Length: > 0 } paths) {
-            try {
-                var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
+        if (profile?.AllowedPaths is { Length: > 0 } || profile?.ExcludedPaths is { Length: > 0 }) {
+            string? cwd;
 
-                if (PathExclusion.IsExcluded(cwd, paths, home)) return true;
+            try {
+                cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
             } catch {
-                // Best effort
+                // A body we cannot read yields no cwd rather than a verdict: a denylist shrugs at
+                // that, an allowlist does not admit it. Deciding here would hand both the same answer.
+                cwd = null;
             }
+
+            if (PathExclusion.IsOutOfScope(cwd, profile?.AllowedPaths, profile?.ExcludedPaths, home)) return true;
         }
 
         return false;

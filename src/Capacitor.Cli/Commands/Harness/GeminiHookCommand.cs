@@ -267,8 +267,8 @@ sealed class GeminiHookCommand(
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(cwd, excludedPaths, home)) return 0;
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) return 0;
 
         return eventName switch {
             "SessionStart" => await HandleSessionStart(node, sessionId, cwd, activeProfile, spool,
@@ -324,8 +324,8 @@ sealed class GeminiHookCommand(
         SessionStartInventory.Stamp(forwarded, config, harnesses);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
 
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }

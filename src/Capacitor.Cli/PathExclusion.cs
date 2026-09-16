@@ -3,12 +3,61 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// Path-based session exclusion. Matches a session's <c>cwd</c> against a
-/// configured list of directories, treating descendants as excluded too.
-/// Resolves symlinks at the leaf so worktree symlinks stored in config still
-/// match cwds reported as the canonical path (or vice versa).
+/// Path-based session scoping. Matches a session's <c>cwd</c> against configured lists of
+/// directories, treating descendants as matching too. Resolves symlinks at the leaf so worktree
+/// symlinks stored in config still match cwds reported as the canonical path (or vice versa).
 /// </summary>
 static class PathExclusion {
+    /// <summary>
+    /// True when the session's cwd should not be captured. The allowlist gates and the denylist
+    /// subtracts within it, so <c>allowed_paths: [~/dev]</c> with
+    /// <c>excluded_paths: [~/dev/client-x]</c> captures <c>~/dev</c> and not that one subtree.
+    /// </summary>
+    public static bool IsOutOfScope(string? cwd, IReadOnlyList<string>? allowedPaths,
+                                    IReadOnlyList<string>? excludedPaths, UserHome home)
+        => IsOutsideAllowlist(cwd, allowedPaths, home) || IsExcluded(cwd, excludedPaths, home);
+
+    /// <summary>
+    /// True when <paramref name="allowedPaths"/> is non-empty and <paramref name="cwd"/> is not
+    /// inside any of its roots.
+    /// <para>Fails closed, unlike the denylist beside it. A denylist can shrug at a cwd it cannot
+    /// read because its default is to capture; an allowlist that captures on an unreadable cwd
+    /// does not restrict anything. So an absent or unparseable cwd is outside a configured
+    /// allowlist — but an empty allowlist still admits everything, which is what keeps the
+    /// default, and every config without the key, capturing as before.</para>
+    /// </summary>
+    public static bool IsOutsideAllowlist(string? cwd, IReadOnlyList<string>? allowedPaths, UserHome home) {
+        if (allowedPaths is null or { Count: 0 }) return false;
+        if (string.IsNullOrWhiteSpace(cwd)) return true;
+
+        string normalizedCwd;
+
+        try {
+            normalizedCwd = Normalize(cwd, home);
+        } catch {
+            return true;
+        }
+
+        if (string.IsNullOrEmpty(normalizedCwd)) return true;
+
+        foreach (var entry in allowedPaths) {
+            // Hand-edited configs can contain null/empty/whitespace entries; skipping them can
+            // leave nothing admitting the cwd, and closed is the right way for that to land.
+            if (string.IsNullOrWhiteSpace(entry)) continue;
+
+            try {
+                var normalizedEntry = Normalize(entry, home);
+
+                if (string.IsNullOrEmpty(normalizedEntry)) continue;
+                if (Contains(normalizedEntry, normalizedCwd)) return false;
+            } catch {
+                // best effort: a bad entry never blocks evaluation of the rest
+            }
+        }
+
+        return true;
+    }
+
     public static bool IsExcluded(string? cwd, IReadOnlyList<string>? excludedPaths, UserHome home) {
         if (string.IsNullOrWhiteSpace(cwd)) return false;
         if (excludedPaths is null or { Count: 0 }) return false;

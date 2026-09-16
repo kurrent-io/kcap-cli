@@ -97,6 +97,8 @@ public static class ConfigMigration {
         UpdateCheck       = Scalar(raw, "update_check", true),
         ExcludedRepos     = profile.ExcludedRepos ?? [],
         ExcludedPaths     = profile.ExcludedPaths ?? [],
+        AllowedPaths      = profile.AllowedPaths ?? [],
+        AllowedRepos      = profile.AllowedRepos ?? [],
         Remotes           = profile.Remotes ?? [],
         Daemon = profile.Daemon is null
             ? null

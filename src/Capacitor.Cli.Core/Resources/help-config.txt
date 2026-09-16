@@ -21,6 +21,7 @@ Config keys:
   disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)
   use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)
   excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)
+  allowed_repos               Capture only these repos, comma-separated; empty allows all
   update_check                Enable update check (true/false)
   flows.reviewer_vendor       Preferred review-flow reviewer vendor (used only when the definition names none)
   telemetry                   Pseudonymous CLI usage reporting, machine-wide (on/off)

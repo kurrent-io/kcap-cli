@@ -79,8 +79,8 @@ sealed class OpenCodeHookCommand(
 
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(cwd, excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             return 0;
         }
 
@@ -132,8 +132,8 @@ sealed class OpenCodeHookCommand(
         SessionStartInventory.Stamp(forwarded, config, harnesses);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString());
 
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(router, config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
             DisabledSessions.Mark(sessionId, config);
             return 0;
         }

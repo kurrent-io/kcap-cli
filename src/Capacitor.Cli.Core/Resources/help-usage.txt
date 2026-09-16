@@ -25,6 +25,9 @@ Configuration:
   ignore <path>                    Exclude a path (and descendants) from session recording
   ignore --list                    List excluded paths in the active profile
   ignore --remove <path>           Remove a path from the exclusion list
+  allow <path>                     Capture only this path (and descendants); empty list allows all
+  allow --list                     List allowed paths in the active profile
+  allow --remove <path>            Remove a path from the allow list
   remap <from> <to>                Rewrite a recorded transcript cwd prefix during import (renamed/moved repos)
   remap --list                     List configured cwd remaps
   remap --remove <from>            Remove a cwd remap entry

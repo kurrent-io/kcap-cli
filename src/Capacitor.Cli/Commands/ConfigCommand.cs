@@ -183,6 +183,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
             "default_visibility" when value is "private" or "project" or "org_public" or "public" => profile with { DefaultVisibility = value },
             "default_visibility" => throw new ArgumentException("Invalid value. Must be: private, project, org_public, or public"),
             "excluded_repos" => profile with { ExcludedRepos = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) },
+            "allowed_repos"  => profile with { AllowedRepos  = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) },
             "flows.reviewer_vendor" when !string.IsNullOrWhiteSpace(value) =>
                 profile with { Flows = (profile.Flows ?? new FlowsSettings()) with { ReviewerVendor = ReviewerVendors.Normalize(value) } },
             "flows.reviewer_vendor" => throw new ArgumentException(
@@ -221,6 +222,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         Console.Error.WriteLine("  disable_harness_nudge       Skip new-harness setup nudges (in-session + CLI stderr) (true/false)");
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
+        Console.Error.WriteLine("  allowed_repos               Capture only these repos, comma-separated; empty allows all");
         Console.Error.WriteLine("  flows.reviewer_vendor       Preferred review-flow reviewer vendor (used only when the definition names none)");
         Console.Error.WriteLine("  skills.auto_sync            Background skills refresh at Claude session start (true/false, default false)");
         Console.Error.WriteLine("  telemetry                   Anonymous CLI usage reporting, machine-wide (on/off)");

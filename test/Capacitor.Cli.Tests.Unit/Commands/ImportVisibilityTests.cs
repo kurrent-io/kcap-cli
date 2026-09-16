@@ -907,7 +907,7 @@ public class ImportVisibilityTests : IDisposable {
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
 
@@ -932,7 +932,7 @@ public class ImportVisibilityTests : IDisposable {
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
 
@@ -984,7 +984,7 @@ public class ImportVisibilityTests : IDisposable {
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
 
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
@@ -1353,7 +1353,7 @@ public class ImportVisibilityTests : IDisposable {
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
 
@@ -1380,7 +1380,7 @@ public class ImportVisibilityTests : IDisposable {
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
 
@@ -1461,5 +1461,101 @@ public class ImportVisibilityTests : IDisposable {
 
         // Never actually asked the user to include the excluded path.
         await Assert.That(capture.GetCapturedError()).DoesNotContain("Include");
+    }
+
+    // Globally sequential for the same reason as the test above: it swaps process-global
+    // Console.Error.
+    [Test, NotInParallel]
+    public async Task HandleImport_skips_a_session_outside_allowed_paths() {
+        // The allow-list arm of the same gate. The cwd is real and readable; it is simply not under
+        // the one root the profile admits, which is the case no per-source test ever covered.
+        var allowedDir = Path.Combine(_tempDir, "allowed-proj");
+        var outsideDir = Path.Combine(_tempDir, "outside-proj");
+        Directory.CreateDirectory(allowedDir);
+        Directory.CreateDirectory(outsideDir);
+
+        var projectsDir = Path.Combine(_tempDir, "claude-projects-allowlist");
+        var cwdDir      = Path.Combine(projectsDir, "-outside-proj");
+        Directory.CreateDirectory(cwdDir);
+
+        var cwdJson = System.Text.Json.JsonSerializer.Serialize(outsideDir);
+        var lines   = Enumerable.Range(0, 20).Select(i =>
+            "{\"type\":\"user\",\"timestamp\":\"2026-03-15T10:00:00Z\",\"cwd\":" + cwdJson
+          + ",\"message\":{\"content\":\"line-" + i + "\"}}");
+        File.WriteAllLines(Path.Combine(cwdDir, "outside-sess.jsonl"), lines);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        StubAllHookEndpoints();
+
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var import = new ImportCommand(Config.Root,
+            Resolutions.Of(new Profile { AllowedPaths = [allowedDir] }, "allowlist-test", _server.Url!), Home,
+            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter());
+
+        var exitCode = await import.HandleImport(
+            filterCwd: null,
+            minLines: 1,
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter())],
+            scope: new ImportScope.All(),
+            skipConfirmation: true,
+            autoSkipExclusions: true
+        );
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedError()).Contains("Auto-skipping");
+
+        // The notice alone proves only that a bucket was non-empty. What has to hold is that
+        // nothing was sent: assert on the requests the server actually received.
+        await Assert.That(_server.LogEntries.Where(e => e.RequestMessage.Path.StartsWith("/hooks/", StringComparison.Ordinal)))
+                    .IsEmpty();
+    }
+
+    // Globally sequential: swaps process-global Console.Error.
+    [Test, NotInParallel]
+    public async Task HandleImport_excludes_an_ignored_session_with_no_new_work_beside_it() {
+        // An already-loaded session is still sent — the routed path re-asserts its lifecycle hooks
+        // — so the scope verdict has to be acted on even when no New or Partial session is out of
+        // scope to raise the question. Whether it is depends on nothing but this session.
+        var excludedDir = Path.Combine(_tempDir, "settled-excluded-proj");
+        Directory.CreateDirectory(excludedDir);
+
+        var projectsDir = Path.Combine(_tempDir, "claude-projects-settled");
+        var cwdDir      = Path.Combine(projectsDir, "-settled-excluded-proj");
+        Directory.CreateDirectory(cwdDir);
+
+        var cwdJson = System.Text.Json.JsonSerializer.Serialize(excludedDir);
+        var lines   = Enumerable.Range(0, 20).Select(i =>
+            "{\"type\":\"user\",\"timestamp\":\"2026-03-15T10:00:00Z\",\"cwd\":" + cwdJson
+          + ",\"message\":{\"content\":\"line-" + i + "\"}}");
+        File.WriteAllLines(Path.Combine(cwdDir, "settled-sess.jsonl"), lines);
+
+        // Server already holds every line → AlreadyLoaded, so nothing in the run is New or Partial.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("{\"last_line_number\":20}"));
+        StubAllHookEndpoints();
+
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var import = new ImportCommand(Config.Root,
+            Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "settled-test", _server.Url!), Home,
+            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter());
+
+        var exitCode = await import.HandleImport(
+            filterCwd: null,
+            minLines: 1,
+            sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter())],
+            scope: new ImportScope.All(),
+            skipConfirmation: true,
+            autoSkipExclusions: true
+        );
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedError()).Contains("Auto-skipping");
+        await Assert.That(_server.LogEntries.Where(e => e.RequestMessage.Path.StartsWith("/hooks/", StringComparison.Ordinal)))
+                    .IsEmpty();
     }
 }

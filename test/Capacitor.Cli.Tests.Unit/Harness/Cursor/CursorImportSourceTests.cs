@@ -1986,115 +1986,6 @@ public class CursorImportSourceTests {
         await Assert.That((int)lineNumbers[0]!).IsEqualTo(1);
     }
 
-    [Test]
-    public async Task classify_sets_excluded_repo_key_when_workspace_repo_matches_excluded_list() {
-        // Qodo bug #1 regression test: Cursor sessions must surface
-        // ExcludedRepoKey so ImportCommand's auto-skip/prompt logic applies.
-        using var fx = new ProjectsDirFixture();
-        fx.AddWorkspaceJson("hash-aaa", "file:///Users/me/dev/secret");
-
-        fx.AddSession(
-            "Users-me-dev-secret",
-            "11111111-1111-1111-1111-111111111111",
-            "{\"a\":1}\n{\"b\":2}\n"
-        );
-
-        var src = new CursorImportSource(Config.Root, 
-            fx.ProjectsDir,
-            fx.WorkspaceStorageDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(
-                new RepositoryPayload { Owner = "acme", RepoName = "secret" }
-            )
-        , router: new GitProviderRouter());
-
-        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
-        using var client  = new HttpClient(handler);
-
-        var classified = await src.ClassifyAsync(
-            await src.DiscoverAsync(Filters(), CancellationToken.None),
-            new ClassifyContext(
-                client,
-                "http://localhost",
-                MinLines: 1,
-                ExcludedRepos: new[] { "acme/secret" },
-                ExcludedPaths: null,
-                Home: Home
-            ),
-            CancellationToken.None
-        );
-
-        await Assert.That(classified[0].ExcludedRepoKey).IsEqualTo("acme/secret");
-    }
-
-    [Test]
-    public async Task classify_does_not_invoke_repo_detection_when_excluded_repos_empty() {
-        using var fx = new ProjectsDirFixture();
-        fx.AddWorkspaceJson("hash-aaa", "file:///Users/me/dev/foo");
-        fx.AddSession("Users-me-dev-foo", "11111111-1111-1111-1111-111111111111", "{}\n");
-
-        var detectorCalls = 0;
-
-        var src = new CursorImportSource(Config.Root, 
-            fx.ProjectsDir,
-            fx.WorkspaceStorageDir,
-            repoDetector: _ => {
-                detectorCalls++;
-
-                return Task.FromResult<RepositoryPayload?>(null);
-            }
-        , router: new GitProviderRouter());
-
-        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
-        using var client  = new HttpClient(handler);
-
-        await src.ClassifyAsync(
-            await src.DiscoverAsync(Filters(), CancellationToken.None),
-            Ctx(client, minLines: 0),
-            CancellationToken.None
-        );
-
-        await Assert.That(detectorCalls).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task classify_caches_repo_detection_per_workspace_across_sessions() {
-        using var fx = new ProjectsDirFixture();
-        fx.AddWorkspaceJson("hash-aaa", "file:///Users/me/dev/shared");
-        fx.AddSession("Users-me-dev-shared", "11111111-1111-1111-1111-111111111111", "{}\n");
-        fx.AddSession("Users-me-dev-shared", "22222222-2222-2222-2222-222222222222", "{}\n");
-        fx.AddSession("Users-me-dev-shared", "33333333-3333-3333-3333-333333333333", "{}\n");
-
-        var detectorCalls = 0;
-
-        var src = new CursorImportSource(Config.Root, 
-            fx.ProjectsDir,
-            fx.WorkspaceStorageDir,
-            repoDetector: _ => {
-                detectorCalls++;
-
-                return Task.FromResult<RepositoryPayload?>(new RepositoryPayload { Owner = "o", RepoName = "r" });
-            }
-        , router: new GitProviderRouter());
-
-        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
-        using var client  = new HttpClient(handler);
-
-        await src.ClassifyAsync(
-            await src.DiscoverAsync(Filters(), CancellationToken.None),
-            new ClassifyContext(
-                client,
-                "http://localhost",
-                MinLines: 0,
-                ExcludedRepos: new[] { "o/r" },
-                ExcludedPaths: null,
-                Home: Home
-            ),
-            CancellationToken.None
-        );
-
-        await Assert.That(detectorCalls).IsEqualTo(1);
-    }
-
     [Test, RunOn(OS.MacOs | OS.Windows)]
     public async Task discover_cwd_filter_matches_case_insensitively_on_macos_and_windows() {
         // cwd comparison must be case-insensitive where the filesystem is; Linux keeps Ordinal.
@@ -2156,7 +2047,7 @@ public class CursorImportSourceTests {
         new(FilterCwd: filterCwd, FilterSession: filterSession, Since: since, MinLines: minLines);
 
     ClassifyContext Ctx(HttpClient http, int minLines = 0) =>
-        new(http, "http://localhost", minLines, ExcludedRepos: null, ExcludedPaths: null, Home: Home);
+        new(http, "http://localhost", minLines, Home: Home);
 
     sealed class ProjectsDirFixture : IDisposable {
         readonly TempDir _root = new("cursorprojects");

@@ -232,8 +232,6 @@ internal sealed class CursorImportSource : IImportSource {
         // Per-workspace repo cache so we only run RepositoryDetection once per
         // unique cwd in this Classify call — sessions cluster heavily inside
         // the same workspace folder.
-        var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
-        var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
 
         // correlate subagent (child) sessions to their parent by prompt-hash across
         // all discovered transcripts. A child is ingested under the parent's AgentSubsession
@@ -383,20 +381,7 @@ internal sealed class CursorImportSource : IImportSource {
                 // Best effort.
             }
 
-            string? repoKey = null;
-            if (hasExcludes && s.Cwd is { } cwd) {
-                if (!repoCache.TryGetValue(cwd, out repoKey)) {
-                    try {
-                        var repo = await _repoDetector(cwd);
-                        repoKey = repo is { Owner: { } o, RepoName: { } n } ? $"{o}/{n}" : null;
-                    } catch {
-                        repoKey = null;
-                    }
-                    repoCache[cwd] = repoKey;
-                }
-            }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -426,8 +411,6 @@ internal sealed class CursorImportSource : IImportSource {
                 Status          = status,
                 Vendor          = Vendor,
                 ResumeFromLine  = resumeFromLn,
-                ExcludedRepoKey = excludedRepoKey,
-                ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
                 SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, quarantineIdentity, subagentLinks, childrenByParent),
             });
@@ -1071,27 +1054,6 @@ internal sealed class CursorImportSource : IImportSource {
     /// </summary>
     internal static bool IsRetryableWatermarkProbeStatus(HttpStatusCode? statusCode) =>
         statusCode is { } code && ((int)code >= 500 && (int)code <= 599 || code == HttpStatusCode.RequestTimeout);
-
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
-        string? cwd, string? repoKey, ClassifyContext ctx
-    ) {
-        string? excludedRepoKey = null;
-        if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
-         && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
-            excludedRepoKey = repoKey;
-        }
-
-        string? excludedPathKey = null;
-        if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
-            foreach (var entry in paths) {
-                if (PathExclusion.IsExcluded(cwd, [entry], ctx.Home)) {
-                    excludedPathKey = PathExclusion.Normalize(entry, ctx.Home);
-                    break;
-                }
-            }
-        }
-        return (excludedRepoKey, excludedPathKey);
-    }
 
     IReadOnlyDictionary<string, string?> BuildSanitizedToFolderMap() {
         // EncodeWorkspacePath is lossy — "/foo/bar" and "/foo-bar" both encode
