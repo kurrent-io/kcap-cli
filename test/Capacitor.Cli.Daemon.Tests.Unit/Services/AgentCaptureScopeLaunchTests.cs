@@ -203,9 +203,9 @@ public class AgentCaptureScopeLaunchTests {
         await Assert.That(factory.LastContext).IsNull();
     }
 
-    // Tony's case on #977: a borrow may sit BELOW its repository root. Judging the root would
-    // find /work/repo unexcluded and run the reviewer inside /work/repo/private anyway, so the
-    // path lists have to see the directory the runtime actually uses.
+    // A borrow may sit BELOW its repository root, and capture scope judges the directory the
+    // runtime is handed rather than the root above it — judging the root would find the repository
+    // unexcluded and run the reviewer inside the excluded subdirectory regardless.
     [Test]
     public async Task A_borrow_in_an_excluded_subdirectory_is_refused_though_its_repo_root_is_not() {
         using var cwd = GitRepo.CreateWithCommit();

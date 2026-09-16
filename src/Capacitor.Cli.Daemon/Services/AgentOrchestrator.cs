@@ -5419,8 +5419,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="ProfileContext.Snapshot"/> says the same of any setting a long-lived process must
     /// observe. Launches are rare enough for a disk read; the hook path this shares rules with is
     /// the one that cannot afford one.
-    /// <para>A read that fails falls back to the boot resolution, which still restricts. Treating
-    /// it as "no lists" would turn a transient disk error into an open gate.</para>
+    /// <para>Returns <c>Readable: false</c> for a config that exists and cannot be understood, and
+    /// the caller refuses the launch on it. Unknown lists are not absent lists: reading them as
+    /// empty would turn a corrupt or unreadable config into an open gate on exactly the checkout
+    /// an existing entry was excluding.</para>
     /// </summary>
     async Task<(Profile? Profile, bool Readable)> CurrentCaptureProfileAsync() {
         // One parse, with the outcome carried out of it. A config that exists and cannot be read
