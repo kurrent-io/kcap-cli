@@ -3,15 +3,20 @@
 
 Usage:
   probe.py [--harness ENTRY ...] [--mode print|daemon] [--scenario S0..S4 ...] [--turn]
-           [--runs N] [--outdir DIR] [--keep] [--emit] [--matrix FILE] [--base DIR]
+           [--runs N] [--outdir DIR] [--keep] [--rerun] [--emit] [--matrix FILE] [--base DIR]
 
 Without --turn only the free phase runs (binary, version, auth in an isolated root): zero model
 requests. Each turn arm costs one model request per run.
+
+An arm whose output directory already holds run1.json is not run again: a sweep interrupted
+halfway resumes where it stopped instead of re-spending the turns it already paid for. --rerun
+deletes an arm's directory before running it, which is how a stale arm is re-measured.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -26,8 +31,10 @@ from lib.git_exclusion import apply as apply_exclusion, assert_untracked_state  
 from lib.hook_script import read_stamp, stamp_path, write_hook_script  # noqa: E402
 from lib.isolation import Sandbox, new_sandbox  # noqa: E402
 from lib.probe_skill import ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill  # noqa: E402
-from lib.recorder import RunRecord, emit_matrix, os_label, run_dir, write_run  # noqa: E402
-from lib.verdict import judge_control, judge_root, judge_single, needs_third_run, combine  # noqa: E402
+from lib.recorder import RunRecord, emit_matrix, load_runs, os_label, run_dir, write_run  # noqa: E402
+from lib.verdict import (  # noqa: E402
+    PromptDesignFailure, judge_control, judge_root, judge_single, needs_third_run, combine,
+)
 
 ALL_ROOTS: dict[str, str] = {
     "claude": ".claude/skills", "agents": ".agents/skills", "codex": ".codex/skills",
@@ -37,16 +44,26 @@ ALL_ROOTS: dict[str, str] = {
 SCENARIOS = ("S0", "S1", "S2", "S3", "S4")
 S2_ARMS = ("hook-creates-root", "hook-adds-skill", "registration")
 S3_ARMS = ("gitignore", "info-exclude")
+# Every arm a full sweep would run, so an entry that cannot run still gets a row per arm.
+ALL_ARMS: tuple[tuple[str, str, bool, str], ...] = (
+    ("S0", "S0/none", False, "none"),
+    ("S1", "S1/native", True, "none"),
+    *(("S2", f"S2/{a}", True, "none") for a in S2_ARMS),
+    *(("S3", f"S3/{e}", True, e) for e in S3_ARMS),
+    ("S4", "S4/all-roots", False, "none"),
+)
 
 
 class Runner:
     def __init__(self, adapter: Adapter, outdir: Path, runs: int = 2, keep: bool = False,
-                 base: Path | None = None, version: str | None = None) -> None:
+                 base: Path | None = None, version: str | None = None, rerun: bool = False) -> None:
         self.adapter = adapter
         self.outdir = outdir
         self.runs = runs
         self.keep = keep
         self.base = base
+        self.rerun = rerun
+        self._cleared: set[Path] = set()
         self.s1_ok: dict[str, bool] = {}
         self._version = version if version is not None else adapter.version()
         self._binary = adapter.binary_path() or adapter.binary
@@ -91,14 +108,49 @@ class Runner:
         write_run(self.outdir, rec)
         return rec
 
-    def run_arm(self, fn: Callable[[], RunRecord]) -> list[RunRecord]:
-        recs = [fn() for _ in range(self.runs)]
+    def _existing(self, mode: str, scenario: str, arm: str) -> list[RunRecord]:
+        d = run_dir(self.outdir, self.adapter.entry, mode, scenario, arm)
+        if self.rerun and d not in self._cleared:
+            self._cleared.add(d)
+            shutil.rmtree(d, ignore_errors=True)
+        return load_runs(d) if (d / "run1.json").exists() else []
+
+    def _guarded(self, fn: Callable[[], RunRecord | list[RunRecord]], mode: str, scenario: str,
+                 arm: str, root: str | None, exclusion: str) -> list[RunRecord]:
+        try:
+            out = fn()
+        except PromptDesignFailure:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            return [self.record(mode, scenario, arm, root, exclusion, None, "untested", {},
+                                notes=f"exception={ex!r}")]
+        return out if isinstance(out, list) else [out]
+
+    def run_arm(self, fn: Callable[[], RunRecord], mode: str, scenario: str, arm: str,
+                root: str | None, exclusion: str) -> list[RunRecord]:
+        existing = self._existing(mode, scenario, arm)
+        if existing:
+            return existing
+        recs: list[RunRecord] = []
+        for _ in range(self.runs):
+            recs += self._guarded(fn, mode, scenario, arm, root, exclusion)
         if needs_third_run([r.verdict for r in recs]):
-            recs.append(fn())
+            recs += self._guarded(fn, mode, scenario, arm, root, exclusion)
         return recs
 
-    def _blocked(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str) -> RunRecord:
-        return self.record(mode, scenario, arm, root, exclusion, None, "untested", {}, notes="S1 failed")
+    def run_once(self, fn: Callable[[], RunRecord], mode: str, scenario: str, arm: str,
+                 root: str | None, exclusion: str) -> list[RunRecord]:
+        existing = self._existing(mode, scenario, arm)
+        return existing or self._guarded(fn, mode, scenario, arm, root, exclusion)
+
+    def _blocked(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str,
+                 notes: str = "S1 failed") -> RunRecord:
+        return self.record(mode, scenario, arm, root, exclusion, None, "untested", {}, notes=notes)
+
+    def record_blocked(self, mode: str, notes: str) -> list[RunRecord]:
+        native = self.adapter.native_root
+        return [self._blocked(mode, scenario, arm, native if uses_root else None, exclusion, notes=notes)
+                for scenario, arm, uses_root, exclusion in ALL_ARMS]
 
     def _ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         return self.adapter.ask(sb, mode, prompt)
@@ -116,7 +168,13 @@ class Runner:
         try:
             skill = ProbeSkill.fresh()
             res = self._ask(sb, mode, single_prompt(skill))
-            verdict = judge_control(parse_reply(res.reply_text, res.raw))
+            try:
+                verdict = judge_control(parse_reply(res.reply_text, res.raw))
+            except PromptDesignFailure as ex:
+                # The reply that broke the control is the evidence for it: record before unwinding.
+                self.record(mode, "S0", "S0/none", None, "none", res, "untested", {}, started=started,
+                            notes=f"prompt design failure: {ex}")
+                raise
             return self.record(mode, "S0", "S0/none", None, "none", res, verdict, {}, started=started)
         finally:
             sb.cleanup()
@@ -220,48 +278,62 @@ class Runner:
 
     def run_scenario(self, mode: str, scenario: str, arms: list[str] | None = None) -> list[RunRecord]:
         gated = scenario not in ("S0", "S1") and not self.s1_ok.get(mode, True)
+        native = self.adapter.native_root
         out: list[RunRecord] = []
         if scenario == "S0":
-            out += self.run_arm(lambda: self.arm_s0(mode))
+            out += self.run_arm(lambda: self.arm_s0(mode), mode, "S0", "S0/none", None, "none")
         elif scenario == "S1":
-            recs = self.run_arm(lambda: self.arm_s1(mode))
+            recs = self.run_arm(lambda: self.arm_s1(mode), mode, "S1", "S1/native", native, "none")
             self.s1_ok[mode] = combine([r.verdict for r in recs])[0] == "visible_first_turn"
             out += recs
         elif scenario == "S2":
             for arm in arms or S2_ARMS:
                 if gated:
-                    out.append(self._blocked(mode, "S2", f"S2/{arm}", self.adapter.native_root, "none"))
+                    out.append(self._blocked(mode, "S2", f"S2/{arm}", native, "none"))
                 elif arm == "registration":
-                    first = self.arm_s2(mode, arm)
-                    out.append(first)
-                    if first.verdict != "untested":
-                        recs = [first, self.arm_s2(mode, arm)]
-                        if needs_third_run([r.verdict for r in recs]):
-                            recs.append(self.arm_s2(mode, arm))
-                        out += recs[1:]
+                    out += self._registration(mode)
                 else:
-                    out += self.run_arm(lambda a=arm: self.arm_s2(mode, a))
+                    out += self.run_arm(lambda a=arm: self.arm_s2(mode, a), mode, "S2", f"S2/{arm}",
+                                        native, "none")
         elif scenario == "S3":
             for exclusion in arms or S3_ARMS:
                 if gated:
-                    out.append(self._blocked(mode, "S3", f"S3/{exclusion}", self.adapter.native_root, exclusion))
+                    out.append(self._blocked(mode, "S3", f"S3/{exclusion}", native, exclusion))
                 else:
-                    out += self.run_arm(lambda e=exclusion: self.arm_s3(mode, e))
+                    out += self.run_arm(lambda e=exclusion: self.arm_s3(mode, e), mode, "S3",
+                                        f"S3/{exclusion}", native, exclusion)
         elif scenario == "S4":
             if gated:
                 out.append(self._blocked(mode, "S4", "S4/all-roots", None, "none"))
                 return out
-            recs = self.run_arm(lambda: self.arm_s4_all(mode))
+            recs = self.run_arm(lambda: self.arm_s4_all(mode), mode, "S4", "S4/all-roots", None, "none")
             out += recs
             roots = self._s4_roots()
             for key, root in roots.items():
                 seen_every_run = all(recs[i].expected_tokens.get(key) in recs[i].tokens_found for i in range(len(recs)))
                 if seen_every_run:
                     continue
-                out += self.run_arm(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r))
+                out += self.run_arm(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r), mode, "S4",
+                                    f"S4/confirm-{key}", root, "none")
         else:
             raise ValueError(scenario)
         return out
+
+    def _registration(self, mode: str) -> list[RunRecord]:
+        identity = (mode, "S2", "S2/registration", self.adapter.native_root, "none")
+        existing = self._existing(mode, "S2", "S2/registration")
+        if existing:
+            return existing
+        def run() -> RunRecord:
+            return self.arm_s2(mode, "registration")
+
+        recs = self._guarded(run, *identity)
+        if recs[0].verdict == "untested":
+            return recs
+        recs += self._guarded(run, *identity)
+        if needs_third_run([r.verdict for r in recs]):
+            recs += self._guarded(run, *identity)
+        return recs
 
 
 def free_phase(adapter: Adapter, outdir: Path, mode: str, base: Path | None) -> dict:
@@ -284,6 +356,13 @@ def free_phase(adapter: Adapter, outdir: Path, mode: str, base: Path | None) -> 
     return info
 
 
+def blocked_reason(info: dict) -> str | None:
+    if info["binary"] is None:
+        return "binary not installed"
+    # auth_ok None is "not measurable for this entry", which is not a reason to skip the turns.
+    return "auth_ok false in isolated root" if info["auth_ok"] is False else None
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--harness", action="append", choices=sorted(ENTRIES))
@@ -294,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--outdir", type=Path, default=KIT / "out")
     p.add_argument("--matrix", type=Path, default=KIT / "matrix.json")
     p.add_argument("--keep", action="store_true")
+    p.add_argument("--rerun", action="store_true")
     p.add_argument("--emit", action="store_true")
     p.add_argument("--base", type=Path, default=None)
     args = p.parse_args(argv)
@@ -304,25 +384,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     entries = args.harness or [e for e in ENTRIES if e != "fake"]
+    completed = aborted = 0
     for name in entries:
         adapter = ENTRIES[name]()
         if args.mode not in adapter.modes:
             print(f"{name}: mode {args.mode} unsupported, skipping")
             continue
-        info = free_phase(adapter, args.outdir, args.mode, args.base)
-        print(f"{name}: {info['version']} auth_ok={info['auth_ok']}")
-        if not args.turn:
-            continue
-        if info["binary"] is None:
-            print(f"{name}: binary not installed, turn arms skipped")
-            continue
-        runner = Runner(adapter, args.outdir, runs=args.runs, keep=args.keep, base=args.base,
-                        version=info["version"])
-        for scenario in args.scenario or SCENARIOS:
-            recs = runner.run_scenario(args.mode, scenario)
-            for r in recs:
-                print(f"{name} {args.mode} {r.arm} root={r.root} excl={r.exclusion} -> {r.verdict} {r.notes}")
-    return 0
+        try:
+            info = free_phase(adapter, args.outdir, args.mode, args.base)
+            print(f"{name}: {info['version']} auth_ok={info['auth_ok']}")
+            if args.turn:
+                runner = Runner(adapter, args.outdir, runs=args.runs, keep=args.keep, base=args.base,
+                                version=info["version"], rerun=args.rerun)
+                blocker = blocked_reason(info)
+                if blocker:
+                    print(f"{name}: {blocker}, turn arms recorded as untested")
+                    for r in runner.record_blocked(args.mode, blocker):
+                        print(f"{name} {args.mode} {r.arm} -> {r.verdict} {r.notes}")
+                else:
+                    for scenario in args.scenario or SCENARIOS:
+                        for r in runner.run_scenario(args.mode, scenario):
+                            print(f"{name} {args.mode} {r.arm} root={r.root} excl={r.exclusion} "
+                                  f"-> {r.verdict} {r.notes}")
+            completed += 1
+        except PromptDesignFailure as ex:
+            aborted += 1
+            print(f"{name}: prompt design failure: {ex}")
+        except Exception as ex:  # noqa: BLE001
+            aborted += 1
+            print(f"{name}: aborted: {ex!r}")
+    return 1 if aborted and not completed else 0
 
 
 if __name__ == "__main__":

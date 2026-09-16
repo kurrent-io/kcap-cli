@@ -337,6 +337,41 @@ class _NoFireAdapter(FakeAdapter):
         return HookInfo(mechanism="fake-startup", config_path=str(script))
 
 
+class _CountingAdapter(FakeAdapter):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def ask(self, sb, mode, prompt):
+        self.calls += 1
+        return super().ask(sb, mode, prompt)
+
+
+class _RaisingAdapter(FakeAdapter):
+    def ask(self, sb, mode, prompt):
+        raise RuntimeError("vendor exploded")
+
+
+class _NoBinaryAdapter(FakeAdapter):
+    entry = "nobin"
+
+    def binary_path(self):
+        return None
+
+
+class _LeakyControlAdapter(FakeAdapter):
+    """Every reply carries a token, so S0 cannot act as a negative control."""
+
+    def __init__(self):
+        super().__init__()
+        self.skill = ProbeSkill.fresh()
+
+    def ask(self, sb, mode, prompt):
+        text = self.skill.body_token
+        return AskResult(reply_text=text, raw=text, argv=["fake"], started_at=0.0,
+                         first_request_at=0.0, stderr_path=None, exit_code=0)
+
+
 class RunnerTests(unittest.TestCase):
     def _runner(self, d, runs=2):
         return probe.Runner(FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
@@ -410,6 +445,42 @@ class RunnerTests(unittest.TestCase):
                 self.assertIn("hook never fired", x.notes)
                 self.assertIn("skill file absent after the turn", x.notes)
 
+    def test_arm_exception_is_untested(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = probe.Runner(_RaisingAdapter(), Path(d) / "out", runs=2, base=Path(d))
+            recs = r.run_scenario("print", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested", "untested"])
+            for x in recs:
+                self.assertIn("exception=RuntimeError", x.notes)
+            self.assertEqual(len(_load(Path(d) / "out")), 2)
+
+    def test_completed_arm_resumes_and_rerun_clears(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            a = _CountingAdapter()
+            first = probe.Runner(a, out, runs=2, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual(a.calls, 2)
+            again = probe.Runner(a, out, runs=2, base=Path(d)).run_scenario("print", "S1")
+            self.assertEqual(a.calls, 2)
+            self.assertEqual([x.reply for x in again], [x.reply for x in first])
+            self.assertEqual(len(_load(out)), 2)
+            probe.Runner(a, out, runs=2, base=Path(d), rerun=True).run_scenario("print", "S1")
+            self.assertEqual(a.calls, 4)
+            self.assertEqual(len(_load(out)), 2)
+
+    def test_s0_prompt_design_failure_keeps_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            a = _LeakyControlAdapter()
+            r = probe.Runner(a, out, runs=2, base=Path(d))
+            with self.assertRaises(PromptDesignFailure):
+                r.run_scenario("print", "S0")
+            recs = _load(out)
+            self.assertEqual(len(recs), 1)
+            self.assertEqual(recs[0].verdict, "untested")
+            self.assertIn(a.skill.body_token, recs[0].reply)
+            self.assertIn("prompt design failure", recs[0].notes)
+
     def test_third_run_on_disagreement(self):
         with tempfile.TemporaryDirectory() as d:
             r = self._runner(d)
@@ -424,8 +495,23 @@ class RunnerTests(unittest.TestCase):
                                        exclusion="none", hook=None, first_request_at=None, reply="",
                                        tokens_found=[], skill_named=False, stderr_path=None, verdict=v,
                                        duration_ms=0)
-            recs = r.run_arm(flaky)
+            recs = r.run_arm(flaky, "print", "S1", "S1/native", None, "none")
             self.assertEqual(len(recs), 3)
+
+    def test_cli_records_untested_rows_without_a_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            with mock.patch.dict(probe.ENTRIES, {"nobin": _NoBinaryAdapter}):
+                code = probe.main(["--harness", "nobin", "--mode", "print", "--turn",
+                                   "--outdir", str(out), "--base", d])
+            self.assertEqual(code, 0)
+            recs = _load(out)
+            self.assertEqual(len(recs), 8)
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertEqual({r.notes for r in recs}, {"binary not installed"})
+            self.assertEqual({r.arm for r in recs}, {
+                "S0/none", "S1/native", "S2/hook-creates-root", "S2/hook-adds-skill",
+                "S2/registration", "S3/gitignore", "S3/info-exclude", "S4/all-roots"})
 
     def test_cli_free_phase_and_emit(self):
         with tempfile.TemporaryDirectory() as d:
