@@ -20,7 +20,8 @@ class KiroAdapter(Adapter):
     native_root = ".kiro/skills"
     documented_roots = frozenset({".kiro/skills"})
     agent_name: str | None = None
-    agent_resources: tuple[str, ...] = ()
+    # None keeps whatever the cloned default agent declares; a tuple replaces it.
+    agent_resources: tuple[str, ...] | None = None
 
     def real_root(self) -> Path | None:
         return Path.home() / ".kiro"
@@ -42,10 +43,26 @@ class KiroAdapter(Adapter):
         return d / "cli.json"
 
     def _agent_file(self, sb: Sandbox, name: str, hooks: dict | None) -> Path:
+        """A custom agent cloned from the default one, as kcap's installer does: a minimal agent
+        definition has no tools, and a model that cannot read the listed SKILL.md never loads it."""
         agents = sb.config_root / "agents"
         agents.mkdir(parents=True, exist_ok=True)
         path = agents / f"{name}.json"
-        data = {"name": name, "description": "probe agent", "resources": list(self.agent_resources)}
+        data: dict = {}
+        if self.binary_path():
+            env = dict(sb.env, EDITOR="true", VISUAL="true")
+            subprocess.run([self.binary_path(), "agent", "create", name, "--from", "kiro_default"], env=env,
+                           capture_output=True, text=True, timeout=120)
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text())
+                except json.JSONDecodeError:
+                    data = {}
+        if not data:
+            data = {"name": name, "description": "probe agent", "tools": ["*"]}
+        data["name"] = name
+        if self.agent_resources is not None:
+            data["resources"] = list(self.agent_resources)
         if hooks:
             data["hooks"] = hooks
         path.write_text(json.dumps(data, indent=2) + "\n")
@@ -119,11 +136,16 @@ def classify_kiro_tools(raw: str) -> str:
 
 
 class KiroAgentBareAdapter(KiroAdapter):
+    """A cloned default agent with its resources emptied: does it still inherit the skills?"""
+
     entry = "kiro-agent-bare"
     agent_name = "probe-bare"
+    agent_resources = ()
 
 
 class KiroAgentSkillsAdapter(KiroAdapter):
+    """A cloned default agent declaring the skills resource explicitly."""
+
     entry = "kiro-agent-skills"
     agent_name = "probe-skills"
     agent_resources = ("skill://.kiro/skills/*/SKILL.md",)
