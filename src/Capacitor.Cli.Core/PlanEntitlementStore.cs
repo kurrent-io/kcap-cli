@@ -9,8 +9,8 @@ namespace Capacitor.Cli.Core;
 /// <summary>
 /// Durable, per-server cache of the tenant's plan entitlements, learned passively from the
 /// <c>X-Kcap-Plan</c> response header (see <c>PlanEntitlementCaptureHandler</c>). The SessionStart
-/// nudges read it so an agent is never told to use a tool its tenant's plan refuses — AI-2326, where
-/// a Free tenant was nudged toward <c>declare_work_item</c> every session and every call bounced 403.
+/// nudges read it so an agent is never told to use a tool its tenant's plan refuses: without it a Free
+/// tenant is nudged toward <c>declare_work_item</c> every session and every call bounces 403.
 ///
 /// <para>One flat file per normalized server URL under the caller's <see cref="ConfigRoot"/>, the
 /// <see cref="ServerVersionStore"/> shape: a multi-profile user gets per-server entitlements for free

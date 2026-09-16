@@ -97,7 +97,7 @@ public class WorkItemsNudgeEmitterTests {
     public async Task Resolve_returns_null_when_the_plan_denies_work_items() {
         using var tmp = new TempDir();
 
-        // AI-2326: a Free tenant is registered and opted in, but every declare would 403 — so the
+        // A Free tenant is registered and opted in, but every declare would 403 — so the
         // agent must not be told to try.
         await Assert.That(WorkItemsNudgeEmitter.Resolve(
             HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses,

@@ -3,7 +3,7 @@ namespace Capacitor.Cli.Core.Http;
 /// <summary>
 /// Records the tenant's plan entitlements from each response's
 /// <see cref="HttpClientExtensions.PlanHeader"/> into <see cref="PlanEntitlementStore"/>, so the
-/// SessionStart nudges can skip a tool the plan refuses (AI-2326). Sits beside
+/// SessionStart nudges can skip a tool the plan refuses. Sits beside
 /// <see cref="ServerVersionCaptureHandler"/> and for the same reason — OUTERMOST, so it observes the
 /// final response after a recovery resend; best-effort, and never alters either.
 ///

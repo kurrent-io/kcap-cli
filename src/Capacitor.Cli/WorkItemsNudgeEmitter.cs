@@ -34,7 +34,7 @@ static class WorkItemsNudgeEmitter {
     /// <para><paramref name="plan"/> is the last answer the server gave, not a live one — the nudge
     /// still takes no round trip of its own. Unknown entitlements allow the nudge, so an offline
     /// machine or a server predating the header behaves as it does today; the cost of that is one
-    /// stale nudge across a plan change, against a nag on every session (AI-2326).</para>
+    /// stale nudge across a plan change, against a nag on every session.</para>
     /// </summary>
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
                                   HarnessRegistry harnesses, PlanEntitlements plan,
