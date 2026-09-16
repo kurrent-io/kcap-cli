@@ -41,14 +41,14 @@ S3_ARMS = ("gitignore", "info-exclude")
 
 class Runner:
     def __init__(self, adapter: Adapter, outdir: Path, runs: int = 2, keep: bool = False,
-                 base: Path | None = None) -> None:
+                 base: Path | None = None, version: str | None = None) -> None:
         self.adapter = adapter
         self.outdir = outdir
         self.runs = runs
         self.keep = keep
         self.base = base
         self.s1_ok: dict[str, bool] = {}
-        self._version = adapter.version()
+        self._version = version if version is not None else adapter.version()
         self._binary = adapter.binary_path() or adapter.binary
         self._os = os_label()
 
@@ -58,8 +58,19 @@ class Runner:
         a = self.adapter
         sb = new_sandbox(a.lever, a.real_root(), a.credential_files, a.passthrough_env,
                          dict(a.extra_env), keep=self.keep, base=self.base)
-        a.prepare(sb)
+        try:
+            a.prepare(sb)
+        except Exception:
+            sb.cleanup()
+            raise
         return sb
+
+    def _s4_roots(self) -> dict[str, str]:
+        a = self.adapter
+        roots = dict(ALL_ROOTS)
+        if a.native_root not in roots.values():
+            roots[f"native_{a.entry}"] = a.native_root
+        return roots
 
     def record(self, mode: str, scenario: str, arm: str, root: str | None, exclusion: str,
                res: AskResult | None, verdict: str, expected: dict[str, str], hook: dict | None = None,
@@ -162,6 +173,7 @@ class Runner:
             notes = "" if hook["fired_at"] is not None or arm == "registration" else "hook never fired"
             if not target.exists():
                 notes = (notes + " skill file absent after the turn").strip()
+                verdict = "untested"
             return self.record(mode, "S2", f"S2/{arm}", root, "none", res, verdict, {"native": skill.token},
                                hook=hook, started=started, notes=notes)
         finally:
@@ -175,9 +187,7 @@ class Runner:
         a = self.adapter
         sb = self.sandbox()
         try:
-            roots = dict(ALL_ROOTS)
-            if a.native_root not in roots.values():
-                roots[a.entry.replace("-", "_")] = a.native_root
+            roots = self._s4_roots()
             skills = {key: ProbeSkill.fresh() for key in roots}
             for key, skill in skills.items():
                 write_skill(sb.repo / roots[key], skill, flat=a.flat_skill_layout and roots[key] == a.native_root)
@@ -243,9 +253,7 @@ class Runner:
                 return out
             recs = self.run_arm(lambda: self.arm_s4_all(mode))
             out += recs
-            roots = dict(ALL_ROOTS)
-            if self.adapter.native_root not in roots.values():
-                roots[self.adapter.entry.replace("-", "_")] = self.adapter.native_root
+            roots = self._s4_roots()
             for key, root in roots.items():
                 seen_every_run = all(recs[i].expected_tokens.get(key) in recs[i].tokens_found for i in range(len(recs)))
                 if seen_every_run:
@@ -262,7 +270,7 @@ def free_phase(adapter: Adapter, outdir: Path, mode: str, base: Path | None) -> 
     try:
         adapter.prepare(sb)
         info = {
-            "entry": adapter.entry, "binary": adapter.binary_path(), "version": adapter.version(),
+            "entry": adapter.entry, "binary": adapter.binary_path(), "version": adapter.version(sb.env),
             "os": os_label(), "mode": mode, "isolation_lever": adapter.lever,
             "credential_files": [c for c in adapter.credential_files if (sb.config_root / c).exists()],
             "auth_ok": adapter.check_auth(sb) if adapter.binary_path() else None,
@@ -308,7 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         if info["binary"] is None:
             print(f"{name}: binary not installed, turn arms skipped")
             continue
-        runner = Runner(adapter, args.outdir, runs=args.runs, keep=args.keep, base=args.base)
+        runner = Runner(adapter, args.outdir, runs=args.runs, keep=args.keep, base=args.base,
+                        version=info["version"])
         for scenario in args.scenario or SCENARIOS:
             recs = runner.run_scenario(args.mode, scenario)
             for r in recs:

@@ -43,11 +43,12 @@ class Adapter:
     def binary_path(self) -> str | None:
         return shutil.which(self.binary)
 
-    def version(self) -> str:
+    def version(self, env: dict | None = None) -> str:
         path = self.binary_path()
         if path is None:
             return "not-installed"
-        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=60)
+        kwargs = {"env": env} if env is not None else {}
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=60, **kwargs)
         return (out.stdout or out.stderr).strip().splitlines()[0] if (out.stdout or out.stderr).strip() else "unknown"
 
     def real_root(self) -> Path | None:

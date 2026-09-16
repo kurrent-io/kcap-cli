@@ -20,7 +20,7 @@ class FakeAdapter(Adapter):
     def __init__(self) -> None:
         self._hook: Path | None = None
 
-    def version(self) -> str:
+    def version(self, env: dict | None = None) -> str:
         return "1.0"
 
     def install_startup_hook(self, sb: Sandbox, script: Path) -> HookInfo:

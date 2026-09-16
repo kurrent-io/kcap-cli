@@ -330,6 +330,13 @@ import probe  # noqa: E402
 from lib.recorder import load_runs as _load  # noqa: E402
 
 
+class _NoFireAdapter(FakeAdapter):
+    """A hook that is installed but never runs, so the skill file never lands."""
+
+    def install_startup_hook(self, sb, script):
+        return HookInfo(mechanism="fake-startup", config_path=str(script))
+
+
 class RunnerTests(unittest.TestCase):
     def _runner(self, d, runs=2):
         return probe.Runner(FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
@@ -383,7 +390,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(per_root[".claude/skills"], "not_visible")
             self.assertNotIn(".fake/skills", per_root)
             self.assertNotIn(".agents/skills", per_root)
-            self.assertEqual(all_rows[0].expected_tokens.keys(), set(probe.ALL_ROOTS) | {"fake"})
+            self.assertEqual(all_rows[0].expected_tokens.keys(), set(probe.ALL_ROOTS) | {"native_fake"})
 
     def test_s1_gate_blocks_later_scenarios(self):
         with tempfile.TemporaryDirectory() as d:
@@ -392,6 +399,16 @@ class RunnerTests(unittest.TestCase):
             recs = r.run_scenario("print", "S3")
             self.assertEqual([x.verdict for x in recs], ["untested", "untested"])
             self.assertEqual(recs[0].notes, "S1 failed")
+
+    def test_s2_hook_never_fired_is_untested(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = probe.Runner(_NoFireAdapter(), Path(d) / "out", runs=2, base=Path(d))
+            r.run_scenario("print", "S1")
+            recs = r.run_scenario("print", "S2", arms=["hook-creates-root"])
+            self.assertEqual({x.verdict for x in recs}, {"untested"})
+            for x in recs:
+                self.assertIn("hook never fired", x.notes)
+                self.assertIn("skill file absent after the turn", x.notes)
 
     def test_third_run_on_disagreement(self):
         with tempfile.TemporaryDirectory() as d:
