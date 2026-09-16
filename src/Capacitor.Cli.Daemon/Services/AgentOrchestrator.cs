@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Acp;
@@ -5424,23 +5423,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// it as "no lists" would turn a transient disk error into an open gate.</para>
     /// </summary>
     async Task<(Profile? Profile, bool Readable)> CurrentCaptureProfileAsync() {
-        var path = AppConfig.GetConfigPath(_config.ConfigRoot);
+        // One parse, with the outcome carried out of it. A config that exists and cannot be read
+        // or understood loads as an empty profile, which is indistinguishable from one that scopes
+        // nothing — so the distinction has to come from the load itself rather than from a
+        // pre-check, which could only ever cover the failures it happened to anticipate.
+        var (outcome, snapshot) = await AppConfig.TryLoadProfileConfig(_config.ConfigRoot);
 
-        // No config file at all is a real answer rather than a failure: nothing is configured,
-        // so nothing is scoped, which is the default every install starts in.
-        if (!File.Exists(path)) return (null, true);
-
-        try {
-            // Proven readable before the result is trusted. LoadProfileConfig answers an
-            // unreadable or invalid config with ProfileConfig.Fresh() rather than an error, and
-            // Fresh() carries a default profile with empty lists — which for a privacy gate is
-            // indistinguishable from a profile that genuinely scopes nothing.
-            using var _ = JsonDocument.Parse(await File.ReadAllTextAsync(path));
-        } catch {
-            return (null, false);
-        }
-
-        var snapshot = await AppConfig.LoadProfileConfig(_config.ConfigRoot);
+        if (outcome == ProfileConfigLoad.Unreadable) return (null, false);
 
         return (snapshot.Profiles.GetValueOrDefault(_config.Profiles.Name) ?? _config.Profiles.Effective, true);
     }

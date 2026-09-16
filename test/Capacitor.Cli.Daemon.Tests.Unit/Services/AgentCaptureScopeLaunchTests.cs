@@ -283,4 +283,29 @@ public class AgentCaptureScopeLaunchTests {
         await Assert.That(server.LaunchFailedCalls.Where(c => c.AgentId == "nocfg-1")
             .Any(c => c.Reason.Contains("out_of_capture_scope"))).IsFalse();
     }
+
+    // Syntax is not the bar: a document that parses but does not deserialize fails inside the
+    // config load and lands on the same empty profile an unreadable file does. Whether the lists
+    // are absent or merely unknown is what the gate turns on, so both have to refuse.
+    [Test]
+    public async Task A_config_that_parses_but_does_not_deserialize_refuses_too() {
+        using var repoPath = GitRepo.CreateWithCommit();
+
+        var server = new CaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("codex"),
+            allowedRepoPath: repoPath,
+            configure: c => File.WriteAllText(
+                c.ConfigRoot.Path("config.json"),
+                """{ "version": 2, "active_profile": "default", "profiles": "not-an-object" }"""));
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "typed-1", Prompt: "review", Model: "default", Effort: null,
+            RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "codex",
+            Kind: LaunchKind.ReviewFlow));
+
+        await Assert.That(server.LaunchFailedCalls.Single(c => c.AgentId == "typed-1").Reason)
+            .Contains("could not be read");
+    }
 }

@@ -3,23 +3,37 @@ using System.Text.Json.Nodes;
 
 namespace Capacitor.Cli.Core.Config;
 
+/// <summary>Whether a config could be understood at all. <see cref="Unreadable"/> means its
+/// contents are unknown, not empty.</summary>
+public enum ConfigMigrationOutcome { Ok, Unreadable }
+
 public static class ConfigMigration {
     public record MigrationResult(ProfileConfig Config, bool WasMigrated, bool ShouldPersist);
 
     static MigrationResult FreshDefault() =>
         new(new() { Profiles = new() { ["default"] = new() } }, WasMigrated: true, ShouldPersist: false);
 
-    public static MigrationResult MigrateIfNeeded(string json) {
+    public static MigrationResult MigrateIfNeeded(string json) => TryMigrate(json).Result;
+
+    /// <summary>
+    /// <see cref="MigrateIfNeeded"/>, with the reason it ended where it did.
+    /// <para>A config that is not JSON at all, or is JSON but not an object, answers a FRESH
+    /// default — indistinguishable from a config that genuinely sets nothing. That suits a caller
+    /// reading a setting and repairing the file as it goes; it does not suit one whose decision
+    /// turns on a value being absent rather than unknown, which needs
+    /// <see cref="ConfigMigrationOutcome.Unreadable"/> instead.</para>
+    /// </summary>
+    public static (ConfigMigrationOutcome Outcome, MigrationResult Result) TryMigrate(string json) {
         JsonNode? parsed;
 
         try {
             parsed = JsonNode.Parse(json);
         } catch (JsonException) {
-            return FreshDefault();
+            return (ConfigMigrationOutcome.Unreadable, FreshDefault());
         }
 
         if (parsed is not JsonObject node)
-            return FreshDefault();
+            return (ConfigMigrationOutcome.Unreadable, FreshDefault());
 
         // A v1 config predates versioning and so carries no "version" key at all. Anything that
         // has one is v2 — including a value we can't read: reinterpreting that as v1 would rewrite
@@ -28,7 +42,7 @@ public static class ConfigMigration {
         if (node.ContainsKey("version")) {
             var v2 = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig)!;
 
-            return new(ApplyDefaults(v2, node), WasMigrated: false, ShouldPersist: false);
+            return (ConfigMigrationOutcome.Ok, new(ApplyDefaults(v2, node), WasMigrated: false, ShouldPersist: false));
         }
 
         // V1 → V2: read old flat fields, build default profile. The v1 flat keys sit
@@ -49,7 +63,8 @@ public static class ConfigMigration {
             Profiles      = new() { ["default"] = defaultProfile }
         };
 
-        return new(ApplyDefaults(config, node, sharedProfilePayload: true), WasMigrated: true, ShouldPersist: true);
+        return (ConfigMigrationOutcome.Ok,
+                new(ApplyDefaults(config, node, sharedProfilePayload: true), WasMigrated: true, ShouldPersist: true));
     }
 
     /// <summary>
