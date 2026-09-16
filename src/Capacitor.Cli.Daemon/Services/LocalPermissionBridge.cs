@@ -36,8 +36,9 @@ internal sealed partial class LocalPermissionBridge(
         PermissionDecisionLog?         decisionLog = null
     ) : IHostedService, IAsyncDisposable {
     const int    MaxBindAttempts = 15;
-    const string PathSuffix      = "/permission-request";
-    const string InputWaitSuffix = "/input-wait";
+    const string PathSuffix        = "/permission-request";
+    const string InputWaitSuffix   = "/input-wait";
+    const string ToolSettledSuffix = "/tool-settled";
 
     internal static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan RequestReadTimeout   = TimeSpan.FromSeconds(2);
@@ -69,6 +70,10 @@ internal sealed partial class LocalPermissionBridge(
     /// agent id and whether a PTY vendor's hook just reported its turn ended (true) or a new one
     /// began (false). Null = relays are acknowledged and dropped.
     internal Action<string, bool>? InputWaitHandler { get; set; }
+
+    /// Assigned by the orchestrator like <see cref="AttributeHandler"/>: receives the attributed
+    /// agent id and what its hook reports as settled. Null = notices are acknowledged and dropped.
+    internal Action<string, ToolSettledNotice>? ToolSettledHandler { get; set; }
 
     internal int ServerLegsInFlightForTest => Volatile.Read(ref _serverLegsInFlight);
 
@@ -479,6 +484,13 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            if (context.Request.HttpMethod == "POST" && path is not null
+             && path.EndsWith(ToolSettledSuffix, StringComparison.Ordinal)) {
+                await HandleToolSettledAsync(context, path);
+
+                return;
+            }
+
             // Require token + vendor + endpoint match. The HttpListener prefix already routed us
             // here, but we re-validate explicitly so a stray prefix can't quietly admit anything.
             // Path shape: /{token}/{vendor}/permission-request.
@@ -669,7 +681,7 @@ internal sealed partial class LocalPermissionBridge(
                         decision = new PermissionDecision("deny", null, null);
                     }
                 } else {
-                    var settlementTask = _broker.Register(pending);
+                    var settlementTask = _broker.Register(pending, SubagentIdOf(node));
                     _ = RunServerLegAsync(pending, toolName, toolInput, suggestions, settlementTask, ct);
 
                     PermissionSettlement settlement;
@@ -821,6 +833,9 @@ internal sealed partial class LocalPermissionBridge(
     static string? ToolUseIdOf(JsonNode node) =>
         node["tool_use_id"] is JsonValue v && v.TryGetValue<string>(out var id) ? id : null;
 
+    static string? SubagentIdOf(JsonNode node) =>
+        node["subagent_id"] is JsonValue v && v.TryGetValue<string>(out var id) && id.Length > 0 ? id : null;
+
     /// <summary>
     /// True when the permission request names one of the reserved result channel's unattended-safe
     /// tools. The match parses the canonical <c>mcp__&lt;server&gt;__&lt;tool&gt;</c> shape and
@@ -895,13 +910,59 @@ internal sealed partial class LocalPermissionBridge(
     /// a body it cannot read a session and a verdict from.
     /// </summary>
     async Task HandleInputWaitAsync(HttpListenerContext context, string path) {
+        if (await ReadRelayAsync(context, path, InputWaitSuffix) is not (var node, var sessionId)) return;
+
+        var waiting = node["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
+
+        if (waiting is null) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
+        if (attributed is { } agent) InputWaitHandler?.Invoke(agent.AgentId, waiting.Value);
+
+        Close(context, 204);
+    }
+
+    async Task HandleToolSettledAsync(HttpListenerContext context, string path) {
+        if (await ReadRelayAsync(context, path, ToolSettledSuffix) is not (var node, var sessionId)) return;
+
+        if (!TryScope(node, "tool_use_id", PermissionWire.MaxToolUseIdBytes, out var toolUseId)
+         || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
+        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(toolUseId, subagentId));
+
+        Close(context, 204);
+    }
+
+    /// An absent scope field widens the notice to a whole turn, so a present one must be usable:
+    /// an empty or over-cap id can match nothing and is refused rather than read as absent.
+    static bool TryScope(JsonObject node, string field, int maxBytes, out string? value) {
+        value = null;
+        if (node[field] is not { } present) return true;
+        if (present is not JsonValue v || !v.TryGetValue<string>(out var s) || s.Length == 0 || Encoding.UTF8.GetByteCount(s) > maxBytes) return false;
+        value = s;
+
+        return true;
+    }
+
+    /// The prologue the hook relays share: a live token, a PTY vendor and a bounded JSON object
+    /// carrying a session id. Null means the response is already closed with the refusal.
+    async Task<(JsonObject Node, string SessionId)?> ReadRelayAsync(HttpListenerContext context, string path, string suffix) {
         var trimmed    = path.TrimStart('/');
         var firstSlash = trimmed.IndexOf('/');
 
         if (firstSlash <= 0) {
             Close(context, 404);
 
-            return;
+            return null;
         }
 
         var token = trimmed[..firstSlash];
@@ -909,16 +970,16 @@ internal sealed partial class LocalPermissionBridge(
         if (!string.Equals(token, _sharedToken, StringComparison.Ordinal) && !_reviewerTokens.ContainsKey(token)) {
             Close(context, 404);
 
-            return;
+            return null;
         }
 
         var afterToken = path[(token.Length + 2)..];
-        var vendor     = afterToken.Length > InputWaitSuffix.Length ? afterToken[..^InputWaitSuffix.Length] : "";
+        var vendor     = afterToken.Length > suffix.Length ? afterToken[..^suffix.Length] : "";
 
         if (vendor is not ("claude" or "codex")) {
             Close(context, 404);
 
-            return;
+            return null;
         }
 
         using var readCts = new CancellationTokenSource(RequestReadTimeout);
@@ -927,7 +988,7 @@ internal sealed partial class LocalPermissionBridge(
         if (body is null) {
             Close(context, 413);
 
-            return;
+            return null;
         }
 
         JsonObject? node;
@@ -939,18 +1000,14 @@ internal sealed partial class LocalPermissionBridge(
         }
 
         var sessionId = PermissionWire.Canonical(Str(node, "session_id"));
-        var waiting   = node?["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
 
-        if (sessionId is null || waiting is null) {
+        if (node is null || sessionId is null) {
             Close(context, 400);
 
-            return;
+            return null;
         }
 
-        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) InputWaitHandler?.Invoke(agent.AgentId, waiting.Value);
-
-        Close(context, 204);
+        return (node, sessionId);
     }
 
     static string? Str(JsonObject? node, string field) =>

@@ -26,7 +26,7 @@ internal static class PermissionSettlements {
 /// request as nothing, or Pending then Resolved, never Pending alone. The withdrawn set is
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
 internal sealed class PermissionPromptBroker {
-    sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs);
+    sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId);
 
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
@@ -35,14 +35,16 @@ internal sealed class PermissionPromptBroker {
 
     public bool HasSubscriber => !_subscribers.IsEmpty;
 
-    public Task<PermissionSettlement> Register(PermissionPendingDto dto) {
+    /// <param name="subagentId">The vendor's id for the subagent whose tool call this is, null for
+    /// the main agent's own. Kept off the wire: only <see cref="WithdrawTurn"/> reads it.</param>
+    public Task<PermissionSettlement> Register(PermissionPendingDto dto, string? subagentId = null) {
         lock (_gate) {
             if (_withdrawnAgents.Contains(dto.AgentId))
                 return Task.FromResult(new PermissionSettlement(
                     PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone));
 
             // Completed while the gate is held: a continuation running inline would re-enter it.
-            var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously));
+            var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId);
             if (!_pending.TryAdd(dto.RequestId, entry))
                 throw new InvalidOperationException($"permission request {dto.RequestId} is already pending");
             Broadcast(new PermissionStreamItem.Pending(dto));
@@ -91,6 +93,29 @@ internal sealed class PermissionPromptBroker {
             _withdrawnAgents.Add(agentId);
             foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId).ToList())
                 SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone);
+        }
+    }
+
+    /// A tool that has run was answered where the daemon cannot see, so its prompt is moot. The
+    /// agent is matched as well as the id: every hosted agent posts on the same shared token.
+    public bool TryWithdrawTool(string agentId, string toolUseId) {
+        lock (_gate) {
+            var entry = _pending.Values.FirstOrDefault(e => e.Dto.AgentId == agentId && e.Dto.ToolUseId == toolUseId);
+            return entry is not null
+                && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled);
+        }
+    }
+
+    /// Withdraws what a finished turn left pending: the main agent's own requests for a null
+    /// subagentId, otherwise that subagent's. A background subagent's prompt outlives the parent's
+    /// turn, which is why the scope matters. Unlike an exit, a turn's end says nothing about the
+    /// agent's next request.
+    public int WithdrawTurn(string agentId, string? subagentId) {
+        lock (_gate) {
+            var settled = 0;
+            foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId && e.SubagentId == subagentId).ToList())
+                if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled)) settled++;
+            return settled;
         }
     }
 

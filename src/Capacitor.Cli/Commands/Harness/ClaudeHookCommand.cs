@@ -68,7 +68,7 @@ public sealed class ClaudeHookCommand(
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
         // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
-        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null;
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
@@ -78,6 +78,7 @@ public sealed class ClaudeHookCommand(
             cwd            = node?["cwd"]?.GetValue<string>();
             source         = node?["source"]?.GetValue<string>();
             agentId        = node?["agent_id"]?.GetValue<string>();
+            toolUseId      = node?["tool_use_id"]?.GetValue<string>();
         } catch { }
 
         var budget = clock.Budget(Ceiling(command));
@@ -89,7 +90,25 @@ public sealed class ClaudeHookCommand(
         // parent's turn: a background subagent must not clear a wait the parent just began.
         if (agentId is null
          && command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
-            await DaemonInputWaitRelay.NotifyAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
+
+        // The daemon holds a prompt until it hears the tool is done, and an answer given in the
+        // terminal is invisible to it. A finished tool names itself; a finished turn covers a
+        // terminal deny, which runs no tool; a finished subagent covers its own prompts, since the
+        // parent's turn ending says nothing about a background subagent's. The tool events have no
+        // server route and no other work, so they end here.
+        if (command is "post-tool-use" or "post-tool-use-failure") {
+            if (toolUseId is not null)
+                await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining);
+
+            return 0;
+        }
+
+        if (command == "stop" && agentId is null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
+
+        if (command == "subagent-stop" && agentId is not null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: agentId, budget.Remaining);
 
         var clientCap = budget.Remaining;
 

@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 /// The input-wait relay a daemon-hosted Claude session sends its daemon: which turn boundaries
 /// reach it, and what silences it. Bare <c>[NotInParallel]</c> because the relay drops its own POST
-/// once <see cref="DaemonInputWaitRelay.Cap"/> is spent and says nothing — on a saturated runner
+/// once <see cref="DaemonBridgeRelay.Cap"/> is spent and says nothing — on a saturated runner
 /// that is the whole second, and a test asserting the POST landed fails for the runner's reasons.
 public class ClaudeHookInputWaitRelayTests {
     [TempHome] public required TempHome Home { get; init; }

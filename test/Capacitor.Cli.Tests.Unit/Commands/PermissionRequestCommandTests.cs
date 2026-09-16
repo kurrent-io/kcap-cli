@@ -77,6 +77,20 @@ public class PermissionRequestCommandTests {
         await Assert.That(PermissionRequestCommand.BuildBridgePayload(withoutId, "abc", "agent-1")["tool_use_id"]).IsNull();
     }
 
+    /// The hook's own agent_id names the subagent whose tool this is. The daemon scopes the
+    /// request by it so the parent's turn ending cannot answer a background subagent's prompt,
+    /// and it travels under its own name because agent_id on this wire is the hosted agent.
+    [Test]
+    public async Task Bridge_payload_forwards_the_hooks_agent_id_as_subagent_id() {
+        var node = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"},"agent_id":"3f2504e04f8911d39a0c0305e82c3301","cwd":"/repo"}""")!;
+        var payload = PermissionRequestCommand.BuildBridgePayload(node, "abc", "agent-1");
+        await Assert.That(payload["subagent_id"]!.GetValue<string>()).IsEqualTo("3f2504e04f8911d39a0c0305e82c3301");
+        await Assert.That(payload["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
+
+        var mainAgent = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"}}""")!;
+        await Assert.That(PermissionRequestCommand.BuildBridgePayload(mainAgent, "abc", "agent-1")["subagent_id"]).IsNull();
+    }
+
     sealed class Accepting : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {

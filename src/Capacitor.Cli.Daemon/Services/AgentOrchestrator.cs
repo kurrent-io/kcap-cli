@@ -753,6 +753,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
         _permissionBridge.AttributeHandler    =  HandleAttributePermission;
         _permissionBridge.InputWaitHandler    =  HandleInputWait;
+        _permissionBridge.ToolSettledHandler  =  HandleToolSettled;
         _server.ProbeBorrowSourceHandler      =  HandleProbeBorrowSource;
         // The side-effect-free reviewer-model preflight: pure resolution over the advertised
         // resolvers — no subprocess/worktree/config side effects.
@@ -957,6 +958,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// (torn down since the hook fired) is dropped.
     void HandleInputWait(string agentId, bool waiting) {
         if (_agents.TryGetValue(agentId, out var agent)) agent.ActivityClock.SetAwaitingInput(waiting);
+    }
+
+    /// The bridge's attributed notice that a prompt was answered where the daemon cannot see:
+    /// the vendor's own terminal. Keyed on the broker alone, so a request outliving its agent's
+    /// table entry is still retired.
+    void HandleToolSettled(string agentId, ToolSettledNotice notice) {
+        if (notice.ToolUseId is { } toolUseId) _permissionBroker.TryWithdrawTool(agentId, toolUseId);
+        else _permissionBroker.WithdrawTurn(agentId, notice.SubagentId);
     }
 
     internal PermissionPromptBroker PermissionBrokerForTest => _permissionBroker;

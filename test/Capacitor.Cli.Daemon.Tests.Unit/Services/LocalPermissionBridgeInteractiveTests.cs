@@ -101,6 +101,25 @@ public class LocalPermissionBridgeInteractiveTests {
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
     }
 
+    /// The hook body's subagent_id scopes the request to that subagent's turn, so the parent's
+    /// turn ending cannot answer it; only the subagent's own end can.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
+    public async Task A_subagents_request_survives_the_main_turns_end_and_falls_with_its_own() {
+        await using var h = new Harness();
+        h.Server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
+        await h.StartAsync();
+
+        var response = h.Client.PostAsync($"{h.Bridge.BaseUrl}/claude/permission-request",
+            JsonContent.Create(new { session_id = Session, tool_name = "Bash", tool_input = new { command = "ls" }, subagent_id = "sub-1", agent_id = "agent-1", cwd = "/repo" }));
+        var pending = await h.WaitPendingAsync();
+
+        await Assert.That(h.Broker.WithdrawTurn("agent-1", subagentId: null)).IsEqualTo(0);
+        await Assert.That(h.Broker.PendingSnapshot().Single().RequestId).IsEqualTo(pending.RequestId);
+
+        await Assert.That(h.Broker.WithdrawTurn("agent-1", subagentId: "sub-1")).IsEqualTo(1);
+        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("deny");
+    }
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
     public async Task Server_claim_first_answers_the_hook_pushes_resolved_server_and_a_later_app_claim_loses() {
         await using var h = new Harness();

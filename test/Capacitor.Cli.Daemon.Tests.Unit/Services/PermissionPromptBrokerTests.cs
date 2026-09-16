@@ -7,8 +7,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class PermissionPromptBrokerTests {
     static readonly TimeSpan Bounded = TimeSpan.FromSeconds(10);
 
-    static PermissionPendingDto Dto(string id = "r1", string agent = "a1") =>
-        new(id, agent, "s1", "claude", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"));
+    static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? toolUseId = null) =>
+        new(id, agent, "s1", "claude", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"), toolUseId);
 
     static PermissionDecision Allow => new("allow", null, null);
 
@@ -149,6 +149,87 @@ public class PermissionPromptBrokerTests {
         var replayed = ((PermissionStreamItem.Pending)await late.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
         await Assert.That(replayed.ServerRequestId).IsEqualTo("srv-1");
         await Assert.That(broker.PendingSnapshot().Single().ServerRequestId).IsEqualTo("srv-1");
+    }
+
+    [Test]
+    public async Task A_settled_tool_withdraws_only_the_request_carrying_its_id() {
+        var broker = new PermissionPromptBroker();
+        var (_, reader) = broker.Subscribe();
+        var s1 = broker.Register(Dto("r1", "a1", toolUseId: "toolu_1"));
+        var s2 = broker.Register(Dto("r2", "a1", toolUseId: "toolu_2"));
+        _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token);
+        _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token);
+
+        await Assert.That(broker.TryWithdrawTool("a1", "toolu_1")).IsTrue();
+
+        var resolved = ((PermissionStreamItem.Resolved)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
+        await Assert.That(resolved.RequestId).IsEqualTo("r1");
+        await Assert.That(resolved.Outcome).IsEqualTo("withdrawn");
+        await Assert.That(resolved.Source).IsEqualTo("tool_settled");
+        await Assert.That((await WaitBounded(s1, "withdrawn")).Decision.Behavior).IsEqualTo("deny");
+        await Assert.That(s2.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
+        await Assert.That(broker.TryWithdrawTool("a1", "toolu_1")).IsFalse();
+    }
+
+    /// The shared token admits every hosted agent, so a tool id is only honoured for the agent
+    /// whose prompt carries it.
+    [Test]
+    public async Task A_settled_tool_of_another_agent_withdraws_nothing() {
+        var broker = new PermissionPromptBroker();
+        var s1 = broker.Register(Dto("r1", "a1", toolUseId: "toolu_1"));
+
+        await Assert.That(broker.TryWithdrawTool("a2", "toolu_1")).IsFalse();
+
+        await Assert.That(s1.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Count).IsEqualTo(1);
+    }
+
+    /// A background subagent's prompt outlives the parent's turn, so the turn-end backstop must
+    /// not answer it on the user's behalf.
+    [Test]
+    public async Task A_turn_end_withdraws_the_main_turns_requests_and_spares_a_subagents() {
+        var broker = new PermissionPromptBroker();
+        var main = broker.Register(Dto("r1", "a1"));
+        var sub  = broker.Register(Dto("r2", "a1"), subagentId: "sub-1");
+
+        await Assert.That(broker.WithdrawTurn("a1", subagentId: null)).IsEqualTo(1);
+
+        var settled = await WaitBounded(main, "main turn withdrawn");
+        await Assert.That(settled.Outcome).IsEqualTo("withdrawn");
+        await Assert.That(settled.Source).IsEqualTo("tool_settled");
+        await Assert.That(sub.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
+    }
+
+    [Test]
+    public async Task A_subagent_stop_withdraws_only_that_subagents_requests() {
+        var broker = new PermissionPromptBroker();
+        var main  = broker.Register(Dto("r1", "a1"));
+        var sub1  = broker.Register(Dto("r2", "a1"), subagentId: "sub-1");
+        var sub2  = broker.Register(Dto("r3", "a1"), subagentId: "sub-2");
+        var other = broker.Register(Dto("r4", "a2"), subagentId: "sub-1");
+
+        await Assert.That(broker.WithdrawTurn("a1", subagentId: "sub-1")).IsEqualTo(1);
+
+        await Assert.That((await WaitBounded(sub1, "subagent withdrawn")).Outcome).IsEqualTo("withdrawn");
+        await Assert.That(main.IsCompleted).IsFalse();
+        await Assert.That(sub2.IsCompleted).IsFalse();
+        await Assert.That(other.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Count).IsEqualTo(3);
+    }
+
+    /// Unlike an agent's exit, a turn's end says nothing about the next turn.
+    [Test]
+    public async Task A_turn_end_leaves_the_agents_next_request_pending() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", "a1"));
+        await Assert.That(broker.WithdrawTurn("a1", subagentId: null)).IsEqualTo(1);
+
+        var next = broker.Register(Dto("r2", "a1"));
+
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
     }
 
     [Test]

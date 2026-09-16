@@ -245,7 +245,7 @@ sealed class CodexHookCommand(
         // Ahead of the disabled and exclusion gates: the hosting daemon's turn-boundary hint is
         // local display state, not recording.
         if (eventName switch { "Stop" => true, "UserPromptSubmit" or "PreToolUse" => false, _ => (bool?) null } is { } waiting)
-            await DaemonInputWaitRelay.NotifyAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
 
         // Mirror the Claude path: if the user ran `kcap disable`, skip every
         // server POST and the watcher restart. Without this check the next Codex
