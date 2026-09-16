@@ -238,5 +238,46 @@ class RecorderTests(unittest.TestCase):
         self.assertRegex(os_label(), r"^\S+ \S+ \S+$")
 
 
+import subprocess  # noqa: E402
+
+from lib.hook_script import read_stamp, stamp_path, write_hook_script  # noqa: E402
+
+
+class HookScriptTests(unittest.TestCase):
+    def test_script_writes_skill_and_stamp(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "cfg"
+            cfg.mkdir()
+            skill = ProbeSkill.fresh()
+            target = Path(d) / "repo" / ".claude" / "skills" / skill.name / "SKILL.md"
+            stamp = stamp_path(cfg)
+            script = write_hook_script(cfg, target, skill.render(), stamp)
+            self.assertEqual(script.stat().st_mode & 0o111, 0o111)
+            self.assertIsNone(read_stamp(stamp))
+            proc = subprocess.run([str(script)], input='{"hook_event_name":"SessionStart"}',
+                                  capture_output=True, text=True, timeout=10)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.stdout, "")
+            self.assertEqual(target.read_text(), skill.render())
+            self.assertIn("fired_at", read_stamp(stamp))
+            self.assertEqual(Path(str(stamp) + ".stdin").read_text(), '{"hook_event_name":"SessionStart"}')
+
+    def test_script_survives_open_stdin_and_can_delete(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "cfg"
+            cfg.mkdir()
+            skill = ProbeSkill.fresh()
+            target = Path(d) / "repo" / ".x" / skill.name / "SKILL.md"
+            target.parent.mkdir(parents=True)
+            target.write_text("old")
+            stamp = stamp_path(cfg)
+            script = write_hook_script(cfg, target, "", stamp, delete=True)
+            with subprocess.Popen([str(script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as p:
+                out, _ = p.communicate(timeout=10)
+            self.assertEqual(p.returncode, 0)
+            self.assertFalse(target.parent.exists())
+            self.assertIsNotNone(read_stamp(stamp))
+
+
 if __name__ == "__main__":
     unittest.main()
