@@ -405,7 +405,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "a TODO, a follow-up) — so it appears in the user's next-work ledger. One call per item, in "
           + "plain text; do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
             new("object", new() {
-                ["text"]       = new("string", "The unfinished work, as one plain-text sentence (12-500 characters)."),
+                ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
                 ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
             }, ["text"])),
 

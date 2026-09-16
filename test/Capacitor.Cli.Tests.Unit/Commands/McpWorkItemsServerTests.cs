@@ -207,8 +207,6 @@ public class McpWorkItemsServerTests {
 
     [Test]
     public async Task Server_instructions_steer_unfinished_work_to_declare_loose_end() {
-        // The preamble is the only place an agent that never opens the work-items skill learns the
-        // tool exists, so a loose end left undeclared is the failure it has to prevent.
         var instructions = McpWorkItemsServer.ServerInstructions;
 
         await Assert.That(instructions).Contains("declare_loose_end");
