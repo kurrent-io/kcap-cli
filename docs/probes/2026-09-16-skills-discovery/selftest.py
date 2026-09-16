@@ -1048,6 +1048,37 @@ class CopilotAdapterTests(unittest.TestCase):
                          "tools_used=1 skill_loads=1 searches=0")
 
 
+class ReportTests(unittest.TestCase):
+    def test_summary_columns(self):
+        import report
+        base = dict(entry="x", harness="x", version="1.0", os="o", mode="print", exclusion="none",
+                    flaky=False, runs=2, mechanism=None, evidence=[], notes="")
+        rows = [
+            dict(base, scenario="S1", arm="S1/native", root=".x/skills", verdict="visible_first_turn"),
+            dict(base, scenario="S2", arm="S2/hook-creates-root", root=".x/skills", verdict="not_visible", mechanism="hook"),
+            dict(base, scenario="S2", arm="S2/registration", root=".x/skills", verdict="visible_after_reload", mechanism="ext"),
+            dict(base, scenario="S3", arm="S3/gitignore", root=".x/skills", verdict="visible_first_turn", exclusion="gitignore"),
+            dict(base, scenario="S3", arm="S3/info-exclude", root=".x/skills", verdict="not_visible", exclusion="info-exclude"),
+            dict(base, scenario="S4", arm="S4/all-roots", root=".x/skills", verdict="visible_first_turn"),
+            dict(base, scenario="S4", arm="S4/all-roots", root=".agents/skills", verdict="visible_first_turn"),
+            dict(base, scenario="S4", arm="S4/all-roots", root=".y/skills", verdict="leaked"),
+            dict(base, entry="y", scenario="S4", arm="S4/all-roots", root=".agents/skills", verdict="visible_first_turn"),
+            dict(base, entry="y", scenario="S1", arm="S1/native", root=".y/skills", verdict="untested", notes="binary not installed"),
+        ]
+        summary = {s["Entry"]: s for s in report.summarise(rows)}
+        x = summary["x"]
+        self.assertEqual(x["Roots consumed"], ".agents/skills, .x/skills (undocumented: .y/skills)")
+        self.assertEqual(x["Startup mechanism proven"], "ext (print)")
+        self.assertEqual(x["Exclusion preserving load"], "gitignore")
+        self.assertEqual(x["Vendor-isolated destination"], ".x/skills")
+        self.assertEqual(x["Reload path"], "ext")
+        self.assertEqual(x["_status"], "measured")
+        self.assertTrue(summary["y"]["_status"].startswith("untested: binary not installed"))
+        self.assertEqual(summary["y"]["Minimum version"], "—")
+        text = report.render(list(summary.values()))
+        self.assertIn("| x | 1.0 |", text)
+
+
 class PiAdapterTests(unittest.TestCase):
     def test_registration_extension_names_the_root(self):
         from harness.pi import PiAdapter
