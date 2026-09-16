@@ -279,5 +279,52 @@ class HookScriptTests(unittest.TestCase):
             self.assertIsNotNone(read_stamp(stamp))
 
 
+from harness.base import Adapter, AskResult, HookInfo  # noqa: E402
+from harness.fake import FakeAdapter  # noqa: E402
+from lib.print_driver import print_ask  # noqa: E402
+
+
+class AdapterTests(unittest.TestCase):
+    def test_fake_adapter_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            fa = FakeAdapter()
+            sb = new_sandbox(fa.lever, None, [], base=Path(d))
+            skill = ProbeSkill.fresh()
+            write_skill(sb.repo / fa.native_root, skill)
+            res = fa.ask(sb, "print", single_prompt(skill))
+            self.assertIsInstance(res, AskResult)
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertIn(skill.body_token, res.raw)
+            self.assertEqual(fa.skill_file(sb, fa.native_root, skill.name),
+                             sb.repo / ".fake/skills" / skill.name / "SKILL.md")
+
+    def test_fake_adapter_runs_hook_before_reading(self):
+        with tempfile.TemporaryDirectory() as d:
+            fa = FakeAdapter()
+            sb = new_sandbox(fa.lever, None, [], base=Path(d))
+            skill = ProbeSkill.fresh()
+            script = write_hook_script(sb.config_root, fa.skill_file(sb, fa.native_root, skill.name),
+                                       skill.render(), stamp_path(sb.config_root))
+            info = fa.install_startup_hook(sb, script)
+            self.assertIsInstance(info, HookInfo)
+            res = fa.ask(sb, "print", single_prompt(skill))
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertIsNotNone(read_stamp(stamp_path(sb.config_root)))
+
+    def test_print_driver_timeout_and_extract(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = print_ask(["sh", "-c", "echo '{\"result\":\"hi\"}'"], Path(d), dict(os.environ),
+                            Path(d) / "e.stderr.log", timeout=10,
+                            extract=lambda raw: json.loads(raw)["result"])
+            self.assertEqual(res.reply_text, "hi")
+            self.assertEqual(res.exit_code, 0)
+            slow = print_ask(["sh", "-c", "sleep 5"], Path(d), dict(os.environ), Path(d) / "s.stderr.log", timeout=0.5)
+            self.assertIsNone(slow.exit_code)
+
+    def test_adapter_defaults(self):
+        self.assertIsNone(Adapter.check_auth(FakeAdapter(), None))
+        self.assertIsNone(Adapter.install_registration(FakeAdapter(), None, None, None))
+
+
 if __name__ == "__main__":
     unittest.main()
