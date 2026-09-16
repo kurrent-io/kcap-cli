@@ -442,5 +442,29 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual({r["scenario"] for r in rows}, {"S1"})
 
 
+from lib.acp_driver import acp_ask  # noqa: E402
+
+SERVERS = KIT / "selftest_servers.py"
+
+
+def _fake_repo(d: str, skill: ProbeSkill) -> Path:
+    repo = Path(d) / "repo"
+    write_skill(repo / ".fake" / "skills", skill)
+    return repo
+
+
+class AcpDriverTests(unittest.TestCase):
+    def test_one_turn(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            res = acp_ask([sys.executable, str(SERVERS), "acp"], repo, dict(os.environ), single_prompt(skill),
+                          Path(d) / "acp.stderr.log", timeout=30)
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertIn("stopReason=end_turn", res.notes)
+            self.assertGreaterEqual(res.first_request_at, res.started_at)
+            self.assertEqual(res.argv[-1], "acp")
+
+
 if __name__ == "__main__":
     unittest.main()
