@@ -88,7 +88,7 @@ public class CursorImportPrTests : IDisposable {
 
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
         await Assert.That(classified.Count).IsEqualTo(2);
 

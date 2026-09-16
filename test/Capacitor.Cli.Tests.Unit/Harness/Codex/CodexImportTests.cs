@@ -247,7 +247,6 @@ public class CodexImportTests {
             server.Url!,
             transcripts,
             minLines: 0,
-            excludedRepos: null,
             CancellationToken.None,
             vendor: HarnessId.Codex
         );
@@ -287,7 +286,6 @@ public class CodexImportTests {
             server.Url!,
             transcripts,
             minLines: 0,
-            excludedRepos: null,
             CancellationToken.None,
             vendor: HarnessId.Codex
         );

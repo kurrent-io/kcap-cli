@@ -84,7 +84,6 @@ public class ImportEndReassertTests : IDisposable {
             _server.Url!,
             transcripts,
             minLines: 0,
-            excludedRepos: null,
             CancellationToken.None
         );
 

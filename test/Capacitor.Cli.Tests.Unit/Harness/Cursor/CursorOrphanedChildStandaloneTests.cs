@@ -229,7 +229,7 @@ public class CursorOrphanedChildStandaloneTests {
         new(FilterCwd: filterCwd, FilterSession: filterSession, Since: since, MinLines: minLines);
 
     ClassifyContext Ctx(HttpClient http, int minLines = 0) =>
-        new(http, "http://localhost", minLines, ExcludedRepos: null, ExcludedPaths: null, Home: Home);
+        new(http, "http://localhost", minLines, Home: Home);
 
     sealed class ProjectsDirFixture : IDisposable {
         readonly TempDir _root = new("cursorprojects");

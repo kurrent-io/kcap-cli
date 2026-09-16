@@ -1109,12 +1109,8 @@ class ImportCommand(
             HttpClient: httpClient,
             BaseUrl: baseUrl,
             MinLines: minLines,
-            ExcludedRepos: excludedRepos,
-            ExcludedPaths: excludedPaths,
             Home: home,
-            Reimport: reimport,
-            AllowedPaths: allowedPaths,
-            AllowedRepos: allowedRepos
+            Reimport: reimport
         );
 
         IReadOnlyList<SessionClassification>[] classificationsPerSource;
@@ -1186,16 +1182,28 @@ class ImportCommand(
         // Flatten classifications.
         var classifications = classificationsPerSource.SelectMany(c => c).ToList();
 
+        // Capture scope is decided here, over every source's output at once, and nowhere else.
+        var captureScope = new CaptureScope(router, config, home,
+                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos);
+
+        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
+
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
         // Repo and path exclusions are independent gates: a session is included only when
         // EVERY applicable exclusion key has been opted-in. Without that, opting into a
         // repo would silently bypass a path the user had explicitly ignored.
-        var excludedByRepo = classifications
+        // Every session this run could still send, which is the same set CaptureScope stamps: an
+        // already-loaded one re-asserts its lifecycle hooks, so it is as much a question for the
+        // user as a new one, it counts toward what an answer withholds, and — since the block below
+        // only opens when a bucket is non-empty — it must be able to open it on its own.
+        var actionable = classifications.Where(CaptureScope.Actionable).ToList();
+
+        var excludedByRepo = actionable
             .Where(c => c.ExcludedRepoKey is not null)
             .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
-        var excludedByPath = classifications
+        var excludedByPath = actionable
             .Where(c => c.ExcludedPathKey is not null)
             .GroupBy(c => c.ExcludedPathKey!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -1203,7 +1211,7 @@ class ImportCommand(
         // Not grouped by key: an allow list excludes by admitting nothing, so there is no entry to
         // name in a prompt. Paths and repos share the bucket — the question they put to the user is
         // the same one, and answering it per-list would not change what it means.
-        var outsideAllowlist = classifications.Where(c => c.OutsideAllowlist).ToList();
+        var outsideAllowlist = actionable.Where(c => c.OutsideAllowlist).ToList();
 
         if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
             var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

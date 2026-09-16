@@ -22,19 +22,15 @@ internal static class TranscriptFileClassification {
             string                                                       baseUrl,
             List<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             int                                                          minLines,
-            string[]?                                                    excludedRepos,
-            CancellationToken                                            ct,
+                        CancellationToken                                            ct,
             HarnessId                                                    vendor        = HarnessId.Claude,
-            Action?                                                      onProbed      = null,
-            string[]?                                                    excludedPaths = null,
-            string[]?                                                    allowedPaths  = null,
-            string[]?                                                    allowedRepos  = null
+            Action?                                                      onProbed      = null
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<ImportCommand.SessionClassification>>(transcripts.Count);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, allowedPaths, allowedRepos, probeGate, vendor, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -52,17 +48,13 @@ internal static class TranscriptFileClassification {
             string            filePath,
             string            encodedCwd,
             int               minLines,
-            string[]?         excludedRepos,
-            string[]?         excludedPaths,
-            string[]?         allowedPaths,
-            string[]?         allowedRepos,
             SemaphoreSlim     probeGate,
             HarnessId         vendor,
             Action?           onProbed,
             CancellationToken ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, allowedPaths, allowedRepos, probeGate, vendor, ct);
+            return await ClassifyOneCoreAsync(router, config, home, httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ct);
         } finally {
             onProbed?.Invoke();
         }
@@ -78,10 +70,6 @@ internal static class TranscriptFileClassification {
             string            filePath,
             string            encodedCwd,
             int               minLines,
-            string[]?         excludedRepos,
-            string[]?         excludedPaths,
-            string[]?         allowedPaths,
-            string[]?         allowedRepos,
             SemaphoreSlim     probeGate,
             HarnessId         vendor,
             CancellationToken ct
@@ -200,47 +188,6 @@ internal static class TranscriptFileClassification {
             }
         }
 
-        // Flag excluded repos/paths for New/Partial sessions. Resolution (include or skip?)
-        // happens later in HandleImport, where we can batch prompts by key.
-        string? excludedRepoKey  = null;
-        string? excludedPathKey  = null;
-        var     outsideAllowlist = false;
-
-        if (status is ImportCommand.ClassificationStatus.New or ImportCommand.ClassificationStatus.Partial) {
-            var cwd = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(encodedCwd);
-
-            // Outside the null-cwd guard below: a session whose cwd we never recovered cannot be
-            // placed inside a configured allowlist, and unplaceable is outside.
-            outsideAllowlist = PathExclusion.IsOutsideAllowlist(cwd, allowedPaths, home);
-
-            string? repoKey = null;
-
-            if (cwd is not null) {
-                if (excludedRepos is { Length: > 0 } || allowedRepos is { Length: > 0 }) {
-                    // Classification only needs owner/repo to match on — skip PR detection.
-                    var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
-
-                    if (repo?.Owner is not null && repo.RepoName is not null) repoKey = $"{repo.Owner}/{repo.RepoName}";
-
-                    if (repoKey is not null && excludedRepos is { Length: > 0 }
-                     && excludedRepos.Contains(repoKey, StringComparer.OrdinalIgnoreCase)) {
-                        excludedRepoKey = repoKey;
-                    }
-                }
-
-                if (excludedPathKey is null && excludedPaths is { Length: > 0 }) {
-                    foreach (var entry in excludedPaths) {
-                        if (PathExclusion.IsExcluded(cwd, [entry], home)) {
-                            excludedPathKey = PathExclusion.Normalize(entry, home);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            outsideAllowlist |= RepoExclusion.IsOutsideAllowlist(repoKey, allowedRepos);
-        }
-
         // TotalLines is only meaningful for TooShort sessions (where we know the exact
         // count because it's below the threshold). Leave it at 0 for other statuses —
         // we only read enough of the file to confirm the TooShort filter didn't apply.
@@ -252,9 +199,6 @@ internal static class TranscriptFileClassification {
             Status           = status,
             ResumeFromLine   = resumeFromLine,
             ProbeErrorReason = probeErrorReason,
-            ExcludedRepoKey  = excludedRepoKey,
-            ExcludedPathKey  = excludedPathKey,
-            OutsideAllowlist = outsideAllowlist,
             Vendor           = vendor,
         };
     }

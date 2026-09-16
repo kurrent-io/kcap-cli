@@ -1,5 +1,4 @@
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Harness.Pi;
 using WireMock.RequestBuilders;
@@ -77,14 +76,14 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
+            router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);
 
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
         await Assert.That(classified.Count).IsEqualTo(1);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
@@ -144,12 +143,12 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
+            router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
@@ -177,12 +176,12 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
+            router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
 
         await Assert.That(classified.Count).IsEqualTo(1);
@@ -209,12 +208,12 @@ public class PiImportSourceImportTests : IDisposable {
 
         var source = new PiImportSource(Config.Root, 
             sessionsDir,
-            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null), router: new GitProviderRouter());
+            router: new GitProviderRouter());
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 

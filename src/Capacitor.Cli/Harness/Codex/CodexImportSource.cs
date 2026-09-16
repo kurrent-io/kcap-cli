@@ -111,12 +111,8 @@ internal sealed class CodexImportSource(
             ctx.BaseUrl,
             transcripts,
             ctx.MinLines,
-            ctx.ExcludedRepos?.ToArray(),
             ct,
-            vendor: Vendor,
-            excludedPaths: ctx.ExcludedPaths?.ToArray(),
-            allowedPaths: ctx.AllowedPaths?.ToArray(),
-            allowedRepos: ctx.AllowedRepos?.ToArray()
+            vendor: Vendor
         );
     }
 

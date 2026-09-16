@@ -26,11 +26,10 @@ internal sealed record DiscoveredSession(
     IReadOnlyDictionary<string, object?>    SourceMeta);
 
 /// <summary>
-/// Dependencies passed to ClassifyAsync. ExcludedRepos / ExcludedPaths / AllowedPaths /
-/// AllowedRepos are
-/// the user's profile-level capture scope, applied identically across sources, and Home is what a
-/// <c>~</c> in one of those paths expands to. An empty AllowedPaths admits every path; a non-empty
-/// one admits only cwds under it, with ExcludedPaths still subtracting within.
+/// Dependencies passed to ClassifyAsync. Carries no capture scope: whether a session may be
+/// imported is decided once in <see cref="CaptureScope"/>, over every source's classifications,
+/// so a source cannot opt out of it by not asking. Home is what a <c>~</c> in a user-configured
+/// path expands to.
 /// Reimport carries the effective <c>--reimport</c> flag: when true, a source
 /// that skips already-loaded sessions via a local completeness ledger must
 /// bypass that ledger so the selected sessions re-classify as New/Partial and
@@ -41,12 +40,8 @@ internal sealed record ClassifyContext(
     HttpClient                  HttpClient,
     string                      BaseUrl,
     int                         MinLines,
-    IReadOnlyList<string>?      ExcludedRepos,
-    IReadOnlyList<string>?      ExcludedPaths,
     UserHome                    Home,
-    bool                        Reimport = false,
-    IReadOnlyList<string>?      AllowedPaths = null,
-    IReadOnlyList<string>?      AllowedRepos = null);
+    bool                        Reimport = false);
 
 /// <summary>
 /// Dependencies passed to ImportSessionAsync. ForcePrivate carries the
