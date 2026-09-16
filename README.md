@@ -2040,6 +2040,8 @@ The two lists compose: the allow list decides what is capturable, and `kcap igno
 
 One asymmetry is deliberate. A session whose working directory kcap cannot determine is **not** captured once an allow list is set, where with only an ignore list it would be — an allow list that admitted sessions it could not place would not be restricting anything. The same rule applies to `allowed_repos` above.
 
+**Agents kcap runs for you are scoped too, but only the unattended ones.** A review flow's reviewer and a PR review run wherever the flow points them, with nobody choosing that directory, so the lists apply and a launch outside them is refused instead of reported. An agent you asked for is never gated this way — choosing the directory *is* the opt-in, so a launch from the UI or from `kcap` in a terminal runs where you told it to whatever the lists say.
+
 **Provider API keys for headless calls.** Title generation, summaries, and judges shell out to `claude -p` / `codex exec` in the background. By default kcap scrubs `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from those spawns so your subscription login (claude.ai / ChatGPT account) is used — a globally-set key would otherwise override subscription auth and fail the call. If you intentionally authenticate via API key (PAYG), opt back in:
 
 ```bash

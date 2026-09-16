@@ -1,13 +1,11 @@
-using Capacitor.Cli.Core;
-
-namespace Capacitor.Cli;
+namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// Path-based session scoping. Matches a session's <c>cwd</c> against configured lists of
 /// directories, treating descendants as matching too. Resolves symlinks at the leaf so worktree
 /// symlinks stored in config still match cwds reported as the canonical path (or vice versa).
 /// </summary>
-static class PathExclusion {
+public static class PathExclusion {
     /// <summary>
     /// True when the session's cwd should not be captured. The allowlist gates and the denylist
     /// subtracts within it, so <c>allowed_paths: [~/dev]</c> with

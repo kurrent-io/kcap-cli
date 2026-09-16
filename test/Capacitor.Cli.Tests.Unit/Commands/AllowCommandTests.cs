@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
 

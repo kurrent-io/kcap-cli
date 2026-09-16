@@ -2107,6 +2107,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
+            // Capture scope, for unattended launches only — ahead of every review-specific check
+            // and of the worktree, so a refused launch neither inspects a repository it may not
+            // report on nor copies one into a borrowed snapshot it is about to discard. The borrow
+            // is re-authorized below regardless, and this gate only ever removes permission, so
+            // running it on the requested cwd cannot admit one the authorizer would reject.
+            if ((isReview || isReviewFlow) && AgentCaptureScope.Configured(_config.Profiles.Effective)) {
+                var scopeOrigin = cmd.Borrowed ? cmd.BorrowCwd : repoPath;
+
+                if (AgentCaptureScope.IsOutOfScope(scopeOrigin, _config.Profiles.Effective, _config.Home)) {
+                    LogLaunchOutOfCaptureScope(agentId, scopeOrigin ?? "");
+                    await _server.LaunchFailedAsync(agentId, AgentCaptureScope.RefusalReason);
+
+                    return new CommandOutcome(
+                        CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+                }
+            }
+
             if (isReview) {
                 if (cmd.Review is not { } review) {
                     await _server.LaunchFailedAsync(agentId, "Review launch missing PR info");
@@ -5355,6 +5372,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Refusing unattended agent {AgentId}: {Origin} is outside the profile's capture scope")]
+    partial void LogLaunchOutOfCaptureScope(string agentId, string origin);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Vendor '{Vendor}' cannot apply a requested model; launching with its default and reporting no model instead of '{RequestedModel}', so the dashboard and analytics are not told a model is live that isn't.")]
     partial void LogModelSelectionUnsupported(string vendor, string requestedModel);
