@@ -245,6 +245,7 @@ public sealed class PermissionService : IPermissionService {
             var item = new PendingPermissionRequest(dto);
             _cache.AddOrUpdate(item);
             Shadow(dto.ServerRequestId);
+            ShadowMatchingServerQuestions(item);
         }
     }
 
@@ -257,6 +258,29 @@ public sealed class PermissionService : IPermissionService {
 
     // Caller holds _lock.
     bool IsClaimed(string serverRequestId) => _cache.Items.Any(i => i.Lane == PermissionLane.Local && i.ServerRequestId == serverRequestId);
+
+    // Caller holds _lock. Prompt-text join: the daemon has not yet written ServerRequestId.
+    void ShadowMatchingServerQuestions(PendingPermissionRequest local) {
+        if (!local.IsQuestion) return;
+        foreach (var twin in _cache.Items.Where(i => i.Lane == PermissionLane.Server && local.SameQuestionAs(i)).ToList())
+            ShadowTwin(local, twin);
+    }
+
+    // Caller holds _lock. The twin may already be in the cache or only arriving now.
+    void ShadowTwin(PendingPermissionRequest local, PendingPermissionRequest twin) {
+        if (local.ServerRequestId is null) {
+            local.ServerRequestId = twin.RequestId;
+            _cache.Refresh(local);
+        }
+        _shadowed[twin.Key] = twin;
+        _cache.Remove(twin.Key);
+    }
+
+    // Caller holds _lock.
+    PendingPermissionRequest? LocalQuestionClaimant(PendingPermissionRequest server) {
+        if (!server.IsQuestion) return null;
+        return _cache.Items.FirstOrDefault(i => i.Lane == PermissionLane.Local && i.SameQuestionAs(server));
+    }
 
     void DropLocalLane() {
         lock (_lock) {
@@ -303,6 +327,7 @@ public sealed class PermissionService : IPermissionService {
             item.AgentId = _sessionAgents.GetValueOrDefault(item.SessionId, "");
             item.LiveSequence = ++_liveSequence;
             if (IsClaimed(item.RequestId)) { _shadowed[item.Key] = item; return; }
+            if (LocalQuestionClaimant(item) is { } claimant) { ShadowTwin(claimant, item); return; }
             if (_cache.Lookup(item.Key) is { HasValue: true, Value: var live }) {
                 live.LiveSequence = item.LiveSequence; // a live card keeps its instance, not its stamp
                 return;

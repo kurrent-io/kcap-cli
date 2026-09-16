@@ -48,7 +48,7 @@ public class ChatTabViewSmokeTests {
         .Where(c => c.Name == "ToolCallRow" && c.DataContext is ToolCallItem).ToList();
     static Button Summary(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("toolSummary"));
     static Button? SummaryOrNull(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Classes.Contains("toolSummary"));
-    static ToolGroupItem OnlyGroup(Host host) => (ToolGroupItem)host.Chat.Items.Single();
+    static ToolGroupItem OnlyGroup(Host host) => host.Chat.Items.OfType<ToolGroupItem>().Single();
 
     /// A synthetic pointer event hit-tests the compositor's last committed scene, which layout alone
     /// does not refresh: a control shown since the last frame is invisible to the click until the
@@ -950,23 +950,23 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Card_renders_with_its_buttons_and_the_row_collapses_when_empty() {
+    public async Task Card_renders_with_its_buttons_and_leaves_the_list_when_empty() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            var row = host.View.FindControl<Border>("NeedsYouRow")!;
-            await Assert.That(row.IsVisible).IsFalse();
+            await Assert.That(host.View.FindControl<Border>("NeedsYouRow")).IsNull();
+            await Assert.That(host.Chat.Items.OfType<PendingCardItem>().Any()).IsFalse();
 
             host.Permissions.Add(PermissionEntries.Entry("r1", "a1", toolName: "Bash"));
-            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 1, what: "the card");
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
             Dispatcher.UIThread.RunJobs();
-            await Assert.That(row.IsVisible).IsTrue();
-            var buttons = row.GetVisualDescendants().OfType<Button>().Select(b => b.Content?.ToString() ?? "").ToArray();
+            var list = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var buttons = list.GetVisualDescendants().OfType<Button>().Select(b => b.Content?.ToString() ?? "").ToArray();
             await Assert.That(buttons).IsEquivalentTo(new[] { "Deny", "Allow always", "Allow" });
 
             host.Permissions.Remove("r1");
-            await WaitUntilAsync(() => host.Chat.PendingCards.Count == 0, what: "cleared");
+            await WaitUntilAsync(() => !host.Chat.Items.OfType<PendingCardItem>().Any(), what: "cleared");
             Dispatcher.UIThread.RunJobs();
-            await Assert.That(row.IsVisible).IsFalse();
+            await Assert.That(list.GetVisualDescendants().OfType<Button>().Any(b => b.Content is "Allow")).IsFalse();
         });
     }
 
@@ -989,7 +989,115 @@ public class ChatTabViewSmokeTests {
             var otherBoxes = host.View.GetVisualDescendants().OfType<TextBox>()
                 .Where(t => t.PlaceholderText == "Other…").ToList();
             await Assert.That(otherBoxes.Count).IsEqualTo(1);
+            await Assert.That(otherBoxes[0].Classes.Contains("kcapField")).IsTrue();
             await Assert.That(host.View.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Pick")).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_header_paints_like_the_tool_kind_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]));
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"declare this","header":"Missing tools","options":[{"label":"A"}]}]}"""));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var chips = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible).ToList();
+            var kind = chips.Single(t => t.Text == "Question");
+            var header = chips.Single(t => t.Text == "Missing tools");
+            await Assert.That(header.FontSize).IsEqualTo(kind.FontSize);
+            await Assert.That(header.FontWeight).IsEqualTo(kind.FontWeight);
+            await Assert.That(header.Foreground).IsSameReferenceAs(kind.Foreground);
+
+            var question = host.View.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("prompt") && t.Text == "declare this");
+            await Assert.That(header.FontSize).IsNotEqualTo(question.FontSize);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_card_packs_against_the_tool_group_it_follows() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]));
+            host.Permissions.Add(PermissionEntries.Question("q1",
+                toolInputJson: """{"questions":[{"question":"declare this","header":"Missing tools","options":[{"label":"A"}]}]}"""));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var group = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
+            var card = host.View.GetVisualDescendants().OfType<ContentControl>().Single(c => c.Classes.Contains("pendingCard"));
+            await Assert.That(group.Classes.Contains("packsWithCard")).IsTrue();
+            await Assert.That(card.Classes.Contains("packsWithPrevious")).IsTrue();
+            await Assert.That(group.Margin.Bottom).IsEqualTo(4);
+            await Assert.That(card.Margin.Top).IsEqualTo(4);
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_card_after_prose_keeps_the_paragraph_gap() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("prose.jsonl", [UserLine]));
+            host.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var card = host.View.GetVisualDescendants().OfType<ContentControl>().Single(c => c.Classes.Contains("pendingCard"));
+            await Assert.That(card.Classes.Contains("packsWithPrevious")).IsFalse();
+            await Assert.That(card.Margin.Top).IsEqualTo(8);
+            await host.CloseAsync();
+        });
+    }
+
+    /// The Other field is a real input in the virtualizing list: a click must keep caret focus
+    /// through layout (follow-tail must not recycle the row), and its outline is the field token,
+    /// never the status green.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Other_keeps_focus_on_click_and_uses_the_field_border_not_status_green() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("tall.jsonl", Enumerable.Repeat(UserLine, 40).ToArray()));
+            host.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => host.Chat.Items.OfType<PendingCardItem>().Any(), what: "the card");
+            host.Settle();
+
+            var other = host.View.GetVisualDescendants().OfType<TextBox>().Single(t => t.PlaceholderText == "Other…");
+            Click(host, other);
+            host.Settle();
+            await Assert.That(other.IsFocused).IsTrue();
+
+            host.Window.KeyTextInput("mine");
+            Dispatcher.UIThread.RunJobs();
+            host.Settle();
+            await Assert.That(other.IsFocused).IsTrue();
+            await Assert.That(other.Text).IsEqualTo("mine");
+            await Assert.That(((QuestionGroupViewModel)other.DataContext!).OtherText).IsEqualTo("mine");
+
+            var ring = other.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "PART_BorderElement");
+            var field = (IBrush)Application.Current!.FindResource("KcapBorderBrush")!;
+            var status = (IBrush)Application.Current!.FindResource("KcapSuccessBrush")!;
+            await Assert.That(ring.BorderBrush).IsSameReferenceAs(field);
+            await Assert.That(ring.BorderBrush).IsNotSameReferenceAs(status);
+            await Assert.That(ring.BorderThickness).IsEqualTo(new Thickness(1));
+
+            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "QuestionCard");
+            await Assert.That(card.BorderBrush).IsSameReferenceAs(field);
+            await Assert.That(card.BorderBrush).IsNotSameReferenceAs(status);
+            await host.CloseAsync();
         });
     }
     static Button Option(Host host, string label) => host.View.GetVisualDescendants().OfType<Button>()

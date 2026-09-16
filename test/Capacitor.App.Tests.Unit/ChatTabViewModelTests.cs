@@ -37,6 +37,7 @@ public class ChatTabViewModelTests {
         Agent("a1", vendor, hasTerminal: true, repoPath: "/repo/x") with { TranscriptPath = transcriptPath };
 
     static ToolGroupItem Group(ChatTabViewModel chat, int index) => (ToolGroupItem)chat.Items[index];
+    static PendingCardItem[] CardRows(ChatTabViewModel chat) => [.. chat.Items.OfType<PendingCardItem>()];
 
     sealed class Harness {
         public FakeDaemonClientService Daemon { get; } = new();
@@ -81,6 +82,8 @@ public class ChatTabViewModelTests {
             var h = Claude(seed: p => p.Add(PermissionEntries.Entry("r1", "a1")));
             await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the replayed card");
             await Assert.That(h.Chat.HasPendingCards).IsTrue();
+            await Assert.That(CardRows(h.Chat).Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r1" });
+            await Assert.That(h.Chat.PhaseNote).IsEqualTo("");
             await h.TeardownAsync();
         });
     }
@@ -405,10 +408,94 @@ public class ChatTabViewModelTests {
             await WaitUntilAsync(() => h.Chat.PendingCards.Count == 2, what: "two cards");
             await Assert.That(h.Chat.PendingCards.Select(c => c.RequestId).ToArray()).IsEquivalentTo(new[] { "r1", "r2" }, CollectionOrdering.Matching);
             await Assert.That(h.Chat.HasPendingCards).IsTrue();
+            await Assert.That(CardRows(h.Chat).Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r1", "r2" }, CollectionOrdering.Matching);
 
             h.Permissions.Remove("r1");
             await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "one card left");
             await Assert.That(h.Chat.PendingCards[0].RequestId).IsEqualTo("r2");
+            await Assert.That(CardRows(h.Chat).Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r2" });
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pending_cards_sit_at_the_end_of_the_item_list_and_return_after_a_path_switch() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [UserLine, AssistantLine]);
+            await h.PushAsync(Dto(path));
+            h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "card in the list");
+            await Assert.That(h.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(
+                new[] { nameof(UserTurnItem), nameof(AssistantTextItem), nameof(PendingCardItem) }, CollectionOrdering.Matching);
+            await Assert.That(CardRows(h.Chat)[0].Card.RequestId).IsEqualTo("r1");
+
+            var other = Tmp.CreateFile("u.jsonl", [UserLine]);
+            await h.PushAsync(Dto(other));
+            await Assert.That(h.Chat.Items.OfType<PendingCardItem>().Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r1" });
+            await Assert.That(h.Chat.Items[^1]).IsTypeOf<PendingCardItem>();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_packs_against_the_tool_group_it_follows_and_unpacks_when_cleared() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(group.PacksWithCard).IsTrue();
+            await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsTrue();
+
+            h.Permissions.Remove("q1");
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 0, what: "cleared");
+            await Assert.That(group.PacksWithCard).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_later_transcript_row_unpacks_the_group_the_card_left() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("ask.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"declare this"}]}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
+            var group = (ToolGroupItem)h.Chat.Items[0];
+            await Assert.That(group.PacksWithCard).IsTrue();
+
+            File.AppendAllText(path, AssistantLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(
+                new[] { nameof(ToolGroupItem), nameof(AssistantTextItem), nameof(PendingCardItem) }, CollectionOrdering.Matching);
+            await Assert.That(group.PacksWithCard).IsFalse();
+            await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_after_prose_does_not_pack() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [UserLine, AssistantLine]);
+            await h.PushAsync(Dto(path));
+            h.Permissions.Add(PermissionEntries.Question("q1"));
+            await WaitUntilAsync(() => CardRows(h.Chat).Length == 1, what: "the card");
+            await Assert.That(h.Chat.Items.OfType<ToolGroupItem>().Any(g => g.PacksWithCard)).IsFalse();
+            await Assert.That(CardRows(h.Chat)[0].PacksWithPrevious).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -438,6 +525,8 @@ public class ChatTabViewModelTests {
             await WaitUntilAsync(() => h.Chat.PendingCards.Count == 2, what: "both cards");
             await Assert.That(h.Chat.PendingCards[0]).IsTypeOf<PermissionCardViewModel>();
             await Assert.That(h.Chat.PendingCards[1]).IsTypeOf<QuestionCardViewModel>();
+            await Assert.That(CardRows(h.Chat).Select(c => c.Card.GetType().Name)).IsEquivalentTo(
+                new[] { nameof(PermissionCardViewModel), nameof(QuestionCardViewModel) }, CollectionOrdering.Matching);
 
             h.Permissions.Remove("q1");
             await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "question card removed");
