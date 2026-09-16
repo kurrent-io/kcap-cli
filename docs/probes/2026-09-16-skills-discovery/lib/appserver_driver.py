@@ -64,6 +64,7 @@ def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: P
     argv = [binary, "app-server", *extra_argv]
     notes = []
     text = ""
+    tools = 0
     first = started
     child = JsonlChild(argv, cwd, env, stderr_path)
     prior_frames: list[dict] = []
@@ -83,8 +84,12 @@ def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: P
             rpc = _Rpc(child)
             rpc.request("initialize", init, 60)
             notes.append("hook_trust=seeded")
+        elif not hooks:
+            notes.append("hook_trust=none")
+        elif any(h.get("trustStatus") == "trusted" for h in hooks):
+            notes.append("hook_trust=trusted")
         else:
-            notes.append("hook_trust=trusted" if hooks else "hook_trust=none")
+            notes.append("hook_trust=untrusted-unseedable")
         thread = rpc.request("thread/start", {
             "cwd": str(cwd), "sandbox": "read-only", "approvalPolicy": "never", "approvalsReviewer": "user",
         }, 120)
@@ -96,19 +101,22 @@ def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: P
             rpc.request("turn/start", {
                 "threadId": tid, "input": [{"type": "text", "text": prompt}],
                 "sandboxPolicy": {"type": "readOnly"}, "approvalPolicy": "never", "approvalsReviewer": "user",
-            }, 60)
+            }, timeout)
             done = rpc.wait_notification("turn/completed", timeout)
             notes.append(f"turn={(((done or {}).get('params') or {}).get('turn') or {}).get('status')}")
-            completed = [n["params"]["item"]["text"] for n in rpc.notifications
-                         if n.get("method") == "item/completed"
-                         and (n.get("params") or {}).get("item", {}).get("type") == "agentMessage"
-                         and isinstance(n["params"]["item"].get("text"), str)]
+            items = [(n.get("params") or {}).get("item") or {} for n in rpc.notifications
+                     if n.get("method") == "item/completed"]
+            completed = [i["text"] for i in items if i.get("type") == "agentMessage" and isinstance(i.get("text"), str)]
+            tools = sum(1 for i in items
+                        if i.get("type") and i["type"] not in ("agentMessage", "reasoning", "userMessage"))
             deltas = [n["params"].get("delta", "") for n in rpc.notifications if n.get("method") == "item/agentMessage/delta"]
             text = "\n".join(completed) if completed else "".join(deltas)
     except Exception as ex:  # noqa: BLE001
         notes.append(f"exception={ex!r}")
     finally:
         child.stop()
+    # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
+    notes.append(f"tools_used={tools}")
     return AskResult(reply_text=text, raw=json.dumps(prior_frames + child.frames), argv=argv, started_at=started,
                      first_request_at=first, stderr_path=str(stderr_path), exit_code=child.returncode,
                      notes=" ".join(notes))

@@ -264,7 +264,10 @@ class HookScriptTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stdout, "")
             self.assertEqual(target.read_text(), skill.render())
-            self.assertIn("fired_at", read_stamp(stamp))
+            stamped = read_stamp(stamp)
+            self.assertIn("fired_at", stamped)
+            self.assertIsInstance(stamped["fired_at_mtime"], float)
+            self.assertAlmostEqual(stamped["fired_at_mtime"], stamp.stat().st_mtime, places=3)
             self.assertEqual(Path(str(stamp) + ".stdin").read_text(), '{"hook_event_name":"SessionStart"}')
 
     def test_script_survives_open_stdin_and_can_delete(self):
@@ -325,6 +328,16 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(res.exit_code, 0)
             slow = print_ask(["sh", "-c", "sleep 5"], Path(d), dict(os.environ), Path(d) / "s.stderr.log", timeout=0.5)
             self.assertIsNone(slow.exit_code)
+
+    def test_print_driver_reports_extraction_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            def boom(raw):
+                raise ValueError("not json")
+
+            res = print_ask(["sh", "-c", "echo not-json"], Path(d), dict(os.environ),
+                            Path(d) / "x.stderr.log", timeout=10, extract=boom)
+            self.assertTrue(res.notes.startswith("extract failed"), res.notes)
+            self.assertEqual(res.reply_text, "not-json\n")
 
     def test_adapter_defaults(self):
         self.assertIsNone(Adapter.check_auth(FakeAdapter(), None))
@@ -582,8 +595,19 @@ class AcpDriverTests(unittest.TestCase):
                           Path(d) / "acp.stderr.log", timeout=30)
             self.assertIn(skill.body_token, res.reply_text)
             self.assertIn("stopReason=end_turn", res.notes)
+            self.assertIn("tools_used=0", res.notes)
             self.assertGreaterEqual(res.first_request_at, res.started_at)
             self.assertEqual(res.argv[-1], "acp")
+
+    def test_tool_call_updates_are_counted(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            env = dict(os.environ, KCAP_FAKE_TOOL_CALL="1")
+            res = acp_ask([sys.executable, str(SERVERS), "acp"], repo, env, single_prompt(skill),
+                          Path(d) / "acp.stderr.log", timeout=30)
+            self.assertIn("tools_used=1", res.notes)
+            self.assertIn(skill.body_token, res.reply_text)
 
 
 from lib.appserver_driver import appserver_ask, hook_state_override  # noqa: E402
@@ -611,6 +635,7 @@ class JsonlDriversTests(unittest.TestCase):
                                 Path(d) / "as.stderr.log", timeout=30)
             self.assertIn(skill.body_token, res.reply_text)
             self.assertIn("hook_trust=none", res.notes)
+            self.assertIn("tools_used=0", res.notes)
             self.assertEqual(res.argv[:2], [str(SERVERS), "app-server"])
 
     def test_pirpc_turn(self):
@@ -620,6 +645,21 @@ class JsonlDriversTests(unittest.TestCase):
             res = pirpc_ask([sys.executable, str(SERVERS), "pirpc"], repo, dict(os.environ), single_prompt(skill),
                             Path(d) / "pi.stderr.log", timeout=30)
             self.assertIn(skill.body_token, res.reply_text)
+            self.assertIn("tools_used=0", res.notes)
+
+    def test_tool_events_are_counted(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            env = dict(os.environ, KCAP_FAKE_TOOL_CALL="1")
+            served = appserver_ask(str(SERVERS), repo, env, single_prompt(skill),
+                                   Path(d) / "as.stderr.log", timeout=30)
+            self.assertIn("tools_used=1", served.notes)
+            self.assertIn(skill.body_token, served.reply_text)
+            piped = pirpc_ask([sys.executable, str(SERVERS), "pirpc"], repo, env, single_prompt(skill),
+                              Path(d) / "pi.stderr.log", timeout=30)
+            self.assertIn("tools_used=1", piped.notes)
+            self.assertIn(skill.body_token, piped.reply_text)
 
     def test_hook_state_override(self):
         untrusted = [{"key": "/x/hooks.json:SessionStart:0:0", "trustStatus": "untrusted",

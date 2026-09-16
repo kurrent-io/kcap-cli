@@ -59,6 +59,17 @@ def agent_text(frames: list[dict]) -> str:
     return "".join(out)
 
 
+def tool_calls(frames: list[dict]) -> int:
+    n = 0
+    for f in frames:
+        fr = f.get("frame") or {}
+        if fr.get("method") != "session/update":
+            continue
+        if ((fr.get("params") or {}).get("update") or {}).get("sessionUpdate") == "tool_call":
+            n += 1
+    return n
+
+
 async def _turn(argv, cwd, env, prompt, stderr_path, timeout) -> AskResult:
     client = IsolatedAcpClient(argv, str(cwd), env, stderr_path)
     started = time.time()
@@ -83,6 +94,8 @@ async def _turn(argv, cwd, env, prompt, stderr_path, timeout) -> AskResult:
         notes.append(f"exception={ex!r}")
     finally:
         await client.shutdown()
+    # A reply the agent read off disk with a tool is not a loaded skill: the count says which it was.
+    notes.append(f"tools_used={tool_calls(client.frames)}")
     exit_code = client.proc.returncode if client.proc is not None else None
     return AskResult(reply_text=text, raw=json.dumps(client.frames), argv=list(argv), started_at=started,
                      first_request_at=first, stderr_path=str(stderr_path), exit_code=exit_code,

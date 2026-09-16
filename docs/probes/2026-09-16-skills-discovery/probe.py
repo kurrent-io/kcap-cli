@@ -173,9 +173,9 @@ class Runner:
         return self.adapter.ask(sb, mode, prompt)
 
     def _hook_dict(self, sb: Sandbox, mechanism: str, config_path: str) -> dict:
-        stamp = read_stamp(stamp_path(sb.config_root))
+        stamp = read_stamp(stamp_path(sb.config_root)) or {}
         return {"mechanism": mechanism, "config_path": config_path,
-                "fired_at": stamp.get("fired_at") if stamp else None}
+                "fired_at": stamp.get("fired_at"), "fired_at_mtime": stamp.get("fired_at_mtime")}
 
     # -- arms ---------------------------------------------------------------------------------
 

@@ -24,11 +24,12 @@ def print_ask(
         except subprocess.TimeoutExpired as ex:
             raw = (ex.stdout or b"").decode("utf-8", "replace") if isinstance(ex.stdout, bytes) else (ex.stdout or "")
             code = None
-    reply = raw
+    reply, notes = raw, ""
     if extract is not None:
         try:
             reply = extract(raw)
-        except Exception:  # noqa: BLE001
-            reply = raw
+        except Exception as ex:  # noqa: BLE001
+            # A silent fallback to the raw stream reads as a vendor that answered in plain text.
+            reply, notes = raw, f"extract failed: {ex!r}"
     return AskResult(reply_text=reply, raw=raw, argv=list(argv), started_at=started,
-                     first_request_at=started, stderr_path=str(stderr_path), exit_code=code)
+                     first_request_at=started, stderr_path=str(stderr_path), exit_code=code, notes=notes)

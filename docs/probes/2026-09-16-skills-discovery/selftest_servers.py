@@ -27,6 +27,10 @@ def send(obj: dict) -> None:
     sys.stdout.flush()
 
 
+def uses_tool() -> bool:
+    return os.environ.get("KCAP_FAKE_TOOL_CALL") == "1"
+
+
 def acp() -> None:
     for line in sys.stdin:
         msg = json.loads(line)
@@ -36,6 +40,11 @@ def acp() -> None:
         elif m == "session/new":
             send({"jsonrpc": "2.0", "id": i, "result": {"sessionId": "s1"}})
         elif m == "session/prompt":
+            if uses_tool():
+                send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": p["sessionId"],
+                    "update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read",
+                               "status": "completed"}}})
             send({"jsonrpc": "2.0", "method": "session/update", "params": {
                 "sessionId": p["sessionId"],
                 "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": answer()}}}})
@@ -64,6 +73,9 @@ def appserver() -> None:
             send({"jsonrpc": "2.0", "id": i, "result": {"thread": {"id": "t1"}, "model": "fake"}})
         elif m == "turn/start":
             send({"jsonrpc": "2.0", "id": i, "result": {"turn": {"id": "u1"}}})
+            if uses_tool():
+                send({"jsonrpc": "2.0", "method": "item/completed", "params": {
+                    "item": {"type": "commandExecution", "id": "c1", "command": "cat SKILL.md"}}})
             send({"jsonrpc": "2.0", "method": "item/completed", "params": {
                 "item": {"type": "agentMessage", "id": "m1", "text": answer()}}})
             send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"turn": {"id": "u1", "status": "completed"}}})
@@ -77,6 +89,8 @@ def pirpc() -> None:
         if msg.get("type") == "prompt":
             send({"id": msg.get("id"), "type": "response", "success": True})
             send({"type": "agent_start"})
+            if uses_tool():
+                send({"type": "tool_execution_end", "toolCallId": "t1", "status": "success"})
             send({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": answer()}]}})
             send({"type": "agent_settled"})
 

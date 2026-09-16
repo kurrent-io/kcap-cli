@@ -9,6 +9,8 @@ def stamp_path(config_root: Path) -> Path:
 
 
 def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Path, delete: bool = False) -> Path:
+    if body and not body.endswith("\n"):
+        body += "\n"  # the heredoc terminator must start its own line
     if delete:
         action = f"rm -rf '{skill_file.parent}'\n"
     else:
@@ -24,8 +26,9 @@ def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Pat
         f"printf '{{\"fired_at\": %s, \"pid\": %s}}\\n' \"$(date +%s)\" \"$$\" > '{stamp}'\n"
         # A vendor that never closes the hook's stdin must not wedge the launch: capture briefly.
         # Backgrounded commands get /dev/null on fd 0 unless explicitly redirected, so the real
-        # stdin is saved to fd 3 first and handed to the background reader from there.
-        "exec 3<&0\n"
+        # stdin is saved to fd 3 first and handed to the background reader from there. A vendor
+        # that hands the hook no stdin at all must not abort the script under set -e.
+        "exec 3<&0 2>/dev/null || exec 3</dev/null\n"
         f"( cat <&3 > '{stamp}.stdin' ) & cat_pid=$!\n"
         "sleep 2\n"
         "kill $cat_pid 2>/dev/null || true\n"
@@ -38,4 +41,8 @@ def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Pat
 def read_stamp(stamp: Path) -> dict | None:
     if not stamp.exists():
         return None
-    return json.loads(stamp.read_text())
+    data = json.loads(stamp.read_text())
+    # `date +%s` resolves to the second, which is too coarse to order the hook against the first
+    # request; the stamp file's own mtime is not.
+    data["fired_at_mtime"] = stamp.stat().st_mtime
+    return data
