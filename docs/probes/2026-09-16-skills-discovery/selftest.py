@@ -466,7 +466,7 @@ class AcpDriverTests(unittest.TestCase):
             self.assertEqual(res.argv[-1], "acp")
 
 
-from lib.appserver_driver import appserver_ask  # noqa: E402
+from lib.appserver_driver import appserver_ask, hook_state_override  # noqa: E402
 from lib.pirpc_driver import pirpc_ask  # noqa: E402
 from lib.jsonl_child import JsonlChild  # noqa: E402
 
@@ -500,6 +500,37 @@ class JsonlDriversTests(unittest.TestCase):
             res = pirpc_ask([sys.executable, str(SERVERS), "pirpc"], repo, dict(os.environ), single_prompt(skill),
                             Path(d) / "pi.stderr.log", timeout=30)
             self.assertIn(skill.body_token, res.reply_text)
+
+    def test_hook_state_override(self):
+        untrusted = [{"key": "/x/hooks.json:SessionStart:0:0", "trustStatus": "untrusted",
+                      "currentHash": "sha256:abc"}]
+        self.assertEqual(hook_state_override(untrusted),
+                         'hooks.state={"/x/hooks.json:SessionStart:0:0"={trusted_hash="sha256:abc"}}')
+        trusted = [{"key": "/x/hooks.json:SessionStart:0:0", "trustStatus": "trusted",
+                    "currentHash": "sha256:abc"}]
+        self.assertIsNone(hook_state_override(trusted))
+        no_hash = [{"key": "/x/hooks.json:SessionStart:0:0", "trustStatus": "untrusted"}]
+        self.assertIsNone(hook_state_override(no_hash))
+
+    def test_appserver_seeds_hook_trust(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo = _fake_repo(d, skill)
+            env = dict(os.environ)
+            env["KCAP_FAKE_UNTRUSTED_HOOK"] = "1"
+            res = appserver_ask(str(SERVERS), repo, env, single_prompt(skill), Path(d) / "seed.stderr.log", timeout=30)
+            self.assertIn("hook_trust=seeded", res.notes)
+            idx = res.argv.index("-c")
+            self.assertTrue(res.argv[idx + 1].startswith("hooks.state="))
+            self.assertIn(skill.body_token, res.reply_text)
+            self.assertIn("hooks/list", res.raw)
+
+    def test_spawn_failure_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = pirpc_ask(["/nonexistent/binary"], Path(d), dict(os.environ), "x",
+                            Path(d) / "sf.stderr.log", timeout=5)
+            self.assertIsNone(res.exit_code)
+            self.assertIn("exception=", res.notes)
 
 
 if __name__ == "__main__":

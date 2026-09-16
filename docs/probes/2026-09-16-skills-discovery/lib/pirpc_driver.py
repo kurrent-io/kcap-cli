@@ -11,10 +11,10 @@ from lib.jsonl_child import JsonlChild
 def pirpc_ask(argv: list[str], cwd: Path, env: dict, prompt: str, stderr_path: Path, timeout: float = 180.0) -> AskResult:
     started = time.time()
     child = JsonlChild(argv, cwd, env, stderr_path)
-    child.start()
     texts, notes = [], []
     first = time.time()
     try:
+        child.start()
         child.send({"id": "1", "type": "prompt", "message": prompt, "streamingBehavior": "followUp"})
         deadline = time.time() + timeout
         while time.time() < deadline:

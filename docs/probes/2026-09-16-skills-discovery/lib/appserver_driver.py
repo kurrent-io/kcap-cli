@@ -19,13 +19,14 @@ class _Rpc:
         rid = self.next_id
         self.child.send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         deadline = time.time() + timeout
-        while True:
+        while time.time() < deadline:
             msg = self.child.recv(max(0.1, deadline - time.time()))
             if msg is None:
                 raise ConnectionError(f"EOF waiting for {method}")
             if msg.get("id") == rid and "method" not in msg:
                 return msg
             self._absorb(msg)
+        raise TimeoutError(f"no response to {method} within {timeout}s")
 
     def _absorb(self, msg: dict) -> None:
         if "method" in msg and "id" in msg:
@@ -65,15 +66,17 @@ def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: P
     text = ""
     first = started
     child = JsonlChild(argv, cwd, env, stderr_path)
-    child.start()
-    rpc = _Rpc(child)
+    prior_frames: list[dict] = []
     try:
+        child.start()
+        rpc = _Rpc(child)
         init = {"clientInfo": {"name": "kcap-probe", "version": "1"}, "capabilities": {}}
         rpc.request("initialize", init, 60)
         hooks = (rpc.request("hooks/list", {}, 60).get("result") or {}).get("hooks") or []
         override = hook_state_override(hooks)
         if override:
             child.stop()
+            prior_frames = list(child.frames)
             argv = [*argv, "-c", override]
             child = JsonlChild(argv, cwd, env, stderr_path)
             child.start()
@@ -106,6 +109,6 @@ def appserver_ask(binary: str, cwd: Path, env: dict, prompt: str, stderr_path: P
         notes.append(f"exception={ex!r}")
     finally:
         child.stop()
-    return AskResult(reply_text=text, raw=json.dumps(child.frames), argv=argv, started_at=started,
+    return AskResult(reply_text=text, raw=json.dumps(prior_frames + child.frames), argv=argv, started_at=started,
                      first_request_at=first, stderr_path=str(stderr_path), exit_code=child.returncode,
                      notes=" ".join(notes))

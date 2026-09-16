@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 TOKEN_RE = re.compile(r"PROBE-BODY-([0-9a-f]{12})")
+UNTRUSTED_HOOK_KEY = "/x/hooks.json:SessionStart:0:0"
+UNTRUSTED_HOOK_HASH = "sha256:fake"
 
 
 def answer() -> str:
@@ -41,6 +44,14 @@ def acp() -> None:
             send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "unknown"}})
 
 
+def hooks_list() -> list[dict]:
+    if os.environ.get("KCAP_FAKE_UNTRUSTED_HOOK") != "1":
+        return []
+    seeded = any(a.startswith("hooks.state=") for a in sys.argv)
+    return [{"key": UNTRUSTED_HOOK_KEY, "trustStatus": "trusted" if seeded else "untrusted",
+             "currentHash": UNTRUSTED_HOOK_HASH}]
+
+
 def appserver() -> None:
     for line in sys.stdin:
         msg = json.loads(line)
@@ -48,7 +59,7 @@ def appserver() -> None:
         if m == "initialize":
             send({"jsonrpc": "2.0", "id": i, "result": {}})
         elif m == "hooks/list":
-            send({"jsonrpc": "2.0", "id": i, "result": {"hooks": []}})
+            send({"jsonrpc": "2.0", "id": i, "result": {"hooks": hooks_list()}})
         elif m == "thread/start":
             send({"jsonrpc": "2.0", "id": i, "result": {"thread": {"id": "t1"}, "model": "fake"}})
         elif m == "turn/start":

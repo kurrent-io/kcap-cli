@@ -17,11 +17,17 @@ class JsonlChild:
         self.frames: list[dict] = []
         self._q: queue.Queue = queue.Queue()
         self.proc: subprocess.Popen | None = None
+        self._err = None
 
     def start(self) -> None:
         self._err = open(self.stderr_path, "ab")
-        self.proc = subprocess.Popen(self.argv, cwd=self.cwd, env=self.env, stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=self._err, text=True, bufsize=1)
+        try:
+            self.proc = subprocess.Popen(self.argv, cwd=self.cwd, env=self.env, stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=self._err, text=True, bufsize=1)
+        except OSError:
+            self._err.close()
+            self._err = None
+            raise
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self) -> None:
@@ -59,6 +65,9 @@ class JsonlChild:
 
     def stop(self, grace: float = 5.0) -> None:
         if not self.proc:
+            if self._err is not None:
+                self._err.close()
+                self._err = None
             return
         self.close_stdin()
         try:
@@ -66,7 +75,11 @@ class JsonlChild:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
-        self._err.close()
+        if self.proc.stdout:
+            self.proc.stdout.close()
+        if self._err is not None:
+            self._err.close()
+            self._err = None
 
     @property
     def returncode(self) -> int | None:

@@ -24,14 +24,22 @@ class IsolatedAcpClient(AcpClient):
     def __init__(self, argv, cwd, env, stderr_path):
         super().__init__(argv, cwd, frames=[], phase_ref=["turn"], label="acp", stderr_path=str(stderr_path))
         self.env = env
+        self.stderr_f = None
 
     async def start(self):
-        stderr_f = open(self.stderr_path, "ab")
+        self.stderr_f = open(self.stderr_path, "ab")
         self.proc = await asyncio.create_subprocess_exec(
             *self.argv, cwd=self.cwd, env=self.env,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=stderr_f)
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=self.stderr_f)
         self.reader_task = asyncio.create_task(self._read_loop())
         self.record("mark", {"event": "spawned", "pid": self.proc.pid, "argv": self.argv})
+
+    async def shutdown(self, hard_after=5):
+        if self.proc is not None:
+            await super().shutdown(hard_after)
+        if self.stderr_f is not None:
+            self.stderr_f.close()
+            self.stderr_f = None
 
 
 def agent_text(frames: list[dict]) -> str:
@@ -56,8 +64,8 @@ async def _turn(argv, cwd, env, prompt, stderr_path, timeout) -> AskResult:
     started = time.time()
     first = started
     text, notes = "", []
-    await client.start()
     try:
+        await client.start()
         await client.request("initialize", INIT_PARAMS, timeout=90)
         new = await client.request("session/new", {"cwd": str(cwd), "mcpServers": []}, timeout=120)
         sid = (new.get("result") or {}).get("sessionId")
@@ -75,8 +83,9 @@ async def _turn(argv, cwd, env, prompt, stderr_path, timeout) -> AskResult:
         notes.append(f"exception={ex!r}")
     finally:
         await client.shutdown()
+    exit_code = client.proc.returncode if client.proc is not None else None
     return AskResult(reply_text=text, raw=json.dumps(client.frames), argv=list(argv), started_at=started,
-                     first_request_at=first, stderr_path=str(stderr_path), exit_code=client.proc.returncode,
+                     first_request_at=first, stderr_path=str(stderr_path), exit_code=exit_code,
                      notes=" ".join(notes))
 
 
