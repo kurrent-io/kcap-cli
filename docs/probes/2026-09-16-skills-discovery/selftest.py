@@ -109,5 +109,54 @@ class IsolationTests(unittest.TestCase):
                 sb.cleanup()
 
 
+from lib.git_exclusion import EXCLUSIONS, apply, assert_untracked_state  # noqa: E402
+
+
+class GitExclusionTests(unittest.TestCase):
+    def _sandbox(self, d):
+        return new_sandbox("HOME", None, [], base=Path(d))
+
+    def test_none_shows_untracked(self):
+        with tempfile.TemporaryDirectory() as d:
+            sb = self._sandbox(d)
+            (sb.repo / ".claude/skills/kcap-probe-abc123").mkdir(parents=True)
+            (sb.repo / ".claude/skills/kcap-probe-abc123/SKILL.md").write_text("x")
+            self.assertIsNone(apply(sb.repo, "none", ".claude/skills/kcap-probe-abc123"))
+            out = assert_untracked_state(sb.repo, ".claude/skills/kcap-probe-abc123", "none")
+            self.assertIn("??", out)
+            with self.assertRaises(AssertionError):
+                assert_untracked_state(sb.repo, ".claude/skills/kcap-probe-abc123", "gitignore")
+
+    def test_gitignore_and_info_exclude(self):
+        for exclusion in ("gitignore", "info-exclude"):
+            with tempfile.TemporaryDirectory() as d:
+                sb = self._sandbox(d)
+                rel = ".agents/skills/kcap-probe-abc123"
+                (sb.repo / rel).mkdir(parents=True)
+                (sb.repo / rel / "SKILL.md").write_text("x")
+                written = apply(sb.repo, exclusion, rel)
+                self.assertIsNotNone(written)
+                self.assertIn(f"/{rel}/", written.read_text())
+                out = assert_untracked_state(sb.repo, rel, exclusion)
+                self.assertEqual(out, "")
+                if exclusion == "gitignore":
+                    self.assertEqual(git(sb.repo, "status", "--porcelain").strip(), "")
+                else:
+                    self.assertNotIn(".gitignore", git(sb.repo, "ls-files"))
+
+    def test_info_exclude_inside_worktree(self):
+        with tempfile.TemporaryDirectory() as d:
+            sb = self._sandbox(d)
+            wt = sb.root / "wt"
+            git(sb.repo, "worktree", "add", "-q", "-b", "wt", str(wt))
+            rel = ".pi/skills/kcap-probe-abc123"
+            (wt / rel).mkdir(parents=True)
+            (wt / rel / "SKILL.md").write_text("x")
+            written = apply(wt, "info-exclude", rel)
+            self.assertEqual(written, written.resolve())
+            self.assertEqual(assert_untracked_state(wt, rel, "info-exclude"), "")
+            self.assertIn(EXCLUSIONS[2], "info-exclude")
+
+
 if __name__ == "__main__":
     unittest.main()
