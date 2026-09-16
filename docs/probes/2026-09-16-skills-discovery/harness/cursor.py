@@ -68,8 +68,11 @@ class CursorAdapter(Adapter):
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
-            return acp_ask([binary, "acp", "--trust"], sb.repo, sb.env, prompt, sb.root / "cursor-acp.stderr.log",
-                           self.turn_timeout)
+            res = acp_ask([binary, "acp", "--trust"], sb.repo, sb.env, prompt, sb.root / "cursor-acp.stderr.log",
+                          self.turn_timeout)
+            generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
+            res.notes = (generic + " " + classify_cursor_tools(res.raw)).strip()
+            return res
 
         def extract(raw: str) -> str:
             texts = []
@@ -88,4 +91,39 @@ class CursorAdapter(Adapter):
             return "\n".join(texts)
 
         argv = [binary, "-p", "--output-format", "json", "--trust", "--force", prompt]
-        return print_ask(argv, sb.repo, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
+        res = print_ask(argv, sb.repo, sb.env, sb.root / "cursor.stderr.log", self.turn_timeout, extract=extract)
+        # The json output format carries the final result only, so tool use is not observable here.
+        res.notes = (res.notes + " tools=unobserved").strip()
+        return res
+
+
+def classify_cursor_tools(raw: str) -> str:
+    """Cursor lists a skill with its path and the model reads that file, so a read of a SKILL.md
+    path is the native mechanism; a shell or search tool is what makes a sighting inconclusive."""
+    calls: dict[str, dict] = {}
+    try:
+        frames = json.loads(raw)
+    except json.JSONDecodeError:
+        frames = []
+    for f in frames:
+        fr = f.get("frame") or {}
+        if fr.get("method") != "session/update":
+            continue
+        upd = (fr.get("params") or {}).get("update") or {}
+        if not upd.get("sessionUpdate", "").startswith("tool_call"):
+            continue
+        call = calls.setdefault(upd.get("toolCallId") or "", {"kind": "", "path": ""})
+        if upd.get("kind"):
+            call["kind"] = upd["kind"]
+        path = (upd.get("rawInput") or {}).get("path")
+        if isinstance(path, str):
+            call["path"] = path
+    skill_reads = searches = other = 0
+    for call in calls.values():
+        if call["kind"] == "read" and call["path"].endswith("SKILL.md"):
+            skill_reads += 1
+        elif call["kind"] in ("execute", "search", "fetch"):
+            searches += 1
+        else:
+            other += 1
+    return f"tools_used={searches + other} skill_reads={skill_reads} searches={searches}"

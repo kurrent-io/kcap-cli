@@ -1083,6 +1083,20 @@ class ReportTests(unittest.TestCase):
         self.assertIn("| x | 1.0 |", text)
 
 
+class CursorAdapterTests(unittest.TestCase):
+    def test_acp_read_of_the_listed_file_is_the_native_load(self):
+        from harness.cursor import classify_cursor_tools
+        def upd(**u):
+            return {"frame": {"method": "session/update", "params": {"update": u}}}
+        frames = [
+            upd(sessionUpdate="tool_call", toolCallId="a", kind="read", title="Read File"),
+            upd(sessionUpdate="tool_call_update", toolCallId="a", rawInput={"path": "/r/.cursor/skills/x/SKILL.md"}),
+            upd(sessionUpdate="tool_call", toolCallId="b", kind="execute", title="Run command", rawInput={"command": "find"}),
+            upd(sessionUpdate="agent_message_chunk", content={"type": "text", "text": "hi"}),
+        ]
+        self.assertEqual(classify_cursor_tools(json.dumps(frames)), "tools_used=1 skill_reads=1 searches=1")
+
+
 class PiAdapterTests(unittest.TestCase):
     def test_registration_extension_names_the_root(self):
         from harness.pi import PiAdapter
