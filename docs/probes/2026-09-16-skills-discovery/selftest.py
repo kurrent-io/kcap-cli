@@ -62,5 +62,52 @@ class ProbeSkillTests(unittest.TestCase):
         self.assertEqual(r.tokens, frozenset())
 
 
+import os  # noqa: E402
+import tempfile  # noqa: E402
+from unittest import mock  # noqa: E402
+
+from lib.isolation import ENV_ALLOWLIST, Sandbox, git, new_sandbox  # noqa: E402
+
+
+class IsolationTests(unittest.TestCase):
+    def test_sandbox_repo_and_lever(self):
+        with tempfile.TemporaryDirectory() as d:
+            real = Path(d) / "real"
+            (real / "nested").mkdir(parents=True)
+            (real / "auth.json").write_text("{}")
+            (real / "nested" / "creds").write_text("x")
+            (real / "secret.db").write_text("no")
+            with mock.patch.dict(os.environ, {"KCAP_URL": "https://leak.invalid"}):
+                sb = new_sandbox("CODEX_HOME", real, ["auth.json", "nested/creds", "missing.json"],
+                                 base=Path(d))
+            try:
+                self.assertEqual(sb.repo, sb.repo.resolve())
+                self.assertEqual(git(sb.repo, "rev-list", "--count", "HEAD").strip(), "1")
+                self.assertEqual(sb.env["CODEX_HOME"], str(sb.config_root))
+                self.assertEqual(sb.env["HOME"], os.environ["HOME"])
+                self.assertNotIn("KCAP_URL", sb.env)
+                self.assertTrue((sb.config_root / "auth.json").exists())
+                self.assertTrue((sb.config_root / "nested" / "creds").exists())
+                self.assertFalse((sb.config_root / "secret.db").exists())
+                for k in sb.env:
+                    self.assertTrue(k in ENV_ALLOWLIST or k in ("HOME", "CODEX_HOME"), k)
+            finally:
+                sb.cleanup()
+            self.assertFalse(sb.root.exists())
+
+    def test_home_lever_and_passthrough(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"GH_TOKEN": "t", "OTHER": "o"}):
+                sb = new_sandbox("HOME", None, [], passthrough_env=["GH_TOKEN"],
+                                 extra_env={"XDG_CONFIG_HOME": "/x"}, base=Path(d))
+            try:
+                self.assertEqual(sb.env["HOME"], str(sb.config_root))
+                self.assertEqual(sb.env["GH_TOKEN"], "t")
+                self.assertNotIn("OTHER", sb.env)
+                self.assertEqual(sb.env["XDG_CONFIG_HOME"], "/x")
+            finally:
+                sb.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
