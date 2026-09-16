@@ -3,10 +3,6 @@ using System.Text.Json.Nodes;
 
 namespace Capacitor.Cli.Core.Config;
 
-/// <summary>Whether a config could be understood at all. <see cref="Unreadable"/> means its
-/// contents are unknown, not empty.</summary>
-public enum ConfigMigrationOutcome { Ok, Unreadable }
-
 public static class ConfigMigration {
     public record MigrationResult(ProfileConfig Config, bool WasMigrated, bool ShouldPersist);
 
