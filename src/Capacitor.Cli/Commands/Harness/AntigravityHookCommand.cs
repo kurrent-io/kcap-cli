@@ -217,7 +217,7 @@ sealed class AntigravityHookCommand(
         // re-injects them as another persistent userMessage step.
         var workItemsNudge = IsFirstInvocation(payload)
             ? HarnessNudgeEmitter.Combine(
-                WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+                WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
                 PlansNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
                 HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses))
             : null;

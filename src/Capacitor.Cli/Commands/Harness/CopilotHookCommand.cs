@@ -322,7 +322,7 @@ sealed class CopilotHookCommand(
         // Copilot parses this hook's stdout as its (optional) single JSON result document. Silent when
         // there is neither a fragment nor a nudge, which keeps all pre-existing paths byte-identical.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
             PlansNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
         WriteSessionStartOutput(Console.Out, fragment, workItemsNudge);

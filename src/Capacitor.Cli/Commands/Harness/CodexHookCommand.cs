@@ -409,7 +409,7 @@ sealed class CodexHookCommand(
         // The static work-items nudge, resolved (availability-gated + opt-out) independently
         // of the lease-driven memory/guidelines fragment and merged only at the output layer.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
             PlansNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
 
