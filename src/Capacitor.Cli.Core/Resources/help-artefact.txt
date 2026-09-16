@@ -1,0 +1,53 @@
+kcap artefact — publish a self-contained HTML page and get a link back
+
+Usage: kcap artefact <subcommand>
+
+Subcommands:
+  publish <file.html> [options]    Publish a page, print its URL
+  list [--mine]                    Artefacts you can see
+  share <id> --visibility V [--to] Change who may open an artefact
+  delete <id>                      Remove an artefact
+
+Options for publish:
+  --title <T>                      Name shown in listings and the browser tab.
+                                   Defaults to the file's own name.
+  --description <D>                One line saying what the artefact is for.
+  --visibility none|org|scoped     Who may open it. `none` (the default) is you
+                                   alone; `org` is anyone in the organization;
+                                   `scoped` is exactly the --to grants below.
+  --to <type>:<id>                 One audience member, repeatable. Type is
+                                   user, team or project. Only read under
+                                   `scoped`.
+  --session <id>                   A session this artefact came out of,
+                                   repeatable. Defaults to KCAP_SESSION_ID when
+                                   set, so an agent's publish is attributed to
+                                   its own session without ceremony.
+  --update <artefactId>            Publish a new version of an existing
+                                   artefact. The URL does not change, so a link
+                                   you already shared stays good. Content only —
+                                   change a title or an audience with `share`.
+
+Options for share:
+  --visibility none|org|scoped     Required.
+  --to <type>:<id>                 Repeatable. This REPLACES the whole
+                                   audience: a grant you leave out is one you
+                                   are taking away.
+
+THE PAGE
+
+  An artefact is served under a sandbox that cannot reach the network, so
+  inline every style, script and image as a data URI — an external URL renders
+  as nothing. The page must be self-contained HTML.
+
+LIMITS
+
+  A refusal names the limit it hit and the value of that limit, so you never
+  have to find the ceiling by bisection.
+
+EXAMPLES
+
+  kcap artefact publish plan.html --title "Migration plan" --visibility org
+  kcap artefact publish report.html --visibility scoped --to team:platform
+  kcap artefact publish plan.html --update art_01J9...
+  kcap artefact list --mine
+  kcap artefact share art_01J9... --visibility none

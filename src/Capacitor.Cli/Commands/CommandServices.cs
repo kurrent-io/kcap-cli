@@ -53,6 +53,7 @@ public static class CommandServices {
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
         services.AddTransient<CurateCommand>();
+        services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();
         services.AddTransient<EvalCommand>();
@@ -80,6 +81,7 @@ public static class CommandServices {
         services.AddTransient<McpSessionsServer>();
         services.AddTransient<McpWorkItemsServer>();
         services.AddTransient<McpAnalyticsServer>();
+        services.AddTransient<McpArtefactsServer>();
         services.AddTransient<McpReviewServer>();
         services.AddTransient<McpJudgeServer>();
         services.AddTransient<UninstallCommand>();

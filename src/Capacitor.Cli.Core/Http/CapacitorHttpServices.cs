@@ -29,6 +29,7 @@ public static class CapacitorHttpServices {
         services.AddSingleton<IProjectsApi, ProjectsApi>();
         services.AddSingleton<IRepositoriesApi, RepositoriesApi>();
         services.AddSingleton<IFeedbackApi, FeedbackApi>();
+        services.AddSingleton<IArtefactsApi, ArtefactsApi>();
         services.AddSingleton<IMachinesApi, MachinesApi>();
         services.AddSingleton<IReviewApi, ReviewApi>();
         services.AddTransient<ServerVersionCaptureHandler>();

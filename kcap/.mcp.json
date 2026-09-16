@@ -29,6 +29,12 @@
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Attach the current session to a work item (issue, PR, or a brand-new item) on the Capacitor server, and list the work items a session is attached to."
     },
+    "kcap-artefacts": {
+      "command": "kcap",
+      "args": ["mcp", "artefacts"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. The page is sandboxed with no network access, so inline everything as data URIs. Private until you set visibility."
+    },
     "kcap-analytics": {
       "command": "kcap",
       "args": ["mcp", "analytics"],

@@ -16,6 +16,10 @@ Subcommands:
   workitems               Start the MCP workitems server (stdio) — declare and
                           list a session's work-item attachments. Claude Code
                           only.
+  analytics               Start the MCP analytics server (stdio) — governed
+                          read-only SQL over the org's coding-agent analytics.
+  artefacts               Start the MCP artefacts server (stdio) — publish a
+                          self-contained HTML page and get back a link.
 
 Options for review:
   --owner <owner>         Repository owner (session default)
@@ -154,10 +158,22 @@ mcp analytics:
       # desktop app launches with no shell PATH, so command
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
+mcp artefacts:
+  Exposes three tools — publish_artefact, list_my_artefacts,
+  set_artefact_visibility — for an agent to publish a self-contained HTML page
+  (a plan, a report, a comparison) and hand back a link. The page is served
+  under a sandbox with no network access, so every style, script and image has
+  to be inlined as a data URI; an external URL renders as nothing. An artefact
+  is private to its owner until visibility says otherwise, and publishing with
+  `update_id` revises an existing one without changing its URL. The tool list is
+  kept to three deliberately — reading, version history and takedown live in the
+  web UI. Requires `kcap login` and a kcap-server with the /api/artefacts
+  endpoints.
+
 INSTALL
 
   `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`,
-  `kcap-flows`, and `kcap-analytics`
+  `kcap-flows`, `kcap-analytics`, and `kcap-artefacts`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap

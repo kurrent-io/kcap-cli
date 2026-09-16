@@ -307,6 +307,7 @@ At a glance — each links to its section below:
 | [`kcap review`](#pr-review-with-full-context) | Launch a PR review with full transcript context |
 | [`kcap mcp <server>`](#sessions-mcp-server-for-agents) | Run an MCP server (sessions / flows / memory / …) for agents |
 | [`kcap curate apply`](#curate-guidelines) | Sync promoted guidelines into `CLAUDE.md` / `AGENTS.md` |
+| [`kcap artefact`](#artefacts) | Publish a self-contained HTML page and get a link to share |
 | [`kcap skills sync`](#skills-sync) | Materialize the repo's approved skill docs into every present harness's skills tree |
 | [`kcap daemon …`](#daemon) | Run and manage the agent daemon |
 | [`kcap agent`](#local-agents-kcap-agent) | Start, list, attach to, and stop daemon-hosted agents |
@@ -679,6 +680,22 @@ It provides nine tools:
 
 `declare_work_item` / `get_session_work_items` / `detach_work_item` default `session_id` to the current kcap-hooked session (`KCAP_SESSION_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
 
+### Artefacts MCP server (for agents)
+
+```bash
+kcap mcp artefacts
+```
+
+Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the Capacitor server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. An artefact is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
+
+It provides three tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and reading, version history and takedown all live in the web UI:
+
+- **`publish_artefact`** — publish a page. `title` plus either `html` or a local `path`; optional `description`, `visibility` (`none` / `org` / `scoped`), `grants`, `session_ids`, and `update_id` to revise an existing artefact.
+- **`list_my_artefacts`** — the artefacts you can see: id, title, audience, latest version, URL.
+- **`set_artefact_visibility`** — replace an artefact's audience. A grant left out is one being taken away.
+
+The current session is cited automatically from `KCAP_SESSION_ID` when set, so an agent's publish is attributed to the work that produced it without ceremony. Requires `kcap login` and a kcap-server new enough to expose the `/api/artefacts` endpoints.
+
 ### Analytics MCP server (for agents)
 
 ```bash
@@ -693,6 +710,21 @@ It provides two tools:
 - **`query_analytics`** — run one governed Postgres SELECT. Defaults to the current repository (resolved from the working directory); pass `scope: "global"` for org-wide questions, and `max_rows` to adjust the row cap. A rejected query returns the validator's reason so the agent can fix the SQL and retry.
 
 Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints (older servers return a clear "upgrade kcap-server" message).
+
+### Artefacts
+
+Publish a self-contained HTML page to the Capacitor server and get back a link — the same shape as a session share link, but for a page you wrote. The page is served under a sandbox that cannot reach the network, so inline every style, script and image as a data URI; an external URL renders as nothing.
+
+```bash
+kcap artefact publish plan.html --title "Migration plan" --visibility org
+kcap artefact publish report.html --visibility scoped --to team:platform --to user:github:7
+kcap artefact publish plan.html --update art_01J9...   # new version, same URL
+kcap artefact list --mine
+kcap artefact share art_01J9... --visibility none      # take it back to private
+kcap artefact delete art_01J9...
+```
+
+An artefact is private to its owner until `--visibility` says otherwise. `--to` names one audience member (`user:<id>`, `team:<slug>`, `project:<id>`) and is only read under `scoped`; on `share` it replaces the whole audience, so a grant you leave out is one you are taking away. `--session` cites a session the artefact came out of and defaults to `KCAP_SESSION_ID`, so an agent's publish is attributed without ceremony. The URL is whatever the server says it is — printed on stdout; refusals go to stderr and name the limit they hit along with its value.
 
 ### Curate guidelines
 

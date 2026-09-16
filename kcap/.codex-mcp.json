@@ -23,6 +23,10 @@
     "kcap-workitems": {
       "command": "kcap",
       "args": ["mcp", "workitems"]
+    },
+    "kcap-artefacts": {
+      "command": "kcap",
+      "args": ["mcp", "artefacts"]
     }
   }
 }

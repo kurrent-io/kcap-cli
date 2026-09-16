@@ -43,6 +43,7 @@ public static partial class CommandEvents {
         "curate", "cleanup", "uninstall", "disable", "hide", "import", "watch",
         "copilot-finalize", "set-title", "hook", "cursor", "cursor-verify-appendonly",
         "generate-whats-done", "permission-request", "feedback",
+        "artefact",
     };
 
     // Verbs whose args[1] is a known literal rather than user data. Verbs absent from this
@@ -55,6 +56,7 @@ public static partial class CommandEvents {
         ["profile"] = new(StringComparer.Ordinal) { "list", "add", "remove", "show" },
         ["curate"]  = new(StringComparer.Ordinal) { "apply" },
         ["agent"]   = new(StringComparer.Ordinal) { "start", "stop", "list", "status" },
+        ["artefact"]  = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
     };
 
     const int MaxFlags = 12;
@@ -71,6 +73,7 @@ public static partial class CommandEvents {
     // Extend this set if another free-text value flag is ever added.
     static readonly HashSet<string> ValueFlags = new(StringComparer.Ordinal) {
         "-m", "--message",
+        "--title", "--description",
     };
 
     public static bool IsReportable(string command) => !Denylisted.Contains(command);

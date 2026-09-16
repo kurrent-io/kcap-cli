@@ -57,6 +57,18 @@ Governed read-only SQL over the org's curated coding-agent analytics views (sess
 
 Repo-aware: defaults to the cwd's repo; pass `scope: "global"` for org-wide questions. Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints.
 
+### `kcap-artefacts`
+
+Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. The page is served under a sandbox with no network access, so every style, script and image has to be inlined as a data URI; an external URL renders as nothing.
+
+| Tool | Description |
+|------|-------------|
+| `publish_artefact` | Publish a page (`title`, and either `html` or a local `path`); optional `description`, `visibility`, `grants`, `session_ids`, and `update_id` to revise an existing artefact without changing its URL |
+| `list_my_artefacts` | The artefacts you can see — id, title, audience, latest version, URL |
+| `set_artefact_visibility` | Replace an artefact's audience (`none` / `org` / `scoped` + grants) |
+
+An artefact is private to its owner until visibility says otherwise. The tool list is kept to three deliberately — reading, version history and takedown live in the web UI. The current session is cited automatically from `KCAP_SESSION_ID`, so a publish is attributed to the work that produced it.
+
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 
 **Hooks** — Automatically captures session activity and forwards it to the Kurrent Capacitor server:
