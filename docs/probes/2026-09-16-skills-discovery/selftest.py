@@ -326,5 +326,104 @@ class AdapterTests(unittest.TestCase):
         self.assertIsNone(Adapter.install_registration(FakeAdapter(), None, None, None))
 
 
+import probe  # noqa: E402
+from lib.recorder import load_runs as _load  # noqa: E402
+
+
+class RunnerTests(unittest.TestCase):
+    def _runner(self, d, runs=2):
+        return probe.Runner(FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
+
+    def test_s0_and_s1(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            recs = r.run_scenario("print", "S0")
+            self.assertEqual([x.verdict for x in recs], ["not_visible", "not_visible"])
+            recs = r.run_scenario("print", "S1")
+            self.assertEqual([x.verdict for x in recs], ["visible_first_turn"] * 2)
+            self.assertTrue(r.s1_ok["print"])
+            self.assertEqual(recs[0].root, ".fake/skills")
+            self.assertEqual(recs[0].expected_tokens.keys(), {"native"})
+            self.assertEqual(len(_load(Path(d) / "out")), 4)
+
+    def test_s2_hook_arms_and_registration_skip(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            r.run_scenario("print", "S1")
+            recs = r.run_scenario("print", "S2")
+            by_arm = {}
+            for x in recs:
+                by_arm.setdefault(x.arm, []).append(x)
+            self.assertEqual({x.verdict for x in by_arm["S2/hook-creates-root"]}, {"visible_first_turn"})
+            self.assertEqual({x.verdict for x in by_arm["S2/hook-adds-skill"]}, {"visible_first_turn"})
+            self.assertEqual({x.verdict for x in by_arm["S2/registration"]}, {"untested"})
+            self.assertIsNotNone(by_arm["S2/hook-creates-root"][0].hook["fired_at"])
+            self.assertEqual(by_arm["S2/hook-creates-root"][0].hook["mechanism"], "fake-startup")
+
+    def test_s3_exclusions(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            r.run_scenario("print", "S1")
+            recs = r.run_scenario("print", "S3")
+            self.assertEqual({x.exclusion for x in recs}, {"gitignore", "info-exclude"})
+            self.assertEqual({x.verdict for x in recs}, {"visible_first_turn"})
+
+    def test_s4_roots_and_confirmation(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            r.run_scenario("print", "S1")
+            recs = r.run_scenario("print", "S4")
+            all_rows = [x for x in recs if x.arm == "S4/all-roots"]
+            self.assertEqual(len(all_rows), 2)
+            self.assertEqual(all_rows[0].verdict, "visible_first_turn")
+            per_root = {}
+            for x in recs:
+                if x.arm.startswith("S4/confirm-"):
+                    per_root[x.root] = x.verdict
+            self.assertEqual(per_root[".claude/skills"], "not_visible")
+            self.assertNotIn(".fake/skills", per_root)
+            self.assertNotIn(".agents/skills", per_root)
+            self.assertEqual(all_rows[0].expected_tokens.keys(), set(probe.ALL_ROOTS) | {"fake"})
+
+    def test_s1_gate_blocks_later_scenarios(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            r.s1_ok["print"] = False
+            recs = r.run_scenario("print", "S3")
+            self.assertEqual([x.verdict for x in recs], ["untested", "untested"])
+            self.assertEqual(recs[0].notes, "S1 failed")
+
+    def test_third_run_on_disagreement(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            calls = {"n": 0}
+
+            def flaky():
+                calls["n"] += 1
+                v = "visible_first_turn" if calls["n"] != 2 else "not_visible"
+                return probe.RunRecord(entry="fake", harness="fake", binary="x", version="1", os="o",
+                                       mode="print", argv=[], isolation_lever="L", credential_files=[],
+                                       auth_ok=None, scenario="S1", arm="S1/native", root=None,
+                                       exclusion="none", hook=None, first_request_at=None, reply="",
+                                       tokens_found=[], skill_named=False, stderr_path=None, verdict=v,
+                                       duration_ms=0)
+            recs = r.run_arm(flaky)
+            self.assertEqual(len(recs), 3)
+
+    def test_cli_free_phase_and_emit(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "out"
+            code = probe.main(["--harness", "fake", "--mode", "print", "--outdir", str(out), "--base", d])
+            self.assertEqual(code, 0)
+            self.assertTrue((out / "fake" / "print" / "free" / "free" / "free.json").exists())
+            code = probe.main(["--harness", "fake", "--mode", "print", "--scenario", "S1", "--turn",
+                               "--outdir", str(out), "--base", d, "--matrix", str(Path(d) / "m.json")])
+            self.assertEqual(code, 0)
+            code = probe.main(["--emit", "--outdir", str(out), "--matrix", str(Path(d) / "m.json")])
+            self.assertEqual(code, 0)
+            rows = json.loads((Path(d) / "m.json").read_text())
+            self.assertEqual({r["scenario"] for r in rows}, {"S1"})
+
+
 if __name__ == "__main__":
     unittest.main()
