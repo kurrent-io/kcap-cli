@@ -306,4 +306,7 @@ Pass 2 PR: lifecycle scenarios and interactive mode, matrix rows added, closes #
   adjustment is recorded.
 - Version drift during the run: every row carries the version it ran against, and `--emit` never
   merges rows from different versions of one entry.
-- Cost: pass 1 is roughly 40 to 60 short turns across the developer's accounts.
+- Cost: about 24 short turns per entry and mode (S0 and S1 twice each, three S2 arms twice, two
+  S3 arms twice, S4 once plus one single-run confirmation per root the multi prompt missed), so
+  pass 1 is roughly 300 to 400 short turns over the developer's accounts. Confirmations are the
+  bulk; an entry whose S4 reply already names every documented root spends none.
