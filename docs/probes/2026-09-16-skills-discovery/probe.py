@@ -56,6 +56,10 @@ ALL_ARMS: tuple[tuple[str, str, bool, str], ...] = (
 )
 
 
+def _verdicts_by_root(recs: list[RunRecord]) -> dict[str | None, str]:
+    return {r.root: r.verdict for r in recs}
+
+
 class Runner:
     def __init__(self, adapter: Adapter, outdir: Path, runs: int = 2, keep: bool = False,
                  base: Path | None = None, version: str | None = None, rerun: bool = False) -> None:
@@ -254,7 +258,7 @@ class Runner:
     def arm_s3(self, mode: str, exclusion: str) -> RunRecord:
         return self.arm_s1(mode, exclusion=exclusion, scenario="S3")
 
-    def arm_s4_all(self, mode: str) -> RunRecord:
+    def arm_s4_all(self, mode: str) -> list[RunRecord]:
         started = time.time()
         a = self.adapter
         sb = self.sandbox()
@@ -265,12 +269,14 @@ class Runner:
                 write_skill(sb.repo / roots[key], skill, flat=a.flat_skill_layout and roots[key] == a.native_root)
             res = self._ask(sb, mode, multi_prompt())
             reply = parse_reply(res.reply_text, res.raw)
-            found = {key for key, s in skills.items() if s.token in reply.tokens}
-            leaked = {key for key in found if roots[key] not in a.documented_roots}
-            verdict = "leaked" if leaked else ("visible_first_turn" if found else "not_visible")
-            notes = f"found={sorted(found)} leaked={sorted(leaked)}"
-            return self.record(mode, "S4", "S4/all-roots", None, "none", res, verdict,
-                               {k: s.token for k, s in skills.items()}, sb=sb, started=started, notes=notes)
+            found = sorted(key for key, s in skills.items() if s.token in reply.tokens)
+            leaked = sorted(key for key in found if roots[key] not in a.documented_roots)
+            notes = f"found={found} leaked={leaked}"
+            # One turn, one row per root: a single verdict for eleven roots cannot say which leaked.
+            return [self.record(mode, "S4", "S4/all-roots", root, "none", res,
+                                judge_root(skills[key].token, root in a.documented_roots, reply),
+                                {key: skills[key].token}, sb=sb, started=started, notes=notes)
+                    for key, root in roots.items()]
         finally:
             sb.cleanup()
 
@@ -320,18 +326,29 @@ class Runner:
             if gated:
                 out.append(self._blocked(mode, "S4", "S4/all-roots", None, "none"))
                 return out
-            recs = self.run_arm(lambda: self.arm_s4_all(mode), mode, "S4", "S4/all-roots", None, "none")
+            recs = self._s4_passes(mode)
             out += recs
-            roots = self._s4_roots()
-            for key, root in roots.items():
-                seen_every_run = all(recs[i].expected_tokens.get(key) in recs[i].tokens_found for i in range(len(recs)))
-                if seen_every_run:
+            for key, root in self._s4_roots().items():
+                rows = [r for r in recs if r.root == root and key in r.expected_tokens]
+                if rows and all(r.expected_tokens[key] in r.tokens_found for r in rows):
                     continue
-                out += self.run_arm(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r), mode, "S4",
-                                    f"S4/confirm-{key}", root, "none")
+                # One confirmation turn per missed root: the multi prompt is what may have
+                # stopped enumerating, and a second miss adds no evidence.
+                out += self.run_once(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r), mode, "S4",
+                                     f"S4/confirm-{key}", root, "none")
         else:
             raise ValueError(scenario)
         return out
+
+    def _s4_passes(self, mode: str) -> list[RunRecord]:
+        existing = self._existing(mode, "S4", "S4/all-roots")
+        if existing:
+            return existing
+        identity = (mode, "S4", "S4/all-roots", None, "none")
+        passes = [self._guarded(lambda: self.arm_s4_all(mode), *identity) for _ in range(max(1, self.runs))]
+        if len(passes) == 2 and _verdicts_by_root(passes[0]) != _verdicts_by_root(passes[1]):
+            passes.append(self._guarded(lambda: self.arm_s4_all(mode), *identity))
+        return [r for p in passes for r in p]
 
     def _registration(self, mode: str) -> list[RunRecord]:
         identity = (mode, "S2", "S2/registration", self.adapter.native_root, "none")

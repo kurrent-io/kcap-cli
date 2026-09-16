@@ -430,16 +430,25 @@ class RunnerTests(unittest.TestCase):
             r.run_scenario("print", "S1")
             recs = r.run_scenario("print", "S4")
             all_rows = [x for x in recs if x.arm == "S4/all-roots"]
-            self.assertEqual(len(all_rows), 2)
-            self.assertEqual(all_rows[0].verdict, "visible_first_turn")
+            expected_keys = set(probe.ALL_ROOTS) | {"native_fake"}
+            self.assertEqual(len(all_rows), 2 * len(expected_keys))
+            self.assertEqual({next(iter(x.expected_tokens)) for x in all_rows}, expected_keys)
+            self.assertEqual({len(x.expected_tokens) for x in all_rows}, {1})
             per_root = {}
-            for x in recs:
-                if x.arm.startswith("S4/confirm-"):
-                    per_root[x.root] = x.verdict
-            self.assertEqual(per_root[".claude/skills"], "not_visible")
-            self.assertNotIn(".fake/skills", per_root)
-            self.assertNotIn(".agents/skills", per_root)
-            self.assertEqual(all_rows[0].expected_tokens.keys(), set(probe.ALL_ROOTS) | {"native_fake"})
+            for x in all_rows:
+                per_root.setdefault(x.root, set()).add(x.verdict)
+            self.assertEqual(len(per_root), len(expected_keys))
+            self.assertEqual(per_root[".fake/skills"], {"visible_first_turn"})
+            self.assertEqual(per_root[".agents/skills"], {"visible_first_turn"})
+            self.assertEqual(per_root[".claude/skills"], {"not_visible"})
+            self.assertIn("found=['agents', 'native_fake'] leaked=[]", all_rows[0].notes)
+            confirms = [x for x in recs if x.arm.startswith("S4/confirm-")]
+            self.assertEqual(len(confirms), len(expected_keys) - 2)
+            self.assertEqual(len({x.arm for x in confirms}), len(confirms))
+            by_root = {x.root: x.verdict for x in confirms}
+            self.assertEqual(by_root[".claude/skills"], "not_visible")
+            self.assertNotIn(".fake/skills", by_root)
+            self.assertNotIn(".agents/skills", by_root)
 
     def test_s1_gate_blocks_later_scenarios(self):
         with tempfile.TemporaryDirectory() as d:
