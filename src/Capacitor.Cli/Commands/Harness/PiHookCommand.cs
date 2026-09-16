@@ -177,7 +177,7 @@ sealed class PiHookCommand(
         // stdout regardless of exit code, so no commit gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
             PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);

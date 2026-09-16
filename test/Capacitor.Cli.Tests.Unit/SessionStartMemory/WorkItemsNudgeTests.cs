@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
@@ -77,7 +78,7 @@ public class WorkItemsNudgeEmitterTests {
 
         // Opt-out wins even for an available harness.
         await Assert.That(WorkItemsNudgeEmitter.Resolve(
-            HarnessId.Codex, "s1", optedOut: true, harnesses: Harnesses,
+            HarnessId.Codex, "s1", optedOut: true, harnesses: Harnesses, plan: PlanEntitlements.Unknown,
             codexConfigPath: CodexConfigWithWorkItems(tmp))).IsNull();
     }
 
@@ -86,10 +87,35 @@ public class WorkItemsNudgeEmitterTests {
         using var tmp = new TempDir();
 
         var nudge = WorkItemsNudgeEmitter.Resolve(
-            HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses,
+            HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses, plan: PlanEntitlements.Unknown,
             codexConfigPath: CodexConfigWithWorkItems(tmp));
         await Assert.That(nudge).IsNotNull();
         await Assert.That(nudge!).Contains("`s1`");
+    }
+
+    [Test]
+    public async Task Resolve_returns_null_when_the_plan_denies_work_items() {
+        using var tmp = new TempDir();
+
+        // A Free tenant is registered and opted in, but every declare would 403 — so the
+        // agent must not be told to try.
+        await Assert.That(WorkItemsNudgeEmitter.Resolve(
+            HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses,
+            plan: PlanEntitlements.Parse("work_items=0"),
+            codexConfigPath: CodexConfigWithWorkItems(tmp))).IsNull();
+    }
+
+    [Test]
+    public async Task Resolve_returns_the_nudge_when_the_plan_denies_only_other_features() {
+        using var tmp = new TempDir();
+
+        // A denial this nudge does not depend on must not suppress it.
+        var nudge = WorkItemsNudgeEmitter.Resolve(
+            HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses,
+            plan: PlanEntitlements.Parse("projects=0,analytics=0,work_items=1"),
+            codexConfigPath: CodexConfigWithWorkItems(tmp));
+
+        await Assert.That(nudge).IsNotNull();
     }
 
     [Test]
@@ -98,7 +124,7 @@ public class WorkItemsNudgeEmitterTests {
         using var tmp = new TempDir();
         var codexConfig = tmp.CreateFile("config.toml", "model = \"gpt-5-codex\"\n");
         await Assert.That(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses,
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, "s1", optedOut: false, harnesses: Harnesses, plan: PlanEntitlements.Unknown,
                                           codexConfigPath: codexConfig))
             .IsNull();
     }

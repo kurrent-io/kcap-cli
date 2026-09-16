@@ -776,7 +776,7 @@ public sealed class ClaudeHookCommand(
 
                     // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
                     var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses);
+                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config));
                     var plansNudge = PlansNudgeEmitter.Resolve(
                         HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses);

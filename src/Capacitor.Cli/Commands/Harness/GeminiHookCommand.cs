@@ -354,7 +354,7 @@ sealed class GeminiHookCommand(
         // parses hook stdout unconditionally, with the exit code only setting its own `success` flag.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
             PlansNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
         result.Write(RenderSessionStartPayload(fragment, workItemsNudge));

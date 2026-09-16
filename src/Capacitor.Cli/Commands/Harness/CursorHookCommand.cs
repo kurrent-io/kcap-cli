@@ -546,7 +546,7 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses);
+            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config));
             var plansNudge     = PlansNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisablePlansNudge is true, harnesses);
             var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli;
@@ -7,11 +8,12 @@ namespace Capacitor.Cli;
 /// is in a recorded Kurrent Capacitor session and that it should register the session with its work
 /// item and declare the work's structure (breakdown + dependencies) as it discovers them.
 ///
-/// <para>Unlike the team-memory index and judge-fact guidelines, this nudge is a pure function of the
-/// current session id — it needs no server round-trip and no lease. It is therefore composed at the
-/// output layer (<see cref="SessionStartMemory.SessionStartMemoryOutputAdapters"/>), AFTER the
-/// lease-gated memory/guidelines fragment is decided, so its presence can never change the
-/// acquire/complete/retry state of those lanes.</para>
+/// <para>Unlike the team-memory index and judge-fact guidelines, this nudge takes no server round-trip
+/// and no lease of its own: it is a function of the current session id and the entitlements already
+/// cached from earlier responses. It is therefore composed at the output layer
+/// (<see cref="SessionStartMemory.SessionStartMemoryOutputAdapters"/>), AFTER the lease-gated
+/// memory/guidelines fragment is decided, so its presence can never change the acquire/complete/retry
+/// state of those lanes — a cache READ preserves that, which a fetch would not.</para>
 ///
 /// <para>The current session id is rendered verbatim so a harness without an ambient
 /// <c>KCAP_SESSION_ID</c> can pass it to <c>declare_work_item</c> explicitly. Returns <c>null</c> when
@@ -24,14 +26,21 @@ static class WorkItemsNudgeEmitter {
 
     /// <summary>
     /// Resolves the nudge fragment for a harness: <c>null</c> (emit nothing) when the user opted out
-    /// (<c>disable_workitems_nudge</c>), when <c>kcap-workitems</c> is not materialized in that
-    /// harness's config (fail-closed availability gate), or when there is no usable session id;
-    /// otherwise the built nudge. <paramref name="codexConfigPath"/> is the availability gate's test
-    /// seam and is null in production.
+    /// (<c>disable_workitems_nudge</c>), when the tenant's plan does not include Work Items, when
+    /// <c>kcap-workitems</c> is not materialized in that harness's config (fail-closed availability
+    /// gate), or when there is no usable session id; otherwise the built nudge.
+    /// <paramref name="codexConfigPath"/> is the availability gate's test seam and is null in production.
+    ///
+    /// <para><paramref name="plan"/> is the last answer the server gave, not a live one — the nudge
+    /// still takes no round trip of its own. Unknown entitlements allow the nudge, so an offline
+    /// machine or a server predating the header behaves as it does today; the cost of that is one
+    /// stale nudge across a plan change, against a nag on every session.</para>
     /// </summary>
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
-                                  HarnessRegistry harnesses, string? codexConfigPath = null) {
+                                  HarnessRegistry harnesses, PlanEntitlements plan,
+                                  string? codexConfigPath = null) {
         if (optedOut) return null;
+        if (!plan.Allows(PlanFeature.WorkItems)) return null;
         if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath)) return null;
         return Build(sessionId);
     }
