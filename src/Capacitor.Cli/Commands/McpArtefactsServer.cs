@@ -176,6 +176,17 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "set_artefact_visibility" => await client.PutAsync(
                     ArtefactUrl(baseUrl, arguments, "visibility"), ToJsonContent(BuildVisibilityBody(arguments))),
 
+                // The long poll. Its own client timeout, well past the server's own ceiling, so the
+                // wait ends because the SERVER decided it had — never because this side gave up
+                // first and left the agent unable to tell a timeout from a lost answer.
+                "await_artefact_responses" => await WaitAsync(client, baseUrl, arguments),
+
+                "get_artefact_results" => await client.GetAsync(
+                    $"{ArtefactUrl(baseUrl, arguments, "results")}{VersionQuery(arguments)}"),
+
+                "close_artefact_responses" => await client.PostAsync(
+                    ArtefactUrl(baseUrl, arguments, "responses/close"), ToJsonContent(BuildCloseBody(arguments))),
+
                 _ => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -276,6 +287,15 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         if (OptionalString(args, "visibility") is { Length: > 0 } visibility) body["visibility"] = visibility;
 
         if (ReadGrants(args) is { } grants) body["grants"] = grants;
+
+        // Forwarded whole rather than reshaped: the server owns every rule about what a schema may
+        // declare, and a second interpretation here would be a second place for them to drift.
+        if (args is not null && args.TryGetPropertyValue("response_schema", out var schema) && schema is not null) {
+            if (schema is not JsonObject declared)
+                throw new ArgumentException("'response_schema' must be an object.");
+
+            body["response_schema"] = declared.DeepClone();
+        }
 
         // The session is cited without being asked for: an artefact published mid-session belongs
         // with the session that produced it, and an agent that has to remember to say so mostly
@@ -378,6 +398,53 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     static string Escape(string id) => Uri.EscapeDataString(id);
 
+    /// <summary>
+    /// The blocking read.
+    ///
+    /// <para>The server caps how long it will hold one poll and answers 200 with whatever it has, so
+    /// a client that timed out first would turn "nobody has answered yet" into an error the agent
+    /// cannot distinguish from a broken server. The client budget is therefore deliberately longer
+    /// than anything the server will hold.</para>
+    /// </summary>
+    static async Task<HttpResponseMessage> WaitAsync(HttpClient client, string baseUrl, JsonObject? args) {
+        var url = new StringBuilder(ArtefactUrl(baseUrl, args, "responses/wait"));
+
+        url.Append(VersionQuery(args).Length == 0 ? '?' : '&').Append("min_respondents=")
+           .Append(McpWorkItemsServer.TryReadInt(args, "min_respondents", out var min) ? min : 1);
+
+        if (VersionQuery(args) is { Length: > 0 } version) url.Append('&').Append(version.TrimStart('?'));
+
+        if (McpWorkItemsServer.TryReadInt(args, "timeout_s", out var timeout)) url.Append("&timeout_s=").Append(timeout);
+
+        using var budget = new CancellationTokenSource(ClientWaitBudget);
+
+        return await client.GetAsync(url.ToString(), budget.Token);
+    }
+
+    /// <summary>Longer than the server's own 25-minute ceiling, so the wait always ends on the
+    /// server's terms.</summary>
+    static readonly TimeSpan ClientWaitBudget = TimeSpan.FromMinutes(30);
+
+    static string VersionQuery(JsonObject? args) =>
+        McpWorkItemsServer.TryReadInt(args, "version", out var version) ? $"?version={version}" : "";
+
+    internal static JsonObject BuildCloseBody(JsonObject? args) {
+        if (!McpWorkItemsServer.TryReadInt(args, "version", out var version))
+            throw new ArgumentException("'version' is required.");
+
+        var body = new JsonObject { ["version"] = version };
+
+        // Absent means close. Reopening is the exception, and has to be asked for.
+        if (args is not null && args.TryGetPropertyValue("closed", out var node)) {
+            if (node is not JsonValue value || !value.TryGetValue<bool>(out var closed))
+                throw new ArgumentException("'closed' must be true or false.");
+
+            body["closed"] = closed;
+        }
+
+        return body;
+    }
+
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
@@ -420,12 +487,50 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                                       new("object", "One audience member: grant_type ('user', 'team' or 'project'), grantee_id, and an optional grantee_name.")),
                 ["session_ids"] = new("array", "Sessions this artefact came out of. Defaults to the current kcap-hooked session when omitted.",
                                       new("string", "A session id.")),
-                ["update_id"]   = new("string", "Publish a new version of this existing artefact instead of creating one. The URL does not change.")
+                ["update_id"]   = new("string", "Publish a new version of this existing artefact instead of creating one. The URL does not change."),
+                ["response_schema"] = new("object",
+                    "Makes the page answerable. Declare the fields people may submit — each with an id and a type "
+                  + "of 'choice' (one of options), 'multi' (any of options), 'score' (min..max) or 'text' — and the "
+                  + "server validates every answer against them and tallies the results. Optionally set results_mode "
+                  + "('owner' (default, only you see answers), 'aggregate' (viewers see tallies, no names or text) or "
+                  + "'named' (viewers see who said what)), min_responses_to_reveal, and closes_at. Without it, answers "
+                  + "are an opaque blob only you can read.")
             }, ["title"])),
 
         new("list_my_artefacts",
             "List the artefacts you can see, newest change first — id, title, audience, latest version and URL.",
             new("object", new(), [])),
+
+        new("await_artefact_responses",
+            "Wait for people to answer an artefact you published, then read what they said. Blocks until "
+          + "min_respondents distinct people have answered the version, or you close it, or the timeout "
+          + "elapses — a timeout is not an error, it returns what there is so far. This is the human "
+          + "checkpoint: publish a plan or a decision, share it, then wait here for the answer.",
+            new("object", new() {
+                ["artefact_id"]     = new("string", "The artefact to wait on."),
+                ["version"]         = new("integer", "Which version's answers to wait for. Defaults to the latest."),
+                ["min_respondents"] = new("integer", "How many distinct people must have answered before this returns. Defaults to 1."),
+                ["timeout_s"]       = new("integer", "How long to wait, in seconds. Defaults to 300; the server caps one wait at 1500 and you may call again.")
+            }, ["artefact_id"])),
+
+        new("get_artefact_results",
+            "Read an artefact's answers without waiting: per-field tallies, and each person's current "
+          + "answer with their name. Every submit is kept, but this shows the latest per person — "
+          + "someone who changed their mind counts once.",
+            new("object", new() {
+                ["artefact_id"] = new("string", "The artefact to read."),
+                ["version"]     = new("integer", "Which version's answers to read. Defaults to the latest.")
+            }, ["artefact_id"])),
+
+        new("close_artefact_responses",
+            "Close a version to further answers, freezing its results. Reversible: pass closed=false to "
+          + "reopen, which also clears any deadline that was set. Closing also releases anyone blocked "
+          + "in await_artefact_responses.",
+            new("object", new() {
+                ["artefact_id"] = new("string", "The artefact to close."),
+                ["version"]     = new("integer", "Which version to close."),
+                ["closed"]      = new("boolean", "false reopens. Defaults to true.")
+            }, ["artefact_id", "version"])),
 
         new("set_artefact_visibility",
             "Change who may open an artefact. This replaces the whole audience: a grant left out is one "

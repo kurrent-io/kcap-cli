@@ -63,11 +63,16 @@ Publish a self-contained HTML page — a plan, a report, a comparison — and ge
 
 | Tool | Description |
 |------|-------------|
-| `publish_artefact` | Publish a page (`title`, and either `html` or a local `path`); optional `description`, `visibility`, `grants`, `session_ids`, and `update_id` to revise an existing artefact without changing its URL |
+| `publish_artefact` | Publish a page (`title`, and either `html` or a local `path`); optional `description`, `visibility`, `grants`, `session_ids`, `response_schema` to make it answerable, and `update_id` to revise an existing artefact without changing its URL |
+| `await_artefact_responses` | Block until people have answered — the human checkpoint. Returns on a respondent count, on a close, or on a timeout (which is not an error) |
+| `get_artefact_results` | Tallies and each person's current answer, without waiting |
+| `close_artefact_responses` | Freeze a version's answers; `closed: false` reopens and clears any deadline |
 | `list_my_artefacts` | The artefacts you can see — id, title, audience, latest version, URL |
 | `set_artefact_visibility` | Replace an artefact's audience (`none` / `org` / `scoped` + grants) |
 
-An artefact is private to its owner until visibility says otherwise. The tool list is kept to three deliberately — reading, version history and takedown live in the web UI. The current session is cited automatically from `KCAP_SESSION_ID`, so a publish is attributed to the work that produced it.
+An artefact is private to its owner until visibility says otherwise. The current session is cited automatically from `KCAP_SESSION_ID`, so a publish is attributed to the work that produced it.
+
+Declaring a `response_schema` turns the page into a form the server validates and tallies: fields of type `choice`, `multi`, `score` or `text`, plus a `results_mode` deciding what other viewers see — `owner` (default, only you), `aggregate` (tallies, no names or free text) or `named` (who said what). Who answered is always the authenticated viewer; there is no field for it to forge. Reading, version history and takedown stay in the web UI.
 
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 

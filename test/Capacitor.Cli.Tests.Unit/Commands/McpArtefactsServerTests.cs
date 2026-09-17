@@ -204,14 +204,48 @@ public class McpArtefactsServerTests {
     // ── the advertised surface ────────────────────────────────────────────────────────
 
     [Test]
-    public async Task The_tool_list_stays_three_wide() {
-        // Deliberate: an agent's context pays for every schema it carries whether or not it ever
-        // publishes. Widening this is a decision, not a drive-by.
+    public async Task The_tool_list_is_exactly_these_six() {
+        // Deliberate and worth keeping deliberate: an agent's context pays for every schema it
+        // carries whether or not it ever publishes. Widening this is a decision, not a drive-by.
         var names = McpArtefactsServer.BuildToolsList().Select(t => t.Name).ToArray();
 
-        await Assert.That(names)
-                    .IsEquivalentTo(new[] { "publish_artefact", "list_my_artefacts", "set_artefact_visibility" });
+        await Assert.That(names).IsEquivalentTo(new[] {
+            "publish_artefact", "await_artefact_responses", "get_artefact_results",
+            "close_artefact_responses", "list_my_artefacts", "set_artefact_visibility"
+        });
     }
+
+    [Test]
+    public async Task Closing_defaults_to_closed_and_reopening_has_to_be_asked_for() {
+        await Assert.That(McpArtefactsServer.BuildCloseBody(Args("""{"version":2}""")).ContainsKey("closed")).IsFalse();
+
+        await Assert.That(McpArtefactsServer.BuildCloseBody(Args("""{"version":2,"closed":false}"""))["closed"]!
+                          .GetValue<bool>()).IsFalse();
+    }
+
+    [Test]
+    public async Task Closing_needs_the_version_it_is_closing() =>
+        await Assert.That(() => McpArtefactsServer.BuildCloseBody(Args("""{}"""))).Throws<ArgumentException>();
+
+    [Test]
+    public async Task A_declared_schema_is_forwarded_whole_rather_than_reshaped() {
+        // The server owns every rule about what a schema may declare; a second interpretation here
+        // would be a second place for the two to drift.
+        var body = McpArtefactsServer.BuildPublishBody(
+            Args("""{"title":"Plan","response_schema":{"fields":[{"id":"ok","type":"choice","options":["y","n"]}],"results_mode":"aggregate"}}"""),
+            "<p>x</p>");
+
+        var schema = body["response_schema"]!.AsObject();
+
+        await Assert.That(schema["results_mode"]!.GetValue<string>()).IsEqualTo("aggregate");
+        await Assert.That(schema["fields"]!.AsArray().Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_response_schema_that_is_not_an_object_is_refused() =>
+        await Assert.That(() => McpArtefactsServer.BuildPublishBody(
+                              Args("""{"title":"Plan","response_schema":"fields"}"""), "<p>x</p>"))
+                    .Throws<ArgumentException>();
 
     [Test]
     public async Task The_instructions_tell_an_agent_the_page_cannot_reach_the_network() {

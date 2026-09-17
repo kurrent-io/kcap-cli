@@ -688,11 +688,16 @@ kcap mcp artefacts
 
 Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the Capacitor server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. An artefact is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
 
-It provides three tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and reading, version history and takedown all live in the web UI:
+It provides six tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and reading, version history and takedown all live in the web UI:
 
-- **`publish_artefact`** — publish a page. `title` plus either `html` or a local `path`; optional `description`, `visibility` (`none` / `org` / `scoped`), `grants`, `session_ids`, and `update_id` to revise an existing artefact.
+- **`publish_artefact`** — publish a page. `title` plus either `html` or a local `path`; optional `description`, `visibility` (`none` / `org` / `scoped`), `grants`, `session_ids`, `response_schema`, and `update_id` to revise an existing artefact.
+- **`await_artefact_responses`** — block until people have answered. Returns on a respondent count, on a close, or on a timeout — a timeout is a result, not an error.
+- **`get_artefact_results`** — tallies and each person's current answer, without waiting.
+- **`close_artefact_responses`** — freeze a version's answers. `closed: false` reopens, which also clears any deadline.
 - **`list_my_artefacts`** — the artefacts you can see: id, title, audience, latest version, URL.
 - **`set_artefact_visibility`** — replace an artefact's audience. A grant left out is one being taken away.
+
+**The human checkpoint.** Declaring a `response_schema` at publish makes the page answerable: fields of type `choice`, `multi`, `score` or `text`, which the server validates every answer against and tallies. The agent publishes a plan or a decision, shares it, then blocks in `await_artefact_responses` until the people who must sign off have answered — reviewable on a phone, by several named people, with the approval recorded next to the artefact. Who answered is the authenticated viewer, resolved server-side; the page cannot claim it. `results_mode` decides what other viewers see: `owner` (default, only their own), `aggregate` (tallies, never names or free text) or `named`.
 
 The current session is cited automatically from `KCAP_SESSION_ID` when set, so an agent's publish is attributed to the work that produced it without ceremony. Requires `kcap login` and a kcap-server new enough to expose the `/api/artefacts` endpoints.
 
