@@ -139,8 +139,15 @@ authenticated → skip with reason; `--skip-import` → skip; `--no-prompt` → 
 `HandleImport(discoverOnly: true, onDiscovered: …)` over every detected vendor — the same call
 `SetupImportLane.DiscoverAsync` makes for the browser — through the injected `ISetupImportRunner`
 (a new `DiscoverAsync` member beside `RunAsync`, so tests substitute figures without a disk scan).
-It prints three figures under the step's rule: repositories, sessions attributed to one, sessions
-matching none. When the total is zero the step prints one line and ends without a prompt.
+It returns `SetupImportDiscovery(ImportDiscoveryResult? Result, Exception? Fault)` and never throws:
+`HandleImport`'s discovery fans out with an unguarded `Task.WhenAll` over the sources
+(`ImportCommand.cs:825`), so one corrupt vendor database would otherwise abort setup before the
+figures. A `Fault` prints one line — the scan failed and why — plus the `kcap import --all` hint,
+and the step ends with no prompt, no import, no file: the user was promised figures before a yes,
+and a blind yes is not that. Making discovery resilient per source is a `kcap import` change and a
+follow-up (Out of scope). On success the step prints three figures under its rule: repositories,
+sessions attributed to one, sessions on disk matching none. When the total is zero the step prints
+one line and ends without a prompt.
 
 **The prompt.** `Import past sessions from this machine?`, default yes. Decline prints the
 `kcap import --all` hint and the step ends; nothing else in this section runs. `--no-prompt` answers
@@ -280,8 +287,8 @@ to do. Nothing spawns only when the remainder is empty, none failed and the pass
   just saved, **remove** `KCAP_URL` (`ProfileOverrides.UrlVar`) — a URL override outranks the profile
   pin in `ProfileResolver` and resolves to *no* profile, which would let the child's allow lists and
   default visibility come from somewhere other than the profile setup wrote — set
-  `KCAP_IMPORT_DETACHED_LOG=<config dir>/import-<utc-timestamp>.log`, and set
-  `KCAP_IMPORT_DEFAULT_VISIBILITY` to the exact value the foreground pass stamped. Setup persists the
+  `KCAP_IMPORT_DETACHED_LOG=<config dir>/import-{run_id}.log` (the file setup has already created,
+  §3), and set `KCAP_IMPORT_DEFAULT_VISIBILITY` to the exact value the foreground pass stamped. Setup persists the
   profile (server URL, visibility, capture lists) before step 6, so the persisted profile is
   authoritative for the child's server and capture scope. No other environment is added or removed.
 - **Visibility parity.** Plain `kcap import` passes no `defaultVisibility` to `HandleImport`
@@ -292,9 +299,10 @@ to do. Nothing spawns only when the remainder is empty, none failed and the pass
   is set, the child passes that value as `defaultVisibility`. The variable is read **only** on the
   detached path — a plain `kcap import` ignores it — so the public surface is unchanged. Whether plain
   `kcap import` should honour the profile default itself is a follow-up (Out of scope).
-- Child-side contract: when `KCAP_IMPORT_DETACHED_LOG` is present, `kcap import` opens that file
-  itself (append, `FileShare.ReadWrite`), points its console output there, treats output as non-TTY
-  line mode, applies `KCAP_IMPORT_DEFAULT_VISIBILITY` as above, and calls
+- Child-side contract: when `KCAP_IMPORT_DETACHED_LOG` is present, `kcap import` opens that
+  **existing** file for append (`FileMode.Open`, `FileShare.ReadWrite`; a missing file is a startup
+  failure, never a create), points its console output there, treats output as non-TTY line mode,
+  applies `KCAP_IMPORT_DEFAULT_VISIBILITY` as above, and calls
   `ProcessHelpers.DetachFromControllingTerminal()` (setsid; no-op on Windows). Absent the log
   variable, `kcap import` behaves exactly as today; the detach path is unreachable from the public
   surface.
@@ -330,14 +338,18 @@ else `~/.config/kcap`; `run_id` is a fresh GUID in N format. Temp file plus atom
 crash cannot leave a parseable partial. On each write, files older than seven days are pruned.
 Nothing earlier shipped, so `schema_version` starts at 1.
 
-**Owner-only on disk.** The file lists up to 500 session ids, the tenant URL and a local log path, and
-the detached log carries repository and path diagnostics. Both are created owner-only the way
-`TokenStore` creates `tokens.json` (`TokenStore.cs:136-158`): `FileStreamOptions.UnixCreateMode =
-UserRead | UserWrite` on the temp file, so the rename carries 0600 onto the final name, and the same
-mode on the log at creation; an existing log is opened for append and its mode re-asserted. On Windows
-both inherit the user-profile ACLs. Neither path follows a symlink into place: the temp file is
-created with `FileMode.CreateNew`, and the log with `FileMode.Append` on a path the CLI generated
-itself.
+**Owner-only on disk, created by setup.** The file lists up to 500 session ids, the tenant URL and a
+local log path, and the detached log carries repository and path diagnostics. Setup creates **both**
+before anything else touches them, the way `TokenStore` creates `tokens.json`
+(`TokenStore.cs:136-158`): `FileMode.CreateNew` with `FileStreamOptions.UnixCreateMode =
+UserRead | UserWrite`, so nothing is ever opened through a pre-existing path — a file or link already
+at either name makes the create fail, and setup treats that as a write failure (handoff) or a `Failed`
+spawn (log) rather than writing through it. Names are per-run GUIDs (`import-handoff-{run_id}.json`,
+`import-{run_id}.log`), not timestamps. The temp file is created the same way, so the rename carries
+0600 onto the final name. The child only ever opens the log setup created. The config directory is
+the trust boundary, exactly as it is for `tokens.json`: a `KCAP_CONFIG_DIR` pointing at a directory
+other users can write to is outside what the CLI protects, for tokens today and for these files. On
+Windows both files get what `tokens.json` gets, the containing directory's ACLs.
 
 ```json
 {
@@ -353,7 +365,7 @@ itself.
   "cohort":                   "exact | partial_exact | unknown",
   "session_ids":              ["<run candidate set, candidate order>"],
   "foreground_succeeded_ids": ["<own-call Loaded/Resumed ids>"],
-  "unattributed_count":       1552,
+  "unattributed_on_disk":     1552,
   "background":               "not_needed | running | exited_zero | failed",
   "background_log":           "<path or null>"
 }
@@ -364,14 +376,16 @@ itself.
   candidate order, so the cut is deterministic across chains, routed sessions and probe errors alike.
   The skill watches exactly those and says so.
 - `cohort: "unknown"` — `Certainty == Incomplete` with `RunCandidateIds == null`; `session_ids` is
-  empty and meaningless; the skill uses heuristic mode.
+  empty and meaningless; the skill queries nothing and closes with links.
 - `foreground_succeeded_ids` lists own-call successes only. A Cursor child landed inline by its
   parent is a candidate (it is in `session_ids`) but not listed here. Its consumer is the skill's
   opening snapshot ("N sessions were imported before you were handed off"); nothing else reads it.
 - `profile` is the saved profile name the two child processes are pinned to, so the skill can name it
   in a remediation (§5 "Server binding").
-- `unattributed_count` is discovery's repo-less figure, so the skill can say how many watched sessions
-  will show no repository.
+- `unattributed_on_disk` is discovery's figure: sessions found on this machine with no repository
+  match, counted before classification, capture scope or selection, so it says nothing about how many
+  imported. The skill renders it as exactly that — "N sessions on disk had no repository match" —
+  never as a count of imported or watched sessions.
 - `handoff_offered` records §4's gating outcome. When it is `false`, `handoff_suppressed` names why
   with one value from the closed set §4 defines; when `true` it is `null`. The skill branches on this
   field rather than inferring the reason.
@@ -504,11 +518,11 @@ re-opens selection:
   `run_id` matches the GUID-N grammar (and equals the prompt token for a run-id reference);
   `written_at` parses as ISO-8601 and is within 24h; `handoff_offered` is a boolean. The 2026-08-21
   draft's cwd-repository match is gone: the run spans repositories. Failure → not selectable.
-- **Layer B — cohort payload** (may its ids drive *exact data*?): `cohort`, `background`,
+- **Layer B — cohort payload** (may its ids drive *data*?): `cohort`, `background`,
   `foreground_certainty` and `handoff_suppressed` are known enum values (or null where allowed);
   every entry of `session_ids` and `foreground_succeeded_ids` matches the session-id grammar;
-  `unattributed_count` is a non-negative integer. Failure → data drops to heuristic, disclosed; the
-  file stays selected.
+  `unattributed_on_disk` is a non-negative integer. Failure → **no data**: the skill issues no query
+  and closes with links, disclosed; the file stays selected.
 - **Layer C — link payload**: an invalid `server_url` (not http/https) cuts file-sourced links **and**
   makes the binding below unverifiable, so no query runs. `background_log` and `profile`, when shown,
   must be plausible (no control characters, bounded length) and are rendered as plain text, never as
@@ -532,17 +546,16 @@ remediation that names the file's `profile`: start the agent from a shell where 
 the file's server — for example with `KCAP_PROFILE=<profile>` set and no `KCAP_URL`, and with
 `KCAP_CONFIG_DIR` set when kcap uses a custom config directory — then re-prompt. A launched agent
 (§4) never hits this path, because setup pinned its environment; the paste-block path can, and this
-is what it gets instead of wrong data. Heuristic mode therefore exists only for a *bound* agent with
-no usable cohort, never as a substitute for binding.
+is what it gets instead of wrong data.
 
 **Resolution, first action of the skill:**
 
 1. A `(run: <id>)` line in the invoking prompt: the token must match the GUID-N grammar **before**
    being used as a filename component. **A valid run id binds the skill to that run and only that
    run.** Its file, when locator-valid, is selected. When the file is missing or fails layer A (for
-   example the write failed), the skill says so and enters heuristic mode *for that run* — it never
-   falls through to another run's file, because disclosure would not make another cohort's results
-   belong to the requested run. If the selected file is a no-handoff file (`handoff_offered: false`),
+   example the write failed), the skill says so and stops *for that run* — it never falls through
+   to another run's file, because disclosure would not make another cohort's results belong to the
+   requested run; with no file there is no cohort, so it closes with the block and no query. If the selected file is a no-handoff file (`handoff_offered: false`),
    branch on `handoff_suppressed` — a layer-B-valid file is required to make any claim; otherwise
    close as "its record is unreadable" — and close with the closing block:
    `"no_new_sessions"` → "nothing to watch — that import found no new sessions" (a running background
@@ -557,13 +570,20 @@ no usable cohort, never as a substitute for binding.
 2. No run id: among `import-handoff-*.json`, the newest locator-valid file that is watchable —
    `handoff_offered: true`, or `handoff_suppressed` ∈ {`skill_not_installed`, `no_agent_detected`}.
    More than one → the skill says it picked the newest and names the others.
-   Matches disagreeing on `server_url` with no provable binding → the newest supplies links, the
-   ambiguity is disclosed, data is heuristic.
-3. Nothing qualifies → **heuristic cohort**, provided `kcap whoami` succeeds (that server is then
-   the one being watched, and the skill says so). A selected file with `cohort: "unknown"` routes its
-   *data* here once bound; its layer-C fields still serve the links.
+   Matches disagreeing on `server_url` → the newest is selected and the binding check decides, as
+   for any file: bound → its cohort is watched; not bound → links, remediation, no query.
+3. Nothing qualifies → the skill says it found no import to follow, closes with the closing block
+   (links from `kcap whoami` when it succeeds) and issues **no query**. A selected file with
+   `cohort: "unknown"` closes the same way, with its layer-C fields serving the links: without a
+   candidate list there is nothing the skill can watch that is provably this user's.
 
-**Cohorts.**
+**The cohort is the only thing the skill ever queries.** Every query the skill issues names session
+ids taken from the selected file's `session_ids`; there is no tenant-wide read of any kind. Those ids
+are sessions this user imported from their own disk moments ago, so the skill can never surface
+another user's session — not a row, not a count, not a link. The analytics surface itself is
+repo-scoped and org-visible by design (it is aggregate telemetry gated by tenant plan, not by
+per-viewer session visibility), and the skill does not depend on that either way: it confines itself
+to its own cohort.
 
 - **Exact**: the file's `session_ids` — the run candidate set, so sessions the background child lands
   before the skill's first snapshot are counted, and sessions imported concurrently by anything else
@@ -571,9 +591,7 @@ no usable cohort, never as a substitute for binding.
 - **Partial-exact**: identical mechanics over the listed 500; the skill opens by saying it watches the
   500 most recent sessions of this import and that older ones may land and evaluate unobserved.
   Omitted candidates are invisible to the bounded queries and are never labelled unrelated.
-- **Heuristic**: the skill says it is watching recent activity rather than a specific import —
-  completed-eval arrivals after the first snapshot plus runs with `evaluated_at` in the ten minutes
-  before start, tenant-wide. Another user's sessions can be counted — accepted and disclosed.
+- **Unknown**, or no file: no query, links and the closing block only.
 
 **Plan denial.** An analytics response of HTTP 403 `analytics_not_in_plan` is a terminal degrade
 recognised on sight, not a poll failure: the skill closes immediately with the closing block and says
@@ -589,46 +607,35 @@ repositories and includes repo-less sessions, whose `repo_hash` is null.
   batch of ids — presence is membership. `repo_hash` is kept per session for the links.
 - Cohort completions: `SELECT session_id, eval_run_id, evaluated_at, overall_score, judge_model
   FROM v_an_eval_summaries WHERE session_id IN (…)`, same batching.
-- Displayed import progress: `SELECT COUNT(*) FROM v_an_sessions` — one row, shown as a total, never
-  used for identification.
-- Heuristic mode: `v_an_eval_summaries` ordered by `evaluated_at` descending — the window read
-  described under "Batching and truncation"; new rows enter at the top, so a capped read still
-  surfaces them.
-- Per-category detail: `v_an_eval_scores` (`session_id`, `category`, `question_id`, `score`) joined
-  to summaries on `session_id`. Deterministic aggregation: per-category mean; strongest = highest,
-  weakest = lowest, ties alphabetical by category; up to two lowest-scoring questions ordered by
-  `score` then `question_id`. A session with no score rows is summarized by `overall_score` alone.
-  Titles may be enriched through the `kcap-sessions` MCP when present, else the id suffices.
-- There is deliberately no repo-wide id diff and no unlisted-arrival narration: identifying non-cohort
-  rows would need exactly the unbounded scan this contract forbids.
+- Displayed import progress: the number of cohort ids present in `v_an_sessions` over the number
+  listed — derived from the membership batches, no separate query, never a tenant-wide count.
+- Per-category detail, one session per query and **aggregated server-side** so no row cap can slice
+  it: `SELECT category, AVG(score) AS mean FROM v_an_eval_scores WHERE session_id = '<id>' GROUP BY
+  category` (one row per category) and `SELECT question_id, score FROM v_an_eval_scores WHERE
+  session_id = '<id>' ORDER BY score ASC, question_id ASC LIMIT 2`. Strongest = highest mean,
+  weakest = lowest, ties alphabetical by category. A session with no score rows is summarized by
+  `overall_score` alone. Titles may be enriched through the `kcap-sessions` MCP when present, else
+  the id suffices.
+- There is deliberately no repo-wide or tenant-wide read and no unlisted-arrival narration:
+  identifying non-cohort rows would need exactly the scan this contract forbids.
 
-**Batching and truncation — two policies.** The server clamps every query to its own configured row
+**Batching and truncation — fail closed.** The server clamps every query to its own configured row
 maximum, and a capped result is a *successful* response flagged `truncated: true` (the MCP appends a
-warning trailer). The two cohort modes treat that differently, because they ask different questions:
+warning trailer). A membership or summary batch asks "which of these ids are present"; a truncated
+answer is incomplete and is never committed. Each batch requests `max_rows` equal to its size; the
+initial size is 100. On truncation the skill halves the batch size (floor 10) and re-issues within
+the same logical poll. If a batch of 10 still truncates, the poll fails and the skill says the
+server's row cap is below what watching needs. The chosen batch size persists across polls. The
+enrichment queries are bounded by construction (one row per category; `LIMIT 2`); should one still
+come back truncated, that session's detail is omitted and it is summarized by `overall_score`
+alone, disclosed.
 
-- **Exact and partial-exact batches fail closed.** A membership or summary batch asks "which of
-  these ids are present"; a truncated answer is incomplete and is never committed. Each batch
-  requests `max_rows` equal to its size; the initial size is 100. On truncation the skill halves the
-  batch size (floor 10) and re-issues within the same logical poll. If a batch of 10 still
-  truncates, the poll fails, the skill says the server's row cap is below what exact watching
-  needs, and the run drops to heuristic mode from the next poll. The chosen batch size persists
-  across polls.
-- **The heuristic read is a window, and truncation is expected.** It asks "what completed most
-  recently", ordered by `evaluated_at` descending with `max_rows` at the nominal 100; a truncated
-  answer is the newest N completions and is committed as such. Baseline = the rows in the first
-  snapshot; a completion is new when its `eval_run_id` was not seen in any earlier committed poll;
-  the skill notes the window size whenever the response is truncated. A window narrower than the
-  activity between two polls can miss completions — that is the disclosed imprecision of heuristic
-  mode, not a failure.
-- The progress `COUNT(*)` is one row and cannot truncate.
-
-**Logical-poll atomicity.** One poll = every required query: in exact and partial-exact mode all
-membership and summary batches, each non-truncated; in heuristic mode the window read, truncated or
-not. Any required-query failure — an error, or an exact-mode truncation the halving could not
-clear — discards the whole poll: no baseline, dedup or completion state commits from it, and it
-counts as one error toward the two-failure stop. Each successful poll recomputes cohort state from
-its own full results. Enrichment queries are optional: their failure degrades summary content, never
-poll success or stop logic.
+**Logical-poll atomicity.** One poll = every membership and summary batch, each non-truncated. Any
+required-query failure — an error, or a truncation the halving could not clear — discards the whole
+poll: no baseline, dedup or completion state commits from it, and it counts as one error toward the
+two-failure stop. Each successful poll recomputes cohort state from its own full results.
+Enrichment queries are optional: their failure or truncation degrades summary content, never poll
+success or stop logic.
 
 **Stop rules**, evaluated after each successful poll, its state committed first:
 
@@ -636,8 +643,8 @@ poll success or stop logic.
    (ordered by `evaluated_at`, ties by `session_id`; the same rule for pre-snapshot rows, so more than
    three arriving at once always select the same three).
 2. **All-cohort-complete**: every id in `session_ids` has a completed eval. Requires `cohort: "exact"`
-   with a non-empty list; never fires in partial-exact, heuristic or unknown mode, and never on an
-   empty list. Sessions that never evaluate are covered by the deadline, not inferred.
+   with a non-empty list; never fires in partial-exact mode, and never on an empty list. Sessions
+   that never evaluate are covered by the deadline, not inferred.
 3. Immediately on the second consecutive failed poll.
 4. Deadline on a monotonic 10-minute clock: no new poll or query starts after it; an in-flight query
    overruns by at most its own duration (`query_analytics` exposes no cancellation). A poll completing
@@ -661,8 +668,9 @@ logged in, prints the URL.
 
 **Closing block, always emitted:** how to keep watching (re-prompt `Follow my kcap import`); the
 full-results link or the no-link fallback; the guided-tour offer with the exact
-`Start kcap guided tour` prompt; and, when `unattributed_count > 0`, one sentence saying that many
-sessions were imported without a repository and can be placed with `kcap remap`.
+`Start kcap guided tour` prompt; and, when `unattributed_on_disk > 0`, one sentence saying that many
+sessions on disk had no repository match, so any of them that imported show without one, and that
+`kcap remap` places them.
 
 **Degrade explanations** name the real gates in plain terms: auto-eval may be off for a repository;
 the server needs an eval agent configured; sessions under the minimum event count are skipped;
@@ -685,12 +693,17 @@ absent entirely, the skill closes immediately with the block above.
   child, writes `cohort: "unknown"` when the candidate set is untrusted.
 - Background `Failed`: warn with the exit code when there is one and `kcap import --all --yes`;
   continue. `ExitedZero` is reported without claiming completeness.
-- Handoff-file write failure: warn, continue; a later run-id reference enters heuristic mode for that
-  run.
+- Discovery fault: one line naming the failure and the `kcap import --all` hint; no prompt, no
+  import, no file.
+- Handoff-file write failure (including a pre-existing path at its name): warn, continue; a later
+  run-id reference finds no file and closes with the block, no query.
+- Log-file creation failure (including a pre-existing path at its name): the spawn is `Failed`
+  with that reason; the manual retry is printed.
 - Agent launch failure (no executable, or non-zero exit within 2000ms): warn, paste block, continue.
 - Skill: analytics MCP absent → immediate close with the block; `analytics_not_in_plan` → immediate
   close with the plan sentence; binding mismatch or `whoami` failure → no query, file links, the
-  profile remediation; two consecutive failed polls → early stop with the block.
+  profile remediation; no file or `cohort: "unknown"` → no query, links, the block; two consecutive
+  failed polls → early stop with the block.
 
 ## Testing
 
@@ -714,6 +727,11 @@ a child outside its unit and no child in the plan lacks its parent.
 quarantined session lands in `SkippedIds`; own-call `Loaded`/`Resumed` land in `SucceededIds`;
 `Complete ⇒ Selected == Succeeded + Skipped + Failed`; the per-id partition is taken from the raw
 outcome and disagrees with nothing the Done grid counts.
+
+**Discovery contract**, through the real `ISetupImportRunner` interface: a source whose
+`DiscoverAsync` throws → `Fault` set, `Result == null`, the step prints the failure line and the
+hint, asks nothing, imports nothing, writes nothing; a clean scan → the three figures, with the
+repo-less figure labelled as on-disk.
 
 **Runner contract and totalization**, through the real `ISetupImportRunner` interface: a throw before
 classification → `Selection == null`, `Outcome == null`, `Fault` set → `Incomplete`,
@@ -748,9 +766,12 @@ pass sends and the stamp the child sends are the same value.
 
 **Handoff file**: written iff the foreground pass ran (accepted prompt → file; declined, skipped,
 unauthenticated and `--no-prompt` → no file); per-run filename under `KCAP_CONFIG_DIR` when set;
-atomic write leaves no parseable partial; temp, final and log files carry owner-only mode on Unix
-(asserted with `File.GetUnixFileMode`), and an existing log has its mode re-asserted on append; §3
-shape including `profile`; `handoff_suppressed` takes each value of the §4 table from a fixture
+atomic write leaves no parseable partial; temp, final and log files are created by setup with
+`CreateNew` and carry owner-only mode on Unix (asserted with `File.GetUnixFileMode`); a pre-existing
+file or symlink at the handoff name → write failure, nothing written through it; a pre-existing file
+or symlink at the log name → spawn `Failed`, nothing written through it; the child opens only the
+pre-created log and fails at startup when it is absent; §3 shape including `profile` and
+`unattributed_on_disk`; `handoff_suppressed` takes each value of the §4 table from a fixture
 built for that row, `null` whenever `handoff_offered` is true, and the precedence cases — failed
 import **and** cached denial → `import_failed`; empty cohort **and** cached denial →
 `no_new_sessions`; all-skipped pass with nothing left → `nothing_landed` — resolve as the table says;
@@ -776,20 +797,23 @@ skill's frontmatter description; `eval-watch` in `SourceNames` and `help-plugin.
 
 **Skill acceptance** (scripted fixtures behind recorded `query_analytics` responses): run-id
 resolution including non-GUID rejection, a missing named file beside a newer unrelated file
-(heuristic for that run, the other file untouched), and a custom `KCAP_CONFIG_DIR`; bare-phrase
+(closes with no query for that run, the other file untouched), and a custom `KCAP_CONFIG_DIR`; bare-phrase
 newest-match with disclosure; no-handoff files by `handoff_suppressed` value, including the
 `analytics_not_in_plan` file that must not suggest a re-import; the layered validation cases including
-the `ses_…`, `--` and hostile-id fixtures; `scope: 'global'` on every query; repo-less members counted
-and linked without a repo hash; partial-exact over 500 with a listed arrival a capped scan would miss;
-exact-mode truncation with a server cap below 100 (halving within the poll, floor-10 failure to
-heuristic) and heuristic-mode truncation committed as a window with the size disclosed;
-`analytics_not_in_plan` from the server closing immediately without polling; **binding fails closed**:
-a `whoami` server that differs from the file's issues zero queries and closes with links plus the
-profile remediation, a `whoami` failure does the same, and a bound agent with no usable cohort is the
-only route into heuristic mode; `skill_not_installed` and `no_agent_detected` files continue as if
-offered; poll atomicity and recovery;
+the `ses_…`, `--` and hostile-id fixtures; `scope: 'global'` on every query; **every query names only
+cohort ids** — a recorded response carrying a row for an id outside the cohort (another user's
+session) is ignored and never counted, linked or summarized, and no fixture query is ever issued
+without an `IN (…)` or `session_id =` bound to cohort ids; no file and `cohort: "unknown"` both
+close with links and zero queries; repo-less members counted and linked without a repo hash;
+partial-exact over 500 with a listed arrival a capped scan would miss; truncation with a server cap
+below 100 (halving within the poll, floor-10 failure fails the poll); a truncated enrichment response
+omits that session's detail; `analytics_not_in_plan` from the server closing immediately without
+polling; **binding fails closed**: a `whoami` server that differs from the file's issues zero queries
+and closes with links plus the profile remediation, and a `whoami` failure does the same;
+`skill_not_installed` and `no_agent_detected` files continue as if offered; poll atomicity and
+recovery;
 each stop rule at its boundary; deterministic first-three under ties; the whoami-failure no-link
-closing variant; the `unattributed_count` sentence.
+closing variant; the `unattributed_on_disk` sentence worded as an on-disk count.
 
 **README**: setup section rewritten for the machine-wide default, the figures, the background
 import, the picker and the paste block; the `--no-prompt` behaviour-change callout updated; the import
@@ -810,3 +834,5 @@ section mentions newest-first prioritization and nothing else changes there.
 - Making plain `kcap import` stamp the profile's `default_visibility` itself instead of leaving an
   omitted stamp to the server. Setup's two passes are made consistent here without touching that;
   the general question is its own change.
+- Making `kcap import`'s discovery resilient to one source failing (today one throwing source aborts
+  the whole scan). Setup totalizes the scan as a whole; per-source resilience is its own change.
