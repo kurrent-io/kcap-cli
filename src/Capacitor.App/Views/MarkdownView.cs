@@ -15,6 +15,11 @@ public sealed class MarkdownView : ContentControl {
     public static readonly StyledProperty<ICommand?> OpenLinkProperty =
         AvaloniaProperty.Register<MarkdownView, ICommand?>(nameof(OpenLink));
 
+    /// Takes a code block's text. Left unset on a surface with nowhere to run it, which is what
+    /// withdraws the offer from the block.
+    public static readonly StyledProperty<ICommand?> RunCodeProperty =
+        AvaloniaProperty.Register<MarkdownView, ICommand?>(nameof(RunCode));
+
     // The extension builds its TextMate highlighters on first use and keeps them, so one
     // instance serves the app; a per-view instance rebuilds them on every render.
     static readonly TextMateExtension Highlighting = new();
@@ -23,12 +28,15 @@ public sealed class MarkdownView : ContentControl {
     readonly MarkdownViewer _viewer = new();
 
     static MarkdownView() {
-        TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._viewer.Markdown = view.Text);
+        TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
+        RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
     }
 
     public MarkdownView() {
         _viewer.Extensions.Add(Kcap);
         _viewer.Extensions.Add(Highlighting);
+        // After the highlighter, whose code block renderer this one wraps.
+        _viewer.Extensions.Add(new CodeBlockActions(this));
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
         ScrollViewer.SetHorizontalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -39,6 +47,15 @@ public sealed class MarkdownView : ContentControl {
         Content = _viewer;
     }
 
+    /// A code block reads RunCode as it is built, so a command arriving after the first render —
+    /// the order a binding on this property lands in — needs the document built again. Clearing
+    /// first is what makes that second build happen at all: the viewer renders on a change, and
+    /// the markdown it already holds is not one.
+    void Render() {
+        if (_viewer.Markdown == Text) _viewer.Markdown = null;
+        _viewer.Markdown = Text;
+    }
+
     public string? Text {
         get => GetValue(TextProperty);
         set => SetValue(TextProperty, value);
@@ -47,5 +64,10 @@ public sealed class MarkdownView : ContentControl {
     public ICommand? OpenLink {
         get => GetValue(OpenLinkProperty);
         set => SetValue(OpenLinkProperty, value);
+    }
+
+    public ICommand? RunCode {
+        get => GetValue(RunCodeProperty);
+        set => SetValue(RunCodeProperty, value);
     }
 }
