@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -27,7 +28,55 @@ public class MarkdownViewTests {
         return (window, view, opened);
     }
 
+    static (Window Window, Control Root, List<string> Opened, List<string> Ran) ShowRunnable(string markdown) {
+        var opened = new List<string>();
+        var ran = new List<string>();
+        var view = new MarkdownView {
+            Text = markdown,
+            OpenLink = ReactiveCommand.Create<string>(opened.Add),
+            RunCode = ReactiveCommand.Create<string>(ran.Add),
+            Width = 400,
+        };
+        var window = new Window { Content = view, Width = 500, Height = 400 };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        return (window, view, opened, ran);
+    }
+
     static IEnumerable<T> All<T>(Visual root) where T : Visual => root.GetVisualDescendants().OfType<T>();
+
+    static List<Panel> Hosts(Visual root) => All<Panel>(root).Where(p => p.Classes.Contains("markdown-code-host")).ToList();
+
+    static Control Strip(Visual host) => All<Control>(host).First(c => c.Classes.Contains("markdown-code-actions"));
+
+    /// What the reader is actually offered: a button the view declined to arm is in the tree but
+    /// hidden, which is indistinguishable from absent and must assert the same way.
+    static List<Button> Actions(Visual host, string kind) =>
+        All<Button>(host).Where(b => b.Classes.Contains(kind) && b.IsVisible).ToList();
+
+    static Point Centre(Visual target, Window window) =>
+        target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)!.Value;
+
+    static void Hover(Window window, Visual target) {
+        window.MouseMove(Centre(target, window));
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+    }
+
+    /// A strip button has no bounds to aim at until the hover that reveals it has been laid out.
+    static Button Reveal(Window window, Visual host, string kind) {
+        Hover(window, host);
+        return Actions(host, kind).Single();
+    }
+
+    static void Click(Window window, Visual target) {
+        var point = Centre(target, window);
+        window.MouseMove(point);
+        window.MouseDown(point, MouseButton.Left);
+        window.MouseUp(point, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+    }
 
     static IEnumerable<TextBlock> Paragraphs(Visual root) => All<TextBlock>(root).Where(t => t.Classes.Contains("markdown-paragraph"));
 
@@ -256,6 +305,110 @@ public class MarkdownViewTests {
                 await Assert.That(code.Foreground).IsEqualTo(text);
                 var block = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
                 await Assert.That(block.Background).IsEqualTo((IBrush)Application.Current!.FindResource("KcapSurfaceBrush")!);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the reveal rule: the strip is out of reach until the pointer is over its own block, so
+    /// resting code carries no chrome and a hover never arms the neighbouring block's buttons.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_action_strip_appears_only_over_the_block_the_pointer_is_on() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```\nfirst\n```\n\n```\nsecond\n```");
+            try {
+                var hosts = Hosts(root);
+                await Assert.That(hosts.Count).IsEqualTo(2);
+                await Assert.That(Strip(hosts[0]).IsVisible).IsFalse();
+                await Assert.That(Strip(hosts[1]).IsVisible).IsFalse();
+
+                Hover(window, hosts[0]);
+                await Assert.That(Strip(hosts[0]).IsVisible).IsTrue();
+                await Assert.That(Strip(hosts[1]).IsVisible).IsFalse();
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the run affordance's one condition: the block's own text begins with the bang that
+    /// makes it a command to run. Copy is offered either way.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_a_bang_prefixed_block_offers_to_run_it() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\n! kcap agent ls\n```\n\n```bash\ngit status\n```");
+            try {
+                var hosts = Hosts(root);
+                await Assert.That(Actions(hosts[0], "markdown-code-run").Count).IsEqualTo(1);
+                await Assert.That(Actions(hosts[1], "markdown-code-run")).IsEmpty();
+                await Assert.That(Actions(hosts[0], "markdown-code-copy").Count).IsEqualTo(1);
+                await Assert.That(Actions(hosts[1], "markdown-code-copy").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins what "run it" hands over: the block's text verbatim, bang and all, since that bang is
+    /// what the composer needs to treat the line as a command rather than a prompt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_a_block_hands_its_text_to_the_command_bang_and_all() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, ran) = ShowRunnable("```bash\n! kcap agent ls\n```");
+            try {
+                Click(window, Reveal(window, Hosts(root)[0], "markdown-code-run"));
+                await Assert.That(ran).IsEquivalentTo(new[] { "! kcap agent ls" });
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the copy path: every line of the block reaches the clipboard, with the fence's own
+    /// trailing newline left off.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Copying_a_block_puts_its_every_line_on_the_clipboard() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\ncd /tmp\nls -la\n```");
+            try {
+                Click(window, Reveal(window, Hosts(root)[0], "markdown-code-copy"));
+                var clipboard = TopLevel.GetTopLevel(root)!.Clipboard!;
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo("cd /tmp\nls -la");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the arrival order a binding actually lands in: the command reaches the view after the
+    /// markdown has already rendered, and the block still ends up offering to run it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_set_after_the_text_still_reaches_the_block() {
+        await RunOnUiAsync(async () => {
+            var ran = new List<string>();
+            var view = new MarkdownView { Text = "```bash\n! kcap agent ls\n```", Width = 400 };
+            var window = new Window { Content = view, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                await Assert.That(Actions(Hosts(view)[0], "markdown-code-run")).IsEmpty();
+
+                view.RunCode = ReactiveCommand.Create<string>(ran.Add);
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                Click(window, Reveal(window, Hosts(view)[0], "markdown-code-run"));
+                await Assert.That(ran).IsEquivalentTo(new[] { "! kcap agent ls" });
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the surface rule: a view with no run command — the pull request reader — offers copy
+    /// and nothing else, whatever the block's text begins with.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_view_without_a_run_command_offers_copy_alone() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _) = Show("```bash\n! kcap agent ls\n```");
+            try {
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
             } finally { window.Close(); }
         });
     }

@@ -51,6 +51,31 @@
         <Setter Property="FontSize" Value="12.5" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
     </Style>
+    <!-- Resting code carries no chrome: the strip is out of the layout until the pointer is over
+         its own block, and the :pointerover rule must follow the resting one to win. -->
+    <Style Selector="mv|MarkdownViewer Panel.markdown-code-host > StackPanel.markdown-code-actions">
+        <Setter Property="IsVisible" Value="False" />
+        <Setter Property="Margin" Value="0,7,7,0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Panel.markdown-code-host:pointerover > StackPanel.markdown-code-actions">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <!-- Opaque: the strip floats over the block's first line, which it would otherwise show through. -->
+    <Style Selector="mv|MarkdownViewer Button.markdown-code-action">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer Button.markdown-code-action:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="TextElement.Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-blockquote">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="3,0,0,0" />

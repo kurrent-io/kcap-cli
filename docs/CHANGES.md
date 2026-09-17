@@ -6,6 +6,22 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A code block carries its own copy, and runs itself when it is a command
+
+An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the
+text out of that block cannot comply. Hovering one now reveals Copy, and Run it when the block's
+text begins with a bang — the bang being what makes the line a command rather than prose, so it is
+the whole condition. Run sends the text verbatim, bang included, through the composer's own send
+path rather than straight at the channel, which is what keeps a block's prompt queued, recalled and
+cleared exactly as a typed one is. Whatever draft was sitting in the composer is replaced: putting
+it in the prompt is the point.
+
+The strip wraps the block MarkView's own renderer wrote instead of replacing that renderer, so
+syntax highlighting and its theme switch stay with the package across an upgrade. A block reads the
+run command as it is built and the document is built again when that command arrives, because the
+binding carrying it lands after the first render — a view that never gets one, the pull request
+reader, offers copy alone.
+
 ## A prompt answered in the terminal is retired by the daemon
 
 A hosted Claude session's permission prompt (an `AskUserQuestion` included) reaches the daemon
