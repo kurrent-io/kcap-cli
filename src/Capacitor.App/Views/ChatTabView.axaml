@@ -53,7 +53,7 @@
         <ItemsControl x:Name="ChatItems" Grid.Row="0" ItemsSource="{Binding Items}">
             <ItemsControl.Template>
                 <ControlTemplate>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" BringIntoViewOnFocusChange="False">
                         <!-- ItemsPanel does not reach the presenter on its own: without this
                              template binding it falls back to its own default StackPanel and
                              every row is realized. -->
@@ -156,7 +156,8 @@
                                                Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
                                 </Panel>
                             </Grid>
-                            <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}" Command="{Binding ToggleCommand}">
+                            <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}"
+                                    Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
                                 <!-- Grid, not a stretching StackPanel: a 28px-tall button would
                                      stretch the label and leave the 12px chevron floating beside
                                      top-aligned text. Path is native 12×12 (the data is authored

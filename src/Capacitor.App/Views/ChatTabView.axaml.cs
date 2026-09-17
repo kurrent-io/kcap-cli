@@ -29,6 +29,14 @@ public partial class ChatTabView : UserControl {
     /// layout, so it covers exactly the scroll changes that gesture produced — an expansion click
     /// or a wheel notch — and not the appends that land later.
     bool _readerGesture;
+    /// The bubble the reader just toggled, kept at its viewport Y across the layout pass that
+    /// changes its height. VirtualizingStackPanel otherwise drops its anchor and re-places every
+    /// row from the average size, which jumps the reader off that bubble.
+    object? _anchorItem;
+    double _anchorY;
+    bool _restoringAnchor;
+    int _anchorPasses;
+    bool _anchorLaidOut;
 
     public ChatTabView() {
         InitializeComponent();
@@ -47,8 +55,11 @@ public partial class ChatTabView : UserControl {
         // The ScrollViewer is the list template's; it exists only once the list is first measured,
         // which for a surface built before its first layout is later than the first rows.
         ChatItems.TemplateApplied += (_, _) => {
+            var next = ChatItems.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+            if (ReferenceEquals(next, _scroll)) return;
+            DropToggleAnchor();
             if (_scroll is not null) _scroll.ScrollChanged -= OnScrollChanged;
-            _scroll = ChatItems.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+            _scroll = next;
             if (_scroll is not null) _scroll.ScrollChanged += OnScrollChanged;
         };
     }
@@ -65,6 +76,7 @@ public partial class ChatTabView : UserControl {
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        DropToggleAnchor();
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
@@ -74,12 +86,113 @@ public partial class ChatTabView : UserControl {
         // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
         // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
         if (OriginatesFromTextBox(e)) return;
+        if (e.RoutedEvent == PointerPressedEvent) CaptureToggleAnchor(e.Source);
         if (_readerGesture) return;
         _readerGesture = true;
         Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
     }
 
+    void OnToolSummaryClick(object? sender, RoutedEventArgs e) {
+        _followTail = false;
+        ArmToggleRestore();
+    }
+
+    void CaptureToggleAnchor(object? source) {
+        EnsureChatScroll();
+        if (_scroll is null || ToolSummaryOf(source) is not { } summary) return;
+        if (summary.TranslatePoint(new Point(0, 0), _scroll) is not { } point) return;
+        _anchorItem = summary.DataContext;
+        _anchorY = point.Y;
+    }
+
+    void EnsureChatScroll() {
+        if (_scroll is not null) return;
+        _scroll = ChatItems.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        if (_scroll is not null) _scroll.ScrollChanged += OnScrollChanged;
+    }
+
+    void ArmToggleRestore() {
+        if (_scroll is null || _anchorItem is null) return;
+        _anchorPasses = 8;
+        _anchorLaidOut = false;
+        _scroll.LayoutUpdated -= OnAnchorLayout;
+        _scroll.LayoutUpdated += OnAnchorLayout;
+        Dispatcher.UIThread.Post(() => {
+            _anchorLaidOut = true;
+            RestoreToggleAnchor();
+        }, DispatcherPriority.Render);
+    }
+
+    void OnAnchorLayout(object? sender, EventArgs e) {
+        if (_restoringAnchor) return;
+        _anchorLaidOut = true;
+        RestoreToggleAnchor();
+    }
+
+    void RestoreToggleAnchor() {
+        if (_scroll is null || _anchorItem is null) return;
+        var summary = ToolSummaryFor(_anchorItem);
+        if (summary is null) {
+            if (!_anchorLaidOut) {
+                FinishIfExhausted();
+                return;
+            }
+            RealizeAnchor();
+            summary = ToolSummaryFor(_anchorItem);
+        }
+        if (summary?.TranslatePoint(new Point(0, 0), _scroll) is not { } after) {
+            FinishIfExhausted();
+            return;
+        }
+        var delta = after.Y - _anchorY;
+        if (Math.Abs(delta) < 0.5) {
+            FinishIfExhausted();
+            return;
+        }
+        _restoringAnchor = true;
+        _scroll.Offset = new Vector(_scroll.Offset.X, _scroll.Offset.Y + delta);
+        _restoringAnchor = false;
+        FinishIfExhausted();
+    }
+
+    void FinishIfExhausted() {
+        if (--_anchorPasses > 0) return;
+        DropToggleAnchor();
+    }
+
+    void DropToggleAnchor() {
+        if (_scroll is not null) _scroll.LayoutUpdated -= OnAnchorLayout;
+        _anchorItem = null;
+        _anchorPasses = 0;
+        _anchorLaidOut = false;
+    }
+
+    void RealizeAnchor() {
+        if (_anchorItem is null || ChatItems.Items is null) return;
+        var index = 0;
+        foreach (var item in ChatItems.Items) {
+            if (ReferenceEquals(item, _anchorItem)) {
+                ChatItems.ScrollIntoView(index);
+                ChatItems.UpdateLayout();
+                return;
+            }
+            index++;
+        }
+    }
+
+    Button? ToolSummaryFor(object item) =>
+        ChatItems.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(b => b.Classes.Contains("toolSummary") && ReferenceEquals(b.DataContext, item));
+
+    static Button? ToolSummaryOf(object? source) {
+        if (source is Button button && button.Classes.Contains("toolSummary")) return button;
+        return source is Visual visual
+            ? visual.GetVisualAncestors().OfType<Button>().FirstOrDefault(b => b.Classes.Contains("toolSummary"))
+            : null;
+    }
+
     void OnScrollChanged(object? sender, ScrollChangedEventArgs e) {
+        if (_restoringAnchor || _anchorItem is not null) return;
         if (sender is not ScrollViewer scroll) return;
         if (ListTextBoxOwnsFocus()) return;
         var atBottom = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - BottomTolerance;
