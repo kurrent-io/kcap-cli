@@ -14,14 +14,15 @@ public static class GitHubHtmlPass {
 
     /// Returns the reach of the container's children.
     static int ProcessContainer(ContainerBlock container, int depth) {
-        var reach = 0;
+        var items = new List<DetailsFolder.Item>(container.Count);
         foreach (var child in container) {
-            reach = Math.Max(reach, child switch {
-                ContainerBlock nested => 1 + ProcessContainer(nested, depth + 1),
-                LeafBlock leaf        => 1 + InlinePass.Process(leaf, depth + 1),
-                _                     => 1,
+            items.Add(child switch {
+                HtmlBlock html        => new DetailsFolder.Item(child, HtmlBlockReader.Read(html), 1),
+                ContainerBlock nested => new DetailsFolder.Item(child, null, 1 + ProcessContainer(nested, depth + 1)),
+                LeafBlock leaf        => new DetailsFolder.Item(child, null, 1 + InlinePass.Process(leaf, depth + 1)),
+                _                     => new DetailsFolder.Item(child, null, 1),
             });
         }
-        return reach;
+        return DetailsFolder.Fold(container, depth, items);
     }
 }
