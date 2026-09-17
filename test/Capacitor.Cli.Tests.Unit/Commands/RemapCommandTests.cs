@@ -161,9 +161,8 @@ public class RemapCommandTests {
         using var tmp  = new TempDir();
         var       root = new ConfigRoot(tmp.Path);
 
-        Directory.CreateDirectory(tmp.Path);
-        await File.WriteAllTextAsync(
-            AppConfig.GetConfigPath(root),
+        tmp.CreateFile(
+            Path.GetFileName(AppConfig.GetConfigPath(root)),
             """{"profiles":{},"cwd_remap":[{"from":"/dev/wt-*","to":"/dev/repo"}]}""");
 
         var exit = await new RemapCommand(root).HandleAsync(["remap", "--remove", "/dev/wt-*"]);

@@ -2567,10 +2567,11 @@ class ImportCommand(
             var sessions = sessionCwds.Values.Count(c => family.Paths.Any(p => IsSelfOrDescendant(c, p)));
             var parent   = ShortenHome(family.Parent, home.Path);
             var project  = ShortenHome(family.Project, home.Path);
+            var sep      = SeparatorOf(family.Parent);
             var word     = sessions == 1 ? "session" : "sessions";
 
-            display.Line($"{sessions} {word} under {parent}/ ({family.Paths.Count} paths) belong to {project}, which still exists:");
-            display.Line($"  kcap remap '{parent}/*' {project}");
+            display.Line($"{sessions} {word} under {parent}{sep} ({family.Paths.Count} paths) belong to {project}, which still exists:");
+            display.Line($"  kcap remap '{parent}{sep}*' {project}");
         }
 
         if (listed.Count == 0) return;
@@ -2583,9 +2584,9 @@ class ImportCommand(
     }
 
     /// <summary>
-    /// A set of missing sibling directories under one still-present git
-    /// repository — the shape a cleaned-up worktree family leaves behind, and
-    /// the one a single wildcard remap recovers.
+    /// Missing paths sharing a parent directory, under two or more slugs, whose
+    /// own parent is a still-present checkout — the shape a cleaned-up worktree
+    /// family leaves behind, and the one a single wildcard remap recovers.
     /// </summary>
     internal readonly record struct WorktreeFamily(string Parent, string Project, IReadOnlyList<string> Paths);
 
@@ -2595,32 +2596,75 @@ class ImportCommand(
     // Internal seam so tests can declare which paths are repositories without
     // laying out real git directories.
     internal static List<WorktreeFamily> DetectWorktreeFamilies(IEnumerable<string> missingRoots, Func<string, bool> isRepo) {
-        var byParent = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var groups    = new Dictionary<string, (string Project, List<string> Paths, HashSet<string> Slugs)>(StringComparer.Ordinal);
+        var repoCache = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         foreach (var path in missingRoots) {
-            var parent = TrimLastSegment(path);
+            if (Locate(path) is not var (parent, project, slug)) continue;
 
-            if (parent is null || TrimLastSegment(parent) is null) continue;
+            if (!groups.TryGetValue(parent, out var group)) {
+                groups[parent] = group = (project, [], new(StringComparer.Ordinal));
+            }
 
-            if (!byParent.TryGetValue(parent, out var siblings)) byParent[parent] = siblings = [];
-
-            siblings.Add(path);
+            group.Paths.Add(path);
+            group.Slugs.Add(slug);
         }
 
         var families = new List<WorktreeFamily>();
 
-        foreach (var (parent, siblings) in byParent.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
-            // One dead sibling is a path to name, not a family to describe.
-            if (siblings.Count < 2) continue;
+        foreach (var (parent, group) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
+            // One dead slug is a path to name, not a family to describe — and two
+            // paths under the same slug are one worktree, not two.
+            if (group.Slugs.Count < 2) continue;
 
-            var project = TrimLastSegment(parent)!;
-
-            if (!isRepo(project)) continue;
-
-            families.Add(new(parent, project, siblings));
+            families.Add(new(parent, group.Project, group.Paths));
         }
 
         return families;
+
+        // The session's cwd is not always the worktree root: one recorded in
+        // <worktree>/src has to reach past its own subdirectory to find the
+        // repository, or the family it belongs to never forms.
+        (string Parent, string Project, string Slug)? Locate(string path) {
+            var slugPath = path;
+            var parent   = TrimLastSegment(path);
+            var project  = parent is null ? null : TrimLastSegment(parent);
+
+            while (parent is not null && project is not null) {
+                if (Repo(project)) return (parent, project, LastSegment(slugPath));
+
+                slugPath = parent;
+                parent   = project;
+                project  = TrimLastSegment(project);
+            }
+
+            return null;
+        }
+
+        bool Repo(string path) {
+            if (repoCache.TryGetValue(path, out var known)) return known;
+
+            return repoCache[path] = isRepo(path);
+        }
+    }
+
+    static string LastSegment(string path) {
+        var parent = TrimLastSegment(path);
+
+        return (parent is null ? path : path[parent.Length..]).Trim('/', '\\');
+    }
+
+    /// <summary>
+    /// The separator <paramref name="path"/> is written with, so a suggested
+    /// rule is spelled the way the transcript spelled its cwd. A pattern mixing
+    /// the two matches nothing: the head is compared literally.
+    /// </summary>
+    static char SeparatorOf(string path) {
+        for (var i = path.Length - 1; i >= 0; i--) {
+            if (CwdRemapper.IsSeparator(path[i])) return path[i];
+        }
+
+        return '/';
     }
 
     /// <summary>
