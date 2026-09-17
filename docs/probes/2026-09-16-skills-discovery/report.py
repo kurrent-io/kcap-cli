@@ -88,13 +88,17 @@ def summarise(rows: list[dict]) -> list[dict]:
             order = {"S1": 0, "hook-adds-skill": 1, "add": 2, "reload": 3}
             return [f"{k}={'/'.join(sorted(v))}" for k, v in sorted(vals.items(), key=lambda kv: order.get(kv[0], 9))]
 
-        def cell(values: list[str], scenario: str) -> str:
+        def cell(values: list[str], scenario: str, mode: str | None = None) -> str:
             # A scenario the entry never ran says so, instead of reading as a measured "none".
             if values:
                 return "; ".join(values)
             if not measured:
                 return "—"
-            ran_it = scenario in modes_ran if scenario == "tui" else scenario in ran
+            if scenario == "tui":
+                ran_it = "tui" in modes_ran
+            else:
+                ran_it = any(r["scenario"] == scenario and r["verdict"] != "untested"
+                             and (mode is None or r["mode"] == mode) for r in rs)
             return "none" if ran_it else "n/a (not run)"
 
         out.append({
@@ -108,7 +112,7 @@ def summarise(rows: list[dict]) -> list[dict]:
             "Exclusion preserving load": cell([", ".join(exclusions)] if exclusions else [], "S3"),
             "Vendor-isolated destination": cell([", ".join(isolated)] if isolated else [], "S4"),
             "Reload path": cell(reload, "S2"),
-            "Live catalogue": cell(arm_cells("S5", "daemon"), "S5"),
+            "Live catalogue": cell(arm_cells("S5", "daemon"), "S5", "daemon"),
             "Startup rewrite": cell(arm_cells("S6"), "S6"),
             "Resume": cell(arm_cells("S7"), "S7"),
             "Nested cwd": cell(arm_cells("S8"), "S8"),

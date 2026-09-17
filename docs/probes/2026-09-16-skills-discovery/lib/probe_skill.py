@@ -94,6 +94,7 @@ def tui_prompt(skill: ProbeSkill) -> str:
 
 
 def extract_tui_reply(screen: str) -> str:
+    # Every match counts, so the caller passes only the screen region this turn produced.
     return "\n".join(f"PROBE-REPLY: {m.group(1)}" for m in TUI_REPLY_RE.finditer(screen))
 
 

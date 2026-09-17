@@ -1171,9 +1171,15 @@ class ReportTests(unittest.TestCase):
             _row("x", "S9", "S9/linked-other", ".x/skills", "not_visible", "print"),
             _row("x", "S1", "S1/native", ".x/skills", "visible_first_turn", "tui"),
             _row("x", "S5", "S5/reload", ".x/skills", "visible_after_reload", "tui", mechanism="/reload"),
+            _row("y", "S1", "S1/native", ".y/skills", "visible_first_turn", "print"),
+            _row("y", "S5", "S5/add", ".y/skills", "visible_live", "tui"),
         ]
         import report
-        s = {r["Entry"]: r for r in report.summarise(rows)}["x"]
+        by_entry = {r["Entry"]: r for r in report.summarise(rows)}
+        # S5 ran only interactively: the daemon-mode column must not read as a measured "none".
+        self.assertEqual(by_entry["y"]["Live catalogue"], "n/a (not run)")
+        self.assertEqual(by_entry["y"]["Interactive"], "add=visible_live")
+        s = by_entry["x"]
         self.assertEqual(s["Live catalogue"], "add=visible_live; delete=revoked")
         self.assertEqual(s["Startup rewrite"], "update=stale")
         self.assertEqual(s["Resume"], "n/a (not run)")
