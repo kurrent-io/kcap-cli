@@ -11,7 +11,10 @@ static class InlinePass {
         if (leaf.Inline is not { } root) return 0;
         var rootDepth = leafDepth + 1;
         Normalise(root, rootDepth);
-        return 1 + InlinePairing.Process(root, rootDepth);
+        var reach = InlinePairing.Process(root, rootDepth);
+        // Hoisting moves nodes sideways and never deepens the tree, so the reach still holds.
+        LinkHoister.Hoist(root);
+        return 1 + reach;
     }
 
     static void Normalise(ContainerInline root, int rootDepth) {
