@@ -8,14 +8,15 @@ GitHub Copilot CLI 1.0.85 (npm `@github/copilot`), kiro-cli 2.21.4 (brew cask), 
 **Driver:** `probe.py` (scenarios S0–S4, two runs per arm, a third on disagreement, one single-run
 confirmation per root the multi prompt missed); `report.py` renders `capability-matrix.md` from
 `matrix.json`; `selftest.py` covers the kit with no vendor binary.
-**Cost:** the free phase issues zero model requests. The recorded matrix holds 397 model turns (361 single-turn
-runs plus 36 S4 passes); re-measurements while adapters were being corrected added about 60 more.
+**Cost:** the free phase issues zero model requests. The recorded matrix holds 803 model turns across
+both passes; re-measurements while adapters were being corrected added roughly a hundred more.
 
 Every verdict below is the starting session's own reply. A skill counts as *discovered* when the model
 names it and as *loaded* when the reply carries the token that exists only in the skill body. A file on
 disk, a hook exit code or a listing command never decides a row. Print mode is the vendor's headless
 single-prompt launch; daemon mode is the launch kcap's daemon uses (ACP for Copilot, Gemini, Kiro,
-Cursor and OpenCode, `codex app-server`, `pi --mode rpc`); interactive TUI launches are pass 2.
+Cursor and OpenCode, `codex app-server`, `pi --mode rpc`); interactive launches drive the vendor's own
+UI on a pseudo-terminal and are measured in pass 2, below.
 
 ## How to reproduce
 
@@ -294,3 +295,130 @@ For Cursor desktop, Antigravity IDE and Kiro IDE, which this kit cannot launch:
 - A reply that echoes another skill's name beside `NO-SKILL` is a negative, not `catalogue_only`; a
   Kiro agent without tools names the listed skill and cannot read it, which is a tool-access confound.
 - Two `cursor-agent` processes at once make print mode fail mid-turn.
+
+# Pass 2 — lifecycle and interactive mode (2026-09-17)
+
+**Subject:** the same machine and binaries as pass 1, with Claude Code 2.1.274 and agy 1.2.5 (both
+auto-updated mid-run, so the matrix carries a row per version). macOS 26.6.2 / arm64.
+**Driver:** the same kit with three launch modes. `--mode tui` drives the vendor's interactive UI on a
+pseudo-terminal: the reader applies the cursor movements to a grid, because a coding agent streams its
+answer beside a spinner that redraws in place and the concatenated bytes interleave the two.
+
+Pass 1 settled that discovery does not depend on the launch mode: exclusion and root verdicts agreed
+between print and daemon mode in 135 of 139 measured pairs. So the discovery-only scenarios stay where
+pass 1 measured them, and pass 2 adds the scenarios that need a second turn or a different tree:
+
+| Scenario | Question | Modes |
+| -- | -- | -- |
+| S5 live catalogue | does a session see a skill added, rewritten or deleted while it is open? | daemon, tui |
+| S6 startup rewrite | does a startup hook that rewrites or deletes an existing skill reach the first request? | print, daemon |
+| S7 resume | does a resumed session see what changed after the first one ended? | print |
+| S8 nested cwd | launched from a subdirectory, is the repository root's skill found? | print |
+| S9 worktrees | in a linked worktree, whose skills are found, under `info/exclude`? | print |
+| S10 peer hook | does one session see the skill another session's startup hook wrote? | daemon |
+
+A two-turn row is decided by the second turn; the first turn's verdict travels in the notes as
+`turn1=`. A later turn asks for the token the skill carries *now* and carries a mark of its own, so a
+session answering from its own context, or a UI redrawing the earlier answer, is wrong rather than
+lucky. New verdicts: `visible_live` (the change reached an open session), `stale` (the old body
+survived), `revoked` (`NO-SKILL` after a delete).
+
+## What a live session sees (S5, S10)
+
+| Harness | add | rewrite | delete | another session's hook |
+| -- | -- | -- | -- | -- |
+| Codex | visible_live | visible_live | revoked | visible_live |
+| Kiro | visible_live | visible_live | revoked | visible_live |
+| Cursor | not visible | visible_live | revoked | not visible |
+| Pi | not visible | visible_live | not visible | not visible |
+| Copilot | not visible | stale | stale | not visible |
+| OpenCode 1.x | not visible | stale | stale | not visible |
+| OpenCode 2.x | not visible | stale | revoked | untested (no plugin loads) |
+
+Two behaviours separate the field. Codex and Kiro re-enumerate the skills directory on every turn, so
+a materializer can write into a session that is already running, including from another process. Pi,
+Cursor and OpenCode fix the catalogue at session start but read the listed file when the skill is used,
+which is why a rewrite lands while an addition does not. Copilot caches both: an open session serves
+the body it read at startup.
+
+In interactive mode the same split holds, with two differences: OpenCode 2.x does see an addition live
+(`visible_live`), and Copilot has the only working reload command. `/skills reload` moves its
+interactive session from `NO-SKILL` to the token, recorded as `visible_after_reload`. No other harness
+has such a command: Codex's palette is `/model /fast /ide /permissions /keymap /vim /experimental
+/approve`, Pi exposes skills as `skill:<name>` entries with no reload, Cursor and Antigravity only list.
+
+## What a startup hook can still change (S6)
+
+Rewriting an existing skill's body from the startup hook reaches the first request on every harness
+except Claude, which keeps serving the body it indexed (`stale`). Deleting the skill is honoured
+everywhere except Antigravity, which still answers from the deleted skill, and Codex's daemon mode,
+which serves the body while the file is already gone. Cursor's daemon mode records `untested`: no
+Cursor hook fires over ACP, as pass 1 also found. OpenCode 2.x records `untested` throughout, because
+no local plugin loads from any placement.
+
+Interactive mode changes Claude's answer to the pass 1 question. A skill written by its `SessionStart`
+hook *is* visible to the first interactive request (`visible_first_turn`), while the same hook in print
+mode is not. Kiro is visible in both, as its `agentSpawn` timing predicts. Codex, Pi, Copilot, Cursor
+and Antigravity are not visible in either.
+
+## Resuming a session (S7)
+
+Every harness that resumes at all sees a skill added after the first session ended, except Cursor,
+which does not. A rewritten body is picked up by all of them except Copilot, which serves the old one.
+
+Claude is the exception worth naming: its resumed session returns `stop_reason: refusal` with zero
+output tokens, twice, for the rewrite question, while the same resume route answers the addition
+question normally. The row is `untested` with that reason, not a negative. Kiro has no session id in
+its non-interactive output at all, so its resume is per launch directory (`chat --resume`).
+
+## Where a harness looks (S8, S9)
+
+Launched from `<repo>/sub/dir`, Claude, Codex, Copilot, OpenCode and Antigravity find a skill in the
+repository root as well as in the subdirectory. Pi, Kiro and Cursor find only the subdirectory's own.
+A materializer that writes to the repository root is therefore invisible to three of nine harnesses
+whenever the session starts deeper in the tree.
+
+In a linked worktree, every harness finds the worktree's own skills under `info/exclude` and none of
+them reads the main checkout's. Git resolves a linked worktree's `info/exclude` to the shared common
+directory, so one exclusion covers every worktree.
+
+## Consequences for #778 and #962
+
+- **Writing into a live session works only on Codex and Kiro**, and for a rewrite also on Pi, Cursor
+  and OpenCode. For Copilot the only live route is its reload command, and that exists in the
+  interactive UI alone. A materializer that must reach an already-running session has to know which of
+  these three groups the vendor is in.
+- **A startup adapter cannot rely on rewriting in place.** Claude serves the old body, so an update
+  has to land before the process starts. Deleting is safer than rewriting everywhere except
+  Antigravity and Codex's daemon mode.
+- **Resume is the cheapest delivery route** for a skill added between sessions: eight of nine harnesses
+  pick it up. Claude's refusal makes the rewrite case unmeasurable there, and Cursor ignores additions.
+- **Anchor on the launch directory, not the repository root**, or three harnesses will not see the
+  skill when a session starts in a subdirectory.
+- **One `info/exclude` covers a repository and all its worktrees**, and no harness reads a sibling
+  worktree's skills, so per-worktree materialization is safe and necessary.
+
+## What the interactive mode cost to drive
+
+Every one of these was found by replaying the screen the driver keeps beside a failed run:
+
+- The kit's hook script captured stdin for two seconds to survive a vendor that never closes it. On a
+  terminal that input belongs to the UI, and OpenCode sat waiting for a keystroke the hook had eaten.
+  The hook now leaves a tty alone.
+- Claude repaints its trust dialog after first drawing it, so an arrow key and the Enter behind it must
+  be a redraw apart, and the dialog must not be answered until the screen settles. Claude then raises a
+  browser-tools dialog and, between turns, an auto-mode wizard that takes the next prompt as its input.
+- Cursor repaints its whole transcript, so the previous turn's reply is on screen after a clear, and
+  its composer swallows an Enter sent straight behind the text.
+- Codex needs the same hook-trust bypass its headless modes pass, or its startup hook silently does not
+  run and the arm reads as a harness with no hook at all.
+- OpenCode 2.x draws nothing whatsoever while a background service from an earlier run is alive, and
+  would otherwise serve that run's catalogue.
+- OpenCode 1.x's interactive UI never renders with the probe plugin installed: a blank screen for 300
+  seconds, twice, while the same driver renders it fine without the plugin. A startup plugin can take
+  the interactive UI down.
+- Cursor's second interactive turn is unmeasurable: it answered once and then twice produced no marked
+  reply within 300 seconds, so its interactive live-catalogue row stays `untested`. Its daemon mode
+  answers the same question.
+- A run that produces no answer at all is recorded `untested`, never `not_visible`. Claude's refusals
+  and Codex's rejected resume flags both landed as "the skill was not there" until that rule existed.
