@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -40,6 +40,27 @@ class Session:
 
     def close(self) -> None:
         return None
+
+
+class ClassifiedSession(Session):
+    """A driver session whose replies carry the adapter's own tool classification instead of the
+    driver's flat count, which cannot tell a listed skill's own file from a search for it."""
+
+    def __init__(self, inner: Session, classify: Callable[[AskResult], str]) -> None:
+        self.inner = inner
+        self.classify = classify
+
+    def ask(self, prompt: str) -> AskResult:
+        res = self.inner.ask(prompt)
+        generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
+        res.notes = (generic + " " + self.classify(res)).strip()
+        return res
+
+    def reload(self) -> str | None:
+        return self.inner.reload()
+
+    def close(self) -> None:
+        self.inner.close()
 
 
 class Adapter:

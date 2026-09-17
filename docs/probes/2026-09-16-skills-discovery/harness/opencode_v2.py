@@ -5,7 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from harness.base import AskResult, HookInfo
+from harness.base import AskResult, HookInfo, Session
 from harness.opencode_v1 import OpenCodeV1Adapter, classify_acp_tools
 from lib.acp_driver import acp_ask
 from lib.hook_script import stamp_path, write_hook_script
@@ -38,6 +38,26 @@ export default Plugin.define({{
 """
 
 
+class _ServiceStopSession(Session):
+    """The ACP client leaves the background service running, and the next sandbox would reuse it."""
+
+    def __init__(self, inner: Session, stop) -> None:
+        self.inner = inner
+        self.stop = stop
+
+    def ask(self, prompt: str) -> AskResult:
+        return self.inner.ask(prompt)
+
+    def reload(self) -> str | None:
+        return self.inner.reload()
+
+    def close(self) -> None:
+        try:
+            self.inner.close()
+        finally:
+            self.stop()
+
+
 class OpenCodeV2Adapter(OpenCodeV1Adapter):
     entry = "opencode-v2"
     # `run` takes a private server; `acp` rejects the flag and always uses the background service,
@@ -48,15 +68,30 @@ class OpenCodeV2Adapter(OpenCodeV1Adapter):
         p = Path(os.environ.get("KCAP_OPENCODE_V2_PATH") or (Path.home() / ".local" / "opencode-v2" / "bin" / "opencode"))
         return str(p) if p.exists() else None
 
+    def acp_argv(self) -> list[str]:
+        return [self.binary_path() or self.binary, "acp"]
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary]
+
+    def _service_stop(self, sb: Sandbox) -> None:
+        subprocess.run([self.binary_path() or self.binary, "service", "stop"], env=sb.env,
+                       capture_output=True, text=True, timeout=60)
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        session = super().open_session(sb, mode)
+        if mode != "daemon" or session is None:
+            return session
+        return _ServiceStopSession(session, lambda: self._service_stop(sb))
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         if mode != "daemon":
             return super().ask(sb, mode, prompt)
-        binary = self.binary_path() or self.binary
         try:
-            res = acp_ask([binary, "acp"], sb.cwd, sb.env, prompt, sb.root / "opencode-acp.stderr.log",
+            res = acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt, sb.root / "opencode-acp.stderr.log",
                           self.turn_timeout)
         finally:
-            subprocess.run([binary, "service", "stop"], env=sb.env, capture_output=True, text=True, timeout=60)
+            self._service_stop(sb)
         generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
         res.notes = (generic + " " + classify_acp_tools(res.raw)).strip()
         return res

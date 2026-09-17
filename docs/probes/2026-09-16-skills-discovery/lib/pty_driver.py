@@ -18,7 +18,15 @@ from lib.procs import kill_group
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|\r")
 
 
+# Cursor movement is how some renderers space words apart; dropping it would glue them together.
+CURSOR_FORWARD_RE = re.compile(r"\x1b\[(\d*)C")
+CURSOR_COLUMN_RE = re.compile(r"\x1b\[\d*G")
+KEY_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b.|.", re.S)
+
+
 def strip_ansi(text: str) -> str:
+    text = CURSOR_FORWARD_RE.sub(lambda m: " " * int(m.group(1) or 1), text)
+    text = CURSOR_COLUMN_RE.sub(" ", text)
     return ANSI_RE.sub("", text)
 
 
@@ -101,8 +109,15 @@ class PtySession(Session):
             if i not in self._answered and pattern.search(screen):
                 self._answered.add(i)
                 self.notes.append(f"dialog={pattern.pattern}")
-                self.send(keys)
-                time.sleep(0.5)
+                self.type(keys)
+                time.sleep(1.0)
+
+    def type(self, keys: str, gap: float = 1.0) -> None:
+        """One keystroke per write, a redraw apart: an arrow and the Enter after it sent together
+        confirm the option the arrow was meant to leave."""
+        for key in KEY_RE.findall(keys):
+            self.send(key)
+            time.sleep(gap)
 
     def wait_ready(self, timeout: float) -> None:
         deadline = time.time() + timeout
@@ -150,7 +165,10 @@ class PtySession(Session):
 
     def command(self, line: str, settle: float | None = None) -> str:
         offset = len(self.screen())
-        self.send(line + "\r")
+        # Enter goes in its own write: inside a burst a TUI's paste detection keeps it as text.
+        self.send(line)
+        time.sleep(0.5)
+        self.send("\r")
         time.sleep(settle if settle is not None else max(self.ready_idle, 1.0))
         self._answer_dialogs()
         return self.screen()[offset:]

@@ -4,8 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.acp_driver import acp_ask
+from harness.base import Adapter, AskResult, HookInfo, Session
+from lib.acp_driver import AcpSession, acp_ask
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
 
@@ -19,6 +19,9 @@ class GeminiAdapter(Adapter):
     passthrough_env = ("GEMINI_API_KEY",)
     native_root = ".gemini/skills"
     documented_roots = frozenset({".gemini/skills", ".agents/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    tui_exit = ("/quit\r", "\x03", "\x03")
 
     def real_root(self) -> Path | None:
         return Path.home()
@@ -49,12 +52,38 @@ class GeminiAdapter(Adapter):
         self._settings(sb).write_text(json.dumps(data, indent=2) + "\n")
         return HookInfo(mechanism="settings.json hooks.SessionStart", config_path=str(self._settings(sb)))
 
+    def acp_argv(self) -> list[str]:
+        return [self.binary_path() or self.binary, "--experimental-acp", "--skip-trust", "--approval-mode", "yolo"]
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, "--approval-mode", "yolo"]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        session = AcpSession(self.acp_argv(), sb.cwd, sb.env, sb.root / "gemini-acp.stderr.log", self.turn_timeout)
+        session.start()
+        return session
+
+    def session_id(self, res: AskResult) -> str | None:
+        try:
+            sid = json.loads(res.raw).get("sessionId") or json.loads(res.raw).get("session_id")
+        except (json.JSONDecodeError, AttributeError):
+            sid = None
+        # The resume flag also takes "latest", which is the session this sandbox just created.
+        return sid or "latest"
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._print(sb, prompt, ["--resume", session_id])
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
-        binary = self.binary_path() or self.binary
         if mode == "daemon":
-            return acp_ask([binary, "--experimental-acp", "--skip-trust", "--approval-mode", "yolo"], sb.cwd, sb.env,
-                           prompt, sb.root / "gemini-acp.stderr.log", self.turn_timeout)
-        argv = [binary, "-p", prompt, "-o", "json", "--approval-mode", "yolo"]
+            return acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt, sb.root / "gemini-acp.stderr.log",
+                           self.turn_timeout)
+        return self._print(sb, prompt)
+
+    def _print(self, sb: Sandbox, prompt: str, extra: list[str] = ()) -> AskResult:
+        argv = [self.binary_path() or self.binary, "-p", prompt, "-o", "json", "--approval-mode", "yolo", *extra]
         return print_ask(argv, sb.cwd, sb.env, sb.root / "gemini.stderr.log", self.turn_timeout,
                          extract=lambda raw: json.loads(raw).get("response") or "")
 

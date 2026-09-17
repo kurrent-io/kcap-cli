@@ -4,8 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.appserver_driver import appserver_ask
+from harness.base import Adapter, AskResult, ClassifiedSession, HookInfo, Session
+from lib.appserver_driver import AppServerSession, appserver_ask
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
 
@@ -17,6 +17,10 @@ class CodexAdapter(Adapter):
     credential_files = ("auth.json",)
     native_root = ".agents/skills"
     documented_roots = frozenset({".agents/skills", ".codex/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    # A linear transcript is easier to read back than an alternate-screen redraw.
+    tui_exit = ("\x03", "\x03", "\x04")
 
     def real_root(self) -> Path | None:
         return Path.home() / ".codex"
@@ -37,6 +41,30 @@ class CodexAdapter(Adapter):
         ]}}, indent=2) + "\n")
         return HookInfo(mechanism="hooks.json SessionStart", config_path=str(hooks))
 
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, "--sandbox", "read-only", "-a", "never", "--no-alt-screen"]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        inner = AppServerSession(self.binary_path() or self.binary, sb.cwd, sb.env,
+                                 sb.root / "codex-appserver.stderr.log", self.turn_timeout)
+        inner.start()
+        return ClassifiedSession(inner, lambda r: classify_tool_items(appserver_items(r.raw)))
+
+    def session_id(self, res: AskResult) -> str | None:
+        for line in res.raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("thread_id"):
+                return obj["thread_id"]
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._exec(sb, prompt, resume=session_id)
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
         binary = self.binary_path() or self.binary
         if mode == "daemon":
@@ -46,9 +74,16 @@ class CodexAdapter(Adapter):
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_tool_items(appserver_items(res.raw))).strip()
             return res
+        return self._exec(sb, prompt)
+
+    def _exec(self, sb: Sandbox, prompt: str, resume: str | None = None) -> AskResult:
+        binary = self.binary_path() or self.binary
         last = sb.root / "last-message.txt"
-        argv = [binary, "exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
-                "--dangerously-bypass-hook-trust", "--output-last-message", str(last), "-"]
+        # A file left by an earlier turn would be read as this turn's answer.
+        last.unlink(missing_ok=True)
+        head = [binary, "exec", *(["resume", resume] if resume else [])]
+        argv = head + ["--json", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
+                       "--dangerously-bypass-hook-trust", "--output-last-message", str(last), "-"]
 
         def extract(raw: str) -> str:
             if last.exists():

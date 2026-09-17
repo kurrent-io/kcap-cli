@@ -4,8 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.acp_driver import acp_ask
+from harness.base import Adapter, AskResult, ClassifiedSession, HookInfo, Session
+from lib.acp_driver import AcpSession, acp_ask
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
 
@@ -17,6 +17,11 @@ class CopilotAdapter(Adapter):
     lever = "COPILOT_HOME"
     native_root = ".github/skills"
     documented_roots = frozenset({".github/skills", ".agents/skills", ".claude/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    tui_dialogs = ((r"Do you trust the files", "\r"),)
+    tui_reload = "/skills reload"
+    tui_exit = ("/exit\r", "\x03", "\x03")
 
     def __init__(self) -> None:
         try:
@@ -44,15 +49,49 @@ class CopilotAdapter(Adapter):
         ]}}, indent=2) + "\n")
         return HookInfo(mechanism="hooks/*.json sessionStart", config_path=str(path))
 
+    def acp_argv(self) -> list[str]:
+        return [self.binary_path() or self.binary, "--acp", "--stdio"]
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, "--allow-all-tools"]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        inner = AcpSession(self.acp_argv(), sb.cwd, sb.env, sb.root / "copilot-acp.stderr.log", self.turn_timeout)
+        inner.start()
+        return ClassifiedSession(inner, lambda r: classify_copilot_tools(acp_tool_calls(r.raw)))
+
+    def session_id(self, res: AskResult) -> str | None:
+        for line in res.raw.splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") == "result" and obj.get("sessionId"):
+                return obj["sessionId"]
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._print(sb, prompt, [f"--resume={session_id}"])
+
+    def list_catalogue(self, sb: Sandbox) -> str | None:
+        out = subprocess.run([self.binary_path() or self.binary, "skill", "list"], cwd=str(sb.repo),
+                             env=sb.env, capture_output=True, text=True, timeout=120)
+        return out.stdout
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
-        binary = self.binary_path() or self.binary
         if mode == "daemon":
-            res = acp_ask([binary, "--acp", "--stdio"], sb.cwd, sb.env, prompt, sb.root / "copilot-acp.stderr.log",
+            res = acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt, sb.root / "copilot-acp.stderr.log",
                           self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_copilot_tools(acp_tool_calls(res.raw))).strip()
             return res
-        argv = [binary, "-p", prompt, "--allow-all-tools", "--output-format", "json"]
+        return self._print(sb, prompt)
+
+    def _print(self, sb: Sandbox, prompt: str, extra: list[str] = ()) -> AskResult:
+        binary = self.binary_path() or self.binary
+        argv = [binary, "-p", prompt, "--allow-all-tools", "--output-format", "json", *extra]
 
         def extract(raw: str) -> str:
             texts = []
@@ -120,8 +159,3 @@ def classify_copilot_tools(calls: list[tuple[str, str]]) -> str:
         else:
             other += 1
     return f"tools_used={searches + other} skill_loads={skill_loads} searches={searches}"
-
-    def list_catalogue(self, sb: Sandbox) -> str | None:
-        out = subprocess.run([self.binary_path() or self.binary, "skill", "list", "--json"], cwd=str(sb.repo),
-                             env=sb.env, capture_output=True, text=True, timeout=120)
-        return out.stdout

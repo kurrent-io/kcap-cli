@@ -19,7 +19,13 @@ class ClaudeAdapter(Adapter):
     credential_files = (".credentials.json",)
     native_root = ".claude/skills"
     documented_roots = frozenset({".claude/skills"})
-    modes = ("print",)
+    modes = ("print", "tui")
+    can_resume = True
+    # An arrow and its Enter are typed a redraw apart; the browser dialog's default keeps the
+    # browser tools off, which is what the probe wants.
+    tui_dialogs = ((r"Yes, I trust this folder", "\x1b[B\r"), (r"keep browser tools off", "\r"))
+    tui_exit = ("/exit\r", "\x03", "\x03")
+    tui_ready = 5.0
 
     def __init__(self) -> None:
         forced = os.environ.get("KCAP_PROBE_CLAUDE_REAL_CONFIG")
@@ -78,23 +84,38 @@ class ClaudeAdapter(Adapter):
         where = "--settings file over the real config root" if self.real_config else "isolated settings.json"
         return HookInfo(mechanism=f"{where} hooks.SessionStart", config_path=str(settings))
 
-    def print_argv(self, sb: Sandbox, prompt: str) -> list[str]:
-        argv = [self.binary_path() or self.binary, "-p", prompt, "--output-format", "json", "--max-turns", "4",
-                "--strict-mcp-config", "--allowedTools", "Skill"]
+    def _settings_argv(self, sb: Sandbox) -> list[str]:
         if self.real_config:
-            argv += ["--setting-sources", "project", "--settings", str(sb.config_root / "settings.json")]
-        else:
-            argv += ["--setting-sources", "user"]
-        return argv
+            return ["--setting-sources", "project", "--settings", str(sb.config_root / "settings.json")]
+        return ["--setting-sources", "user"]
 
-    def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
+    def print_argv(self, sb: Sandbox, prompt: str) -> list[str]:
+        return [self.binary_path() or self.binary, "-p", prompt, "--output-format", "json", "--max-turns", "4",
+                "--strict-mcp-config", "--allowedTools", "Skill"] + self._settings_argv(sb)
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, "--strict-mcp-config",
+                "--allowedTools", "Skill"] + self._settings_argv(sb)
+
+    def session_id(self, res: AskResult) -> str | None:
+        try:
+            return json.loads(res.raw).get("session_id")
+        except (json.JSONDecodeError, AttributeError):
+            return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._run(sb, self.print_argv(sb, prompt) + ["--resume", session_id])
+
+    def _run(self, sb: Sandbox, argv: list[str]) -> AskResult:
         def extract(raw: str) -> str:
             obj = json.loads(raw)
             if obj.get("is_error"):
                 raise ValueError(f"is_error: {json.dumps(obj)[:300]}")
             return obj.get("result") or ""
 
-        res = print_ask(self.print_argv(sb, prompt), sb.cwd, sb.env, sb.root / "claude.stderr.log",
-                        self.turn_timeout, extract=extract)
+        res = print_ask(argv, sb.cwd, sb.env, sb.root / "claude.stderr.log", self.turn_timeout, extract=extract)
         res.notes = (res.notes + f" config={'real' if self.real_config else 'isolated'}").strip()
         return res
+
+    def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
+        return self._run(sb, self.print_argv(sb, prompt))

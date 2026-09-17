@@ -5,8 +5,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from harness.base import Adapter, AskResult, HookInfo
-from lib.acp_driver import acp_ask
+from harness.base import Adapter, AskResult, ClassifiedSession, HookInfo, Session
+from lib.acp_driver import AcpSession, acp_ask
 from lib.isolation import Sandbox
 from lib.print_driver import print_ask
 
@@ -19,6 +19,10 @@ class KiroAdapter(Adapter):
     passthrough_env = ("KIRO_API_KEY",)
     native_root = ".kiro/skills"
     documented_roots = frozenset({".kiro/skills"})
+    modes = ("print", "daemon", "tui")
+    can_resume = True
+    tui_dialogs = ((r"Yes, I accept", "\x1b[B\r"),)
+    tui_exit = ("/quit\r", "\x03", "\x03")
     agent_name: str | None = None
     # None keeps whatever the cloned default agent declares; a tuple replaces it.
     agent_resources: tuple[str, ...] | None = None
@@ -88,16 +92,42 @@ class KiroAdapter(Adapter):
         self._settings(sb).write_text(json.dumps({"chat.defaultAgent": name}) + "\n")
         return HookInfo(mechanism="agent hooks.agentSpawn (cli 2.x)", config_path=str(path))
 
+    def _agent_argv(self) -> list[str]:
+        return ["--agent", self.agent_name] if self.agent_name else []
+
+    def acp_argv(self) -> list[str]:
+        return [self.binary_path() or self.binary, "acp", "--trust-all-tools", *self._agent_argv()]
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return [self.binary_path() or self.binary, "chat", "--trust-all-tools", *self._agent_argv()]
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "daemon":
+            return super().open_session(sb, mode)
+        inner = AcpSession(self.acp_argv(), sb.cwd, sb.env, sb.root / "kiro-acp.stderr.log", self.turn_timeout)
+        inner.start()
+        return ClassifiedSession(inner, lambda r: classify_kiro_tools(r.raw))
+
+    def session_id(self, res: AskResult) -> str | None:
+        # Kiro's non-interactive output carries no id; its resume flag takes the most recent
+        # conversation of the launch directory, which is the one this sandbox just had.
+        return "most-recent-in-cwd"
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return self._chat(sb, prompt, ["--resume"])
+
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
-        binary = self.binary_path() or self.binary
-        agent = ["--agent", self.agent_name] if self.agent_name else []
         if mode == "daemon":
-            res = acp_ask([binary, "acp", "--trust-all-tools", *agent], sb.cwd, sb.env, prompt,
+            res = acp_ask(self.acp_argv(), sb.cwd, sb.env, prompt,
                           sb.root / "kiro-acp.stderr.log", self.turn_timeout)
             generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
             res.notes = (generic + " " + classify_kiro_tools(res.raw)).strip()
             return res
-        argv = [binary, "chat", "--no-interactive", "--trust-all-tools", *agent, prompt]
+        return self._chat(sb, prompt)
+
+    def _chat(self, sb: Sandbox, prompt: str, extra: list[str] = ()) -> AskResult:
+        argv = [self.binary_path() or self.binary, "chat", "--no-interactive", "--trust-all-tools",
+                *self._agent_argv(), *extra, prompt]
         res = print_ask(argv, sb.cwd, sb.env, sb.root / "kiro.stderr.log", self.turn_timeout)
         # Plain chat output carries the answer only, so tool use is unobservable in this mode.
         res.notes = (res.notes + " tools=unobserved").strip()
