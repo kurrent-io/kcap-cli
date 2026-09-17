@@ -2548,16 +2548,33 @@ class ImportCommand(
         var sessionsAffected = sessionCwds.Values.Count(missing.Contains);
         var sortedRoots      = roots.OrderBy(c => c, StringComparer.Ordinal).ToList();
 
+        var families = DetectWorktreeFamilies(sortedRoots);
+        var covered  = families.SelectMany(f => f.Paths).ToHashSet(StringComparer.Ordinal);
+        var listed   = sortedRoots.Where(r => !covered.Contains(r)).ToList();
+
         var sessionWord = sessionsAffected == 1 ? "session references" : "sessions reference";
         var pathWord    = sortedRoots.Count == 1 ? "path that no longer exists" : "distinct paths that no longer exist";
-        display.Line($"{sessionsAffected} {sessionWord} {sortedRoots.Count} {pathWord} on disk:");
+        display.Line($"{sessionsAffected} {sessionWord} {sortedRoots.Count} {pathWord} on disk{(listed.Count > 0 ? ":" : ".")}");
 
         const int sampleSize = 5;
-        foreach (var cwd in sortedRoots.Take(sampleSize)) display.Line($"  {ShortenHome(cwd, home.Path)}");
+        foreach (var cwd in listed.Take(sampleSize)) display.Line($"  {ShortenHome(cwd, home.Path)}");
 
-        if (sortedRoots.Count > sampleSize) {
-            display.Line($"  ... and {sortedRoots.Count - sampleSize} more");
+        if (listed.Count > sampleSize) {
+            display.Line($"  ... and {listed.Count - sampleSize} more");
         }
+
+        foreach (var family in families) {
+            var sessions = sessionCwds.Values.Count(c => family.Paths.Any(p => IsSelfOrDescendant(c, p)));
+            var parent   = ShortenHome(family.Parent, home.Path);
+            var project  = ShortenHome(family.Project, home.Path);
+            var sep      = SeparatorOf(family.Parent);
+            var word     = sessions == 1 ? "session" : "sessions";
+
+            display.Line($"{sessions} {word} under {parent}{sep} ({family.Paths.Count} paths) belong to {project}, which still exists:");
+            display.Line($"  kcap remap '{parent}{sep}*' {project}");
+        }
+
+        if (listed.Count == 0) return;
 
         var hint = cwdRemap is { Count: > 0 }
             ? "Run `kcap remap <from> <to>` to update or add mappings to their new on-disk paths."
@@ -2565,6 +2582,108 @@ class ImportCommand(
 
         display.Line(hint);
     }
+
+    /// <summary>
+    /// Missing paths sharing a parent directory, under two or more slugs, whose
+    /// own parent is a still-present checkout — the shape a cleaned-up worktree
+    /// family leaves behind, and the one a single wildcard remap recovers.
+    /// </summary>
+    internal readonly record struct WorktreeFamily(string Parent, string Project, IReadOnlyList<string> Paths);
+
+    internal static List<WorktreeFamily> DetectWorktreeFamilies(IEnumerable<string> missingRoots) =>
+        DetectWorktreeFamilies(missingRoots, IsRepoOnDisk);
+
+    // Internal seam so tests can declare which paths are repositories without
+    // laying out real git directories.
+    internal static List<WorktreeFamily> DetectWorktreeFamilies(IEnumerable<string> missingRoots, Func<string, bool> isRepo) {
+        var groups    = new Dictionary<string, (string Project, List<string> Paths, HashSet<string> Slugs)>(StringComparer.Ordinal);
+        var repoCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        foreach (var path in missingRoots) {
+            if (Locate(path) is not var (parent, project, slug)) continue;
+
+            if (!groups.TryGetValue(parent, out var group)) {
+                groups[parent] = group = (project, [], new(StringComparer.Ordinal));
+            }
+
+            group.Paths.Add(path);
+            group.Slugs.Add(slug);
+        }
+
+        var families = new List<WorktreeFamily>();
+
+        foreach (var (parent, group) in groups.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
+            // One dead slug is a path to name, not a family to describe — and two
+            // paths under the same slug are one worktree, not two.
+            if (group.Slugs.Count < 2) continue;
+
+            families.Add(new(parent, group.Project, group.Paths));
+        }
+
+        return families;
+
+        // The session's cwd is not always the worktree root: one recorded in
+        // <worktree>/src has to reach past its own subdirectory to find the
+        // repository, or the family it belongs to never forms.
+        (string Parent, string Project, string Slug)? Locate(string path) {
+            var slugPath = path;
+            var parent   = TrimLastSegment(path);
+            var project  = parent is null ? null : TrimLastSegment(parent);
+
+            while (parent is not null && project is not null) {
+                if (Repo(project)) return (parent, project, LastSegment(slugPath));
+
+                slugPath = parent;
+                parent   = project;
+                project  = TrimLastSegment(project);
+            }
+
+            return null;
+        }
+
+        bool Repo(string path) {
+            if (repoCache.TryGetValue(path, out var known)) return known;
+
+            return repoCache[path] = isRepo(path);
+        }
+    }
+
+    static string LastSegment(string path) {
+        var parent = TrimLastSegment(path);
+
+        return (parent is null ? path : path[parent.Length..]).Trim('/', '\\');
+    }
+
+    /// <summary>
+    /// The separator <paramref name="path"/> is written with, so a suggested
+    /// rule is spelled the way the transcript spelled its cwd. A pattern mixing
+    /// the two matches nothing: the head is compared literally.
+    /// </summary>
+    static char SeparatorOf(string path) {
+        for (var i = path.Length - 1; i >= 0; i--) {
+            if (CwdRemapper.IsSeparator(path[i])) return path[i];
+        }
+
+        return '/';
+    }
+
+    /// <summary>
+    /// A checkout root, not merely a path inside one: the suggestion names the
+    /// repository the sessions belong to, and a non-root parent would produce a
+    /// rule that points at a directory rather than at the repo.
+    /// </summary>
+    static bool IsRepoOnDisk(string path) {
+        if (!Directory.Exists(path)) return false;
+
+        var dotGit = Path.Combine(path, ".git");
+
+        return Directory.Exists(dotGit) || File.Exists(dotGit);
+    }
+
+    static bool IsSelfOrDescendant(string path, string ancestor) =>
+        path.Length >= ancestor.Length
+        && path.StartsWith(ancestor, StringComparison.Ordinal)
+        && (path.Length == ancestor.Length || CwdRemapper.IsSeparator(path[ancestor.Length]));
 
     /// <summary>
     /// Drop any path from <paramref name="paths"/> whose parent (at any depth)
@@ -2582,12 +2701,6 @@ class ImportCommand(
         return roots;
 
         static bool HasAncestorIn(string path, IReadOnlySet<string> set) {
-            // Walk parent directories: /a/b/c → /a/b → /a (stop at the first
-            // segment). Trim the last separator-delimited segment ourselves
-            // instead of Path.GetDirectoryName, which on Windows normalizes
-            // '/' → '\' and would break the Ordinal set comparison for
-            // forward-slash transcript cwds. Both '/' and '\' are
-            // honored so mixed-style paths collapse consistently on every OS.
             var parent = TrimLastSegment(path);
 
             while (parent is not null) {
@@ -2596,27 +2709,33 @@ class ImportCommand(
             }
 
             return false;
-
-            static string? TrimLastSegment(string p) {
-                var i = p.Length - 1;
-
-                // Skip trailing separators (e.g. a stray "/a/b/").
-                while (i >= 0 && CwdRemapper.IsSeparator(p[i])) i--;
-
-                // Find the separator that ends the parent segment.
-                while (i >= 0 && !CwdRemapper.IsSeparator(p[i])) i--;
-
-                // No separator left, or only a leading-root separator remains
-                // ("/foo" → root) → no further ancestor to test.
-                if (i <= 0) return null;
-
-                // Collapse any run of separators so "/a//b" trims cleanly to "/a".
-                var end = i;
-                while (end > 0 && CwdRemapper.IsSeparator(p[end - 1])) end--;
-
-                return end <= 0 ? null : p[..end];
-            }
         }
+    }
+
+    /// <summary>
+    /// The parent of <paramref name="p"/>, or null once no meaningful ancestor
+    /// is left ("/foo" → root). Trims the last separator-delimited segment
+    /// rather than calling <c>Path.GetDirectoryName</c>, which on Windows
+    /// normalizes '/' → '\' and would break Ordinal comparison against
+    /// forward-slash transcript cwds. Both separators are honored so
+    /// mixed-style paths resolve consistently on every OS.
+    /// </summary>
+    internal static string? TrimLastSegment(string p) {
+        var i = p.Length - 1;
+
+        // Skip trailing separators (e.g. a stray "/a/b/").
+        while (i >= 0 && CwdRemapper.IsSeparator(p[i])) i--;
+
+        // Find the separator that ends the parent segment.
+        while (i >= 0 && !CwdRemapper.IsSeparator(p[i])) i--;
+
+        if (i <= 0) return null;
+
+        // Collapse any run of separators so "/a//b" trims cleanly to "/a".
+        var end = i;
+        while (end > 0 && CwdRemapper.IsSeparator(p[end - 1])) end--;
+
+        return end <= 0 ? null : p[..end];
     }
 
     /// <summary>

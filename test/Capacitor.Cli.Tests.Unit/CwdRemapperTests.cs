@@ -132,6 +132,197 @@ public class CwdRemapperTests {
     }
 
     [Test]
+    public async Task Apply_wildcard_segment_rewrites_to_verbatim() {
+        var rules  = new[] { R("~/dev/repo/worktrees/*", "~/dev/repo") };
+        var result = CwdRemapper.Apply("/home/u/dev/repo/worktrees/ai-2441", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/home/u/dev/repo");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_segment_preserves_tail() {
+        var rules  = new[] { R("~/dev/repo/worktrees/*", "~/dev/repo") };
+        var result = CwdRemapper.Apply("/home/u/dev/repo/worktrees/ai-2441/src/Foo", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/home/u/dev/repo/src/Foo");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_does_not_match_a_missing_segment() {
+        // The parent directory itself is not one of the family.
+        var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
+        var result = CwdRemapper.Apply("/dev/repo/worktrees", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/repo/worktrees");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_does_not_match_an_empty_segment() {
+        var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
+        var result = CwdRemapper.Apply("/dev/repo/worktrees/", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/repo/worktrees/");
+    }
+
+    [Test]
+    public async Task Apply_interior_wildcard_matches_one_segment_and_keeps_the_tail() {
+        var rules  = new[] { R("/dev/worktrees/*/server", "/dev/server") };
+        var result = CwdRemapper.Apply("/dev/worktrees/capacitor/server/src", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/server/src");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_spans_exactly_one_segment() {
+        // '*' must not swallow "capacitor/nested" to reach the literal tail.
+        var rules  = new[] { R("/dev/worktrees/*/server", "/dev/server") };
+        var result = CwdRemapper.Apply("/dev/worktrees/capacitor/nested/server", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/worktrees/capacitor/nested/server");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_tail_requires_a_path_boundary() {
+        var rules  = new[] { R("/dev/worktrees/*/server", "/dev/server") };
+        var result = CwdRemapper.Apply("/dev/worktrees/capacitor/server-cli", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/worktrees/capacitor/server-cli");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_reaches_further_than_a_shorter_literal() {
+        var rules = new[] {
+            R("/dev/repo",              "/dev/wrong"),
+            R("/dev/repo/worktrees/*",  "/dev/repo"),
+        };
+
+        var result = CwdRemapper.Apply("/dev/repo/worktrees/ai-1/src", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/repo/src");
+    }
+
+    [Test]
+    public async Task Apply_literal_beats_a_wildcard_reaching_equally_far() {
+        // The one-off override has to survive the family rule, whichever order
+        // the two were added in.
+        var rules = new[] {
+            R("/dev/repo/worktrees/*",     "/dev/repo"),
+            R("/dev/repo/worktrees/ai-1",  "/dev/elsewhere"),
+        };
+
+        await Assert.That(CwdRemapper.Apply("/dev/repo/worktrees/ai-1/src", rules, new("/home/u")))
+            .IsEqualTo("/dev/elsewhere/src");
+
+        await Assert.That(CwdRemapper.Apply("/dev/repo/worktrees/ai-1/src", rules.Reverse().ToArray(), new("/home/u")))
+            .IsEqualTo("/dev/elsewhere/src");
+    }
+
+    [Test]
+    public async Task Apply_prefers_the_wildcard_rule_that_reaches_further() {
+        var rules = new[] {
+            R("/dev/worktrees/*",               "/dev/shallow"),
+            R("/dev/worktrees/*/repo",          "/dev/repo"),
+        };
+
+        await Assert.That(CwdRemapper.Apply("/dev/worktrees/capacitor/repo/src", rules, new("/home/u")))
+            .IsEqualTo("/dev/repo/src");
+
+        // ...and falls back to the shallower one where the deeper tail is absent.
+        await Assert.That(CwdRemapper.Apply("/dev/worktrees/capacitor/other", rules, new("/home/u")))
+            .IsEqualTo("/dev/shallow/other");
+    }
+
+    [Test]
+    public async Task Apply_matches_a_wildcard_head_written_with_the_other_separator() {
+        // A transcript recorded on Windows against a rule typed with '/': the
+        // head has to fail cleanly rather than half-match into the segment scan.
+        var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
+        var result = CwdRemapper.Apply(@"\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"\dev\repo\worktrees\ai-1");
+    }
+
+    [Test]
+    public async Task Apply_skips_a_rule_whose_wildcard_is_glued_to_a_following_literal() {
+        var rules  = new[] { R("/dev/*-tree/src", "/dev/repo") };
+        var result = CwdRemapper.Apply("/dev/ai-tree/src", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/ai-tree/src");
+    }
+
+    [Test]
+    public async Task Apply_skips_a_rule_whose_wildcard_is_not_a_whole_segment() {
+        var rules  = new[] { R("/dev/wt-*", "/dev/repo") };
+        var result = CwdRemapper.Apply("/dev/wt-ai-1/src", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/wt-ai-1/src");
+    }
+
+    [Test]
+    public async Task Apply_skips_a_rule_with_two_wildcards() {
+        var rules  = new[] { R("/dev/*/worktrees/*", "/dev/repo") };
+        var result = CwdRemapper.Apply("/dev/repo/worktrees/ai-1", rules, new("/home/u"));
+        await Assert.That(result).IsEqualTo("/dev/repo/worktrees/ai-1");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_matches_at_backslash_boundaries() {
+        var rules  = new[] { R(@"C:\dev\repo\worktrees\*", @"C:\dev\repo") };
+        var result = CwdRemapper.Apply(@"C:\dev\repo\worktrees\ai-1\src", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\dev\repo\src");
+    }
+
+    [Test]
+    public async Task Apply_wildcard_follows_the_case_policy() {
+        var rules = new[] { R(@"C:\Dev\Repo\Worktrees\*", @"C:\Dev\Repo") };
+
+        await Assert.That(CwdRemapper.Apply(@"c:\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.OrdinalIgnoreCase))
+            .IsEqualTo(@"C:\Dev\Repo");
+
+        await Assert.That(CwdRemapper.Apply(@"c:\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.Ordinal))
+            .IsEqualTo(@"c:\dev\repo\worktrees\ai-1");
+    }
+
+    [Test]
+    public async Task TryParseFrom_accepts_a_literal_path() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/repo", out var pattern, out _)).IsTrue();
+        await Assert.That(pattern.HasWildcard).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseFrom_accepts_a_trailing_wildcard_segment() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/repo/worktrees/*", out var pattern, out _)).IsTrue();
+        await Assert.That(pattern.HasWildcard).IsTrue();
+        await Assert.That(pattern.Head).IsEqualTo("/dev/repo/worktrees/");
+        await Assert.That(pattern.Tail).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task TryParseFrom_accepts_an_interior_wildcard_segment() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/worktrees/*/server", out var pattern, out _)).IsTrue();
+        await Assert.That(pattern.Tail).IsEqualTo("/server");
+    }
+
+    [Test]
+    public async Task TryParseFrom_rejects_a_partial_segment_wildcard() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/wt-*", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("stand alone as a path segment");
+    }
+
+    [Test]
+    public async Task TryParseFrom_rejects_a_wildcard_glued_to_a_following_literal() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/*-tree/src", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("stand alone as a path segment");
+    }
+
+    [Test]
+    public async Task TryParseFrom_rejects_a_leading_wildcard() {
+        await Assert.That(CwdRemapper.TryParseFrom("*/worktrees", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("stand alone as a path segment");
+    }
+
+    [Test]
+    public async Task TryParseFrom_rejects_more_than_one_wildcard() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/*/worktrees/*", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("only one '*'");
+    }
+
+    [Test]
+    public async Task TryParseFrom_rejects_a_double_star() {
+        await Assert.That(CwdRemapper.TryParseFrom("/dev/repo/**", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("only one '*'");
+    }
+
+    [Test]
     public async Task Apply_does_not_expand_tilde_username_form() {
         // "~alice" is the ~user form; we don't expand it. Since the resulting
         // 'from' starts with '~' and the cwd doesn't, no match → unchanged.

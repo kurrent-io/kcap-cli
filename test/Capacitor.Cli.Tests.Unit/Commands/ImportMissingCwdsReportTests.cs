@@ -8,6 +8,10 @@ public class ImportMissingCwdsReportTests {
     // Every path reported below is outside this home, so the ~ shortening never fires.
     static readonly UserHome Home = new("/no/such/home");
 
+    // A suggested rule is spelled with the separator the cwd was recorded with,
+    // which under a TempDir is the host's.
+    static readonly char Sep = Path.DirectorySeparatorChar;
+
     [Test, NotInParallel]
     public async Task Reports_missing_cwds_with_session_count_and_sample() {
         using var tmp = new TempDir();
@@ -164,6 +168,149 @@ public class ImportMissingCwdsReportTests {
         var output = Capture(d => ImportCommand.ReportMissingCwds(sessionCwds, cwdRemap: null, d, Home));
 
         await Assert.That(output).Contains("... and 2 more");
+    }
+
+    [Test]
+    public async Task DetectWorktreeFamilies_groups_dead_siblings_under_their_repository() {
+        var families = ImportCommand.DetectWorktreeFamilies(
+            ["/dev/repo/worktrees/ai-1", "/dev/repo/worktrees/ai-2"],
+            isRepo: p => p == "/dev/repo");
+
+        await Assert.That(families).Count().IsEqualTo(1);
+        await Assert.That(families[0].Parent).IsEqualTo("/dev/repo/worktrees");
+        await Assert.That(families[0].Project).IsEqualTo("/dev/repo");
+        await Assert.That(families[0].Paths).Count().IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task DetectWorktreeFamilies_needs_more_than_one_sibling() {
+        var families = ImportCommand.DetectWorktreeFamilies(
+            ["/dev/repo/worktrees/ai-1"],
+            isRepo: p => p == "/dev/repo");
+
+        await Assert.That(families).IsEmpty();
+    }
+
+    [Test]
+    public async Task DetectWorktreeFamilies_reaches_past_a_subdirectory_the_session_ran_in() {
+        // A cwd of <worktree>/src still belongs to the family its worktree does.
+        var families = ImportCommand.DetectWorktreeFamilies(
+            ["/dev/repo/worktrees/ai-1/src", "/dev/repo/worktrees/ai-2/test"],
+            isRepo: p => p == "/dev/repo");
+
+        await Assert.That(families).Count().IsEqualTo(1);
+        await Assert.That(families[0].Parent).IsEqualTo("/dev/repo/worktrees");
+        await Assert.That(families[0].Project).IsEqualTo("/dev/repo");
+    }
+
+    [Test]
+    public async Task DetectWorktreeFamilies_counts_slugs_not_paths() {
+        // Two dead directories inside ONE worktree are one slug, so there is no
+        // family to describe — naming the two paths is the honest report.
+        var families = ImportCommand.DetectWorktreeFamilies(
+            ["/dev/repo/worktrees/ai-1/src", "/dev/repo/worktrees/ai-1/test"],
+            isRepo: p => p == "/dev/repo");
+
+        await Assert.That(families).IsEmpty();
+    }
+
+    [Test]
+    public async Task DetectWorktreeFamilies_keeps_the_recorded_separator_on_windows_paths() {
+        var families = ImportCommand.DetectWorktreeFamilies(
+            [@"C:\dev\repo\worktrees\ai-1", @"C:\dev\repo\worktrees\ai-2"],
+            isRepo: p => p == @"C:\dev\repo");
+
+        await Assert.That(families).Count().IsEqualTo(1);
+        await Assert.That(families[0].Parent).IsEqualTo(@"C:\dev\repo\worktrees");
+    }
+
+    [Test]
+    public async Task DetectWorktreeFamilies_skips_a_parent_that_is_not_under_a_repository() {
+        // ~/dev/worktrees/<project>/<tree>: the directory above the family is
+        // not a repo, so only the user knows what these belong to.
+        var families = ImportCommand.DetectWorktreeFamilies(
+            ["/dev/worktrees/capacitor/a", "/dev/worktrees/capacitor/b"],
+            isRepo: _ => false);
+
+        await Assert.That(families).IsEmpty();
+    }
+
+    [Test, NotInParallel]
+    public async Task Report_suggests_a_wildcard_rule_instead_of_listing_the_family() {
+        using var tmp  = new TempDir();
+        var       repo = tmp.CreateDir("repo");
+
+        repo.CreateDir(".git");
+
+        var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
+            ["s1"] = repo.PathTo("worktrees", "ai-1"),
+            ["s2"] = repo.PathTo("worktrees", "ai-1"),
+            ["s3"] = repo.PathTo("worktrees", "ai-2"),
+        };
+
+        var output = Capture(d => ImportCommand.ReportMissingCwds(sessionCwds, cwdRemap: null, d, Home));
+        var family = repo.PathTo("worktrees") + Sep;
+
+        await Assert.That(output).Contains($"3 sessions under {family} (2 paths) belong to {repo.Path}, which still exists:");
+        await Assert.That(output).Contains($"  kcap remap '{family}*' {repo.Path}");
+        // The family stands for its members, so they are not also listed, and
+        // the generic hint would only repeat the command already printed.
+        await Assert.That(output).DoesNotContain($"  {repo.PathTo("worktrees", "ai-1")}");
+        await Assert.That(output).DoesNotContain("Run `kcap remap <from> <to>`");
+    }
+
+    [Test, NotInParallel]
+    public async Task Report_suggests_a_rule_for_a_session_that_ran_below_its_worktree() {
+        using var tmp  = new TempDir();
+        var       repo = tmp.CreateDir("repo");
+
+        repo.CreateDir(".git");
+
+        var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
+            ["s1"] = repo.PathTo("worktrees", "ai-1", "src"),
+            ["s2"] = repo.PathTo("worktrees", "ai-2", "src"),
+        };
+
+        var output = Capture(d => ImportCommand.ReportMissingCwds(sessionCwds, cwdRemap: null, d, Home));
+
+        await Assert.That(output).Contains($"  kcap remap '{repo.PathTo("worktrees")}{Sep}*' {repo.Path}");
+    }
+
+    [Test, NotInParallel]
+    public async Task Report_still_lists_paths_outside_any_family() {
+        using var tmp  = new TempDir();
+        var       repo = tmp.CreateDir("repo");
+
+        repo.CreateDir(".git");
+
+        var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
+            ["s1"] = repo.PathTo("worktrees", "ai-1"),
+            ["s2"] = repo.PathTo("worktrees", "ai-2"),
+            ["s3"] = "/does/not/exist/repo-b",
+        };
+
+        var output = Capture(d => ImportCommand.ReportMissingCwds(sessionCwds, cwdRemap: null, d, Home));
+
+        await Assert.That(output).Contains("3 sessions reference 3 distinct paths that no longer exist on disk:");
+        await Assert.That(output).Contains("  /does/not/exist/repo-b");
+        await Assert.That(output).Contains($"  kcap remap '{repo.PathTo("worktrees")}{Sep}*' {repo.Path}");
+        await Assert.That(output).Contains("Run `kcap remap <from> <to>`");
+    }
+
+    [Test, NotInParallel]
+    public async Task Report_lists_a_family_whose_project_is_not_a_repository() {
+        using var tmp   = new TempDir();
+        var       plain = tmp.CreateDir("plain");
+
+        var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
+            ["s1"] = plain.PathTo("worktrees", "ai-1"),
+            ["s2"] = plain.PathTo("worktrees", "ai-2"),
+        };
+
+        var output = Capture(d => ImportCommand.ReportMissingCwds(sessionCwds, cwdRemap: null, d, Home));
+
+        await Assert.That(output).DoesNotContain("kcap remap '");
+        await Assert.That(output).Contains($"  {plain.PathTo("worktrees", "ai-1")}");
     }
 
     static string Capture(Action<ImportCommand.ImportDisplay> render) {
