@@ -102,6 +102,30 @@ public class RemapCommandTests {
     }
 
     [Test]
+    public async Task TryNormalizeFrom_accepts_a_wildcard_segment() {
+        await Assert.That(RemapCommand.TryNormalizeFrom("  ~/dev/repo/worktrees/*  ", out var from, out _)).IsTrue();
+        await Assert.That(from).IsEqualTo("~/dev/repo/worktrees/*");
+    }
+
+    [Test]
+    public async Task TryNormalizeFrom_trims_a_trailing_separator_after_the_wildcard() {
+        await Assert.That(RemapCommand.TryNormalizeFrom("~/dev/repo/worktrees/*/", out var from, out _)).IsTrue();
+        await Assert.That(from).IsEqualTo("~/dev/repo/worktrees/*");
+    }
+
+    [Test]
+    public async Task TryNormalizeFrom_rejects_a_partial_segment_wildcard() {
+        await Assert.That(RemapCommand.TryNormalizeFrom("~/dev/wt-*", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("stand alone as a path segment");
+    }
+
+    [Test]
+    public async Task TryNormalizeFrom_rejects_two_wildcards() {
+        await Assert.That(RemapCommand.TryNormalizeFrom("~/dev/*/worktrees/*", out _, out var error)).IsFalse();
+        await Assert.That(error).Contains("only one '*'");
+    }
+
+    [Test]
     public async Task ApplyAdd_with_OrdinalIgnoreCase_replaces_case_variant_entry() {
         // On Windows, "C:\Users\Alice" and "c:\users\alice" refer to the same
         // dir at import time, so kcap remap should replace — not duplicate —

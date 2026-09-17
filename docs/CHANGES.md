@@ -6,6 +6,39 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## One remap rule covers a family of deleted worktrees
+
+A `from` may carry one `*` standing as a whole path segment, and the cwd's remainder past that
+segment is preserved. The literal form could not express this at all: a prefix rewrite keeps the
+tail, so `~/dev/repo/worktrees` -> `~/dev/repo` turns `.../worktrees/ai-1` into `~/dev/repo/ai-1`,
+which is equally missing, and only an exact `cwd == from` hit uses `to` verbatim. That made it one
+entry per dead worktree, growing every time a tree was cleaned up.
+
+One segment, never `**`. A greedy wildcard is ambiguous about where the preserved tail starts, and
+every layout seen so far is one segment deep. A pattern whose `*` is not a whole segment is refused
+when it is typed and skipped when it is read back, so a hand-edited config cannot turn one into a
+substring match.
+
+Precedence is the length of the cwd the rule consumed, not the length of the pattern, so a wildcard
+beats a shorter literal that it reaches past. A literal wins a tie against a wildcard of equal
+reach, which is what keeps one path overridable out of a family it otherwise belongs to.
+
+Rules stay unconditional, as literal ones already were: they rewrite whether or not the original
+path still exists. That is harmless for a worktree pattern, since a live worktree rewritten to its
+project root resolves to the same repository, but it is a sharper edge than a literal `from` the
+user knows is gone, so `--help` and the README say so.
+
+`WorktreePathResolver` is untouched. The dot form (`<project>/.<dotseg>/worktrees/<slug>`) stays
+automatic because tooling invents those paths and no user would think to remap them; a `worktrees/`
+directory the user configured carries no dot segment, and declaring it is fair.
+
+Discovery is the other half: a wildcard nobody finds saves nobody, and an under-scoped import is
+quiet for months. The missing-cwd report groups dead siblings by their parent and prints the rule
+instead of the paths when it sees more than one under a directory whose own parent is a checkout
+root. That root test is what makes the suggestion honest — it names the repository the sessions
+belong to. Worktrees kept outside the project can't be grouped this way, since the directory above
+them is not a repository and only the user knows the mapping.
+
 ## A session's loose ends are declared, and bounded by the server
 
 `declare_loose_end` posts one concrete piece of unfinished work — a missing test, a TODO left in the

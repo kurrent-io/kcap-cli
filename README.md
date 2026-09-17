@@ -2059,6 +2059,7 @@ Manage the rewrites with `kcap remap`:
 
 ```bash
 kcap remap ~/dev/eventstore/foo-cli ~/dev/eventstore/bar-cli   # add or replace a mapping
+kcap remap '~/dev/my-repo/worktrees/*' ~/dev/my-repo           # one rule for a family of worktrees
 kcap remap --list                                              # show all mappings
 kcap remap --remove ~/dev/eventstore/foo-cli                   # drop one
 ```
@@ -2068,12 +2069,22 @@ Entries are stored at the top of `~/.config/kcap/config.json` under `cwd_remap` 
 Semantics:
 
 - `from` / `to` are **path-prefix** rewrites with `~` expanding to the current user's home directory (`~\` is also accepted on Windows). The match requires a path boundary (`from` exactly equal, or `from` followed by `/` — or `\` on Windows), so `from: "~/dev/foo"` will **not** spuriously rewrite `~/dev/foo-cli`.
+- `from` may contain a single `*` standing as a **whole path segment**, matching exactly one segment of the cwd. Everything past that segment is preserved, so `'~/dev/my-repo/worktrees/*' → ~/dev/my-repo` rewrites `~/dev/my-repo/worktrees/ai-2441/src` to `~/dev/my-repo/src`. There is no `**`. Quote the pattern — an unquoted `*` is expanded by your shell before kcap sees it.
 - Comparisons follow the host filesystem's case policy: case-insensitive on Windows, case-sensitive elsewhere.
-- When multiple rules could apply to the same transcript cwd, the **longest** `from` wins.
+- When multiple rules could apply to the same transcript cwd, the one matching the **most** of it wins, and a literal `from` beats a wildcard `from` reaching just as far — so a single path can be pointed elsewhere without dropping the family rule.
 - Rules are applied once (no chaining), so the result of one rule isn't fed into another.
+- Rules are **unconditional** — they rewrite whether or not the original path still exists. Harmless for a worktree pattern, since a live worktree rewritten to its project root resolves to the same repository, but worth knowing before pointing one at an unrelated directory.
+- `--list` and `--remove` take the pattern verbatim, exactly as typed.
 - Remaps are global, not per-profile — same rename affects all profiles' imports.
 
-After adding a remap, re-run `kcap import --org` (or whichever scope you use). The missing-cwd report at the top of the import will show what's still unresolved. Ephemeral worktree paths under `<project>/.<anything>/worktrees/<slug>` are auto-attributed to `<project>` when it still exists on disk, so deleted-worktree cwds don't need a remap entry.
+After adding a remap, re-run `kcap import --org` (or whichever scope you use). The missing-cwd report at the top of the import will show what's still unresolved. Ephemeral worktree paths under `<project>/.<anything>/worktrees/<slug>` are auto-attributed to `<project>` when it still exists on disk, so deleted-worktree cwds don't need a remap entry — a `worktrees/` directory you configured yourself carries no dot segment, so that one does, and the missing-cwd report prints the wildcard rule for it when it sees more than one dead sibling under a repository that still exists:
+
+```
+17 sessions under ~/dev/my-repo/worktrees/ (4 paths) belong to ~/dev/my-repo, which still exists:
+  kcap remap '~/dev/my-repo/worktrees/*' ~/dev/my-repo
+```
+
+Worktrees kept *outside* the project (`~/dev/worktrees/<project>/<tree>`) can't be suggested — the directory above them is not a repository, so only you know which project they belong to — but the same wildcard covers them: `kcap remap '~/dev/worktrees/my-repo/*' ~/dev/my-repo`.
 
 ### Telemetry
 
