@@ -19,7 +19,6 @@ static class DetailsFolder {
     public sealed class Pair(Item open, Item close) {
         public Item Open => open;
         public Item Close => close;
-        public int Level { get; set; }
         public bool Rejected { get; set; }
         public Item Partner(Item item) => ReferenceEquals(item, open) ? close : open;
     }
@@ -76,8 +75,7 @@ static class DetailsFolder {
             for (var tag = 0; tag < item.TagPairs.Count; tag++) {
                 if (item.TagPairs[tag] is not { } pair) continue;
                 if (!plan.DetailsTags[tag]) { level--; continue; }
-                pair.Level = ++level;
-                if (level > GitHubHtmlPass.MaxDetailsNesting) pair.Rejected = true;
+                if (++level > GitHubHtmlPass.MaxDetailsNesting) pair.Rejected = true;
             }
         }
         return pairs;

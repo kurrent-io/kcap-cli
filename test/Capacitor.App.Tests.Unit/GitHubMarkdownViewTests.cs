@@ -141,7 +141,7 @@ public class GitHubMarkdownViewTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_link_after_a_line_break_inside_pre_opens() {
-        if (Environment.NewLine.Length != 1) return;
+        if (Environment.NewLine.Length != 1) Skip.Test("MarkView measures a line break as Environment.NewLine, Avalonia lays it out as one character; they disagree here.");
         await RunOnUiAsync(async () => {
             var (window, root, opened) = Show("<pre>first\n<a href=\"https://u.example/second\">second</a></pre>", MarkdownFlavor.GitHub);
             try {

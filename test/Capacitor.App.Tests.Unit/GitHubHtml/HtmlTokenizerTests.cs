@@ -70,9 +70,8 @@ public class HtmlTokenizerTests {
         await Assert.That(result.Tokens[0].IsWhitespace).IsFalse();
     }
 
-    /// Pins linear work: every one of these tag starts scans a quoted value that closes only at the
-    /// very end and then fails on the `!`, which costs the square of the input unless the quote
-    /// search is remembered — minutes at this size, against milliseconds.
+    /// Two hundred thousand tag starts that each open a quote and fail on the character after it
+    /// finish in time.
     [Test]
     [Timeout(10_000)]
     public async Task Repeated_unclosed_quotes_stay_linear(CancellationToken _) {

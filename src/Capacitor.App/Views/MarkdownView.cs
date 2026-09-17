@@ -93,5 +93,6 @@ public sealed class MarkdownView : ContentControl {
     }
 
     ToggleButton? Header(int ordinal) =>
-        this.GetVisualDescendants().OfType<ToggleButton>().FirstOrDefault(button => button.Tag is int tag && tag == ordinal);
+        this.GetVisualDescendants().OfType<ToggleButton>().FirstOrDefault(button =>
+            button.Classes.Contains("markdown-details-summary") && button.Tag is int tag && tag == ordinal);
 }

@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Capacitor.App.GitHubHtml;
 using Capacitor.App.Views;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
@@ -197,7 +198,7 @@ public class DetailsViewTests {
             var details = string.Concat(Enumerable.Repeat("<details open>\n\n", 50)) + "x\n\n" + string.Concat(Enumerable.Repeat("</details>\n\n", 50));
             var (window, root, _) = Show(details, MarkdownFlavor.GitHub);
             try {
-                await Assert.That(Headers(root).Count()).IsEqualTo(8);
+                await Assert.That(Headers(root).Count()).IsEqualTo(GitHubHtmlPass.MaxDetailsNesting);
                 await Assert.That(All<TextBlock>(root).Select(Reads).Any(t => t.Contains('x'))).IsTrue();
             } finally { window.Close(); }
 

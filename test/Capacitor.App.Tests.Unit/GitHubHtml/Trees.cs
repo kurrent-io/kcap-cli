@@ -29,6 +29,7 @@ static class Trees {
             switch (node) {
                 case ContainerBlock blocks:
                     foreach (var child in blocks) pending.Push((child, depth + 1));
+                    if (blocks is DetailsBlock details) pending.Push((details.Summary, depth + 1));
                     break;
                 case LeafBlock { Inline: { } inlines }:
                     pending.Push((inlines, depth + 1));

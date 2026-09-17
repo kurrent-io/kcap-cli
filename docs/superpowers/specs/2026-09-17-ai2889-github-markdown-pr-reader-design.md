@@ -112,7 +112,7 @@ Order makes the heights true. For each leaf block's inline tree: D8's normalisat
 
 ### D4 — `<details>`
 
-`DetailsBlock : ContainerBlock` carries `Summary` (a `ContainerInline`, possibly empty), `IsOpen` (the `open` attribute) and `Ordinal` (its pre-order index among the document's details blocks, assigned by the pass).
+`DetailsBlock : ContainerBlock` carries `Summary` (a `ContainerInline`, possibly empty), `StartsOpen` (the `open` attribute) and `Ordinal` (its pre-order index among the document's details blocks, assigned by the pass).
 
 **Matching.** Within one block container, the `details` open and close tags of *every* sibling `HtmlBlock` — rejected ones too — are matched in document order with a stack. Matching never depends on eligibility, so a rejected block cannot change which tags pair. A pair is matched only within one parent container: a `<details>` opened in a list item and closed outside it is two unmatched tags.
 
@@ -142,7 +142,7 @@ the inner opener is rejected for `<span>`, its partner `</details>` block is rej
 
 **Rendering.** A collapsed details section renders its header and nothing else: its content is not in the visual tree, so it is not selectable, not copied by select-all, and not hit-tested, which is how github.com treats it too. Rendering the content hidden is not an option, because the selection index ignores visibility: hidden text would be copied, and its stale bounds would take clicks meant for what follows.
 
-- `DetailsExtension : IMarkViewExtension` is owned by the view and holds its details state: a map from `Ordinal` to expanded, empty by default so that `IsOpen` decides. It registers `DetailsBlockRenderer`, which writes a `Border.markdown-details` holding a `StackPanel`: a `ToggleButton.markdown-details-summary` (a chevron and the summary inlines, `IsChecked` = expanded, `Tag` = the ordinal) and, only when expanded, a content `StackPanel` written with `Push` / `WriteChildren` / `Pop`. Nested details are therefore rendered only inside an expanded parent.
+- `DetailsExtension : IMarkViewExtension` is owned by the view and holds its details state: a map from `Ordinal` to expanded, empty by default so that `StartsOpen` decides. It registers `DetailsBlockRenderer`, which writes a `Border.markdown-details` holding a `StackPanel`: a `ToggleButton.markdown-details-summary` (a chevron and the summary inlines, `IsChecked` = expanded, `Tag` = the ordinal) and, only when expanded, a content `StackPanel` written with `Push` / `WriteChildren` / `Pop`. Nested details are therefore rendered only inside an expanded parent.
 - A toggle records the new state and re-renders the view: `_viewer.Markdown = null`, then the text again, in the same dispatcher turn. The re-render rebuilds the selection index, so it always matches what is visible. It clears any selection. When the toggled header had keyboard focus, focus returns to the header with the same ordinal.
 - The state is cleared whenever `Text` or `Flavor` changes.
 - Not an `Expander`: its content is outside the selection walk. The summary text itself is not selectable, being inside a button; the header takes focus and toggles on Space and Enter.

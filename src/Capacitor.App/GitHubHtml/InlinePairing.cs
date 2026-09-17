@@ -5,8 +5,7 @@ namespace Capacitor.App.GitHubHtml;
 /// The inline rule. Reach counts the levels a node occupies, its own included, so a wrapper
 /// placed one level below its container fits when `containerDepth + reach` stays within the limit.
 static class InlinePairing {
-    sealed class OpenTag(string name, HtmlInline node, HtmlToken token, int index) {
-        public string Name => name;
+    sealed class OpenTag(HtmlInline node, HtmlToken token, int index) {
         public HtmlInline Node => node;
         public HtmlToken Token => token;
         public int Index => index;
@@ -50,7 +49,7 @@ static class InlinePairing {
                 case HtmlTagClass.Paired when HtmlTags.IsInline(token.Name) && token.Kind == HtmlTokenKind.OpenTag:
                     // Counted as source until a close tag proves otherwise.
                     Note(1);
-                    var entry = new OpenTag(token.Name, html, token, open.Count);
+                    var entry = new OpenTag(html, token, open.Count);
                     open.Add(entry);
                     if (!byName.TryGetValue(token.Name, out var named)) byName[token.Name] = named = new();
                     named.Push(entry);

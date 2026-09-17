@@ -11,9 +11,6 @@ public static class HtmlTokenizer {
     sealed class Scanner(string html) {
         readonly List<HtmlToken> _tokens = [];
         readonly int _lastClose = html.LastIndexOf('>');
-        // A search for a closing quote answers every later start up to where it landed, and a
-        // failed one stays failed, so repeated unclosed quotes cost one scan rather than one each.
-        int _doubleFrom = -1, _doubleAt = -1, _singleFrom = -1, _singleAt = -1;
         bool _malformed;
 
         public HtmlTokenization Run() {
@@ -88,7 +85,7 @@ public static class HtmlTokenizer {
                     while (i < html.Length && char.IsWhiteSpace(html[i])) i++;
                     if (i >= html.Length) return false;
                     if (html[i] is '"' or '\'') {
-                        var end = NextQuote(html[i], i + 1);
+                        var end = html.IndexOf(html[i], i + 1);
                         if (end < 0) return false;
                         value = html[(i + 1)..end];
                         i = end + 1;
@@ -108,15 +105,6 @@ public static class HtmlTokenizer {
                 attributes is null ? FrozenDictionary<string, string>.Empty : attributes);
             after = i;
             return true;
-        }
-
-        int NextQuote(char quote, int from) {
-            ref var cachedFrom = ref quote == '"' ? ref _doubleFrom : ref _singleFrom;
-            ref var cachedAt = ref quote == '"' ? ref _doubleAt : ref _singleAt;
-            if (cachedFrom >= 0 && from >= cachedFrom && (cachedAt < 0 || from <= cachedAt)) return cachedAt;
-            cachedFrom = from;
-            cachedAt = html.IndexOf(quote, from);
-            return cachedAt;
         }
 
         static bool IsAttributeNameChar(char c) => char.IsAsciiLetterOrDigit(c) || c is '_' or ':' or '.' or '-';
