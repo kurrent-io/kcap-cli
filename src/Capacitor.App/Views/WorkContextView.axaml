@@ -70,18 +70,22 @@
         <Style Selector="TextBlock.settled">
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
+        <!-- Identity mark, not a status: green is reserved for shipped/connected. Border is a
+             Decorator and ignores alignment on a direct child, so the initial lives in a Panel. -->
         <Style Selector="Border.avatar">
             <Setter Property="Width" Value="24" />
             <Setter Property="Height" Value="24" />
             <Setter Property="CornerRadius" Value="999" />
-            <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
-        <Style Selector="Border.avatar > TextBlock">
+        <Style Selector="Border.avatar > Panel > TextBlock">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
+            <Setter Property="LineHeight" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextAlignment" Value="Center" />
         </Style>
         <!-- Stretch wrapper around a card: the card is the chrome, so the wrapper paints nothing in
              any state — Fluent's hover fill lands on the presenter at the button's own radius and
@@ -474,7 +478,9 @@
                         <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
                                 <Border Classes="avatar" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Initial}" />
+                                    <Panel>
+                                        <TextBlock Text="{Binding Initial}" />
+                                    </Panel>
                                 </Border>
                                 <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
                                         HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
@@ -491,7 +497,9 @@
                 </ItemsControl>
                 <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
                     <Border Classes="avatar" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding RequesterInitial}" />
+                        <Panel>
+                            <TextBlock Text="{Binding RequesterInitial}" />
+                        </Panel>
                     </Border>
                     <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
                             HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}">

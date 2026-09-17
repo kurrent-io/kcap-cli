@@ -6,6 +6,7 @@ using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -157,6 +158,41 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Vm.PeopleExpanded).IsFalse();
             var name = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "Ada");
             await Assert.That(name.IsEffectivelyVisible).IsTrue();
+        });
+    }
+
+    /// Who's-on-it initials are identity, not a live/settled status, so they must not paint
+    /// success green. Border ignores alignment on a direct child; the letter lives in a Panel
+    /// so Horizontal/VerticalAlignment actually centre it in the disc.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_avatar_is_neutral_and_centres_the_initial() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            host.Window.UpdateLayout();
+
+            var avatar = host.Find<ItemsControl>("ContributorList")
+                .GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("avatar"));
+            var letter = avatar.GetVisualDescendants().OfType<TextBlock>().Single();
+            var raised = host.Window.FindResource("KcapSurfaceRaisedBrush");
+            var muted = host.Window.FindResource("KcapMutedBrush");
+            var success = host.Window.FindResource("KcapSuccessBrush");
+            var successDim = host.Window.FindResource("KcapSuccessDimBrush");
+
+            await Assert.That(ReferenceEquals(avatar.Background, raised)).IsTrue();
+            await Assert.That(ReferenceEquals(letter.Foreground, muted)).IsTrue();
+            await Assert.That(ReferenceEquals(avatar.Background, successDim)).IsFalse();
+            await Assert.That(ReferenceEquals(letter.Foreground, success)).IsFalse();
+            await Assert.That(letter.Parent).IsTypeOf<Panel>();
+            await Assert.That(letter.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Center);
+            await Assert.That(letter.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
+            await Assert.That(letter.TextAlignment).IsEqualTo(TextAlignment.Center);
+
+            var letterMid = letter.TranslatePoint(
+                new Point(letter.Bounds.Width / 2, letter.Bounds.Height / 2), avatar)!.Value;
+            await Assert.That(Math.Abs(letterMid.X - avatar.Bounds.Width / 2)).IsLessThan(1.5);
+            await Assert.That(Math.Abs(letterMid.Y - avatar.Bounds.Height / 2)).IsLessThan(1.5);
         });
     }
 
