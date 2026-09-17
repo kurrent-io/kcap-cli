@@ -1098,6 +1098,84 @@ class JsonlDriversTests(unittest.TestCase):
                 s.close()
 
 
+from lib.pty_driver import PtySession, strip_ansi  # noqa: E402
+from lib.probe_skill import tui_prompt  # noqa: E402
+
+
+class PtyDriverTests(unittest.TestCase):
+    def _session(self, d, skill=None, env=None, **kw):
+        repo = _fake_repo(d, skill)
+        argv = [sys.executable, str(SERVERS), "tui"]
+        s = PtySession(argv, repo, dict(os.environ, **(env or {})), Path(d) / "fake-tui.log", ready_idle=0.3,
+                       timeout=15, **kw)
+        s.start()
+        return repo, s
+
+    def test_strip_ansi(self):
+        self.assertEqual(strip_ansi("\x1b[1mbold\x1b[0m\r\n\x1b]0;title\x07x"), "bold\nx")
+
+    def test_ask_reads_the_reply_not_the_echoed_prompt(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo, s = self._session(d, skill)
+            try:
+                res = s.ask(tui_prompt(skill))
+                self.assertEqual(res.reply_text, f"PROBE-REPLY: {skill.body_token}")
+                self.assertIn("PROBE-REPLY: <value>", res.raw)
+                self.assertGreaterEqual(res.first_request_at, res.started_at)
+                other = ProbeSkill.fresh()
+                self.assertEqual(s.ask(tui_prompt(other)).reply_text, "PROBE-REPLY: NO-SKILL")
+            finally:
+                s.close()
+            self.assertIsNotNone(s.proc.poll())
+            self.assertTrue((Path(d) / "fake-tui.log").stat().st_size > 0)
+
+    def test_dialog_is_answered_before_the_prompt(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo, s = self._session(d, skill, env={"KCAP_FAKE_TUI_DIALOG": "1"},
+                                    dialogs=((r"trust this folder", "y\r"),))
+            try:
+                res = s.ask(tui_prompt(skill))
+                self.assertEqual(res.reply_text, f"PROBE-REPLY: {skill.body_token}")
+                self.assertIn("dialog=", res.notes)
+            finally:
+                s.close()
+
+    def test_reload_refreshes_a_frozen_catalogue(self):
+        with tempfile.TemporaryDirectory() as d:
+            skill = ProbeSkill.fresh()
+            repo, s = self._session(d, None, env={"KCAP_FAKE_TUI_FROZEN": "1"}, reload_command="/reload")
+            try:
+                self.assertEqual(s.ask(tui_prompt(skill)).reply_text, "PROBE-REPLY: NO-SKILL")
+                write_skill(repo / ".fake" / "skills", skill)
+                self.assertEqual(s.ask(tui_prompt(skill)).reply_text, "PROBE-REPLY: NO-SKILL")
+                self.assertEqual(s.reload(), "/reload")
+                self.assertEqual(s.ask(tui_prompt(skill)).reply_text, f"PROBE-REPLY: {skill.body_token}")
+            finally:
+                s.close()
+
+    def test_silent_process_times_out_and_is_killed(self):
+        with tempfile.TemporaryDirectory() as d:
+            s = PtySession([sys.executable, "-c", "import time; time.sleep(60)"], Path(d), dict(os.environ),
+                           Path(d) / "t.log", ready_idle=0.3, timeout=2)
+            with self.assertRaises(TimeoutError):
+                s.start()
+            s.close()
+            self.assertIsNotNone(s.proc.poll())
+
+    def test_no_reply_line_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, s = self._session(d, None)
+            try:
+                s.timeout = 3
+                res = s.ask("hello")
+                self.assertEqual(res.reply_text, "")
+                self.assertIn("no PROBE-REPLY line", res.notes)
+            finally:
+                s.close()
+
+
 from harness import ENTRIES  # noqa: E402
 
 # Adapters that probe a real binary at construction are pinned to one mode here, so the

@@ -106,5 +106,40 @@ def pirpc() -> None:
             send({"type": "agent_settled"})
 
 
+def tui() -> None:
+    hook = os.environ.get("KCAP_FAKE_HOOK")
+    if hook:
+        subprocess.run([hook], input="{}", capture_output=True, text=True, timeout=10)
+    frozen = answer() if os.environ.get("KCAP_FAKE_TUI_FROZEN") == "1" else None
+    out = sys.stdout
+    out.write("\x1b[1mfake tui\x1b[0m ready\r\n")
+    if os.environ.get("KCAP_FAKE_TUI_DIALOG") == "1":
+        out.write("Do you trust this folder? (y/n) ")
+        out.flush()
+        if not sys.stdin.readline().strip().lower().startswith("y"):
+            return
+    out.write("> ")
+    out.flush()
+    for line in sys.stdin:
+        line = line.strip()
+        if line in ("/exit", "/quit"):
+            return
+        if line == "/reload":
+            if frozen is not None:
+                frozen = answer()
+            out.write("reloaded\r\n> ")
+        elif line.startswith("You have a skill"):
+            reply = frozen if frozen is not None else answer()
+            entries = [] if reply == "NO-SKILL" else reply.splitlines()
+            # The prompt embeds the queried skill's name; a reply for some other skill still on
+            # disk must not be mistaken for it.
+            match = next((e for e in entries if e.split("=", 1)[0] in line), None)
+            value = match.split("=", 1)[1] if match else "NO-SKILL"
+            out.write(f"\x1b[32m**PROBE-REPLY: {value}**\x1b[0m\r\n> ")
+        else:
+            out.write("?\r\n> ")
+        out.flush()
+
+
 if __name__ == "__main__":
-    {"acp": acp, "appserver": appserver, "app-server": appserver, "pirpc": pirpc}[sys.argv[1]]()
+    {"acp": acp, "appserver": appserver, "app-server": appserver, "pirpc": pirpc, "tui": tui}[sys.argv[1]]()
