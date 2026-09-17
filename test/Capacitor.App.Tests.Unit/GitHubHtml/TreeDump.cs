@@ -17,6 +17,12 @@ static class TreeDump {
     static void Write(StringBuilder builder, MarkdownObject node) {
         switch (node) {
             case MarkdownDocument document: Blocks(builder, "doc", document); break;
+            case DetailsBlock details:
+                builder.Append(details.IsOpen ? "details+" : "details").Append('#').Append(details.Ordinal).Append('{');
+                Inlines(builder, details.Summary);
+                builder.Append('}');
+                Blocks(builder, "", details);
+                break;
             case HtmlPreBlock pre:        Leaf(builder, "pre", pre); break;
             case ParagraphBlock paragraph: Leaf(builder, "p", paragraph); break;
             case HeadingBlock heading:    Leaf(builder, "h" + heading.Level, heading); break;

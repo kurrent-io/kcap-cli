@@ -10,7 +10,11 @@ public static class GitHubHtmlPass {
     public const int MaxDetailsNesting = 8;
     public const int MaxHoistedEmphasis = 8;
 
-    public static void Run(MarkdownDocument document) => ProcessContainer(document, 0);
+    public static void Run(MarkdownDocument document) {
+        ProcessContainer(document, 0);
+        var ordinal = 0;
+        foreach (var details in document.Descendants<DetailsBlock>()) details.Ordinal = ordinal++;
+    }
 
     /// Returns the reach of the container's children.
     static int ProcessContainer(ContainerBlock container, int depth) {
