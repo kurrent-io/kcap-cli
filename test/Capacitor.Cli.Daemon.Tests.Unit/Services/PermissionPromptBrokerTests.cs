@@ -160,7 +160,7 @@ public class PermissionPromptBrokerTests {
         _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token);
         _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token);
 
-        await Assert.That(broker.TryWithdrawTool("a1", "toolu_1")).IsTrue();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1")).IsTrue();
 
         var resolved = ((PermissionStreamItem.Resolved)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
         await Assert.That(resolved.RequestId).IsEqualTo("r1");
@@ -169,7 +169,7 @@ public class PermissionPromptBrokerTests {
         await Assert.That((await WaitBounded(s1, "withdrawn")).Decision.Behavior).IsEqualTo("deny");
         await Assert.That(s2.IsCompleted).IsFalse();
         await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
-        await Assert.That(broker.TryWithdrawTool("a1", "toolu_1")).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1")).IsFalse();
     }
 
     /// The shared token admits every hosted agent, so a tool id is only honoured for the agent
@@ -179,7 +179,21 @@ public class PermissionPromptBrokerTests {
         var broker = new PermissionPromptBroker();
         var s1 = broker.Register(Dto("r1", "a1", toolUseId: "toolu_1"));
 
-        await Assert.That(broker.TryWithdrawTool("a2", "toolu_1")).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a2", "s1", "toolu_1")).IsFalse();
+
+        await Assert.That(s1.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Count).IsEqualTo(1);
+    }
+
+    /// A notice names the session its hook ran in, and a prompt registered under another session
+    /// is not its to retire, whichever agent the caller named.
+    [Test]
+    public async Task A_notice_for_another_session_withdraws_nothing() {
+        var broker = new PermissionPromptBroker();
+        var s1 = broker.Register(Dto("r1", "a1", toolUseId: "toolu_1"));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s2", "toolu_1")).IsFalse();
+        await Assert.That(broker.WithdrawTurn("a1", "s2", subagentId: null)).IsEqualTo(0);
 
         await Assert.That(s1.IsCompleted).IsFalse();
         await Assert.That(broker.PendingSnapshot().Count).IsEqualTo(1);
@@ -193,7 +207,7 @@ public class PermissionPromptBrokerTests {
         var main = broker.Register(Dto("r1", "a1"));
         var sub  = broker.Register(Dto("r2", "a1"), subagentId: "sub-1");
 
-        await Assert.That(broker.WithdrawTurn("a1", subagentId: null)).IsEqualTo(1);
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(1);
 
         var settled = await WaitBounded(main, "main turn withdrawn");
         await Assert.That(settled.Outcome).IsEqualTo("withdrawn");
@@ -210,7 +224,7 @@ public class PermissionPromptBrokerTests {
         var sub2  = broker.Register(Dto("r3", "a1"), subagentId: "sub-2");
         var other = broker.Register(Dto("r4", "a2"), subagentId: "sub-1");
 
-        await Assert.That(broker.WithdrawTurn("a1", subagentId: "sub-1")).IsEqualTo(1);
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: "sub-1")).IsEqualTo(1);
 
         await Assert.That((await WaitBounded(sub1, "subagent withdrawn")).Outcome).IsEqualTo("withdrawn");
         await Assert.That(main.IsCompleted).IsFalse();
@@ -224,7 +238,7 @@ public class PermissionPromptBrokerTests {
     public async Task A_turn_end_leaves_the_agents_next_request_pending() {
         var broker = new PermissionPromptBroker();
         _ = broker.Register(Dto("r1", "a1"));
-        await Assert.That(broker.WithdrawTurn("a1", subagentId: null)).IsEqualTo(1);
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(1);
 
         var next = broker.Register(Dto("r2", "a1"));
 

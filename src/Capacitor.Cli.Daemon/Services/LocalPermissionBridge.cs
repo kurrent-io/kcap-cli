@@ -910,7 +910,7 @@ internal sealed partial class LocalPermissionBridge(
     /// a body it cannot read a session and a verdict from.
     /// </summary>
     async Task HandleInputWaitAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, InputWaitSuffix) is not (var node, var sessionId)) return;
+        if (await ReadRelayAsync(context, path, InputWaitSuffix, reviewerAllowed: true) is not (var node, var sessionId)) return;
 
         var waiting = node["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
 
@@ -926,8 +926,10 @@ internal sealed partial class LocalPermissionBridge(
         Close(context, 204);
     }
 
+    /// Shared token only: an unattended reviewer has no prompt a human could have answered, so
+    /// its token buys it no say over the interactive agents' prompts.
     async Task HandleToolSettledAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, ToolSettledSuffix) is not (var node, var sessionId)) return;
+        if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId)) return;
 
         if (!TryScope(node, "tool_use_id", PermissionWire.MaxToolUseIdBytes, out var toolUseId)
          || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)) {
@@ -937,7 +939,7 @@ internal sealed partial class LocalPermissionBridge(
         }
 
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(toolUseId, subagentId));
+        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
 
         Close(context, 204);
     }
@@ -953,9 +955,11 @@ internal sealed partial class LocalPermissionBridge(
         return true;
     }
 
-    /// The prologue the hook relays share: a live token, a PTY vendor and a bounded JSON object
-    /// carrying a session id. Null means the response is already closed with the refusal.
-    async Task<(JsonObject Node, string SessionId)?> ReadRelayAsync(HttpListenerContext context, string path, string suffix) {
+    /// The prologue the hook relays share: the shared token (or a live reviewer token, where the
+    /// route admits one), a PTY vendor and a bounded JSON object carrying a session id. Null means
+    /// the response is already closed with the refusal.
+    async Task<(JsonObject Node, string SessionId)?> ReadRelayAsync(
+            HttpListenerContext context, string path, string suffix, bool reviewerAllowed) {
         var trimmed    = path.TrimStart('/');
         var firstSlash = trimmed.IndexOf('/');
 
@@ -967,7 +971,7 @@ internal sealed partial class LocalPermissionBridge(
 
         var token = trimmed[..firstSlash];
 
-        if (!string.Equals(token, _sharedToken, StringComparison.Ordinal) && !_reviewerTokens.ContainsKey(token)) {
+        if (!string.Equals(token, _sharedToken, StringComparison.Ordinal) && !(reviewerAllowed && _reviewerTokens.ContainsKey(token))) {
             Close(context, 404);
 
             return null;

@@ -108,8 +108,10 @@ public sealed class ClaudeHookCommand(
         if (command == "stop" && agentId is null)
             await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
 
+        // Dashless, as NormalizeGuidField leaves the permission hook's agent_id before the bridge
+        // stores it; the daemon matches the two exactly.
         if (command == "subagent-stop" && agentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: agentId, budget.Remaining);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: agentId.Replace("-", ""), budget.Remaining);
 
         var clientCap = budget.Remaining;
 

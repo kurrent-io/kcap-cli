@@ -19,7 +19,10 @@ which retires every prompt of the turn: a terminal *deny* runs no tool, so no to
 it, and `PermissionDenied` fires only for auto mode. `SubagentStop` names the subagent, because a
 background subagent's prompt legitimately outlives the parent's turn and the turn backstop must
 not answer it; for that scoping the permission hook now forwards its own `agent_id` as
-`subagent_id`, held on the broker's entry and never on the wire. All three settle through the
+`subagent_id`, held on the broker's entry and never on the wire. Every hosted agent posts on the
+one shared token, so a notice retires only what its own session registered under the agent it
+names, and the route admits that token alone: an unattended reviewer has no prompt a human could
+have answered. All three settle through the
 withdraw path the chat tab already used, outcome `withdrawn`, source `tool_settled`, so the parked
 hook gets its deny, the server leg closes the request and every subscriber sees Resolved; the tab's
 own correlation stays as a fast path the broker dedups. The two tool events are async in the

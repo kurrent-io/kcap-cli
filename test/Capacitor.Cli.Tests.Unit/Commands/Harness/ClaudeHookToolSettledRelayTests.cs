@@ -137,6 +137,18 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(bridge.LogEntries.Any(e => e.RequestMessage.Path == "/tok/claude/input-wait")).IsFalse();
     }
 
+    /// The permission hook strips the dashes from its agent_id before the bridge sees it, and the
+    /// daemon matches the two exactly, so the stop's notice must arrive in the same form.
+    [Test, NotInParallel]
+    public async Task A_subagents_stop_relays_its_id_dashless_as_the_permission_hook_sent_it() {
+        using var bridge = Bridge();
+
+        var (exit, _) = await RunAsync(HostedOn(bridge), "SubagentStop", extraFields: ",\"agent_id\":\"3f2504e0-4f89-11d3-9a0c-0305e82c3301\"");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Relayed(bridge)!["subagent_id"]!.GetValue<string>()).IsEqualTo(Sub);
+    }
+
     /// A session the user runs themselves has a daemon URL only by accident of environment
     /// inheritance; without the agent id nothing identifies it to a daemon, and the hook has no
     /// other work for the event.

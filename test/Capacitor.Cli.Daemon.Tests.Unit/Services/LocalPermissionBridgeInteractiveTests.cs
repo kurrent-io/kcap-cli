@@ -113,10 +113,10 @@ public class LocalPermissionBridgeInteractiveTests {
             JsonContent.Create(new { session_id = Session, tool_name = "Bash", tool_input = new { command = "ls" }, subagent_id = "sub-1", agent_id = "agent-1", cwd = "/repo" }));
         var pending = await h.WaitPendingAsync();
 
-        await Assert.That(h.Broker.WithdrawTurn("agent-1", subagentId: null)).IsEqualTo(0);
+        await Assert.That(h.Broker.WithdrawTurn("agent-1", Session, subagentId: null)).IsEqualTo(0);
         await Assert.That(h.Broker.PendingSnapshot().Single().RequestId).IsEqualTo(pending.RequestId);
 
-        await Assert.That(h.Broker.WithdrawTurn("agent-1", subagentId: "sub-1")).IsEqualTo(1);
+        await Assert.That(h.Broker.WithdrawTurn("agent-1", Session, subagentId: "sub-1")).IsEqualTo(1);
         await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("deny");
     }
 

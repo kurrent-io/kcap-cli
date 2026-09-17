@@ -41,7 +41,7 @@ public class LocalPermissionBridgeToolSettledTests {
         var response = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", cwd = "/repo", tool_use_id = "toolu_1" });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
-        await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice("toolu_1", null)));
+        await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(Session, "toolu_1", null)));
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
@@ -52,7 +52,7 @@ public class LocalPermissionBridgeToolSettledTests {
         var response = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", subagent_id = "sub-1" });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
-        await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(null, "sub-1")));
+        await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(Session, null, "sub-1")));
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
@@ -63,7 +63,7 @@ public class LocalPermissionBridgeToolSettledTests {
         var response = await h.PostAsync(new { session_id = Session, agent_id = "agent-1" }, vendor: "codex");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
-        await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(null, null)));
+        await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(Session, null, null)));
     }
 
     /// A notice the ladder cannot place is not an error the hook can act on, so it is acknowledged
@@ -127,6 +127,21 @@ public class LocalPermissionBridgeToolSettledTests {
         await h.StartAsync();
 
         var response = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_1" }, vendor: "cursor");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        await Assert.That(h.Seen).IsEmpty();
+    }
+
+    /// An unattended reviewer has no prompt a human could have answered, so its token buys it no
+    /// say over the interactive agents' prompts.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
+    public async Task A_reviewer_token_has_no_route() {
+        await using var h = new Harness();
+        await h.StartAsync();
+        var reviewerUrl = h.Bridge.RegisterReviewerToken(["kcap-review"]);
+
+        var response = await h.Client.PostAsync($"{reviewerUrl}/claude/tool-settled",
+            JsonContent.Create(new { session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_1" }));
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
         await Assert.That(h.Seen).IsEmpty();

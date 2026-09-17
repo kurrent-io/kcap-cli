@@ -97,23 +97,26 @@ internal sealed class PermissionPromptBroker {
     }
 
     /// A tool that has run was answered where the daemon cannot see, so its prompt is moot. The
-    /// agent is matched as well as the id: every hosted agent posts on the same shared token.
-    public bool TryWithdrawTool(string agentId, string toolUseId) {
+    /// agent and the session are matched as well as the id: every hosted agent posts on the same
+    /// shared token, and a notice retires only what its own session registered.
+    public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId) {
         lock (_gate) {
-            var entry = _pending.Values.FirstOrDefault(e => e.Dto.AgentId == agentId && e.Dto.ToolUseId == toolUseId);
+            var entry = _pending.Values.FirstOrDefault(e =>
+                e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
             return entry is not null
                 && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled);
         }
     }
 
-    /// Withdraws what a finished turn left pending: the main agent's own requests for a null
-    /// subagentId, otherwise that subagent's. A background subagent's prompt outlives the parent's
-    /// turn, which is why the scope matters. Unlike an exit, a turn's end says nothing about the
-    /// agent's next request.
-    public int WithdrawTurn(string agentId, string? subagentId) {
+    /// Withdraws what a finished turn left pending in the session: the main agent's own requests
+    /// for a null subagentId, otherwise that subagent's. A background subagent's prompt outlives
+    /// the parent's turn, which is why the scope matters. Unlike an exit, a turn's end says nothing
+    /// about the agent's next request.
+    public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
         lock (_gate) {
             var settled = 0;
-            foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId && e.SubagentId == subagentId).ToList())
+            foreach (var e in _pending.Values.Where(e =>
+                         e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
                 if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled)) settled++;
             return settled;
         }
