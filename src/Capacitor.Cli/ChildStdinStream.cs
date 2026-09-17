@@ -9,6 +9,8 @@ namespace Capacitor.Cli;
 /// wrapper's lifetime can be tied off. Disposing it leaves the child itself running.
 /// </summary>
 sealed class ChildStdinStream(Stream pipe, Process owner) : Stream {
+    int _disposed;
+
     public override bool CanRead  => false;
     public override bool CanSeek  => false;
     public override bool CanWrite => true;
@@ -35,18 +37,33 @@ sealed class ChildStdinStream(Stream pipe, Process owner) : Stream {
     public override long Seek(long offset, SeekOrigin origin)       => throw new NotSupportedException();
     public override void SetLength(long value)                      => throw new NotSupportedException();
 
+    // Closing the pipe first is what delivers EOF to the child; the owner goes in a finally because
+    // that close can throw — a child that already exited leaves buffered bytes with nowhere to go —
+    // and the process handle would then be abandoned, which is the leak this type exists to close.
     protected override void Dispose(bool disposing) {
-        if (disposing) {
-            pipe.Dispose();
-            owner.Dispose();
+        if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0) {
+            try {
+                pipe.Dispose();
+            } finally {
+                owner.Dispose();
+            }
         }
 
         base.Dispose(disposing);
     }
 
+    /// <summary>
+    /// <c>base.DisposeAsync()</c> routes back through <see cref="Dispose(bool)"/>, which would run
+    /// the release a second time; the gate is what makes that round trip a no-op.
+    /// </summary>
     public override async ValueTask DisposeAsync() {
-        await pipe.DisposeAsync();
-        owner.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) == 0) {
+            try {
+                await pipe.DisposeAsync();
+            } finally {
+                owner.Dispose();
+            }
+        }
 
         await base.DisposeAsync();
     }
