@@ -127,11 +127,6 @@
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
-        <Style Selector="Border.sectionRule">
-            <Setter Property="Height" Value="1" />
-            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
-            <Setter Property="Margin" Value="0,14,0,14" />
-        </Style>
         <!-- Expanded body hangs off the header the same way rail sessions hang off a worktree:
              a left rule plus indent, not a sibling in the pane flow. -->
         <Style Selector="Border.sectionBody">
@@ -341,19 +336,16 @@
                     </StackPanel>
                 </Border>
 
-                <Border Classes="sectionRule" IsVisible="{Binding HasRelated}" />
-                <StackPanel Spacing="8" IsVisible="{Binding HasRelated}">
+                <StackPanel Spacing="8" Margin="0,18,0,0" IsVisible="{Binding HasRelated}">
                     <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}" IsVisible="{Binding ShowsLegacyLinks}" />
                     <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}"
                         IsVisible="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).HasPullRequestContext}" />
                     <ContentControl x:Name="IssueCard" Content="{Binding Issue}" ContentTemplate="{StaticResource LinkCard}" IsVisible="{Binding HasSeparateIssue}" />
                 </StackPanel>
 
-                <Border Classes="sectionRule" />
-
                 <!-- Subagents: read from the transcript, so it renders in every pane phase. -->
-                <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasSubagents}" Margin="0,0,0,12">
-                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleSubagentsCommand}" Classes="sectionHeader">
+                <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasSubagents}" Margin="0,18,0,0">
+                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleSubagentsCommand}" Classes="sectionHeader expandable">
                         <DockPanel>
                             <Panel DockPanel.Dock="Right" Width="12" Height="12" VerticalAlignment="Center">
                                 <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SubagentsExpanded}" />
@@ -390,7 +382,7 @@
                 </StackPanel>
 
                 <!-- Session facts. -->
-                <StackPanel>
+                <StackPanel Margin="0,18,0,0">
                 <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <TextBlock Text="SESSION" Classes="eyebrow" />
@@ -459,10 +451,8 @@
                 </Border>
                 </StackPanel>
 
-                <Border Classes="sectionRule" />
-
                 <!-- Who's on it: names stay visible; the chevron only appears when the list is longer than the cap. -->
-                <StackPanel>
+                <StackPanel Margin="0,18,0,0">
                 <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
                         Classes.expandable="{Binding PeopleOverflows}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
