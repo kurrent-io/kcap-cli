@@ -46,6 +46,13 @@ public static class HttpClientExtensions {
     /// recommendation at <c>min(npm latest, server version)</c>.</summary>
     public const string ServerVersionHeader = "X-Kcap-Server-Version";
 
+    /// <summary>Response header carrying the tenant's plan entitlements as comma-separated
+    /// <c>key=flag</c> pairs (<c>work_items=0,projects=1</c>), captured by
+    /// <see cref="PlanEntitlementCaptureHandler"/> so a SessionStart nudge never points an agent at a
+    /// tool its plan refuses. Absence means "nothing known to be denied" — see
+    /// <see cref="PlanEntitlements"/>.</summary>
+    public const string PlanHeader = "X-Kcap-Plan";
+
     /// <summary>
     /// Wire header sent ONLY to declare the active profile's update-check preference is off. Its
     /// ABSENCE on a version-carrying request means the preference is on (the default) — never send

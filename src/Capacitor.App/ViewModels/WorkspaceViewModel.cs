@@ -33,6 +33,14 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly ObservableAsPropertyHelper<bool> _sessionEnded;
     public bool SessionEnded => _sessionEnded.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _isStarting;
+    /// A launch the daemon has not published yet; the header and the starting panel read the
+    /// directory's pending row until the first dto lands.
+    public bool IsStarting => _isStarting.Value;
+
+    readonly ObservableAsPropertyHelper<string> _startingText;
+    public string StartingText => _startingText.Value;
+
     public TerminalTabViewModel Terminal { get; }
 
     ChatTabViewModel? _chat;
@@ -89,8 +97,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             string agentId, IDaemonClientService daemon, AgentActionService actions,
             TerminalAttachClientFactory factory, Func<ITerminalSurface> surfaceFactory, TimeProvider time,
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
-            Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
-            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null) {
+            IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
+            SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
         _disposables.Add(_lease);
@@ -133,15 +141,39 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 .Subscribe(sessionId => _lease.Disposable = sessionId is null ? Disposable.Empty : access.Acquire(sessionId))
                 .DisposeWith(_disposables);
 
-        _title = presence.Select(p => TitleFor(p.Dto))
+        // The daemon cache emits nothing for an agent it has not published, so the pending row
+        // is combined with an explicit empty presence rather than waiting on the first dto.
+        var pendingRow = directory is null
+            ? Observable.Return<AgentRow?>(null)
+            : directory.Rows.Connect()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Filter(row => row.Id == agentId && row.Origin == AgentOrigin.Pending)
+                .QueryWhenChanged(query => query.Items.FirstOrDefault())
+                .StartWith((AgentRow?)null);
+        var header = presence.StartWith(new AgentPresence(null, false))
+            .CombineLatest(pendingRow, (p, row) => (p.Dto, Row: p.Dto is null ? row : null));
+
+        _title = header.Select(h => h.Dto is not null ? TitleFor(h.Dto) : h.Row?.Title ?? TitleFor(null))
             .ToProperty(this, x => x.Title, TitleFor(null))
             .DisposeWith(_disposables);
-        _repoLabelText = presence.Select(p => CheckoutLabelFor(p.Dto))
+        _repoLabelText = header.Select(h => h.Dto is not null ? CheckoutLabelFor(h.Dto) : h.Row is { } row ? RepoLabel.Leaf(row.RepoPath) : CheckoutLabelFor(null))
             .ToProperty(this, x => x.RepoLabelText, CheckoutLabelFor(null))
             .DisposeWith(_disposables);
-        _showsTerminalTab = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor))
+        _isStarting = header.Select(h => h.Row is not null)
+            .ToProperty(this, x => x.IsStarting, initialValue: false)
+            .DisposeWith(_disposables);
+        _startingText = header.Select(h => h.Row is { } row ? LaunchStages.StartingText(row.Vendor, row.LaunchStage) : "")
+            .ToProperty(this, x => x.StartingText, initialValue: "")
+            .DisposeWith(_disposables);
+        var showsTerminal = presence.Select(p => p.Dto is not null && HostedHarnessCatalog.ShowsTerminal(p.Dto.HasTerminal, p.Dto.Vendor));
+        _showsTerminalTab = showsTerminal
             .ToProperty(this, x => x.ShowsTerminalTab, initialValue: false)
             .DisposeWith(_disposables);
+        // ShowTerminalCommand is unguarded — a caller can select the tab before any dto says whether
+        // this agent has one — so presence clamps it back rather than leaving a blank pane in front.
+        showsTerminal.Subscribe(shows => {
+            if (!shows && IsTerminalActive) ActiveTab = WorkspaceTab.Chat;
+        }).DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);
@@ -153,10 +185,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 var dto = p.Dto!;
                 var (projection, note) = ChatTranscriptSource.Resolve(dto);
                 ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
-                    ? new TerminalChatInput(Terminal)
+                    ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, note, sessionIds, localDaemonOnAppServer);
             })
             .DisposeWith(_disposables);
 

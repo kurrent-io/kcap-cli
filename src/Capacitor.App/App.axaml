@@ -32,6 +32,7 @@
             <SolidColorBrush x:Key="KcapDangerDimBrush" Color="#321F29" />
             <SolidColorBrush x:Key="KcapInfoBrush" Color="#7BA7F7" />
             <SolidColorBrush x:Key="KcapInfoDimBrush" Color="#1B2740" />
+            <SolidColorBrush x:Key="KcapSelectionBrush" Color="#1E2E52" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
             </ResourceDictionary.MergedDictionaries>
@@ -58,13 +59,32 @@
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
             <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
+        <!-- A MenuFlyout presents through MenuFlyoutPresenter, which is not a FlyoutPresenter, so
+             the same class needs its own arm or the flyout silently keeps the theme's chrome. -->
+        <Style Selector="MenuFlyoutPresenter.kcapPanel">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="MaxWidth" Value="10000" />
+            <Setter Property="MaxHeight" Value="10000" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+        </Style>
         <!-- A TextBox inside one of our cards: the card is its boundary, so the theme's focused
              ring and fill would read as a second box. Fluent's default placeholder follows the
              system theme and goes near-black on our dark surfaces — pin a readable muted tone. -->
         <Style Selector="TextBox.kcapEmbedded">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CaretBrush" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
             <Setter Property="PlaceholderForeground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
-        <Style Selector="TextBox.kcapEmbedded:focus /template/ Border#PART_BorderElement, TextBox.kcapEmbedded:pointerover /template/ Border#PART_BorderElement">
+        <Style Selector="TextBox.kcapEmbedded /template/ Border#PART_BorderElement,
+                         TextBox.kcapEmbedded:focus /template/ Border#PART_BorderElement,
+                         TextBox.kcapEmbedded:pointerover /template/ Border#PART_BorderElement">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
         </Style>
@@ -269,6 +289,44 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- The chip look on a radio. Fluent draws an ellipse glyph beside the content, so this is a
+             template swap rather than setters; the presenter is deliberately not named
+             PART_ContentPresenter, which keeps Fluent's per-state presenter styles off the chip. -->
+        <Style Selector="RadioButton.kcapChoice">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="RadioButton">
+                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Name="ChipContent" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Foreground="{TemplateBinding Foreground}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="RadioButton.kcapChoice:pointerover">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="RadioButton.kcapChoice:checked,
+                         RadioButton.kcapChoice:checked:pointerover">
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <!-- Dimming the whole chip rather than its brushes keeps the checked one legible while a
+             send holds the form. -->
+        <Style Selector="RadioButton.kcapChoice:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
         <Style Selector="Button.kcapPrimary">
             <Setter Property="Background" Value="{StaticResource KcapPrimaryBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
@@ -299,6 +357,37 @@
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <!-- In-flight state markers (a starting session's dot, a running check) share one pulse. -->
+        <Style Selector=":is(Control).pulsing">
+            <Style.Animations>
+                <Animation Duration="0:0:1.1" IterationCount="Infinite">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="0.35" />
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="Opacity" Value="1" />
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.35" />
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+        <!-- A prompt card that takes dropped files. The resting border lives here rather than on
+             the card so the drag-over ring can outrank it: a local value on the control beats
+             every style, and a style closer to the control beats one declared here — which is why
+             the resting brush cannot stay behind in the view either. -->
+        <Style Selector="Border.attachTarget">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="Border.attachTarget.dragOver">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+        </Style>
+        <Style Selector="TextBlock.toolKindChip">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
         <!-- Live tool-call status: a soft pulse so an in-flight row is never a blank gap. -->
         <Style Selector="Border.toolRunning">

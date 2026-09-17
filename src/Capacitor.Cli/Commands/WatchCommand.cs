@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -5,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
@@ -20,6 +22,7 @@ using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,7 +32,8 @@ namespace Capacitor.Cli.Commands;
 
 partial class WatchCommand(
         ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers) {
+        ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
+        GitProviderRouter router) {
     readonly CursorMarkers  _markers  = new(config);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -117,9 +121,9 @@ partial class WatchCommand(
             TimeSpan        noProgressElapsed,
             TimeSpan        ceiling
         ) =>
-        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
-        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
-        :                                          ParentDeadRecovery.KeepWaiting;
+        reResolvedPid is { } pid && pid > 1 && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling                        ? ParentDeadRecovery.EndTerminal
+        :                                                      ParentDeadRecovery.KeepWaiting;
 
     /// <summary>
     /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
@@ -277,6 +281,9 @@ partial class WatchCommand(
 
         using var cts = new CancellationTokenSource();
 
+        var shutdownRequestedAt = 0L;
+        using var shutdownStamp = cts.Token.Register(() => Interlocked.CompareExchange(ref shutdownRequestedAt, Stopwatch.GetTimestamp(), 0));
+
         // A cancellable delay that keeps the heartbeat fresh across long waits. The connect-retry
         // backoff grows to 30s — longer than the ~20s staleness threshold — so a single Task.Delay
         // would let the heartbeat go stale mid-wait and get a healthy-but-reconnecting watcher
@@ -430,7 +437,9 @@ partial class WatchCommand(
                                 return;
                             }
 
-                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
+                            // No fallback: this watcher has been reparented, so the heuristic here
+                            // resolves systemd/init rather than the agent.
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false);
                             var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
 
                             switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
@@ -501,8 +510,13 @@ partial class WatchCommand(
 
         // Detect repository info upfront if cwd is provided (session watchers only, not agents)
         if (cwd is not null) {
-            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+            state.Repository        = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
             state.LastRepoDetection = DateTimeOffset.UtcNow;
+        }
+
+        if (vendor == "claude" && agentId is null) {
+            state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
+            state.SecondaryRoots.SeedFromTranscript(vendor, transcriptPath);
         }
 
         // No cwd-derived repo (launched outside any checkout, or no cwd at all): fall back to
@@ -511,7 +525,7 @@ partial class WatchCommand(
         // watcher is always spawned with cwd: null too and has never had its own repo detection.
         if (vendor == "claude" && agentId is null && (cwd is null || GitRepository.FindRoot(cwd) is null)) {
             state.EvidenceScanner = new RepoEvidenceScanner<RepositoryPayload>(
-                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(config, root),
+                GitRepository.FindRoot, root => RepositoryDetection.DetectRepositoryAsync(router, config, root),
                 p => p.Owner is not null && p.RepoName is not null);
 
             try {
@@ -728,7 +742,7 @@ partial class WatchCommand(
 
                 // Periodically refresh repository info (every 60s)
                 if (cwd is not null && DateTimeOffset.UtcNow - state.LastRepoDetection > TimeSpan.FromSeconds(60)) {
-                    var detected = await RepositoryDetection.DetectRepositoryAsync(config, cwd);
+                    var detected = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd);
 
                     // An evidence-derived repo may only be replaced by another real detection,
                     // never cleared back to null by a launch-cwd probe that still finds nothing.
@@ -737,6 +751,11 @@ partial class WatchCommand(
                     }
 
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
+                }
+
+                if (state.SecondaryRoots is not null && DateTimeOffset.UtcNow - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
+                    await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
+                    state.LastSecondaryProbe = DateTimeOffset.UtcNow;
                 }
 
                 // gated so this can never interleave with a
@@ -832,6 +851,10 @@ partial class WatchCommand(
             // Expected
         }
 
+        // The kill grace runs from the stop request, not from the loop noticing it: an await the
+        // loop was in when the request arrived has already spent some of it.
+        var shutdownStarted = Volatile.Read(ref shutdownRequestedAt) is var requestedAt and not 0 ? requestedAt : Stopwatch.GetTimestamp();
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -883,6 +906,10 @@ partial class WatchCommand(
             if (agentId is null && vendor == "antigravity") {
                 await ScanAntigravitySubagentLinks(sessionId, finalDrained, state.PostedSubagentLinks, CancellationToken.None);
             }
+
+            // A PR is usually opened in the session's last turn, after the previous 60s probe.
+            await LinkSecondaryPullRequestsAsync(state, sessionId,
+                FinalSecondaryProbeDeadline - Stopwatch.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
         }
 
         // Signal drain complete to server.
@@ -2019,6 +2046,13 @@ partial class WatchCommand(
                 foreach (var line in drainRead.Lines) {
                     UpdateClaudePendingToolCalls(state.PendingClaudeToolCalls, line);
                 }
+            }
+
+            // Secondary checkouts, from raw lines and ahead of the threshold buffering below: a
+            // mutation in a session's first lines must register before the buffer flushes, and an
+            // oversized Write redacts to a placeholder with no path. Only paths are read.
+            if (state.SecondaryRoots is { } secondaryRoots) {
+                foreach (var line in drainRead.Lines) secondaryRoots.OnLine(vendor, line);
             }
 
             // A Codex collab CHILD watcher additionally folds its own rollout's turn state
@@ -3309,6 +3343,111 @@ partial class WatchCommand(
 
         if (isFinalDrain && await scanner.PromoteReadFallbackAsync() is { } fallback) {
             ApplyEvidenceRepo(state, fallback);
+        }
+    }
+
+    /// <summary>
+    /// Probes every checkout the agent mutated outside its launch cwd and links each PR found
+    /// there to the session. The PR is linked under the repository its URL names, not the
+    /// checkout's origin: in a fork checkout <c>gh pr view</c> resolves the base repository's PR
+    /// while origin names the fork. A PR is posted once per (owner, repo, number); a failed post
+    /// is retried on the next pass. Only github.com PRs are linked: the server endpoint rebuilds
+    /// the remote URL from owner and repo on github.com, so any other host would hash to the
+    /// wrong repository. Detection takes no cancellation token, so a cancelled pass abandons an
+    /// in-flight probe (its child process dies on its own cap) rather than waiting for it. Each
+    /// pass starts after the root the previous one last attempted, so a slow root cannot shadow
+    /// the roots behind it every time, and <paramref name="beat"/> is called before every probe
+    /// because the caller's heartbeat is otherwise untouched for the whole pass.
+    /// </summary>
+    internal static async Task LinkSecondaryPullRequestsAsync(
+            WatchState                                          state,
+            Func<string, TimeSpan, Task<RepositoryPayload?>>    detect,
+            Func<RepositoryPayload, CancellationToken, Task<bool>> post,
+            TimeSpan                                            budget,
+            CancellationToken                                   ct,
+            Action                                              beat
+        ) {
+        if (state.SecondaryRoots is null || budget <= TimeSpan.Zero) return;
+
+        var roots = state.SecondaryRoots.Roots.ToArray();
+        if (roots.Length == 0) return;
+
+        var started = Stopwatch.GetTimestamp();
+        using var deadline = new CancellationTokenSource(budget);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        var first = Math.Max(0, Array.IndexOf(roots, state.NextSecondaryRoot));
+
+        for (var i = 0; i < roots.Length; i++) {
+            var remaining = budget - Stopwatch.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero || linked.IsCancellationRequested) return;
+
+            // Advanced only once this root is actually attempted, so a root the check above
+            // skips is the one the next pass starts with.
+            var root = roots[(first + i) % roots.Length];
+            state.NextSecondaryRoot = roots[(first + i + 1) % roots.Length];
+
+            beat();
+
+            RepositoryPayload? repo;
+            try { repo = await detect(root, remaining).WaitAsync(linked.Token); }
+            catch (OperationCanceledException) { return; }
+            catch { repo = null; }
+
+            if (repo is not { PrNumber: { } number, PrUrl: { } url }) continue;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !string.Equals(uri.IdnHost, "github.com", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!PrRefParser.TryParse(url, out var owner, out var name, out var urlNumber) || urlNumber != number) continue;
+
+            var key = (owner, name, number);
+            if (state.LinkedPullRequests.Contains(key)) continue;
+
+            bool accepted;
+            try { accepted = await post(repo with { Owner = owner, RepoName = name }, linked.Token); } catch (OperationCanceledException) { return; }
+            if (accepted) state.LinkedPullRequests.Add(key);
+        }
+    }
+
+    Task LinkSecondaryPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct, Action beat) =>
+        LinkSecondaryPullRequestsAsync(state,
+            (root, remaining) => RepositoryDetection.DetectRepositoryAsync(router, config, root, remaining),
+            (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, token),
+            budget, ct, beat);
+
+    // Half of WatcherHeartbeat.Threshold: the heartbeat is touched before each probe, so one
+    // probe bounded by this budget is the longest the pass can leave it untouched. The pass is
+    // retried every minute, so a lost post costs a minute, not the PR.
+    static readonly TimeSpan SecondaryProbeBudget = TimeSpan.FromSeconds(10);
+
+    // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
+    // the PR probe share this much of it, leaving the rest for the drain-complete signal.
+    static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
+
+    async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
+        try {
+            using var client  = await http.ForBackgroundAsync(ct);
+            var       payload = new JsonObject {
+                ["owner"]       = pr.Owner,
+                ["repo_name"]   = pr.RepoName,
+                ["pr_number"]   = pr.PrNumber,
+                ["pr_title"]    = pr.PrTitle,
+                ["pr_url"]      = pr.PrUrl,
+                ["pr_head_ref"] = pr.PrHeadRef,
+                ["branch"]      = pr.Branch,
+            };
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            // The server dedupes by (owner, repo, number), so retrying a throttled or 5xx status is safe.
+            using var resp    = await client.PostWithRetryAsync(
+                $"{Url}/api/sessions/{Uri.EscapeDataString(sessionId)}/pull-requests", content, ct: ct, retryStatuses: true);
+
+            if (resp.IsSuccessStatusCode) Log($"Linked {pr.Owner}/{pr.RepoName}#{pr.PrNumber} from a secondary checkout");
+            else Log($"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: HTTP {(int)resp.StatusCode}");
+
+            return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            Log($"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: {ex.Message}");
+            return false;
         }
     }
 

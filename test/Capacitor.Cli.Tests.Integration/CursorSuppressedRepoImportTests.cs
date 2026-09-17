@@ -4,6 +4,7 @@ using Capacitor.Cli.Harness.Cursor;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -66,7 +67,7 @@ public class CursorSuppressedRepoImportTests : IDisposable {
             WriteOneCursorSessionWithWorkspace(),
             WorkspaceStorageDir,
             repoDetector: _ => Task.FromResult<RepositoryPayload?>(
-                new RepositoryPayload { Owner = "acme", RepoName = "widgets" }));
+                new RepositoryPayload { Owner = "acme", RepoName = "widgets" }), router: new GitProviderRouter());
 
         using var client = new HttpClient();
 
@@ -75,7 +76,7 @@ public class CursorSuppressedRepoImportTests : IDisposable {
 
         var classified = await source.ClassifyAsync(
             discovered,
-            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null, Home: Home),
+            new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home),
             CancellationToken.None);
         await Assert.That(classified.Count).IsEqualTo(1);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);

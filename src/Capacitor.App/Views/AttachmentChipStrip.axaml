@@ -1,0 +1,45 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             x:Class="Capacitor.App.Views.AttachmentChipStrip">
+    <ItemsControl x:Name="ChipItems">
+        <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+                <WrapPanel Orientation="Horizontal" />
+            </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:StagedAttachmentViewModel">
+                <Border Classes="attachmentChip" Margin="0,0,6,4" Padding="5,4" CornerRadius="8"
+                        Background="{StaticResource KcapSurfaceRaisedBrush}"
+                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                        ToolTip.Tip="{Binding FileName}">
+                    <StackPanel Orientation="Horizontal" Spacing="7">
+                        <Panel Width="32" Height="32" VerticalAlignment="Center">
+                            <Border Background="{StaticResource KcapSurfaceBrush}" CornerRadius="5"
+                                    IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}">
+                                <TextBlock Text="{Binding Glyph}" FontSize="9" FontWeight="SemiBold"
+                                           Foreground="{StaticResource KcapMutedBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <Image Source="{Binding Thumbnail}" Width="32" Height="32" Stretch="UniformToFill"
+                                   IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        </Panel>
+                        <StackPanel VerticalAlignment="Center" Spacing="1">
+                            <TextBlock x:Name="ChipName" Text="{Binding FileName}" FontSize="12" MaxWidth="170"
+                                       TextTrimming="CharacterEllipsis" Foreground="{StaticResource KcapTextBrush}" />
+                            <TextBlock Text="{Binding SizeLabel}" FontSize="10.5"
+                                       Foreground="{StaticResource KcapFaintBrush}" />
+                        </StackPanel>
+                        <Button x:Name="ChipRemove" Command="{Binding RemoveCommand}" Content="✕"
+                                ToolTip.Tip="Remove" Width="20" Height="20" Padding="0" FontSize="10"
+                                CornerRadius="10" Cursor="Hand" VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                Background="Transparent" BorderThickness="0"
+                                Foreground="{StaticResource KcapMutedBrush}" />
+                    </StackPanel>
+                </Border>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

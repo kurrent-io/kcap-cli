@@ -118,6 +118,34 @@ public class ConfigMigrationTests {
     }
 
     [Test]
+    public async Task ProfileConfig_AllowedPaths_RoundTrips() {
+        var json = """{ "allowed_paths": ["/home/alice/dev", "/srv/work"] }""";
+        var profile = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;
+
+        await Assert.That(profile.AllowedPaths).Contains("/home/alice/dev");
+        await Assert.That(profile.AllowedPaths).Contains("/srv/work");
+    }
+
+    [Test]
+    public async Task ProfileConfig_AllowedRepos_RoundTrips() {
+        var json = """{ "allowed_repos": ["acme/widgets", "acme/gadgets"] }""";
+        var profile = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;
+
+        await Assert.That(profile.AllowedRepos).Contains("acme/widgets");
+        await Assert.That(profile.AllowedRepos).Contains("acme/gadgets");
+    }
+
+    [Test]
+    public async Task ProfileConfig_without_AllowedPaths_admits_everything() {
+        // The upgrade case: a config written before the key existed must not start filtering.
+        var json = """{ "excluded_paths": ["/home/alice/secret"] }""";
+        var profile = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;
+
+        await Assert.That(profile.AllowedPaths ?? []).IsEmpty();
+        await Assert.That(profile.AllowedRepos ?? []).IsEmpty();
+    }
+
+    [Test]
     public async Task Active_returns_the_entry_active_profile_names() {
         var activeProfile = new Profile { ExcludedPaths = ["/from/active"] };
         var config        = new ProfileConfig {

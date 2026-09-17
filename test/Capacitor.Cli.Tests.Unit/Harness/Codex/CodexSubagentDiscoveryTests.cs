@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Harness.Codex;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Codex;
 
@@ -264,7 +265,7 @@ public class CodexSubagentDiscoveryTests {
             Path.Combine(day, $"rollout-2026-08-10T17-24-19-{malformedDashed}.jsonl"),
             "not json at all\n");
 
-        var source     = new CodexImportSource(Config.Root, tmp.Path);
+        var source     = new CodexImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var ids        = discovered.Select(d => d.SessionId).OrderBy(x => x, StringComparer.Ordinal).ToList();
 

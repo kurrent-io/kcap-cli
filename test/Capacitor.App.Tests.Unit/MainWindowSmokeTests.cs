@@ -1,4 +1,6 @@
 using System.Reactive.Threading.Tasks;
+using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -39,7 +41,7 @@ public class MainWindowSmokeTests {
     static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, AgentActionService actions, string agentId) =>
         new(agentId, service, actions, new FakeTerminalAttachClientFactory().Factory,
             () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
-            new FakeWorkContextSource(), new ScriptedLocalControlOps());
+            new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -302,7 +304,7 @@ public class MainWindowSmokeTests {
                 service, CancellationToken.None, activity,
                 workspaceFactory: agentId => new WorkspaceViewModel(
                     agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps()));
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -400,7 +402,7 @@ public class MainWindowSmokeTests {
                 service, CancellationToken.None, TestActivity.New(),
                 workspaceFactory: agentId => new WorkspaceViewModel(
                     agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
-                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), pullRequests: source));
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: source));
             var window = new MainWindow { DataContext = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
@@ -454,7 +456,7 @@ public class MainWindowSmokeTests {
                     service, CancellationToken.None, TestActivity.New(),
                     workspaceFactory: agentId => new WorkspaceViewModel(
                         agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-                        new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps()));
+                        new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
                 var window = new MainWindow { DataContext = vm };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
@@ -501,6 +503,43 @@ public class MainWindowSmokeTests {
         });
     }
 
+    /// A shown MainWindow on the Sessions surface whose rail holds two rows, "Fix the flaky test"
+    /// and "Leave this one alone", under one worktree named feature-x.
+    static (MainWindowViewModel Vm, MainWindow Window) RailWindow() {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        service.Agents.AddOrUpdate(new AgentStatusDto(
+            "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
+            null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test"));
+        service.Agents.AddOrUpdate(new AgentStatusDto(
+            "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
+            null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
+
+        var (actions, _) = NewActions(service);
+        MainWindowViewModel? vm = null;
+        Func<string, string> resolveRepoRoot = p => p.Contains("/wt/", StringComparison.Ordinal)
+            ? p[..p.IndexOf("/wt/", StringComparison.Ordinal)]
+            : p;
+        var directory = new AgentDirectory(
+            service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
+            resolveRepoRoot, null, null);
+        var rail = new SessionRailViewModel(
+            directory, id => vm!.OpenSession(id), _ => { }, resolveRepoRoot);
+        vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(),
+            workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        vm.ShowSessionsCommand.Execute().Subscribe();
+        Dispatcher.UIThread.RunJobs();
+        return (vm, window);
+    }
+
+    static Button RailRow(MainWindow window, string text) => window.GetVisualDescendants().OfType<Button>()
+        .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
+
     /// The rail's own click path (spec §3): a session row rendered by SessionRailView carries the
     /// VM's OpenCommand, and executing it opens that agent's workspace on the Sessions surface.
     ///
@@ -515,37 +554,8 @@ public class MainWindowSmokeTests {
     public async Task Rail_click_opens_the_workspace_and_highlights_the_open_row() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var opened = await AvaloniaSession.DispatchAsync(() => {
-                var service = new FakeDaemonClientService();
-                service.SnapshotsSubject.OnNext(Snap());
-                service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-                service.Agents.AddOrUpdate(new AgentStatusDto(
-                    "a1", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-                    null, null, null, DateTime.UtcNow, null, null, Title: "Fix the flaky test"));
-                service.Agents.AddOrUpdate(new AgentStatusDto(
-                    "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-                    null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
-
-                var (actions, _) = NewActions(service);
-                MainWindowViewModel? vm = null;
-                Func<string, string> resolveRepoRoot = p => p.Contains("/wt/", StringComparison.Ordinal)
-                    ? p[..p.IndexOf("/wt/", StringComparison.Ordinal)]
-                    : p;
-                var directory = new AgentDirectory(
-                    service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-                    resolveRepoRoot, null, null);
-                var rail = new SessionRailViewModel(
-                    directory, id => vm!.OpenSession(id), _ => { }, resolveRepoRoot);
-                vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(),
-                    workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
-                var window = new MainWindow { DataContext = vm };
-                window.Show();
-                Dispatcher.UIThread.RunJobs();
-
-                vm.ShowSessionsCommand.Execute().Subscribe();
-                Dispatcher.UIThread.RunJobs();
-
-                Button Row(string text) => window.GetVisualDescendants().OfType<Button>()
-                    .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
+                var (vm, window) = RailWindow();
+                Button Row(string text) => RailRow(window, text);
                 byte Alpha(Button b) => (b.Background as ISolidColorBrush)?.Color.A ?? 0;
 
                 Row("Fix the flaky test").Command!.Execute(null);
@@ -567,6 +577,41 @@ public class MainWindowSmokeTests {
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
             await Assert.That(opened.WorktreeAlpha).IsGreaterThan((byte)0);
+        });
+    }
+
+    /// A selected row must read as selected next to a hovered one: hover paints the raised surface
+    /// brush, so the selection needs its own background, an accent edge and a heavier title.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selected_row_is_distinct_from_a_hovered_row() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var seen = await AvaloniaSession.DispatchAsync(() => {
+                var (_, window) = RailWindow();
+                RailRow(window, "Fix the flaky test").Command!.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+
+                var selected = RailRow(window, "Fix the flaky test");
+                var sibling = RailRow(window, "Leave this one alone");
+                var hover = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapSurfaceRaisedBrush")!).Color;
+                static TextBlock Title(Button row) => row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("rowTitle"));
+                var result = (
+                    SelectedBackground: (selected.Background as ISolidColorBrush)?.Color,
+                    Hover: hover,
+                    SelectedEdge: selected.BorderThickness.Left,
+                    SiblingEdge: sibling.BorderThickness.Left,
+                    SelectedWeight: Title(selected).FontWeight,
+                    SiblingWeight: Title(sibling).FontWeight);
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return result;
+            });
+            await Assert.That(seen.SelectedBackground).IsNotNull();
+            await Assert.That(seen.SelectedBackground).IsNotEqualTo(seen.Hover);
+            await Assert.That(seen.SelectedEdge).IsGreaterThanOrEqualTo(3);
+            await Assert.That(seen.SiblingEdge).IsEqualTo(0);
+            await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
+            await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
         });
     }
 
@@ -637,6 +682,53 @@ public class MainWindowSmokeTests {
             await Assert.That(ok).IsTrue();
         });
     }
+
+    /// Help and support is reachable from the rail footer whatever the server says: the button and
+    /// Documentation stay enabled with no feedback action, and only the two report items follow it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_footer_offers_help_with_docs_always_and_reports_only_with_a_server() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), openFeedback: null);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
+            await Assert.That(help.IsEnabled).IsTrue();
+            // It leads the right-docked footer stack; the hosted-count text follows it.
+            await Assert.That(((StackPanel)help.Parent!).Children[0]).IsSameReferenceAs(help);
+            await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
+            await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
+
+            // Opened, because a MenuFlyout's items only join a tree — and so only bind — once its
+            // presenter exists; unopened they all read disabled, which Documentation below catches.
+            var flyout = (MenuFlyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var items = flyout.Items.OfType<MenuItem>().ToList();
+            await Assert.That(items.Select(i => (string)i.Header!)).IsEquivalentTo(["Documentation", "Report a bug…", "Send feedback…"]);
+            // A command's CanExecute reaches a MenuItem through IsEffectivelyEnabled; IsEnabled
+            // stays at its unset true, so reading it here would assert nothing.
+            await Assert.That(items[0].IsEffectivelyEnabled).IsTrue();
+            await Assert.That(items[1].IsEffectivelyEnabled).IsFalse();
+            await Assert.That(items[2].IsEffectivelyEnabled).IsFalse();
+
+            // The class reaching the presenter is only the positive control — it lands there
+            // whether or not a style matches it. The corner radius is what pins the kit chrome.
+            var presenter = items[0].FindAncestorOfType<MenuFlyoutPresenter>()!;
+            await Assert.That(presenter.Classes.Contains("kcapPanel")).IsTrue();
+            await Assert.That(presenter.CornerRadius).IsEqualTo(new CornerRadius(12));
+
+            flyout.Hide();
+            Dispatcher.UIThread.RunJobs();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
 
     /// 310 of rail plus 400 of pane must never squeeze the center column to nothing.
     [Test]

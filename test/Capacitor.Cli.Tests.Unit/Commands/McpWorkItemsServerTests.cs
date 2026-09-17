@@ -13,72 +13,6 @@ public class McpWorkItemsServerTests {
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 
-    // Injected rather than set on the process: the suite itself runs inside a harness session that
-    // exports these variables, so a real-environment test could pass or fail on the runner's own id.
-    static Func<string, string?> Env(Dictionary<string, string?> values) =>
-        key => values.TryGetValue(key, out var value) ? value : null;
-
-    [Test]
-    public async Task Resolve_session_id_prefers_explicit_argument() {
-        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"explicit1"}"""));
-
-        await Assert.That(id).IsEqualTo("explicit1");
-    }
-
-    [Test]
-    public async Task Resolve_session_id_strips_dashes_from_explicit_argument() {
-        // Matches ArgParsing.ResolveSessionIdFromEnv's normalization so an explicit dashed GUID
-        // (e.g. copy-pasted from a UI) resolves to the same dashless key as the ambient env var.
-        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"1234abcd-56ef-78ab-90cd-1234567890ab"}"""));
-
-        await Assert.That(id).IsEqualTo("1234abcd56ef78ab90cd1234567890ab");
-    }
-
-    [Test]
-    public async Task Resolve_session_id_falls_back_to_env_when_argument_missing() {
-        var id = McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new() { ["KCAP_SESSION_ID"] = "envsess1" }));
-
-        await Assert.That(id).IsEqualTo("envsess1");
-    }
-
-    [Test]
-    public async Task Resolve_session_id_falls_back_to_the_running_harness_session() {
-        // KCAP_SESSION_ID reaches only a Claude Code session's Bash tool calls; the MCP server process
-        // sees CLAUDE_CODE_SESSION_ID and nothing else, so this is the one ambient signal it ever gets.
-        var id = McpWorkItemsServer.ResolveSessionId(new JsonObject(),
-            Env(new() { ["CLAUDE_CODE_SESSION_ID"] = "1234abcd-56ef-78ab-90cd-1234567890ab" }));
-
-        await Assert.That(id).IsEqualTo("1234abcd56ef78ab90cd1234567890ab");
-    }
-
-    [Test]
-    public async Task Resolve_session_id_prefers_the_running_harness_session_over_an_inherited_env_var() {
-        // A session launched from another session's shell inherits the parent's KCAP_SESSION_ID;
-        // attaching to it would file the work under the wrong session without any error.
-        var id = McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new() {
-            ["KCAP_SESSION_ID"]        = "22222222222222222222222222222222",
-            ["CLAUDE_CODE_SESSION_ID"] = "11111111-1111-1111-1111-111111111111"
-        }));
-
-        await Assert.That(id).IsEqualTo("11111111111111111111111111111111");
-    }
-
-    [Test]
-    public async Task Resolve_session_id_rejects_an_ambient_dot_segment_like_an_explicit_one() {
-        // "." survives escaping, so a dot segment in the session URL would be normalized out of the route.
-        var ex = Assert.Throws<ArgumentException>(() =>
-            McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new() { ["CLAUDE_CODE_SESSION_ID"] = ".." })));
-
-        await Assert.That(ex!.Message).IsEqualTo(McpWorkItemsServer.NoSessionIdMessage);
-    }
-
-    [Test]
-    public async Task Resolve_session_id_throws_when_neither_argument_nor_env_present() {
-        var ex = Assert.Throws<ArgumentException>(() => McpWorkItemsServer.ResolveSessionId(new JsonObject(), Env(new())));
-
-        await Assert.That(ex!.Message).IsEqualTo(McpWorkItemsServer.NoSessionIdMessage);
-    }
-
     [Test]
     public async Task Declare_body_carries_session_id_and_issue_key() {
         var body = McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","issue_key":"PROJ-1234"}"""));
@@ -170,7 +104,7 @@ public class McpWorkItemsServerTests {
         var tools = McpWorkItemsServer.BuildToolsList();
 
         await Assert.That(tools.Select(t => t.Name).ToArray()).IsEquivalentTo(new[] {
-            "declare_work_item", "get_session_work_items",
+            "declare_work_item", "get_session_work_items", "declare_loose_end",
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
@@ -217,6 +151,44 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
+    public async Task Loose_end_body_carries_session_id_and_text() {
+        var body = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Add the retry test"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
+    }
+
+    [Test]
+    public async Task Loose_end_body_requires_text() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1"}""")))
+            .Throws<ArgumentException>()
+            .WithMessageContaining("'text' is required");
+    }
+
+    [Test]
+    public async Task Loose_end_body_rejects_a_blank_text() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"   "}""")))
+            .Throws<ArgumentException>()
+            .WithMessageContaining("'text' must not be blank");
+    }
+
+    /// <summary>Pins that the loose end takes its session from McpSessionId like every other
+    /// session-scoped tool here, rather than reading the argument itself — the refusal when no
+    /// session resolves at all is that resolver's, and McpSessionIdTests pins it.</summary>
+    [Test]
+    public async Task Loose_end_body_rejects_a_non_string_session_id_as_a_field_error() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":42,"text":"Add the retry test"}""")))
+            .Throws<ArgumentException>().WithMessageContaining("session_id");
+    }
+
+    [Test]
+    public async Task Declare_loose_end_requires_text_and_defaults_the_session() {
+        var tool = McpWorkItemsServer.BuildToolsList().Single(t => t.Name == "declare_loose_end");
+
+        await Assert.That(tool.InputSchema.Required).IsEquivalentTo(new[] { "text" });
+        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "session_id" });
+    }
+
+    [Test]
     public async Task Server_instructions_steer_duplicates_to_merge_not_breakdown() {
         await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("merge_work_item");
         await Assert.That(McpWorkItemsServer.ServerInstructions).Contains("detach_work_item");
@@ -231,6 +203,14 @@ public class McpWorkItemsServerTests {
         await Assert.That(instructions).Contains("declare_work_breakdown");
         await Assert.That(instructions).Contains("declare_work_relation");
         await Assert.That(instructions).Contains("never");   // "declared, never inferred"
+    }
+
+    [Test]
+    public async Task Server_instructions_steer_unfinished_work_to_declare_loose_end() {
+        var instructions = McpWorkItemsServer.ServerInstructions;
+
+        await Assert.That(instructions).Contains("declare_loose_end");
+        await Assert.That(instructions).Contains("unfinished");
     }
 
     // ── declared breakdown + relations ───────────────────────────────────────
@@ -550,6 +530,16 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
         await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/topology");
         await Assert.That(h.Body).IsNull();
+    }
+
+    [Test]
+    public async Task Dispatch_declare_loose_end_posts_to_the_loose_ends_route() {
+        var h = await DispatchAsync("declare_loose_end", """{"session_id":"s1","text":"Add the retry test"}""");
+
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/declare");
+        await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
     }
 
     [Test]

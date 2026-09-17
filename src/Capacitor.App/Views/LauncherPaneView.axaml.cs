@@ -16,12 +16,31 @@ namespace Capacitor.App.Views;
 /// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel),
 /// same contract as HomeView — this view never builds its own ViewModel.
 public partial class LauncherPaneView : UserControl {
+    AttachmentDropPaste? _attachments;
+
     public LauncherPaneView() {
         InitializeComponent();
         // Tunnel, not bubble: the TextBox marks Enter handled on the bubble route, so bare-Enter
         // submit must see the key on the way down. Shift+Enter falls through untouched, so the
         // TextBox inserts a newline (AcceptsReturn is true).
         GoalInput.AddHandler(KeyDownEvent, OnGoalKeyDown, RoutingStrategies.Tunnel);
+    }
+
+    internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
+
+    /// Paired with the visual tree rather than the constructor: a pane swap detaches and
+    /// re-attaches the same view, and a behaviour disposed on the way out has to come back with it.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _attachments ??= AttachmentDropPaste.Attach(
+            GoalCard, GoalInput, AttachButton,
+            () => (DataContext as HomeViewModel)?.Attachments, TimeProvider.System);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _attachments?.Dispose();
+        _attachments = null;
+        base.OnDetachedFromVisualTree(e);
     }
 
     /// Bare Enter starts a session when Start can run; otherwise the key is consumed so it does
@@ -586,6 +605,18 @@ public sealed class MachineLabelConverter : IValueConverter {
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is string { Length: > 0 } name ? $"Machine · {name}" : "Machine";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// StartButton's tip: an upload in flight owns the button, so it says so rather than leaving the
+/// repository-gate wording standing over a control the user cannot use.
+public sealed class StartButtonTipConverter : IMultiValueConverter {
+    public static readonly StartButtonTipConverter Instance = new();
+
+    public object Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture) =>
+        values is [_, true] ? "Uploading…" : values is [string tip, ..] ? tip : "";
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

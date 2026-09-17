@@ -32,6 +32,33 @@ public class RailSessionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_row_reads_its_launch_stage_and_opens_locally() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var pending = AgentRow.FromPending(
+                new PendingLaunchDto("p1", "claude", "/repo", "Fix the flaky test", DateTime.UtcNow, "session_created"), Repo);
+            var opened = new List<string>();
+            using var row = new RailSessionViewModel(pending, new BehaviorSubject<string?>(null), NoPending, NotStale, opened.Add, _ => throw new InvalidOperationException("remote"));
+
+            await Assert.That(row.IsStarting).IsTrue();
+            await Assert.That(row.Meta).IsEqualTo("Session created");
+            await Assert.That(row.Tooltip).Contains("Starting");
+            await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
+            row.OpenCommand.Execute().Subscribe();
+            await Assert.That(opened).IsEquivalentTo(new[] { "p1" });
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_published_row_is_not_starting() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var row = new RailSessionViewModel(Row(status: "Starting"), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });
+            await Assert.That(row.IsStarting).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Title_is_primary_with_vendor_and_model_as_chips() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { });

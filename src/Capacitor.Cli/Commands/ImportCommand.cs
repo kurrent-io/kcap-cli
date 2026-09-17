@@ -13,12 +13,13 @@ using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Cursor;
 using Spectre.Console;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http) {
+        ICapacitorHttpClient http, GitProviderRouter router) {
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
     /// channel-based dispatcher in ImportChainsAsync and the TTY slot-row
@@ -351,6 +352,14 @@ class ImportCommand(
         /// them.
         /// </summary>
         public string? ExcludedPathKey { get; init; }
+
+        /// <summary>
+        /// Set when an allow list is configured and the session is not admitted by it — its cwd
+        /// under no <c>allowed_paths</c> root, or its repo not on <c>allowed_repos</c>, a cwd or
+        /// repo that was never resolved included. Unlike the excluded-* keys there is no matching
+        /// entry to name, so these group under one prompt.
+        /// </summary>
+        public bool OutsideAllowlist { get; init; }
 
         /// <summary>Total transcript line count (cached so we don't re-read the file downstream).</summary>
         public int TotalLines { get; init; }
@@ -764,7 +773,7 @@ class ImportCommand(
 
         // --- Sources ---
         // A caller that names none means Claude only.
-        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects)];
+        sources ??= [new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router)];
 
         // --- No-source exit policy ---
         var available = sources.Where(s => s.IsAvailable).ToList();
@@ -933,7 +942,7 @@ class ImportCommand(
                     async (cwd, _) => {
                         try {
                             // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                            var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
+                            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
                             repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
                         } catch {
                             repoByCwd[cwd] = null;
@@ -1093,13 +1102,13 @@ class ImportCommand(
         // --- Classification (parallel fan-out per source) ---
         var excludedRepos = profile?.ExcludedRepos;
         var excludedPaths = profile?.ExcludedPaths;
+        var allowedPaths  = profile?.AllowedPaths;
+        var allowedRepos  = profile?.AllowedRepos;
 
         var classifyCtx = new ClassifyContext(
             HttpClient: httpClient,
             BaseUrl: baseUrl,
             MinLines: minLines,
-            ExcludedRepos: excludedRepos,
-            ExcludedPaths: excludedPaths,
             Home: home,
             Reimport: reimport
         );
@@ -1173,23 +1182,41 @@ class ImportCommand(
         // Flatten classifications.
         var classifications = classificationsPerSource.SelectMany(c => c).ToList();
 
+        // Capture scope is decided here, over every source's output at once, and nowhere else.
+        var captureScope = new CaptureScope(router, config, home,
+                                            allowedPaths, excludedPaths, allowedRepos, excludedRepos);
+
+        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
+
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
         // Repo and path exclusions are independent gates: a session is included only when
         // EVERY applicable exclusion key has been opted-in. Without that, opting into a
         // repo would silently bypass a path the user had explicitly ignored.
-        var excludedByRepo = classifications
+        // Every session this run could still send, which is the same set CaptureScope stamps: an
+        // already-loaded one re-asserts its lifecycle hooks, so it is as much a question for the
+        // user as a new one, it counts toward what an answer withholds, and — since the block below
+        // only opens when a bucket is non-empty — it must be able to open it on its own.
+        var actionable = classifications.Where(CaptureScope.Actionable).ToList();
+
+        var excludedByRepo = actionable
             .Where(c => c.ExcludedRepoKey is not null)
             .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
-        var excludedByPath = classifications
+        var excludedByPath = actionable
             .Where(c => c.ExcludedPathKey is not null)
             .GroupBy(c => c.ExcludedPathKey!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
-        if (excludedByRepo.Count > 0 || excludedByPath.Count > 0) {
-            var includedRepoKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var includedPathKeys = new HashSet<string>(StringComparer.Ordinal);
+        // Not grouped by key: an allow list excludes by admitting nothing, so there is no entry to
+        // name in a prompt. Paths and repos share the bucket — the question they put to the user is
+        // the same one, and answering it per-list would not change what it means.
+        var outsideAllowlist = actionable.Where(c => c.OutsideAllowlist).ToList();
+
+        if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
+            var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var includedPathKeys        = new HashSet<string>(StringComparer.Ordinal);
+            var includeOutsideAllowlist = false;
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
             // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
@@ -1209,13 +1236,20 @@ class ImportCommand(
                     var answer = Console.ReadLine()?.Trim();
                     if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedPathKeys.Add(key);
                 }
+
+                if (outsideAllowlist.Count > 0) {
+                    await Console.Error.WriteAsync($"{outsideAllowlist.Count} session{(outsideAllowlist.Count == 1 ? " falls" : "s fall")} outside the configured allow list. Include {(outsideAllowlist.Count == 1 ? "it" : "them")}? (y/N) ");
+                    var answer = Console.ReadLine()?.Trim();
+                    if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includeOutsideAllowlist = true;
+                }
             } else {
                 var distinctSessions = excludedByRepo.Values.SelectMany(v => v)
                     .Concat(excludedByPath.Values.SelectMany(v => v))
+                    .Concat(outsideAllowlist)
                     .Select(c => c.SessionId)
                     .Distinct()
                     .Count();
-                var totalGroups = excludedByRepo.Count + excludedByPath.Count;
+                var totalGroups = excludedByRepo.Count + excludedByPath.Count + (outsideAllowlist.Count > 0 ? 1 : 0);
                 await Console.Error.WriteLineAsync(
                     $"{display.Indented}Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
             }
@@ -1223,7 +1257,7 @@ class ImportCommand(
             for (var i = 0; i < classifications.Count; i++) {
                 var c = classifications[i];
 
-                if (ShouldExclude(c, includedRepoKeys, includedPathKeys)) {
+                if (ShouldExclude(c, includedRepoKeys, includedPathKeys, includeOutsideAllowlist)) {
                     classifications[i] = c with { Status = ClassificationStatus.Excluded };
                 }
             }
@@ -2686,7 +2720,7 @@ class ImportCommand(
 
             async ValueTask DetectOne(string cwd) {
                 // Import only needs owner/repo here — skip the PR/MR provider round-trip.
-                var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
+                var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
                 repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
             }
 
@@ -3109,7 +3143,7 @@ class ImportCommand(
         if (cwd is not null) {
             // The imported session-start payload carries no PR fields (only owner/repo/branch/user),
             // so skip the PR/MR provider round-trip.
-            var repo = await RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, detectPullRequest: false);
 
             if (repo is not null || codexRepo is not null) {
                 var repoNode = new JsonObject();
@@ -3146,7 +3180,7 @@ class ImportCommand(
                 session.Vendor.VendorId,
                 session.FilePath,
                 GitRepository.FindRoot,
-                root => RepositoryDetection.DetectRepositoryAsync(config, root, detectPullRequest: false));
+                root => RepositoryDetection.DetectRepositoryAsync(router, config, root, detectPullRequest: false));
 
             if (evidenceNode is not null) startHook["repository"] = evidenceNode;
         }
@@ -3252,10 +3286,12 @@ class ImportCommand(
     internal static bool ShouldExclude(
             SessionClassification c,
             HashSet<string>       includedRepoKeys,
-            HashSet<string>       includedPathKeys
+            HashSet<string>       includedPathKeys,
+            bool                  includeOutsideAllowlist = false
         ) {
         if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
         if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
+        if (c.OutsideAllowlist && !includeOutsideAllowlist) return true;
 
         return false;
     }

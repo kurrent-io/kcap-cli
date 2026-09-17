@@ -7,9 +7,9 @@ namespace Capacitor.Cli.Core.Http;
 public static class CapacitorHttpServices {
     /// <summary>
     /// Registers the authenticated client and everything it resolves. Handler order is load-bearing,
-    /// but the constraint is not the order of the first two: both must sit OUTSIDE recovery. Capture
-    /// so it records the response finally returned rather than a discarded 401, and the observation
-    /// headers so a resend carries one copy of each rather than two.
+    /// but the constraint is not the order among the captures and the observation headers: all of them
+    /// must sit OUTSIDE recovery. The captures so they record the response finally returned rather than
+    /// a discarded 401, and the observation headers so a resend carries one copy of each rather than two.
     /// </summary>
     public static IServiceCollection AddCapacitorHttp(
             this IServiceCollection services, ProfileOverrides env, MachineAuth machine) {
@@ -32,6 +32,7 @@ public static class CapacitorHttpServices {
         services.AddSingleton<IMachinesApi, MachinesApi>();
         services.AddSingleton<IReviewApi, ReviewApi>();
         services.AddTransient<ServerVersionCaptureHandler>();
+        services.AddTransient<PlanEntitlementCaptureHandler>();
         // Both values are resolved once, here: the handler is registered per lane and constructed
         // per request, so reading the profile inside it would re-read config on every send.
         services.AddTransient(sp => new ObservationHeaderHandler(
@@ -41,6 +42,7 @@ public static class CapacitorHttpServices {
 
         services.AddHttpClient(CapacitorClients.Default)
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
+            .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler<UnauthorizedRecoveryHandler>()
             // Redirects are followed. The runtime drops Authorization only when a hop crosses origin,
@@ -64,6 +66,7 @@ public static class CapacitorHttpServices {
         // payload and the next invocation carries a credential the rotation would have minted anyway.
         services.AddHttpClient(CapacitorClients.Hook)
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
+            .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler(sp => new UnauthorizedRecoveryHandler(
                 sp.GetRequiredService<ICredentialSource>(), recover: false))
@@ -79,6 +82,7 @@ public static class CapacitorHttpServices {
         // way, so the substitute would not even be authenticated.
         services.AddHttpClient(CapacitorClients.Memory)
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
+            .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler<UnauthorizedRecoveryHandler>()
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler {
@@ -88,9 +92,9 @@ public static class CapacitorHttpServices {
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
         // No recovery handler, because there is no credential to rotate; that is the whole point of
-        // the lane rather than an omission. No version capture either: ServerVersionStore is keyed by
-        // the CONFIGURED server, and these requests go to one the caller has not adopted yet, so a
-        // captured version would be filed against the wrong server.
+        // the lane rather than an omission. Neither capture either: both stores are keyed by the
+        // CONFIGURED server, and these requests go to one the caller has not adopted yet, so what they
+        // captured would be filed against the wrong server.
         services.AddHttpClient(CapacitorClients.Anonymous)
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             // With no bearer to strip there is nothing a redirect can break, and a download that

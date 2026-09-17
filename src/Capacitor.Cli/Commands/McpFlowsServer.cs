@@ -11,11 +11,13 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
 class McpFlowsServer(
-        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http, TelemetryStartup startup) {
+        ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http,
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir) {
     public async Task<int> RunAsync(string? driverArg = null) {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
@@ -25,14 +27,14 @@ class McpFlowsServer(
         // session id and the working directory come from the same resolution, so a flow can never be
         // attributed to one session while being reviewed in another session's checkout.
         var requester    = HarnessRequesterContext.Resolve();
-        var cwd          = requester.ProjectDir ?? Directory.GetCurrentDirectory();
+        var cwd          = requester.ProjectDir ?? workdir.Path;
         var repoRoot     = GitRepository.FindRoot(cwd);
         // Prefer the `--driver` stamp from this server's own registration (deterministic for the JSON
         // harnesses); fall back to env inference for Claude/Codex, whose registrations are unstamped.
         var driverVendor = DriverVendor.Infer(driverArg);
         var tools        = BuildToolsList();
 
-        var repository = new CwdRepository(config, cwd);
+        var repository = new CwdRepository(config, cwd, router);
 
         // Best-effort, and recorded even when the read throws: a stale token on disk must never
         // block the server from starting, and an absent property is a different value in a funnel

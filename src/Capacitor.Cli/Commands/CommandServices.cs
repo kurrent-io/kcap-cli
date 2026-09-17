@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
@@ -18,12 +19,12 @@ public static class CommandServices {
     /// does not pay for it.
     /// </summary>
     public static IServiceCollection AddCapacitorCli(
-            this IServiceCollection services, ConfigRoot config, UserHome home, DaemonStore daemons,
+            this IServiceCollection services, ConfigRoot config, UserHome home, WorkingDirectory workdir, DaemonStore daemons,
             ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
             AuthEndpoints endpoints, HookClock clock, string? baseUrl,
             TelemetryStartup telemetryStartup) {
         services
-            .AddCapacitorContext(config, home, daemons, profiles)
+            .AddCapacitorContext(config, home, workdir, daemons, profiles)
             .AddCapacitorCommands();
 
         services.AddSingleton(endpoints);
@@ -32,6 +33,9 @@ public static class CommandServices {
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
         services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
         services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
+
+        // Singleton deliberately: per-resolution routers would each start with an empty memo.
+        services.AddSingleton<GitProviderRouter>();
 
         // Factories because only a handful of commands take either. The registry is built over the
         // same probe instance, so a harness binary and a configured path search one PATH.
@@ -86,6 +90,7 @@ public static class CommandServices {
         services.AddTransient<FeedbackCommand>();
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
+        services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
@@ -109,6 +114,7 @@ public static class CommandServices {
         services.AddTransient<McpMemoryServer>();
         services.AddTransient<McpSessionsServer>();
         services.AddTransient<McpWorkItemsServer>();
+        services.AddTransient<McpPlansServer>();
         services.AddTransient<McpAnalyticsServer>();
         services.AddTransient<McpReviewServer>();
         services.AddTransient<McpJudgeServer>();

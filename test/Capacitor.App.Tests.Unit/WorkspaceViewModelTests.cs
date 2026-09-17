@@ -28,7 +28,7 @@ public class WorkspaceViewModelTests {
             SessionAccessService? access = null) =>
         new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            access: access);
+            new NoAttachmentUploader(), access: access);
 
     static FakeServerLane ConnectedLane() {
         var lane = new FakeServerLane();
@@ -41,6 +41,59 @@ public class WorkspaceViewModelTests {
             Func<string, Task<bool>>? confirmForceStop = null) =>
         new(ops, notifier, opener, new ReplaySubject<DaemonStatusDto>(1), CancellationToken.None,
             confirmForceStop ?? NeverConfirm.Confirm);
+
+    /// Between the launch being accepted and the daemon publishing the agent, the header reads the
+    /// directory's pending row, so the workspace never opens as a blank shell.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_row_fills_the_header_until_the_dto_arrives() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var actions = NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener());
+            var factory = new FakeTerminalAttachClientFactory();
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("a1", "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            var vm = new WorkspaceViewModel("a1", daemon, actions, factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
+                new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+
+            await Assert.That(vm.IsStarting).IsTrue();
+            await Assert.That(vm.Title).IsEqualTo("Fix the flaky test");
+            await Assert.That(vm.RepoLabelText).IsEqualTo("myproj");
+            await Assert.That(vm.StartingText).IsEqualTo("Starting Claude · Process started");
+
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("a1", "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "session_created"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            await Assert.That(vm.StartingText).IsEqualTo("Starting Claude · Session created");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj"));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.IsStarting).IsFalse();
+            await Assert.That(vm.Title).IsEqualTo("myproj");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A workspace over an agent nothing reports is not starting: the placeholder text belongs to
+    /// a launch in flight, never to an unknown id.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unknown_agent_is_not_starting() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var actions = NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener());
+            var factory = new FakeTerminalAttachClientFactory();
+            using var directory = new FakeAgentDirectory();
+            var vm = new WorkspaceViewModel("a1", daemon, actions, factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
+                new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+
+            await Assert.That(vm.IsStarting).IsFalse();
+            await Assert.That(vm.StartingText).IsEqualTo("");
+            await vm.TeardownAsync();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -294,7 +347,7 @@ public class WorkspaceViewModelTests {
                 "a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
                 new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(),
                 new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-                access: access, localDaemonOnAppServer: onAppServer);
+                new NoAttachmentUploader(), access: access, localDaemonOnAppServer: onAppServer);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "gemini", hasTerminal: false, sessionId: "s1"));
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
@@ -391,7 +444,7 @@ public class WorkspaceViewModelTests {
             var factory = new FakeTerminalAttachClientFactory();
             var vm = new WorkspaceViewModel("a1", daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()),
                 factory.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), source,
-                new ScriptedLocalControlOps());
+                new ScriptedLocalControlOps(), new NoAttachmentUploader());
             await Assert.That(vm.WorkContext.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "0123456789abcdef0123456789abcdef"));

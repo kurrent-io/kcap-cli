@@ -28,6 +28,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     /// The daemon name badge for a remote row; null for a local one.
     public string? MachineBadge { get; }
     public bool IsRemote { get; }
+    /// A launch the daemon has not published yet: Meta carries its stage instead of an age.
+    public bool IsStarting { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     internal DateTime CreatedAt { get; }
@@ -63,10 +65,13 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         HasVendor = !string.IsNullOrEmpty(row.Vendor);
         Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
         HasModel = Model is not null;
-        Meta = Join(kindExtra, borrowed, age);
+        IsStarting = row.Origin == AgentOrigin.Pending;
+        Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age);
         StatusDot = SessionStatusDots.For(row.Status);
-        Tooltip = Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
-            row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
+        Tooltip = IsStarting
+            ? Join(row.Id, "Starting", LaunchStages.Label(row.LaunchStage))
+            : Join(row.Id, row.Status, SessionStatusDots.WaitsOnUser(row) ? "waiting for input" : null,
+                row.RequesterDisplay, row.BorrowedFrom is null ? null : $"borrowed {row.BorrowedFrom}");
         MachineBadge = row.MachineBadge;
         IsRemote = row.Origin == AgentOrigin.Remote;
 

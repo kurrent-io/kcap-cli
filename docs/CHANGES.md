@@ -28,6 +28,156 @@ transcript watcher already carries the result, so a session nobody hosts spends 
 and nothing else. An older daemon answers the route with 404 and the relay drops it silently.
 Codex PTY prompts are untouched: their permission hook carries no tool id.
 
+## A session's loose ends are declared, and bounded by the server
+
+`declare_loose_end` posts one concrete piece of unfinished work — a missing test, a TODO left in the
+code, a follow-up — to `/api/loose-ends/declare`, and the CLI validates its shape only: present, a
+string, not blank. The 12-500 character bound and the refusal of none-class text are the server's, so
+a caller who trips one reads a coded 400 naming the real reason rather than a client-side guess that
+drifts as those rules move, and the tool never refuses text the server would take. `session_id`
+resolves through the same path as the other session-scoped tools here — the running harness's own
+session first, the ambient variables behind it — so an agent that omits it records against the
+session it is actually in. The tool lives on the work-items server because that is where an agent
+already declares what its session is doing, but a loose end is the user's ledger entry, not a work
+item, and nothing here turns one into the other. A server that does not serve the route answers 404
+and the tool surfaces `Error: HTTP 404`: the client half is inert until the route is there, never
+broken.
+
+## Support from the desktop rides the feedback lane
+
+The desktop app has no web view, so the Plain chat widget the web app uses cannot embed; instead a
+native "Send feedback" window posts through the same `POST /api/feedback` lane `kcap feedback` uses.
+Three things are deliberate. The message the server receives is the reporter's text plus one trailer
+line naming the client and daemon, because the lane's context has no slot for the daemon and the
+server caps the context fields — the hint under the form discloses the trailer and counts it
+against the 8000-character cap. A pressed Send binds the report into a snapshot with its
+`client_request_id`; an unchanged retry re-sends the snapshot, any edit mints a new id, and three
+duplicate cases are accepted rather than solved (an unchanged retry after Plain accepted but the
+tenant answered non-success, a changed retry after an ambiguous failure, a quit mid-call). The
+report entries follow one oracle — a resolved server URL — evaluated before the main window is
+shown, while Documentation stays reachable without a server; on Windows and Linux the rail-footer
+flyout is the only entry, since those builds draw no menu bar. `context.source = "desktop"` reaches
+the tenant server and stops there; the trailer is what support reads.
+
+## A PR opened from another checkout is linked to the session
+
+The session's PR list is fed by one probe, `gh pr view` in the launch cwd, which can only ever
+see the PR of that checkout's branch. An agent that makes its own worktree — of another
+repository or of the same one — and opens a PR there left the list empty. The Claude session
+watcher now collects the roots of every checkout the agent *mutated* outside its launch cwd,
+probes each on the 60s refresh and once more on the final drain, and posts any GitHub PR it finds
+to the session's pull-requests endpoint, which dedupes and never repoints the primary repository.
+Mutation paths only: a checkout the agent merely read must not have whatever PR its branch
+happens to carry attached. The collector reads raw transcript lines ahead of the threshold
+buffer, so a mutation in a session's first lines registers and an oversized Write is not lost to
+redaction. The PR is linked under the repository its URL names rather than the checkout's origin,
+because in a fork checkout `gh pr view` resolves the base repository's PR while origin names the
+fork. Only GitHub, because the endpoint rebuilds the remote URL from owner and repo on github.com,
+so another host would hash to the wrong repository. Each pass runs under one budget that bounds
+every probe and post, abandoning a probe still running when the pass is cancelled; it touches the
+watcher heartbeat before each probe and is capped at half the staleness threshold, since the loop
+awaits it inline and a stale heartbeat gets a healthy watcher reaped by the next hook. Passes
+rotate their starting root so a slow checkout cannot shadow the ones behind it every minute. The
+final pass shares the shutdown deadline, measured from the stop request rather than from the loop
+noticing it, with the final-line wait and drain, since the watcher is killed five seconds after it
+is told to stop. A session that never crosses the transcript threshold is still discarded whole,
+PR links included: it sends no transcript and no session-end either.
+
+## A launch shows in the rail before the daemon publishes it
+
+A hosted runtime's agent instance exists only once its handshake ends, which for an ACP vendor can
+take many seconds per stage, and the workspace the launch auto-opened was a blank shell until then.
+The daemon now lists its in-flight launches, with the runtime's latest stage, in the local status
+snapshot it already pushes, and the app adds its own placeholder row the moment the server accepts
+the request, so the gap is covered from both ends. Both render as one pending row keyed by the
+agent id: the daemon's entry hides the placeholder, and a published row on the local lane retires
+both — a same-id row on the remote lane is a different agent. A pending row never settles the launch — only a published row clears the failure tracking,
+or a late `LaunchFailed` would be lost — and a launch failure removes the placeholder, with a
+ten-minute expiry behind it for a failure notice that never arrives.
+
+## The rail colours a worktree's branch glyph by its pull request
+
+The rail knows nothing of pull requests on its own: PR state was read only for the open workspace,
+per session, behind the access window that masks the reader. A tone cache reads every listed
+session's links and overviews on a slow cadence and reduces each to one tone, keeping the
+overview's own denial semantics — a denied read clears the tone, a transient miss keeps the last
+one. A worktree shows the strongest tone across its sessions, ordered by how much the state needs
+the user, and the card's lifecycle and checks labels share the same vocabulary so the two never
+disagree. "Merge conflicts" waits on the server: the overview carries no mergeability field yet,
+so the client reads an optional `mergeable` that is null until the server sends it.
+
+## A triple click selects the line, not the whole box
+
+Avalonia's `TextBox` and `SelectableTextBlock` answer the third click with `SelectAll` in their own
+class handler on the bubbling route. One application-wide handler on the tunnel route selects the
+logical line under the pointer and marks the press handled before that handler runs. Markdown
+bodies are outside its reach: MarkView's selection layer is internal and takes no click count.
+
+## Desktop prompts carry attachments
+
+The launcher's goal box and the session composer stage files and send ids, never bytes. The
+server's temp attachment store is the one byte path on every lane, because it is the only
+mechanism that already ships bytes to a daemon on another machine, its size cap is enforced
+server-side, and the bytes' lifetime there is already someone else's problem. Ids are what travel
+onward in receipts, in the pending-launch entries and in the last-sent reference, so a staged
+file's bytes live in one tray and leave with its chip.
+
+Where the daemon writes a fetched file follows the agent's containment rather than the vendor. An
+agent that can already write anywhere the daemon can gets `<worktree>/.attached/`, which is the one
+place a workspace-confined file tool is sure to read. A write-contained runtime — Codex under
+seatbelt or landlock — would instead be handed a write its own sandbox forbids, so its default-kind
+launches land in a per-agent directory under the daemon's state directory, outside every cwd, named
+absolutely in the trailer. Each runtime factory answers one question: can this process be running,
+write-contained, while a fetch for it happens? A worktree placement over a borrowed cwd is refused
+outright — the follow-up is dropped and a launch carrying ids fails — because the user's own
+checkout is never written to and no attachment is dropped without a word.
+
+A chat send that carries attachments rides a new frame, `SendTextWithAttachments` (24), behind
+`input/2`, which an older daemon's codec rejects before routing. A trailing `attachment_ids` on the
+existing text payload was rejected for the opposite behaviour: an older decoder ignores an unknown
+member, so the text would arrive, the files would vanish, and nothing would say so — and a
+capability check on the status connection does not cover the one-shot socket a send opens.
+
+A fetch is fail-closed and published atomically. Files stream into a pending directory and one
+same-filesystem rename publishes the batch, so the agent sees all of it or none of it; the batch
+stays revocable until the runtime's write commits, and every exit between the fetch and that write
+rolls it back, leaving nothing where the agent looks for attachments. A launch whose attachments
+cannot be fetched fails rather than delivering the text alone: a user who attached a file meant the
+file, and the text without it means something else.
+
+One downgrade gap is accepted. The affordance is gated before the send — `input/2` from the local
+daemon's hello, the advertised daemon version for a remote machine — so "+" disables with
+"attachments need the daemon updated" instead of failing after the fact. But the server dispatches a
+launch after that check and enforces no daemon version, so an operator who downgrades their own
+daemon inside a window of seconds gets a pre-change daemon's best-effort delivery; that is the only
+case where an attached file is dropped silently. Because a launch is merely accepted when the hub
+returns, its draft is retained for ten minutes — the server's own byte TTL — and restored when a
+delayed failure can be correlated back to it. The web path changes with all of this, deliberately:
+default-kind Codex files move to the daemon store, every fetch lands in one directory per batch, a
+missing attachment fails the send with the generic rejection the web already renders rather than
+sending text without it, and an in-place non-Codex agent is refused instead of getting `.attached/`
+inside the user's checkout.
+
+The remote workspace's composer carries text alone: its channel declares no attachment support, so
+"+" disables with "attachments to a session on another machine are not supported yet" and a send
+that somehow carries ids is refused before the hub is called. When that lane lands, its channel is
+the server's `SendUserInput(agentId, text, attachmentIds)` and the tray, uploader and Home's version
+gate apply unchanged.
+
+## Plans are declared from the CLI
+
+A plan document is read by the CLI, not sent for the server to fetch: the server keys a document
+on its repo-relative path and the workspace root exactly as discovery keys a written file, so the
+tool sends the path relative to the git top level and only attaches content at or under the
+server's 256 KB transport cap; above it the document is declared by hash alone and the tool result
+says so. A path is refused before it is read when it, or any link between the repository root and
+it, resolves outside the root: the server rejects such a path as well, but only once the content
+has reached it. `update_plan_task` resolves the session's current plan before it posts when no `plan_id` is
+given, because the update route answers with the task alone and every result has to name the plan
+it acted on. The SessionStart nudge for Claude reads the installed plugin's `.mcp.json` rather than
+assuming the bundled copy: a plugin installed before `kcap-plans` existed carries no such server,
+and a nudge toward a tool the session lacks is worse than none.
+
 ## A running daemon follows repos.json
 
 `kcap repos add` writes `repos.json` and exits; the daemon read that file only when it registered and
@@ -361,6 +511,28 @@ every reconnect re-reconciles what is dirty or non-empty. Cold-start pips for a 
 the lane connected in a session never opened still need the server's pending-interrupts seed; until
 it lands, remote attention covers prompts raised while the lane is up plus whatever opening the
 session discovers.
+
+## Desktop shell: remote workspace — chat and read-only terminal
+
+A session on another machine opens as a workspace: its transcript as chat, a composer, and for a
+PTY harness a read-only terminal, all over the server. Three rules hold it together.
+
+**One chat pane, two feeds.** The chat reads rows through a feed seam: locally a tail of the
+transcript file, remotely a seed from the session detail route followed by a live tail of the
+session's stream from the position the seed ended at. Every access establishment restarts the
+tail from the last position seen and the seed is fetched only until one lands, so a reconnect
+resumes rather than replays rows under the user. Server events reach the same envelope mapping
+and vendor rules the file path applies, so the two paths cannot disagree about a row.
+
+**Authorization is the server's word, never inferred from silence.** The seed fetch and the stream
+subscribe both refuse loudly; the terminal subscribe, which the server refuses with silence, is
+attempted only once the session's access lease reads Established. An empty terminal after that is
+"no output yet", and a lane loss keeps the rows it already has.
+
+**A reported viewport is released, and (0,0) is never sent.** The server folds every viewer's size
+into the PTY's clamp until told otherwise, so a viewer that stops driving releases its size, and
+each establishment subscribes onto a fresh surface so the replay never stacks on old scrollback.
+Keystrokes cross only as the daemon's seven special keys; everything else stays local.
 
 ## A vendor update under a running daemon is re-advertised
 

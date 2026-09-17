@@ -7,6 +7,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Kiro;
 
@@ -21,15 +22,13 @@ namespace Capacitor.Cli.Harness.Kiro;
 /// </summary>
 internal sealed class KiroImportSource : IImportSource {
     readonly string                                 _sessionsDir;
-    readonly Func<string, Task<RepositoryPayload?>> _repoDetector;
 
     public KiroImportSource(
         ConfigRoot                              config,
         string                                  sessionsDir,
-        Func<string, Task<RepositoryPayload?>>? repoDetector        = null
+        GitProviderRouter                        router
     ) {
         _sessionsDir  = sessionsDir;
-        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(config, cwd, detectPullRequest: false));
     }
 
     static StringComparison PathComparison =>
@@ -128,8 +127,6 @@ internal sealed class KiroImportSource : IImportSource {
             CancellationToken                ct
         ) {
         var results     = new List<ImportCommand.SessionClassification>(sessions.Count);
-        var repoCache   = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var hasExcludes = ctx.ExcludedRepos is { Count: > 0 };
 
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
@@ -174,20 +171,7 @@ internal sealed class KiroImportSource : IImportSource {
 
             meta.LastTimestamp ??= TryGetLastWriteUtc(transcriptPath);
 
-            string? repoKey = null;
-            if (hasExcludes && s.Cwd is { } cwd) {
-                if (!repoCache.TryGetValue(cwd, out repoKey)) {
-                    try {
-                        var repo = await _repoDetector(cwd);
-                        repoKey = repo is { Owner: { } o, RepoName: { } n } ? $"{o}/{n}" : null;
-                    } catch {
-                        repoKey = null;
-                    }
-                    repoCache[cwd] = repoKey;
-                }
-            }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -213,8 +197,6 @@ internal sealed class KiroImportSource : IImportSource {
                 Status          = status,
                 Vendor          = Vendor,
                 ResumeFromLine  = resumeFromLn,
-                ExcludedRepoKey = excludedRepoKey,
-                ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
                 SourceMeta      = s.SourceMeta,
             });
@@ -445,27 +427,6 @@ internal sealed class KiroImportSource : IImportSource {
         return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
             ? ln.GetInt32()
             : null;
-    }
-
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
-        string? cwd, string? repoKey, ClassifyContext ctx
-    ) {
-        string? excludedRepoKey = null;
-        if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
-         && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
-            excludedRepoKey = repoKey;
-        }
-
-        string? excludedPathKey = null;
-        if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
-            foreach (var entry in paths) {
-                if (PathExclusion.IsExcluded(cwd, [entry], ctx.Home)) {
-                    excludedPathKey = PathExclusion.Normalize(entry, ctx.Home);
-                    break;
-                }
-            }
-        }
-        return (excludedRepoKey, excludedPathKey);
     }
 }
 

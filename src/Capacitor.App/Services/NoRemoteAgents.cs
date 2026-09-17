@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using Capacitor.Remote.Models;
 using DynamicData;
+using Eventuous.SignalR;
 
 namespace Capacitor.App.Services;
 
@@ -25,6 +26,7 @@ internal sealed class NoServerLane : IServerLane {
     public IObservable<ServerPermissionRequest> PermissionRequests => Observable.Never<ServerPermissionRequest>();
     public IObservable<ServerElicitationRequest> ElicitationRequests => Observable.Never<ServerElicitationRequest>();
     public IObservable<string> SessionAccessChanged => Observable.Never<string>();
+    public IObservable<PendingInputUpdate> PendingInputChanged => Observable.Never<PendingInputUpdate>();
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DaemonInfo>?>(null);
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) =>
@@ -35,4 +37,14 @@ internal sealed class NoServerLane : IServerLane {
         Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> RegisterSessionAccessWatchAsync(string sessionId, CancellationToken ct) =>
         Task.FromResult(HubCallOutcome.NotConnected);
+    public IObservable<TerminalOutputFrame> TerminalOutput => Observable.Never<TerminalOutputFrame>();
+    public IObservable<TerminalSize> TerminalDimensions => Observable.Never<TerminalSize>();
+    public IAsyncEnumerable<StreamEventEnvelope> TailStreamAsync(string stream, ulong? fromPosition, CancellationToken ct) =>
+        AsyncEnumerable.Empty<StreamEventEnvelope>();
+    public Task<HubCallOutcome> SubscribeToTerminalAsync(string agentId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> UnsubscribeFromTerminalAsync(string agentId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
 }

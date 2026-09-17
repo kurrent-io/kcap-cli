@@ -47,6 +47,8 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
 
     public SourceCache<AgentStatusDto, string> Agents { get; } = new(a => a.Id);
 
+    public SourceCache<PendingLaunchDto, string> Pending { get; } = new(p => p.Id);
+
     /// Begins the attach loop with the service-lifetime token. Fire-and-forget: Start() itself
     /// never blocks the caller (Avalonia startup) on the first attach cycle.
     public void Start() => _ = RestartLoopAsync();
@@ -63,13 +65,20 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
             case LocalControlEvent.Connected(var caps, var first, var identity):
                 _snapshots.OnNext(first);
                 Agents.EditDiff(first.Agents, EqualityComparer<AgentStatusDto>.Default);
+                Pending.EditDiff(first.Pending ?? [], EqualityComparer<PendingLaunchDto>.Default);
                 _status.OnNext(new(AttachState.Connected, null, caps, null, identity));
                 break;
             case LocalControlEvent.Status(var snap):
                 _snapshots.OnNext(snap);
                 Agents.EditDiff(snap.Agents, EqualityComparer<AgentStatusDto>.Default);
+                Pending.EditDiff(snap.Pending ?? [], EqualityComparer<PendingLaunchDto>.Default);
                 break;
             case LocalControlEvent.Unreachable(var reason, var version):
+                // Agents stay as display-only history, but a pending launch is the daemon's live
+                // claim on a handshake in progress: a daemon that died mid-handshake never sends
+                // the snapshot that would retire it, and the reconnect snapshot restores any still
+                // in flight.
+                Pending.Clear();
                 _status.OnNext(new(AttachState.Unreachable, reason, null, version));
                 break;
             default:
@@ -196,5 +205,6 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
         _status.Dispose();
         _snapshots.Dispose();
         Agents.Dispose();
+        Pending.Dispose();
     }
 }

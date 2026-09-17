@@ -2,6 +2,7 @@ using System.Globalization;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Harness.Pi;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Pi;
 
@@ -31,7 +32,7 @@ public class PiImportSourceTests {
         using var tmp = new TempDir();
         WriteSession(tmp.Path, Sid1, cwd: "/work/a");
 
-        var source   = new PiImportSource(Config.Root, tmp.Path);
+        var source   = new PiImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
@@ -47,7 +48,7 @@ public class PiImportSourceTests {
         WriteSession(tmp.PathTo("proj-a"), Sid1, cwd: "/work/a");
         WriteSession(tmp.PathTo("proj-b"), Sid2, cwd: "/work/b");
 
-        var source   = new PiImportSource(Config.Root, tmp.Path);
+        var source   = new PiImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(2);
@@ -59,7 +60,7 @@ public class PiImportSourceTests {
         // A .jsonl whose first line is not a Pi session header.
         tmp.CreateFile("other.jsonl", "{\"type\":\"something\",\"x\":1}\n");
 
-        var source   = new PiImportSource(Config.Root, tmp.Path);
+        var source   = new PiImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(0);
@@ -77,7 +78,7 @@ public class PiImportSourceTests {
             """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hello"}}"""
         });
 
-        var source   = new PiImportSource(Config.Root, tmp.Path);
+        var source   = new PiImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(0);
@@ -95,7 +96,7 @@ public class PiImportSourceTests {
                 """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hi"}}"""
             });
 
-        var source   = new PiImportSource(Config.Root, tmp.Path);
+        var source   = new PiImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
@@ -108,7 +109,7 @@ public class PiImportSourceTests {
         WriteSession(tmp.Path, Sid1, cwd: "/work/a");
         WriteSession(tmp.Path, Sid2, cwd: "/work/b");
 
-        var source = new PiImportSource(Config.Root, tmp.Path);
+        var source = new PiImportSource(Config.Root, tmp.Path, router: new GitProviderRouter());
 
         var bySession = await source.DiscoverAsync(new DiscoveryFilters(null, Sid1, null, 0), CancellationToken.None);
         await Assert.That(bySession.Count).IsEqualTo(1);
@@ -122,7 +123,7 @@ public class PiImportSourceTests {
     [Test]
     public async Task is_available_false_when_dir_missing() {
         using var tmp = new TempDir();
-        var source = new PiImportSource(Config.Root, tmp.PathTo("nope"));
+        var source = new PiImportSource(Config.Root, tmp.PathTo("nope"), router: new GitProviderRouter());
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
@@ -131,7 +132,7 @@ public class PiImportSourceTests {
         // Pi is a routed source (FilePath=""), so it never reaches the chain
         // title worker. Like Copilot/Cursor it relies on the server-side fallback
         // title; advertising true would be a no-op contract lie.
-        var source = new PiImportSource(Config.Root, "/nonexistent");
+        var source = new PiImportSource(Config.Root, "/nonexistent", router: new GitProviderRouter());
         await Assert.That(source.SupportsTitleGeneration).IsFalse();
     }
 

@@ -4,10 +4,13 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
-class SessionsCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http) {
+class SessionsCommand(
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, GitProviderRouter router,
+        WorkingDirectory workdir) {
     public async Task<int> HandleAsync(string[] args) {
         var options = SessionsArgs.Parse(args, out var error);
 
@@ -23,7 +26,8 @@ class SessionsCommand(ConfigRoot config, ProfileContext profiles, ICapacitorHttp
 
         if (options.Repo is null) {
             var repo = await RepositoryDetection.DetectRepositoryAsync(
-                config, Directory.GetCurrentDirectory(), detectPullRequest: false);
+                router,
+                config, workdir.Path, detectPullRequest: false);
 
             if (repo?.Owner is null || repo.RepoName is null) {
                 await Console.Error.WriteLineAsync("Not in a git repository with a remote origin.");

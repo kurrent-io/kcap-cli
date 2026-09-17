@@ -19,6 +19,7 @@ static class RepositoryDetection {
     internal static CommandRunner DefaultRunner => RunCommandAsync;
 
     public static async Task<string> EnrichWithRepositoryInfo(
+            GitProviderRouter router,
             ConfigRoot config, string json, TimeSpan? budget = null, bool detectPullRequest = true,
             CommandRunner? run = null) {
         try {
@@ -34,7 +35,7 @@ static class RepositoryDetection {
                 return json;
             }
 
-            var repo = await DetectRepositoryAsync(config, cwd, budget, detectPullRequest, run);
+            var repo = await DetectRepositoryAsync(router, config, cwd, budget, detectPullRequest, run);
 
             if (repo is null) {
                 return json;
@@ -66,12 +67,12 @@ static class RepositoryDetection {
     /// Fail-open: forwards the original payload unchanged on any error or non-git dir.
     /// </summary>
     public static async Task<string> EnrichWithRepositoryInfoFromCwd(
-            ConfigRoot config, string json, string cwd, TimeSpan? budget = null) {
+            GitProviderRouter router, ConfigRoot config, string json, string cwd, TimeSpan? budget = null) {
         try {
             if (string.IsNullOrEmpty(cwd)) return json;
             if (JsonNode.Parse(json) is not JsonObject obj) return json;
 
-            var repo = await DetectRepositoryAsync(config, cwd, budget);
+            var repo = await DetectRepositoryAsync(router, config, cwd, budget);
             if (repo is null) return json;
 
             obj["repository"] = BuildRepositoryNode(repo);
@@ -120,10 +121,9 @@ static class RepositoryDetection {
 
     // detectPullRequest=false skips the live PR/MR provider detection (the `gh pr view` / `glab api`
     // round-trip) while still resolving base repo info (owner/repo/user/branch/host). Bulk import
-    // passes false: it never emits PR fields, so that per-cwd round-trip is pure wasted latency
-    // `run` is an injectable command runner (defaults to the real process spawner) so the
-    // git/provider spawns are unit-testable.
+    // passes false: it never emits PR fields, so that per-cwd round-trip is pure wasted latency.
     public static async Task<RepositoryPayload?> DetectRepositoryAsync(
+            GitProviderRouter router,
             ConfigRoot config, string cwd, TimeSpan? budget = null, bool detectPullRequest = true,
             CommandRunner? run = null) {
         if (budget is { } b0 && b0 <= TimeSpan.Zero) return null;
@@ -208,7 +208,7 @@ static class RepositoryDetection {
             // Import passes detectPullRequest:false: it discards PR fields, so the round-trip is
             // wasted latency. ResolveAndDetectPrAsync owns the split of providerCap across probes.
             if (detectPullRequest && providerCap > TimeSpan.Zero && host is not null) {
-                var pr = await ResolveAndDetectPrAsync(host, owner, repoName, branch, cwd, providerCap, run);
+                var pr = await ResolveAndDetectPrAsync(router, host, owner, repoName, branch, cwd, providerCap, run);
 
                 if (pr is not null) {
                     prNumber  = pr.Number;
@@ -243,6 +243,7 @@ static class RepositoryDetection {
     /// <paramref name="getTimestamp"/> is a seam for tests (defaults to <see cref="Stopwatch.GetTimestamp"/>).
     /// </summary>
     internal static async Task<PrInfo?> ResolveAndDetectPrAsync(
+            GitProviderRouter router,
             string        host,
             string?       owner,
             string?       repoName,
@@ -256,7 +257,7 @@ static class RepositoryDetection {
 
         var getTs = getTimestamp ?? Stopwatch.GetTimestamp;
         var start = getTs();
-        var kind  = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, run);
+        var kind  = await router.ResolveAsync(host, cwd, providerCap, run);
 
         var detectCap = Remaining();
         if (detectCap <= TimeSpan.Zero) return null;

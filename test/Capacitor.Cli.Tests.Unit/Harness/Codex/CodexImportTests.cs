@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Codex;
 
@@ -239,13 +240,13 @@ public class CodexImportTests {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             server.Url!,
             transcripts,
             minLines: 0,
-            excludedRepos: null,
             CancellationToken.None,
             vendor: HarnessId.Codex
         );
@@ -278,13 +279,13 @@ public class CodexImportTests {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             server.Url!,
             transcripts,
             minLines: 0,
-            excludedRepos: null,
             CancellationToken.None,
             vendor: HarnessId.Codex
         );

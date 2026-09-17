@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness;
 // ReSharper disable ShortLivedHttpClient
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -39,7 +40,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </remarks>
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -155,7 +157,7 @@ sealed class CodexHookCommand(
         // the injected client factory can throw synchronously.
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Codex, sessionId!, LifecycleInstanceId: null,
@@ -265,7 +267,7 @@ sealed class CodexHookCommand(
         // Path exclusion is a string-prefix compare against the payload's cwd
         // — cheap, safe to run on every event (including Stop, which fires
         // per turn). Repo exclusion is handled inside HandleSessionStart
-        // instead: running it here would call RepoExclusion.IsExcludedAsync,
+        // instead: running it here would call RepoExclusion.IsOutOfScopeAsync,
         // which falls back to DetectRepositoryAsync (multiple git commands +
         // gh pr view) when the payload lacks a repository block — too
         // expensive for the per-turn Stop hook. Doing the repo check once at
@@ -275,8 +277,8 @@ sealed class CodexHookCommand(
         // above without paying any git cost.
         var activeProfile = profiles.Effective;
 
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
-         && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths, home)) {
+        if (PathExclusion.IsOutOfScope(TryGetString(node, "cwd"), activeProfile?.AllowedPaths,
+                                      activeProfile?.ExcludedPaths, home)) {
             EmitFallbackOutput(eventName);
             return 0;
         }
@@ -343,7 +345,7 @@ sealed class CodexHookCommand(
         }
 
         SessionStartInventory.Stamp(node.AsObject(), config, harnesses);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(config, node.ToJsonString());
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, node.ToJsonString());
 
         // Repo exclusion runs here (not above the event switch) so that the
         // repository block is already populated by enrichment — RepoExclusion
@@ -352,8 +354,8 @@ sealed class CodexHookCommand(
         // DisabledSessions so subsequent Stop / PermissionRequest events
         // take the existing disabled-session fast path at the top of Handle
         // without paying any git cost.
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(config, enriched, excludedRepos)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos)) {
             var excludedSessionId = TryGetString(node, "session_id");
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);
@@ -407,7 +409,8 @@ sealed class CodexHookCommand(
         // The static work-items nudge, resolved (availability-gated + opt-out) independently
         // of the lease-driven memory/guidelines fragment and merged only at the output layer.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses),
+            WorkItemsNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config)),
+            PlansNudgeEmitter.Resolve(HarnessId.Codex, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses));
 
         await RunSessionStartHandshakeForTest(

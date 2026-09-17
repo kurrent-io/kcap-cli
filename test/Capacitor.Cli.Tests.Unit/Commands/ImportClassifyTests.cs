@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -49,13 +50,13 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             transcripts,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None
         );
 
@@ -80,13 +81,13 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             transcripts,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None
         );
 
@@ -113,13 +114,13 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             transcripts,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None
         );
 
@@ -143,13 +144,13 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             transcripts,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None
         );
 
@@ -171,13 +172,13 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             transcripts,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None
         );
 
@@ -202,57 +203,17 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             transcripts,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None
         );
 
         await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.InternalSubSession);
-    }
-
-    [Test]
-    public async Task ClassifyAsync_tags_ExcludedRepoKey_for_new_sessions_in_excluded_repos() {
-        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-            .RespondWith(Response.Create().WithStatusCode(404));
-
-        // cwd must be a real repo so DetectRepositoryAsync can query its remote.
-        using var repo = GitRepo.Create();
-        repo.AddRemote("https://github.com/acme/secret.git");
-
-        var transcriptPath = Path.Combine(_tempDir, "sessionX.jsonl");
-
-        await File.WriteAllLinesAsync(
-            transcriptPath,
-            Enumerable.Range(0, 50)
-                .Select(_ =>
-                    $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"{{{repo.Path.Replace("\\", @"\\")}}}","message":{"content":"x"}}"""
-                )
-        );
-
-        var transcripts = new List<(string SessionId, string FilePath, string EncodedCwd)> {
-            ("sessionX", transcriptPath, repo.Path.Replace('/', '-'))
-        };
-
-        using var client = new HttpClient();
-
-        var result = await TranscriptFileClassification.ClassifyAsync(
-            Config.Root,
-            Home,
-            client,
-            _server.Url!,
-            transcripts,
-            minLines: 15,
-            excludedRepos: ["acme/secret"],
-            CancellationToken.None
-        );
-
-        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
-        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/secret");
     }
 
     [Test]
@@ -270,13 +231,13 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client,
             _server.Url!,
             paths,
             minLines: 15,
-            excludedRepos: null,
             CancellationToken.None,
             onProbed: () => Interlocked.Increment(ref probedCount)
         );
@@ -306,10 +267,11 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client, _server.Url!, transcripts,
-            minLines: 15, excludedRepos: null, CancellationToken.None
+            minLines: 15, ct: CancellationToken.None
         );
 
         await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
@@ -337,59 +299,15 @@ public class ImportClassifyTests : IDisposable {
         using var client = new HttpClient();
 
         var result = await TranscriptFileClassification.ClassifyAsync(
+            new GitProviderRouter(),
             Config.Root,
             Home,
             client, _server.Url!, transcripts,
-            minLines: 15, excludedRepos: null, CancellationToken.None
+            minLines: 15, ct: CancellationToken.None
         );
 
         await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(result[0].ResumeFromLine).IsEqualTo(50);
-    }
-
-    [Test]
-    public async Task ClassifyAsync_does_not_set_ExcludedRepoKey_when_reclassified_to_AlreadyLoaded() {
-        // Pins ordering: reclassification (Partial -> AlreadyLoaded) must run before the
-        // excluded-repo block, which only fires for New|Partial. Otherwise ExcludedRepoKey
-        // would get set even though there's no new work to prompt about.
-        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-            .RespondWith(
-                Response.Create()
-                    .WithStatusCode(200)
-                    .WithHeader("Content-Type", "application/json")
-                    .WithBody("""{"last_line_number": 49}""")
-            );
-
-        using var repo = GitRepo.Create();
-        repo.AddRemote("https://github.com/any/repo.git");
-
-        var transcriptPath = Path.Combine(_tempDir, "excludedNoNew.jsonl");
-
-        await File.WriteAllLinesAsync(
-            transcriptPath,
-            Enumerable.Range(0, 50)
-                .Select(i =>
-                    $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"{{{repo.Path.Replace("\\", @"\\")}}}","message":{"content":"line-{{{i}}}"}}"""
-                )
-        );
-
-        var transcripts = new List<(string SessionId, string FilePath, string EncodedCwd)> {
-            ("excludedNoNew", transcriptPath, repo.Path.Replace('/', '-'))
-        };
-
-        using var client = new HttpClient();
-
-        var result = await TranscriptFileClassification.ClassifyAsync(
-            Config.Root,
-            Home,
-            client, _server.Url!, transcripts,
-            minLines: 15,
-            excludedRepos: ["any/repo"],
-            CancellationToken.None
-        );
-
-        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
-        await Assert.That(result[0].ExcludedRepoKey).IsNull();
     }
 
 }

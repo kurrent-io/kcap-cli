@@ -19,10 +19,10 @@ namespace Capacitor.Cli.Harness.Gemini;
 ///
 /// <para>The full (dashed) session id lives in the file's header record
 /// (<c>sessionId</c>), not the filename (which carries only the 8-char shortId).
-/// Gemini does not record the workspace path in a machine-readable header, so
-/// import leaves <c>cwd</c> null (no repo enrichment / exclusion on historical
-/// import — a v1 limitation; live capture gets cwd from the hook payload). The
-/// <c>--cwd</c> filter is honoured best-effort against the project-dir basename.</para>
+/// The working directory comes from the <c>&lt;session_context&gt;</c> bootstrap that opens the
+/// recording (<see cref="GeminiSessionContext"/>) — the header names only a project hash — and a
+/// recording that does not name one stays unplaceable, so capture scope skips it under an allow
+/// list. The <c>--cwd</c> filter compares whole paths against it.</para>
 /// </summary>
 internal sealed class GeminiImportSource : IImportSource {
     readonly string _tmpDir;
@@ -33,6 +33,14 @@ internal sealed class GeminiImportSource : IImportSource {
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
+
+    static string NormalizeForComparison(string path) {
+        try {
+            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        } catch {
+            return path.TrimEnd('/', '\\');
+        }
+    }
 
     public HarnessId Vendor => HarnessId.Gemini;
 
@@ -48,7 +56,7 @@ internal sealed class GeminiImportSource : IImportSource {
 
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var sessionFilter = filters.FilterSession is { } sf ? ImportCommand.NormalizeGuid(sf) : null;
-        var cwdBasename   = filters.FilterCwd is { } fc ? Path.GetFileName(fc.TrimEnd('/', '\\')) : null;
+        var normalizedCwd = filters.FilterCwd is { } fc ? NormalizeForComparison(fc) : null;
         var sinceUtc      = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
             : (DateTimeOffset?)null;
@@ -64,16 +72,11 @@ internal sealed class GeminiImportSource : IImportSource {
             ct.ThrowIfCancellationRequested();
 
             try {
-                if (cwdBasename is not null
-                 && !string.Equals(Path.GetFileName(projectDir), cwdBasename, PathComparison)) {
-                    continue;
-                }
-
                 var chatsDir = GeminiPaths.ChatsDir(projectDir);
                 if (!Directory.Exists(chatsDir)) continue;
 
                 foreach (var file in GuardedDiscovery.EnumerateFiles(chatsDir, "session-*.jsonl", recursive: false)) {
-                    var (sessionId, startTime) = ReadHeader(file);
+                    var (sessionId, startTime, workspace) = ReadHead(file);
 
                     if (sessionId is null || !Guid.TryParse(sessionId, out _)) continue;
 
@@ -82,6 +85,14 @@ internal sealed class GeminiImportSource : IImportSource {
                     if (!seen.Add(dashless)) continue;
                     if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
                         continue;
+
+                    // A recording that names no workspace cannot satisfy a --cwd filter, the same
+                    // way it cannot satisfy an allow list.
+                    if (normalizedCwd is not null
+                     && (workspace is null
+                      || !NormalizeForComparison(workspace).Equals(normalizedCwd, PathComparison))) {
+                        continue;
+                    }
 
                     var firstTimestamp = startTime;
                     if (firstTimestamp is null) {
@@ -93,7 +104,7 @@ internal sealed class GeminiImportSource : IImportSource {
                     result.Add(new DiscoveredSession(
                         SessionId:      dashless,
                         Vendor:         Vendor,
-                        Cwd:            null,
+                        Cwd:            workspace,
                         FirstTimestamp: firstTimestamp,
                         SourceMeta:     new Dictionary<string, object?> {
                             ["TranscriptPath"] = file,
@@ -209,7 +220,8 @@ internal sealed class GeminiImportSource : IImportSource {
         // transcript that advances the watermark past a failed lifecycle POST
         // would leave the session permanently lifecycle-less. Re-runs are
         // idempotent server-side (deterministic lifecycle event ids).
-        var startPayload = BuildSessionStartPayload(classification.SessionId, classification.Meta.FirstTimestamp);
+        var startPayload = BuildSessionStartPayload(
+            classification.SessionId, classification.Meta.Cwd, classification.Meta.FirstTimestamp);
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) {
             startPayload["default_visibility"] = visibility;
         }
@@ -265,12 +277,18 @@ internal sealed class GeminiImportSource : IImportSource {
         return new ImportSessionResult(startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded, sentChildContent);
     }
 
-    static JsonObject BuildSessionStartPayload(string sessionId, DateTimeOffset? startedAt) {
+    static JsonObject BuildSessionStartPayload(string sessionId, string? cwd, DateTimeOffset? startedAt) {
         var payload = new JsonObject {
             ["hook_event_name"] = "SessionStart",
             ["session_id"]      = sessionId,
             ["source"]          = "startup",
         };
+        // Same two fields the live hook forwards, so an imported session attributes to a repo
+        // exactly as a captured one does. Git-root discovery is fail-open.
+        if (cwd is not null) {
+            payload["cwd"] = cwd;
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
+        }
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
         payload["origin"] = ImportOrigins.Historical;
         return payload;
@@ -413,32 +431,57 @@ internal sealed class GeminiImportSource : IImportSource {
     };
 
     /// <summary>
-    /// Reads the session's header record (first non-blank line) for the full
-    /// dashed <c>sessionId</c> and <c>startTime</c>. Gemini always writes the
-    /// header first; if the first line isn't one, bail rather than scan the
-    /// whole file.
+    /// How far into a recording the workspace scan runs. The bootstrap is the seed op that
+    /// opens the file, so a recording that has not named a workspace by here does not have one
+    /// — and the bound keeps discovery off the body of every transcript on the machine.
     /// </summary>
-    static (string? SessionId, DateTimeOffset? StartTime) ReadHeader(string path) {
+    const int HeadScanLines = 8;
+
+    /// <summary>
+    /// Reads the head of a recording for the full dashed <c>sessionId</c> and <c>startTime</c>
+    /// (the header record, always written first — if the first line isn't one, bail rather than
+    /// scan the whole file) plus the workspace directory from the <c>&lt;session_context&gt;</c>
+    /// bootstrap that follows it.
+    /// </summary>
+    static (string? SessionId, DateTimeOffset? StartTime, string? Workspace) ReadHead(string path) {
+        string?         sessionId = null;
+        DateTimeOffset? startTime = null;
+        string?         workspace = null;
+        var             scanned   = 0;
+
         try {
-            foreach (var line in File.ReadLines(path)) {
+            // Shared, because this scan runs while Gemini may still own the file: File.ReadLines
+            // opens FileShare.Read, which on Windows denies the agent its own append.
+            foreach (var line in File.ReadLinesShared(path)) {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
-                using var doc  = JsonDocument.Parse(line);
-                var       root = doc.RootElement;
-
-                if (root.Str("sessionId") is not { } sid) return (null, null);
-
-                DateTimeOffset? start = null;
-                if (root.Str("startTime") is { } s
-                 && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)) {
-                    start = ts;
+                if (scanned == 0) {
+                    (sessionId, startTime) = ParseHeader(line);
+                    if (sessionId is null) return (null, null, null);
+                } else {
+                    workspace = GeminiSessionContext.TryReadWorkspace(line);
                 }
 
-                return (sid, start);
+                if (++scanned >= HeadScanLines || workspace is not null) break;
             }
         } catch { /* unreadable / malformed → skip */ }
 
-        return (null, null);
+        return (sessionId, startTime, workspace);
+    }
+
+    static (string? SessionId, DateTimeOffset? StartTime) ParseHeader(string line) {
+        using var doc  = JsonDocument.Parse(line);
+        var       root = doc.RootElement;
+
+        if (root.Str("sessionId") is not { } sid) return (null, null);
+
+        DateTimeOffset? start = null;
+        if (root.Str("startTime") is { } s
+         && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)) {
+            start = ts;
+        }
+
+        return (sid, start);
     }
 
     static async Task<(int? LastNonBlankIndex, int? LastRelevantIndex, int NonBlankCount)> ReadTranscriptStatsAsync(

@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Claude;
 
@@ -12,7 +13,8 @@ namespace Capacitor.Cli.Harness.Claude;
 /// with <c>vendor = "claude"</c>. Claude sessions are imported per chain, so
 /// <see cref="ImportSessionAsync"/> is never the entry point — <c>ImportChainsAsync</c> is.
 /// </summary>
-internal sealed class ClaudeImportSource(ConfigRoot config, string projectsDir) : IImportSource {
+internal sealed class ClaudeImportSource(
+        ConfigRoot config, string projectsDir, GitProviderRouter router) : IImportSource {
     readonly string _projectsDir = projectsDir;
 
     public HarnessId Vendor => HarnessId.Claude;
@@ -87,16 +89,15 @@ internal sealed class ClaudeImportSource(ConfigRoot config, string projectsDir) 
         }
 
         return await TranscriptFileClassification.ClassifyAsync(
+            router,
             config,
             ctx.Home,
             ctx.HttpClient,
             ctx.BaseUrl,
             transcripts,
             ctx.MinLines,
-            ctx.ExcludedRepos?.ToArray(),
             ct,
-            vendor: Vendor,
-            excludedPaths: ctx.ExcludedPaths?.ToArray()
+            vendor: Vendor
         );
     }
 

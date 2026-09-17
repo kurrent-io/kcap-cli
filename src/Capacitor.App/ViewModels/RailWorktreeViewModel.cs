@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Reactive;
@@ -41,6 +42,19 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _holdsSelected;
     public bool HoldsSelected => _holdsSelected.Value;
 
+    readonly ObservableAsPropertyHelper<PullRequestTone> _pullRequestTone;
+    /// The strongest PR tone across this worktree's sessions; None colours the branch glyph plain.
+    public PullRequestTone PullRequestTone => _pullRequestTone.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _hasPullRequest;
+    public bool HasPullRequest => _hasPullRequest.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _checksRunning;
+    public bool ChecksRunning => _checksRunning.Value;
+
+    readonly ObservableAsPropertyHelper<string> _tooltip;
+    public string Tooltip => _tooltip.Value;
+
     readonly ObservableCollectionExtended<RailSessionViewModel> _sessionsSource = new();
     public ReadOnlyObservableCollection<RailSessionViewModel> Sessions { get; }
 
@@ -56,7 +70,8 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
             string path, Func<string, string> resolveRepoRoot, bool showHeader,
             IObservableCache<AgentRow, string> sessionsCache, RailCollapseState collapse,
             IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
-            IObservable<bool> remoteStale, Action<string> openLocal, Action<string> openRemote) {
+            IObservable<bool> remoteStale, Action<string> openLocal, Action<string> openRemote,
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null) {
         Path = path;
         // Every row in one worktree group shares CheckoutLabel by construction — any member
         // names a remote pseudo-checkout (labeled by the daemon it runs on, never "main"); an
@@ -117,6 +132,18 @@ public sealed class RailWorktreeViewModel : ReactiveObject, IDisposable {
             .CombineLatest(selectedAgentId, (q, sel) => sel is not null && q.Items.Any(r => r.Id == sel))
             .ToProperty(this, x => x.HoldsSelected, initialValue: false)
             .DisposeWith(_disposables);
+
+        var tone = sessionsCache.Connect().QueryWhenChanged()
+            .CombineLatest(
+                pullRequestTones ?? Observable.Return<IReadOnlyDictionary<string, PullRequestTone>>(FrozenDictionary<string, PullRequestTone>.Empty),
+                (q, map) => PullRequestTones.Strongest(q.Items.Select(r => r.SessionId).OfType<string>().Select(s => map.GetValueOrDefault(s))))
+            .DistinctUntilChanged()
+            .Replay(1).RefCount();
+        _pullRequestTone = tone.ToProperty(this, x => x.PullRequestTone, initialValue: PullRequestTone.None).DisposeWith(_disposables);
+        _hasPullRequest = tone.Select(t => t != PullRequestTone.None).ToProperty(this, x => x.HasPullRequest, initialValue: false).DisposeWith(_disposables);
+        _checksRunning = tone.Select(t => t == PullRequestTone.ChecksRunning).ToProperty(this, x => x.ChecksRunning, initialValue: false).DisposeWith(_disposables);
+        _tooltip = tone.Select(t => t == PullRequestTone.None ? path : $"{path}\nPull request: {PullRequestTones.Label(t)}")
+            .ToProperty(this, x => x.Tooltip, initialValue: path).DisposeWith(_disposables);
 
         Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         sessionsCache.Connect()

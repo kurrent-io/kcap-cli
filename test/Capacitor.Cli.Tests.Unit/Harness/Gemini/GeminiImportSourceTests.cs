@@ -52,6 +52,64 @@ public class GeminiImportSourceTests {
         await Assert.That(found[0].SessionId).IsEqualTo("22222222222222222222222222222222");
     }
 
+    // The bootstrap is the only on-disk record of where a Gemini session ran, so discovery
+    // reads it: without a cwd, capture scope cannot place the session and an allow list drops it.
+    const string Bootstrap =
+        "<session_context>\\nThis is the Gemini CLI.\\n"
+      + "- **Workspace Directories:**\\n  - /work/demo\\n- **Directory Structure:**\\n</session_context>";
+
+    static string BootstrapSeed() =>
+        $$$"""{"$set":{"messages":[{"id":"d0","timestamp":"t","type":"user","content":[{"text":"{{{Bootstrap}}}"}]}],"lastUpdated":"t"}}""";
+
+    [Test]
+    public async Task discover_reads_the_workspace_from_the_session_context_bootstrap() {
+        using var tmp = new TempDir();
+        WriteSession(tmp.Path, "proj", "session-2026-06-17T14-10-44444444.jsonl",
+            "44444444-4444-4444-4444-444444444444", BootstrapSeed());
+
+        var found = await new GeminiImportSource(tmp.Path)
+            .DiscoverAsync(new DiscoveryFilters(null, null, null, 1), CancellationToken.None);
+
+        await Assert.That(found.Count).IsEqualTo(1);
+        await Assert.That(found[0].Cwd).IsEqualTo("/work/demo");
+    }
+
+    [Test]
+    public async Task discover_leaves_cwd_null_when_no_bootstrap_names_one() {
+        using var tmp = new TempDir();
+        WriteSession(tmp.Path, "proj", "session-2026-06-17T14-10-55555555.jsonl",
+            "55555555-5555-5555-5555-555555555555",
+            """{"id":"u1","timestamp":"t","type":"user","content":[{"text":"hi"}]}""");
+
+        var found = await new GeminiImportSource(tmp.Path)
+            .DiscoverAsync(new DiscoveryFilters(null, null, null, 1), CancellationToken.None);
+
+        await Assert.That(found.Count).IsEqualTo(1);
+        await Assert.That(found[0].Cwd).IsNull();
+    }
+
+    [Test]
+    public async Task discover_filter_by_cwd_matches_the_recorded_workspace() {
+        using var tmp = new TempDir();
+        WriteSession(tmp.Path, "proj", "session-a-66666666.jsonl",
+            "66666666-6666-6666-6666-666666666666", BootstrapSeed());
+        WriteSession(tmp.Path, "proj", "session-b-77777777.jsonl",
+            "77777777-7777-7777-7777-777777777777",
+            """{"id":"u1","timestamp":"t","type":"user","content":[{"text":"hi"}]}""");
+
+        var source = new GeminiImportSource(tmp.Path);
+
+        var matched = await source.DiscoverAsync(
+            new DiscoveryFilters("/work/demo", null, null, 1), CancellationToken.None);
+        await Assert.That(matched.Count).IsEqualTo(1);
+        await Assert.That(matched[0].SessionId).IsEqualTo("66666666666666666666666666666666");
+
+        // A session with no recorded workspace cannot satisfy the filter either.
+        var elsewhere = await source.DiscoverAsync(
+            new DiscoveryFilters("/work/other", null, null, 1), CancellationToken.None);
+        await Assert.That(elsewhere.Count).IsEqualTo(0);
+    }
+
     [Test]
     public async Task unavailable_when_tmp_dir_missing() {
         using var tmp = new TempDir();

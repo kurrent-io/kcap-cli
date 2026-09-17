@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -22,6 +23,7 @@ public partial class ChatTabView : UserControl {
     const double BottomTolerance = 2;
 
     ScrollViewer? _scroll;
+    AttachmentDropPaste? _attachments;
     bool _followTail = true;
     /// Armed by a gesture inside the list and released once the dispatcher queue drains past
     /// layout, so it covers exactly the scroll changes that gesture produced — an expansion click
@@ -51,7 +53,27 @@ public partial class ChatTabView : UserControl {
         };
     }
 
+    internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
+
+    /// Paired with the visual tree rather than the constructor: a tab swap detaches and re-attaches
+    /// the same view, and a behaviour disposed on the way out has to come back with it.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _attachments ??= AttachmentDropPaste.Attach(
+            ComposerCard, ComposerInput, AttachButton,
+            () => (DataContext as ChatTabViewModel)?.Attachments, TimeProvider.System);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _attachments?.Dispose();
+        _attachments = null;
+        base.OnDetachedFromVisualTree(e);
+    }
+
     void OnReaderGesture(object? sender, RoutedEventArgs e) {
+        // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
+        // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
+        if (OriginatesFromTextBox(e)) return;
         if (_readerGesture) return;
         _readerGesture = true;
         Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
@@ -59,9 +81,18 @@ public partial class ChatTabView : UserControl {
 
     void OnScrollChanged(object? sender, ScrollChangedEventArgs e) {
         if (sender is not ScrollViewer scroll) return;
+        if (ListTextBoxOwnsFocus()) return;
         var atBottom = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - BottomTolerance;
         _followTail = _readerGesture ? atBottom : _followTail || atBottom;
         if (_followTail && !atBottom) scroll.ScrollToEnd();
+    }
+
+    static bool OriginatesFromTextBox(RoutedEventArgs e) =>
+        e.Source is Visual visual && (visual is TextBox || visual.GetVisualAncestors().OfType<TextBox>().Any());
+
+    bool ListTextBoxOwnsFocus() {
+        if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is not TextBox box) return false;
+        return box.GetVisualAncestors().OfType<ItemsControl>().Any(c => ReferenceEquals(c, ChatItems));
     }
 
     /// The composer wraps, so the rendered rows, not the newlines, say whether the caret has a row

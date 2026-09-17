@@ -1,0 +1,40 @@
+kcap allow — Restrict session recording to named paths
+
+Usage: kcap allow <path>
+       kcap allow --list
+       kcap allow --remove <path>
+
+While the allow list is empty, every path is capturable — that is the default.
+Add <path> and recording narrows to it: a coding-agent session is captured only
+when its working directory is that path or a directory inside it. Everything
+else is silently dropped, both live hooks and `kcap import`.
+
+Removing the last entry empties the list and re-admits the whole machine.
+
+Relationship to `kcap ignore`:
+  The allow list decides what is capturable; `kcap ignore` still subtracts
+  within it, and a path on both lists is dropped. So `kcap allow ~/dev` with
+  `kcap ignore ~/dev/client-x` records everything under ~/dev except that
+  subtree.
+
+  `allowed_repos` (see `kcap config set`) is a separate gate on the session's
+  repo. With both set, a session must be admitted by each.
+
+Unplaceable sessions:
+  A session whose working directory kcap cannot determine is NOT captured while
+  an allow list is set, where with only an ignore list it would be. An allow
+  list that admitted what it could not place would not restrict anything.
+
+Path resolution:
+  - `.` and `~` are expanded to absolute paths.
+  - Trailing separators are stripped.
+  - Symlinks are resolved so a worktree symlink and its target match.
+
+Scope:
+  Entries are stored on the **active profile** (see `kcap profile show`).
+  Switching profiles with `kcap use` switches the allow list too.
+
+Examples:
+  kcap allow ~/dev                         # capture only work under ~/dev
+  kcap allow --list                        # show all allowed paths
+  kcap allow --remove ~/dev                # re-admit everything

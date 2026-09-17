@@ -288,6 +288,20 @@ public class WatchCommandTests {
     }
 
     [Test]
+    [Arguments(1)]
+    [Arguments(0)]
+    [Arguments(-1)]
+    public async Task DecideParentDeadRecovery_keepsWaiting_on_an_implausible_pid(int reResolved) {
+        // Re-arming on init (or anything below it) watchdogs an immortal PID, so the agent's
+        // death can never be observed and only the idle ceiling can end the session.
+        var decision = WatchCommand.DecideParentDeadRecovery(
+            reResolved, _ => true, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(90)
+        );
+
+        await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.KeepWaiting);
+    }
+
+    [Test]
     public async Task DecideParentDeadRecovery_keepsWaiting_when_reResolved_pid_is_dead() {
         // Re-resolution returned a transient/dead pid → not a valid re-arm target; below ceiling.
         var decision = WatchCommand.DecideParentDeadRecovery(

@@ -24,6 +24,15 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
 
     public bool IsProvenLocalTwin(string agentId) => ProvenTwins.Contains(agentId);
 
+    /// Placeholder calls as received, in order; a test asserts on them rather than on rows.
+    public List<(string Id, string Vendor, string RepoPath, string? Title, string? Model)> Placeholders { get; } = [];
+    public List<string> RemovedPlaceholders { get; } = [];
+
+    public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) =>
+        Placeholders.Add((agentId, vendor, repoPath, title, model));
+
+    public void RemovePlaceholder(string agentId) => RemovedPlaceholders.Add(agentId);
+
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
         Rows.Connect().QueryWhenChanged(q => SessionMap(q.Items))
             .StartWith((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);

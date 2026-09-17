@@ -10,6 +10,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -23,10 +24,21 @@ namespace Capacitor.Cli.Commands.Harness;
 /// </summary>
 public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
-        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers) {
+        HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
+        GitProviderRouter router, WorkingDirectory workdir) {
     readonly CursorMarkers  _markers  = new(config);
 
     string Url => profiles.Resolution.ServerUrl!;
+
+    /// <summary>
+    /// <c>workspace_roots[0]</c>, or null when absent or not a string. Safe extract:
+    /// <c>GetValue&lt;string&gt;</c> would throw and drop the whole hook through the outer catch.
+    /// </summary>
+    static string? TryWorkspaceRoot(JsonNode node) =>
+        node["workspace_roots"] is JsonArray roots && roots.Count > 0
+     && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr)
+            ? wr
+            : null;
 
     /// <summary>2s of work is what kcap promises Cursor per hook so it never blocks the agent loop
     /// — its own promise, not a Cursor timeout, which is why it is written as the
@@ -285,6 +297,19 @@ public sealed class CursorHookCommand(
 
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId, config)) return EmptyOrNull();
 
+            var activeProfile = profiles.Effective;
+
+            // Cursor carries `workspace_roots` where every other harness carries `cwd`, so the scope
+            // gate reads roots[0]. Hoisted: the sessionStart block below reuses the raw value, and a
+            // path compare is cheap enough to run on every event — which matters because a session
+            // already under way when the lists change has no marker to stop it.
+            var workspaceRoot = TryWorkspaceRoot(node);
+
+            if (PathExclusion.IsOutOfScope(workspaceRoot, activeProfile?.AllowedPaths,
+                                           activeProfile?.ExcludedPaths, home)) {
+                return EmptyOrNull();
+            }
+
             // Subagent classification. Built to bring CursorSubagentCorrelator into the live
             // hook path (Cursor is NOT watcher-backed, so it would have to run right here in the
             // per-hook dispatcher), persisting the decision to an on-disk marker because this
@@ -334,12 +359,6 @@ public sealed class CursorHookCommand(
             }
             var isSubagentChild = subagentParentId is not null;
 
-            // Hoisted (rather than block-local) so the memory orchestration wired in
-            // at the end of this method — reached only for the same top-level, non-child
-            // sessionStart this block guards — can reuse the RAW workspace_roots[0] value as
-            // Cwd without re-deriving it.
-            string? workspaceRoot = null;
-
             // attach a `repository` node on sessionStart so the session groups
             // under its repo in the sidebar. Cursor payloads carry `workspace_roots`
             // rather than `cwd`, so the generic EnrichWithRepositoryInfo (which reads
@@ -361,11 +380,17 @@ public sealed class CursorHookCommand(
                     // fail-open — visibility is best-effort, never fatal to the hook.
                 }
 
-                // Safe extract: workspace_roots[0] may be absent or a non-string; GetValue<string>
-                // would throw and (via the outer catch) drop the whole sessionStart hook.
-                if (node["workspace_roots"] is JsonArray roots && roots.Count > 0
-                 && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
-                    workspaceRoot = wr;
+                // Repo scope needs detection, so unlike the path compare above it runs once here
+                // and is recorded — later events read the marker rather than paying for git again.
+                // Before the watcher: spawning one starts uploading the transcript, so a session
+                // this profile does not admit must not get that far.
+                if (await RepoExclusion.IsOutOfScopeAsync(
+                        router, config, new JsonObject { ["cwd"] = workspaceRoot }.ToJsonString(),
+                        activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, budget.Remaining)) {
+                    if (sessionId is not null) DisabledSessions.Mark(sessionId, config);
+
+                    return EmptyOrNull();
+                }
 
                 // Task 9: spawn (or heal) this session's tailing Cursor watcher FIRST —
                 // live transcript capture must never be lost even if the repo-enrichment call
@@ -378,7 +403,7 @@ public sealed class CursorHookCommand(
                     var remaining = budget.Remaining;
                     if (remaining > TimeSpan.Zero) {
                         node = JsonNode.Parse(
-                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(config, node.ToJsonString(), workspaceRoot, remaining)
+                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(router, config, node.ToJsonString(), workspaceRoot, remaining)
                         ) ?? node;
                     }
                 }
@@ -521,10 +546,11 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses);
+            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config));
+            var plansNudge     = PlansNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisablePlansNudge is true, harnesses);
             var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
-                HarnessNudgeEmitter.Combine(workItemsNudge, harnessNudge));
+                HarnessNudgeEmitter.Combine(workItemsNudge, plansNudge, harnessNudge));
         } catch {
             // Fail-open per design: any exception (budget cancellation,
             // transcript-file IO race, JSON quirk we missed) must never crash Cursor's agent
@@ -557,8 +583,8 @@ public sealed class CursorHookCommand(
         if (sessionId is null) return null;
 
         // An absent/blank Cursor workspace root must NOT fall through to the scope resolver's
-        // Directory.GetCurrentDirectory() fallback: that would derive a repo scope from the hook
-        // PROCESS's cwd and could inject an UNRELATED repository's memories into this session.
+        // working-directory fallback: that would derive a repo scope from the hook PROCESS's
+        // directory and could inject an UNRELATED repository's memories into this session.
         // With no authoritative workspace root there is no safe scope, so skip injection entirely.
         if (string.IsNullOrWhiteSpace(workspaceRoot)) return null;
 
@@ -583,7 +609,7 @@ public sealed class CursorHookCommand(
 
             var store = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             // Both lanes send on the hook's own client, which stays this method's caller's to dispose.
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(config, _ => Task.FromResult(client), clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, _ => Task.FromResult(client), clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 // ClassificationAuthoritative is hardcoded true, and this is VALID UNDER THE

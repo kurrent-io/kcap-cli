@@ -4,7 +4,21 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
-    <Grid RowDefinitions="*,Auto,Auto,Auto,Auto">
+    <UserControl.Styles>
+        <Style Selector="Border.toolGroup">
+            <Setter Property="Margin" Value="0,4,0,22" />
+        </Style>
+        <Style Selector="Border.toolGroup.packsWithCard">
+            <Setter Property="Margin" Value="0,4,0,4" />
+        </Style>
+        <Style Selector="ContentControl.pendingCard">
+            <Setter Property="Margin" Value="0,8,0,12" />
+        </Style>
+        <Style Selector="ContentControl.pendingCard.packsWithPrevious">
+            <Setter Property="Margin" Value="0,4,0,12" />
+        </Style>
+    </UserControl.Styles>
+    <Grid RowDefinitions="*,Auto,Auto,Auto">
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An
              ItemsControl inside an external ScrollViewer is measured at infinite height. -->
         <ItemsControl x:Name="ChatItems" Grid.Row="0" ItemsSource="{Binding Items}">
@@ -76,7 +90,8 @@
                 <DataTemplate x:DataType="vm:ToolGroupItem">
                     <!-- Stretch to the chat column (capped like assistant text) so lone cards are
                          not content-width pills. -->
-                    <Border MaxWidth="660" MinWidth="320" Margin="0,4,0,22" Padding="12,10" CornerRadius="10"
+                    <Border Classes="toolGroup" Classes.packsWithCard="{Binding PacksWithCard}"
+                            MaxWidth="660" MinWidth="320" Padding="12,10" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceBrush}"
                             BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                             HorizontalAlignment="Stretch">
@@ -85,8 +100,6 @@
                                  Plain text (no chip chrome) so it lines up with the detail. -->
                             <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding ShowsKindChip}">
                                 <TextBlock Classes="toolKindChip" Text="{Binding KindChip}"
-                                           FontSize="10" FontWeight="SemiBold"
-                                           Foreground="{StaticResource KcapMutedBrush}"
                                            VerticalAlignment="Center" />
                                 <Panel Grid.Column="1" DataContext="{Binding LoneCall}" VerticalAlignment="Center">
                                     <Border Classes="toolStatus" Width="14" Height="8" CornerRadius="4"
@@ -123,6 +136,16 @@
                         </StackPanel>
                     </Border>
                 </DataTemplate>
+                <DataTemplate x:DataType="vm:PendingCardItem">
+                    <ContentControl Classes="pendingCard" Classes.packsWithPrevious="{Binding PacksWithPrevious}"
+                                    Content="{Binding Card}" MaxWidth="660" HorizontalAlignment="Stretch">
+                        <ContentControl.DataTemplates>
+                            <StaticResource ResourceKey="PermissionCardTemplate" />
+                            <StaticResource ResourceKey="QuestionCardTemplate" />
+                            <StaticResource ResourceKey="AcpQuestionCardTemplate" />
+                        </ContentControl.DataTemplates>
+                    </ContentControl>
+                </DataTemplate>
             </ItemsControl.DataTemplates>
         </ItemsControl>
 
@@ -139,22 +162,7 @@
                        VerticalAlignment="Center" />
         </StackPanel>
 
-        <Border x:Name="NeedsYouRow" Grid.Row="2" Margin="22,0,22,4" IsVisible="{Binding HasPendingCards}">
-            <StackPanel Spacing="6">
-                <TextBlock Text="NEEDS YOU" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource KcapMutedBrush}" />
-                <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding PendingCards}">
-                        <ItemsControl.DataTemplates>
-                            <StaticResource ResourceKey="PermissionCardTemplate" />
-                            <StaticResource ResourceKey="QuestionCardTemplate" />
-                            <StaticResource ResourceKey="AcpQuestionCardTemplate" />
-                        </ItemsControl.DataTemplates>
-                    </ItemsControl>
-                </ScrollViewer>
-            </StackPanel>
-        </Border>
-
-        <Border x:Name="QueuedMessagesBanner" Grid.Row="3" Margin="22,4,22,0" Padding="13,10"
+        <Border x:Name="QueuedMessagesBanner" Grid.Row="2" Margin="22,4,22,0" Padding="13,10"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasQueuedMessages}">
             <StackPanel Spacing="6">
@@ -170,6 +178,8 @@
                                                Foreground="{StaticResource KcapMutedBrush}" />
                                     <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
                                                FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
+                                    <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
+                                               FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
@@ -178,13 +188,14 @@
             </StackPanel>
         </Border>
 
-        <Border Grid.Row="4" Margin="22,8,22,18"
-                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+        <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3" Margin="22,8,22,18"
+                Background="{StaticResource KcapSurfaceBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,12">
             <StackPanel Spacing="6">
+                <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
+                                           IsVisible="{Binding Tray.HasAttachments}" />
                 <TextBox x:Name="ComposerInput" Classes="kcapEmbedded" Text="{Binding ComposerText}" AcceptsReturn="True" TextWrapping="Wrap"
-                         MinHeight="38" MaxHeight="160" Background="Transparent" BorderThickness="0"
-                         PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
+                         MinHeight="38" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}" />
                 <!-- A flow participant is addressed through the flow protocol, never messaged
                      directly, so the banner replaces the input rather than overlaying a dead one. -->
                 <Border x:Name="ReadOnlyBanner" IsVisible="{Binding IsReadOnlyParticipant}"
@@ -193,10 +204,19 @@
                     <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
                                Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
                 </Border>
-                <Grid ColumnDefinitions="*,Auto">
-                    <TextBlock Text="{Binding ComposerHint}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}"
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
+                         is suppressed by default. -->
+                    <Button x:Name="AttachButton" Content="+" IsVisible="{Binding ShowsComposer}"
+                            IsEnabled="{Binding Attachments.CanAttach}" ToolTip.Tip="{Binding Attachments.AttachHint}"
+                            ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
+                            Width="24" Height="24" Padding="0" FontSize="15" CornerRadius="7" Cursor="Hand"
+                            Margin="0,0,10,0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                            Background="Transparent" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                            Foreground="{StaticResource KcapMutedBrush}" />
+                    <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                    <Button x:Name="SendButton" Grid.Column="1" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"
+                    <Button x:Name="SendButton" Grid.Column="2" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"
                             Padding="12,4" FontSize="12" FontWeight="SemiBold" CornerRadius="7"
                             Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                             IsVisible="{Binding ShowsComposer}" />

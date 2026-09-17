@@ -76,6 +76,10 @@ internal record AgentInstance(
     /// Null for a PTY runtime, which writes its own transcript and needs none.
     public TranscriptJournal? Journal { get; init; }
 
+    /// Where a fetched attachment lands for this agent — the runtime factory's answer for this
+    /// launch's <see cref="LaunchKind"/>, recorded once at construction.
+    public AttachmentPlacement Placement { get; init; } = AttachmentPlacement.Worktree;
+
     bool _titleComputed;
     string? _title;
     /// <summary>The status payload's display title, computed ONCE from the immutable Prompt
@@ -185,6 +189,11 @@ internal record AgentInstance(
     /// <see cref="System.Threading.Interlocked.CompareExchange(ref int,int,int)"/> can gate it. Exactly
     /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
     public int CleanupStarted;
+
+    /// <summary><see cref="CleanupStarted"/> as a bool, through a
+    /// <see cref="System.Threading.Volatile"/> read: teardown latches it outside every per-agent gate,
+    /// so a plain field read is not guaranteed to observe it.</summary>
+    public bool IsCleanupStarted => Volatile.Read(ref CleanupStarted) != 0;
 
     /// <summary>Design spec §3.3: single-flight guard for reporting a published ACP launch-window
     /// reap verdict to the server — claimed (0→1) by the FIRST path that reports it, via
@@ -484,6 +493,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // Retained so the next-boot handoff can be exercised over the same root a restarted daemon would use.
     readonly string _pidRecordRoot;
 
+    readonly AttachmentStore _attachmentStore;
+    readonly AttachmentFetcher _attachmentFetcher;
+
     // Phase B2-b (sequenced-settlement design §4.2.3): the durable coverage boot-chain verdict,
     // folded in DaemonRunner (before Connect) and stashed on config. Advertised on the enriched
     // DaemonConnect payload; a Linux/macOS value is inert (the server consumes it only on Windows).
@@ -544,7 +556,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly WorktreeManager                                   _worktreeManager;
     readonly RepoMatcher                                       _repoMatcher;
     readonly IPtyProcessFactory                                _ptyFactory;
-    readonly IHttpClientFactory                                _httpClientFactory;
     readonly ICapacitorHttpClient                              _http;
     readonly TokenStore                                        _tokens;
     readonly LocalPermissionBridge                             _permissionBridge;
@@ -692,7 +703,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _worktreeManager   = worktreeManager;
         _repoMatcher       = repoMatcher;
         _ptyFactory        = ptyFactory;
-        _httpClientFactory = httpClientFactory;
         _http              = http;
         _permissionBridge  = permissionBridge;
         _permissionBroker  = permissionBroker ?? new();
@@ -710,6 +720,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // survivors from the current incarnation's live children.
         var recordRoot = config.Store.StateDirectory(config.Name);
         _pidRecordRoot = recordRoot;
+        _attachmentStore = new AttachmentStore(recordRoot);
+        _attachmentFetcher = new AttachmentFetcher(
+            httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
         _failedLaunchLog = new FailedLaunchLog(recordRoot);
         _quarantine  = new AgentKillQuarantine(logger);
@@ -887,6 +900,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// stem is live when some agent still in <see cref="_agents"/> hashes to it — true between an
     /// Antigravity turn's child exiting and the next one starting, when no PID record exists.
     internal bool IsLiveJournalStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
+
+    /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem.
+    internal bool IsLiveAttachmentStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
 
     /// Mutation FIRST, Pulse() second — always (a pulse published before its mutation lets a
     /// subscriber read the new version, snapshot the OLD state, and wait forever). These
@@ -1432,6 +1448,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only: the per-daemon record root, so a test can build the store a NEXT BOOT would
     /// build over the same state dir (§3.3's shutdown-orphan handoff).</summary>
     internal string PidRecordRootForTest                            => _pidRecordRoot;
+    internal AttachmentStore AttachmentStore                        => _attachmentStore;
     internal string DaemonIdForTest                                 => _daemonId;
     internal string DaemonEpochForTest                             => _daemonEpoch;
     internal bool   RecordlessSurvivorsImpossibleForTest           => _recordlessSurvivorsImpossible;
@@ -1717,7 +1734,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         DateTime           CreatedAt,
         string?            FlowRunId,
         string?            FlowRole,
-        AgentActivityClock ActivityClock);
+        AgentActivityClock ActivityClock,
+        string?            Vendor,
+        string?            RepoPath,
+        string?            Title);
 
     readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
 
@@ -1728,14 +1748,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// leaves no window: <see cref="BuildLiveAgents"/> suppresses a pending entry already in
     /// <c>_agents</c>.</summary>
     internal IDisposable TrackPendingLaunch(
-            string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock) {
-        _pendingLaunches[agentId] = new PendingLaunch(agentId, kind, DateTime.UtcNow, flowRunId, flowRole, clock);
+            string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
+            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
+        _pendingLaunches[agentId] = new PendingLaunch(
+            agentId, kind, createdAt ?? DateTime.UtcNow, flowRunId, flowRole, clock, vendor, repoPath, title);
+        _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
     }
 
     sealed class PendingLaunchScope(AgentOrchestrator owner, string agentId) : IDisposable {
-        public void Dispose() => owner._pendingLaunches.TryRemove(agentId, out _);
+        public void Dispose() {
+            if (owner._pendingLaunches.TryRemove(agentId, out _)) owner._statusNotifier.Pulse();
+        }
     }
 
     /// <summary>One activity clock per launch, wired so a genuine
@@ -1745,7 +1770,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
     AgentActivityClock CreateActivityClock() =>
         new(TimeProvider.System) {
-            OnLaunchStageChanged   = () => _ = SendStatusReportNowAsync(),
+            OnLaunchStageChanged   = () => { _statusNotifier.Pulse(); _ = SendStatusReportNowAsync(); },
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
             // this fires, so the pulse's snapshot reads it (mutation first, pulse second).
@@ -2056,6 +2081,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // be able to complete it, and remove a file no other incarnation has written to.
         TranscriptJournal? journal = null;
 
+        // Hoisted so the finally below can drop a store batch no launch completed. Disposing after
+        // Keep() is a no-op, so the success path and the post-publish cleanup path both stay correct.
+        AttachmentStoreLease? storeLease = null;
+
         // Set the instant PublishAgent makes _agents[agentId] THIS launch's own instance. Without
         // it, the catch below can't tell "_agents already holds agentId" apart from "a different,
         // already-live incarnation holds it" — a pre-publish failure on the latter would route
@@ -2085,6 +2114,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 await _server.LaunchFailedAsync(agentId, $"Repo path does not exist: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+            }
+
+            // Capture scope for an unattended launch into a named repo, ahead of every
+            // review-specific check and of the worktree, so a refused launch never inspects a
+            // repository it may not report on. A BORROWED launch is judged further down instead,
+            // on the canonical path its authorization resolves.
+            if ((isReview || isReviewFlow) && !cmd.Borrowed
+             && await RefuseOutOfCaptureScopeAsync(agentId, repoPath) is { } scopeRefusal) {
+                return scopeRefusal;
             }
 
             if (isReview) {
@@ -2145,6 +2183,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
                 }
 
+                // The canonical cwd is the one that will actually be run — a borrow may sit below
+                // its repository root, and judging the root would miss a list entry naming the
+                // subdirectory itself. It is only known here, too: a symlink retargeted between the
+                // request and this resolution would otherwise hand the runtime a checkout no list
+                // was compared against. Before the snapshot, so a refusal copies nothing.
+                // The repo key still resolves from here, since it walks up to the root.
+                if ((isReview || isReviewFlow)
+                 && await RefuseOutOfCaptureScopeAsync(agentId, auth.CanonicalCwd)
+                        is { } borrowScopeRefusal) {
+                    return borrowScopeRefusal;
+                }
+
                 if (snapshotBorrow) {
                     borrowedSnapshotSource = auth.CanonicalCwd
                         ?? throw new InvalidOperationException("borrow_auth_failed: canonical_cwd_missing");
@@ -2183,20 +2233,38 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _ = _server.AppendAgentRunEventAsync(agentId, PolicyWire.ToUpload(agentId, uploadable));
             }
 
-            if (work == WorkLocation.OwnedWorktree) {
-                // Download attachments into worktree (best-effort)
-                if (attachmentIds is { Length: > 0 }) {
-                    try {
-                        var paths = await DownloadAttachmentsAsync(worktree.Path, attachmentIds);
+            // Fails the launch rather than starting an agent whose prompt talks about files it has
+            // not got. The refusal is keyed to the RESOLVED work location: a borrowed request that
+            // materialised into an independent snapshot owns that snapshot and can be written to.
+            var placement = runtimeFactory.AttachmentPlacementFor(cmd.Kind);
 
-                        if (paths.Count > 0) {
-                            var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
-                            prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
-                        }
-                    } catch (Exception ex) {
-                        LogAttachmentDownloadFailed(ex, agentId);
-                    }
+            if (attachmentIds is { Length: > 0 }) {
+                if (AttachmentIds.Validate(attachmentIds) is { } invalid)
+                    throw new InvalidOperationException($"attachments_refused: {invalid}");
+
+                if (placement == AttachmentPlacement.Worktree && work == WorkLocation.BorrowedCwd)
+                    throw new InvalidOperationException(
+                        $"attachments_refused: {AttachmentRefusals.NeedsOwnedWorktree}");
+
+                var root = placement == AttachmentPlacement.DaemonStore
+                    ? _attachmentStore.DirectoryFor(agentId)
+                    : Path.Combine(worktree.Path, ".attached");
+
+                // Taken BEFORE the fetch: every exit between here and registration disposes it, and
+                // only a published agent keeps the directory.
+                if (placement == AttachmentPlacement.DaemonStore) storeLease = _attachmentStore.Lease(agentId);
+
+                var fetch = await _attachmentFetcher.FetchAsync(root, placement, attachmentIds, _shutdownCts.Token);
+
+                if (fetch.Batch is null) {
+                    LogAttachmentFetchFailed(agentId, fetch.FailedId, fetch.Error);
+
+                    throw new InvalidOperationException(
+                        $"attachment_unavailable: {fetch.FailedId}: {fetch.Error}");
                 }
+
+                var suffix = AttachmentTrailer.For(fetch.Batch.Paths);
+                prompt = string.IsNullOrEmpty(prompt) ? suffix : $"{prompt}\n\n{suffix}";
             }
 
             // An unattended review-flow reviewer must auto-approve its kcap tool calls (no human is
@@ -2342,7 +2410,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
             using var pendingLaunch = TrackPendingLaunch(
-                agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock);
+                agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
+                vendor: cmd.Vendor, repoPath: repoPath, title: AgentInstance.TitleFromPrompt(prompt));
 
             try {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
@@ -2446,6 +2515,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 PolicySnapshot      = policySnapshot,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,
+                Placement           = placement,
                 Kind                = cmd.Kind,       // Phase B (D2): flow identity + kind for LiveAgents/status report
                 FlowRunId           = cmd.FlowRunId,
                 FlowRole            = cmd.FlowRole,
@@ -2455,6 +2525,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             };
             PublishAgent(agent);
             published = true;
+            storeLease?.Keep();
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after
@@ -2598,9 +2669,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Only tear down a worktree we OWN. A borrowed cwd is the user's real checkout — never
             // remove it, its branch, or its Claude project symlink on a failed launch (spec's top
-            // safety invariant; mirrors the normal-stop guard in CleanupAgentAsync). For a borrowed
-            // launch there is nothing daemon-created to clean up anyway (no CreateAsync, no mirror,
-            // no attachments), and StartAsync throwing means mcpConfigPath was never assigned.
+            // safety invariant; mirrors the normal-stop guard in CleanupAgentAsync). A borrowed launch
+            // creates no worktree and no mirror here; its attachments, if its runtime places them in
+            // the daemon store, are released by the lease in the finally below. StartAsync throwing
+            // means mcpConfigPath was never assigned.
             if (worktree != null && work == WorkLocation.OwnedWorktree) {
                 if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
                     try {
@@ -2639,6 +2711,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Phase B2-b (sequenced-settlement design §4.2.2): a pre-insert failure — the worktree (if any)
             // was torn down and no agent was ever registered; terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+        } finally {
+            if (storeLease is not null) {
+                // Never drop a directory a LIVE incarnation under this id owns: a relaunch that fails
+                // before publishing finds the previous agent still holding the id, and that agent's
+                // batch is not this launch's to remove. Same rule the failed-launch journal keeps.
+                if (_agents.ContainsKey(agentId)) {
+                    if (!published) LogAttachmentsLeftToLiveAgent(agentId);
+                    storeLease.Keep();
+                }
+
+                // The failure this launch already reported must stand: a cleanup fault here would
+                // replace the outcome after LaunchFailedAsync has been sent.
+                try { storeLease.Dispose(); }
+                catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments (failed-launch)", agentId); }
+            }
         }
     }
 
@@ -3825,6 +3912,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// checks that decide whether a condemned agent may still be written to — happens inside the
     /// agent's own delivery section.</summary>
     internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds) {
+        // Refused before the section, so nothing is downloaded for a message that was never going to
+        // be delivered. The ids are re-validated here whichever lane they arrived on: the local frame
+        // checks them too, but a server dispatch reaches this method directly. A borrowed cwd is the
+        // user's own checkout — a vendor whose files would land there gets none — and a TUI-less
+        // runtime's quit command never reaches a model, so files fetched for it would be orphaned.
+        if (attachmentIds is { Length: > 0 }) {
+            if (AttachmentIds.Validate(attachmentIds) is { } invalid) return RefuseAttachments(invalid);
+            if (agent.Kind != LaunchKind.Default) return RefuseAttachments(AttachmentRefusals.ReviewParticipant);
+
+            if (agent.Placement == AttachmentPlacement.Worktree && agent.Work == WorkLocation.BorrowedCwd)
+                return RefuseAttachments(AttachmentRefusals.NeedsOwnedWorktree);
+
+            if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+                return RefuseAttachments(AttachmentRefusals.QuitTakesNone);
+        }
+
         // A quit command typed into chat: a runtime with no TUI has nothing that interprets it, so
         // forwarding would hand the text to the model as an ordinary prompt — at best role-played
         // ("Quitting"), never a stop. PTY runtimes keep receiving the text verbatim: their TUI owns
@@ -3859,7 +3962,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         return outcome;
 
+        // The wire carries only the drop token, so an attachment refusal's wording lives in the
+        // daemon's own log or nowhere: a server-dispatched prompt refused before the section is
+        // otherwise a bare "delivery_failed" with no local trace of why.
+        InputDeliveryOutcome RefuseAttachments(string detail) {
+            LogSendInputAttachmentsRefused(agent.Id, detail);
+
+            return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, detail);
+        }
+
         async Task<InputDeliveryOutcome> DeliverInSectionAsync() {
+            const string TearingDown = "agent teardown has started";
+
             // Losing side of the reap claim: a reap-claimed agent gets nothing — no write, no clock
             // advance. Failing the dispatch here rather than writing into a dying runtime is
             // deliberate; the server heals it on resubmit.
@@ -3869,86 +3983,130 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimed);
             }
 
+            // Teardown latches CleanupStarted before its first destructive step and never waits for
+            // this section, so a delivery admitted while the agent was live can otherwise download
+            // into — and recreate — a root CleanupAgentAsync is removing.
+            if (agent.IsCleanupStarted)
+                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, TearingDown);
+
             // Fails closed: a refresh that failed has already terminated the reviewer rather than
             // leave it on a possibly-partial snapshot, so this round is over.
             if (!await TryRefreshBorrowedSnapshotAsync(agent))
                 return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, "borrowed snapshot refresh failed");
 
-            var message = text;
+            AttachmentBatch? batch   = null;
+            var              message = text;
 
+            // Inside the section, so the fetcher's sweep of its own stale staging directories can
+            // never run beside another fetch for this agent.
             if (attachmentIds is { Length: > 0 }) {
-                var paths = await DownloadAttachmentsAsync(agent.Worktree.Path, attachmentIds);
+                var root = agent.Placement == AttachmentPlacement.DaemonStore
+                    ? _attachmentStore.DirectoryFor(agent.Id)
+                    : Path.Combine(agent.Worktree.Path, ".attached");
+                var fetch = await _attachmentFetcher.FetchAsync(root, agent.Placement, attachmentIds, _shutdownCts.Token);
 
-                if (paths.Count > 0) {
-                    message = $"{text}\n\n[Attached files: {string.Join(", ", paths)}]";
+                // Fails the whole message rather than delivering a prompt that talks about files the
+                // agent has not got.
+                if (fetch.Batch is null) {
+                    LogAttachmentFetchFailed(agent.Id, fetch.FailedId, fetch.Error);
+
+                    return InputDeliveryOutcome.Drop(
+                        SendInputDropReason.DeliveryFailed, $"attachment {fetch.FailedId} unavailable: {fetch.Error}");
                 }
+
+                batch   = fetch.Batch;
+                message = $"{text}\n\n{AttachmentTrailer.For(batch.Paths)}";
             }
 
-            if (SendInputBeforeWriteHookForTest is { } beforeWrite) await beforeWrite();
-
-            // Re-read HERE, not only on entry: the borrowed-snapshot refresh budget
-            // (BorrowedSnapshotRefreshTimeout) plus any downloads routinely exceed the reap claim's
-            // own gate wait (ReapClaimGateWait), so an unfenced claim can land mid-section. The latch
-            // is monotonic 0→1 via Volatile.Read, so this re-read can never false-positive.
-            if (agent.IsReapClaimed) {
-                LogSendInputReapClaimedLate(agent.Id);
-
-                return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimedLate);
-            }
-
-            // Codex turn diagnostic: bump the round generation and sample the rollout length BEFORE
-            // delivering, while the gate is held so it is ordered per agent. Bumping first instantly
-            // invalidates any prior round's still-running probe (it emits a verdict only while its
-            // generation is the latest), so a fast Codex append caused by THIS input can never be
-            // credited to the previous round. Sampling after the bump but before the send keeps the
-            // baseline honest — the append lands strictly after it. A null here (path not cached yet,
-            // or the stat failed) is handled in ArmCodexTurnProbe.
-            if (isCodex) {
-                codexGen = Interlocked.Increment(ref agent.CodexTurnProbeGen);
-                if (agent.TranscriptPath is { } rolloutPath) codexBaseline = TryFileLength(rolloutPath);
-            }
-
-            // Sampled before the write: a turn can end while the delivery is still in flight, and
-            // that wait is newer than the one this input answers.
-            var waitGeneration = agent.ActivityClock.WaitGeneration;
-
+            // The files become the agent's only once the prompt naming them has landed: every refusal
+            // and every fault from here on takes the batch back with it, so a delivery nobody accepted
+            // leaves nothing in the worktree.
             try {
-                // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
-                if (agent.BorrowedSnapshotSource is not null)
-                    await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
-                else
-                    await agent.Runtime.SendUserInputAsync(message);
-            } catch (InputNotAdmittedException ex) {
-                LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.QueueFull);
+                if (SendInputBeforeWriteHookForTest is { } beforeWrite) await beforeWrite();
 
-                return InputDeliveryOutcome.Drop(SendInputDropReason.QueueFull, ex.Message);
-            } catch (Exception ex) {
-                LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.DeliveryFailed);
+                // Re-read HERE, not only on entry: the borrowed-snapshot refresh budget
+                // (BorrowedSnapshotRefreshTimeout) plus any downloads routinely exceed the reap claim's
+                // own gate wait (ReapClaimGateWait), so an unfenced claim can land mid-section. The latch
+                // is monotonic 0→1 via Volatile.Read, so this re-read can never false-positive.
+                if (agent.IsReapClaimed) {
+                    LogSendInputReapClaimedLate(agent.Id);
+                    batch?.Rollback();
 
-                return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, ex.Message);
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.ReaperClaimedLate);
+                }
+
+                // Same re-read for teardown, which the reap latch does not cover: every path but the
+                // reaper's tears an agent down without claiming it.
+                if (agent.IsCleanupStarted) {
+                    batch?.Rollback();
+
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, TearingDown);
+                }
+
+                // Codex turn diagnostic: bump the round generation and sample the rollout length BEFORE
+                // delivering, while the gate is held so it is ordered per agent. Bumping first instantly
+                // invalidates any prior round's still-running probe (it emits a verdict only while its
+                // generation is the latest), so a fast Codex append caused by THIS input can never be
+                // credited to the previous round. Sampling after the bump but before the send keeps the
+                // baseline honest — the append lands strictly after it. A null here (path not cached yet,
+                // or the stat failed) is handled in ArmCodexTurnProbe.
+                if (isCodex) {
+                    codexGen = Interlocked.Increment(ref agent.CodexTurnProbeGen);
+                    if (agent.TranscriptPath is { } rolloutPath) codexBaseline = TryFileLength(rolloutPath);
+                }
+
+                // Sampled before the write: a turn can end while the delivery is still in flight, and
+                // that wait is newer than the one this input answers.
+                var waitGeneration = agent.ActivityClock.WaitGeneration;
+
+                try {
+                    // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
+                    if (agent.BorrowedSnapshotSource is not null)
+                        await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
+                    else
+                        await agent.Runtime.SendUserInputAsync(message);
+                } catch (InputNotAdmittedException ex) {
+                    LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.QueueFull);
+                    batch?.Rollback();
+
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.QueueFull, ex.Message);
+                } catch (Exception ex) {
+                    LogSendInputDeliveryFailed(ex, agent.Id, agent.Runtime.Vendor, SendInputDropReason.DeliveryFailed);
+                    batch?.Rollback();
+
+                    return InputDeliveryOutcome.Drop(SendInputDropReason.DeliveryFailed, ex.Message);
+                }
+
+                // The write landed, so the files are the agent's: nothing after this point may take
+                // them back, however it fails.
+                batch = null;
+
+                // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
+                // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
+                agent.ActivityClock.Advance();
+                agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+
+                // One report per successfully handled invocation (SendInputCommand carries no round
+                // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,
+                // one-way. Captured strictly after Advance() above, so it can never carry a pre-delivery
+                // seq — monotonicity comes from _statusReportOrderingGate's acquisition order, never from
+                // the order these Task.Run calls happen to be scheduled in.
+                //
+                // MUST offload rather than await here (lock order): _statusReportOrderingGate must never
+                // be acquired while this agent's BorrowedSnapshotGate is held (see the gate's own doc).
+                // Task.Run, not a bare discard — WaitAsync can complete synchronously on an uncontended
+                // gate, which would otherwise run BuildStatusReport() (disk I/O) inline on this receive
+                // loop while still holding BorrowedSnapshotGate.
+                _ = Task.Run(() => SendDaemonStatusReportOnceAsync());
+
+                LogSendInputDelivered(agent.Id, agent.Runtime.Vendor, message.Length);
+
+                return InputDeliveryOutcome.Delivered;
+            } catch {
+                batch?.Rollback();
+
+                throw;
             }
-
-            // Input delivery counts as activity (AgentActivityClock.Advance(), shared with PTY
-            // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
-            agent.ActivityClock.Advance();
-            agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
-
-            // One report per successfully handled invocation (SendInputCommand carries no round
-            // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,
-            // one-way. Captured strictly after Advance() above, so it can never carry a pre-delivery
-            // seq — monotonicity comes from _statusReportOrderingGate's acquisition order, never from
-            // the order these Task.Run calls happen to be scheduled in.
-            //
-            // MUST offload rather than await here (lock order): _statusReportOrderingGate must never
-            // be acquired while this agent's BorrowedSnapshotGate is held (see the gate's own doc).
-            // Task.Run, not a bare discard — WaitAsync can complete synchronously on an uncontended
-            // gate, which would otherwise run BuildStatusReport() (disk I/O) inline on this receive
-            // loop while still holding BorrowedSnapshotGate.
-            _ = Task.Run(() => SendDaemonStatusReportOnceAsync());
-
-            LogSendInputDelivered(agent.Id, agent.Runtime.Vendor, message.Length);
-
-            return InputDeliveryOutcome.Delivered;
         }
     }
 
@@ -4091,88 +4249,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
         await agent.Runtime.SendSpecialKeyAsync(key);
-    }
-
-    async Task<List<string>> DownloadAttachmentsAsync(string worktreePath, string[] attachmentIds) {
-        var attachDir = Path.Combine(worktreePath, ".attached");
-        Directory.CreateDirectory(attachDir);
-
-        // Write .gitignore to prevent accidental commits
-        var gitignorePath = Path.Combine(attachDir, ".gitignore");
-
-        if (!File.Exists(gitignorePath)) {
-            await File.WriteAllTextAsync(gitignorePath, "*\n");
-        }
-
-        var paths = new List<string>();
-
-        foreach (var id in attachmentIds) {
-            try {
-                using var httpClient = _httpClientFactory.CreateClient("Attachments");
-
-                var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl);
-
-                if (resolution.Tokens is not null) {
-                    httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);
-                }
-
-                var response = await httpClient.GetAsync($"/api/attachments/{id}");
-
-                if (!response.IsSuccessStatusCode) {
-                    LogAttachmentNotFound(id, response.StatusCode);
-
-                    continue;
-                }
-
-                var rawFileName = response.Content.Headers.ContentDisposition?.FileNameStar
-                 ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"')
-                 ?? $"attachment-{id[..8]}";
-
-                // Sanitize: strip path separators to prevent directory traversal
-                var fileName = Path.GetFileName(rawFileName);
-
-                if (string.IsNullOrWhiteSpace(fileName))
-                    fileName = $"attachment-{id[..8]}";
-
-                var filePath = GetUniqueFilePath(attachDir, fileName);
-                var fullPath = Path.GetFullPath(filePath);
-                var safeDir  = Path.GetFullPath(attachDir) + Path.DirectorySeparatorChar;
-
-                if (!fullPath.StartsWith(safeDir)) {
-                    LogAttachmentPathEscape(rawFileName);
-
-                    continue;
-                }
-
-                await using var fs = File.Create(filePath);
-                await response.Content.CopyToAsync(fs);
-
-                paths.Add($".attached/{Path.GetFileName(filePath)}");
-            } catch (Exception ex) {
-                LogAttachmentError(ex, id);
-            }
-        }
-
-        return paths;
-    }
-
-    static string GetUniqueFilePath(string directory, string fileName) {
-        var path = Path.Combine(directory, fileName);
-
-        if (!File.Exists(path)) {
-            return path;
-        }
-
-        var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-        var ext            = Path.GetExtension(fileName);
-        var counter        = 2;
-
-        do {
-            path = Path.Combine(directory, $"{nameWithoutExt}-{counter}{ext}");
-            counter++;
-        } while (File.Exists(path));
-
-        return path;
     }
 
     Task<string[]> HandleFindRepoForRemote(FindRepoForRemoteRequest req)
@@ -5072,6 +5148,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
 
+        try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
+
         // Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
         // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
         // if the child exited and its pid was recycled, a re-capture would adopt the unrelated process's
@@ -5308,6 +5386,65 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Refusing unattended agent {AgentId}: {Origin} is outside the profile's capture scope")]
+    partial void LogLaunchOutOfCaptureScope(string agentId, string origin);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refusing unattended agent {AgentId}: the profile's capture scope could not be read")]
+    partial void LogLaunchCaptureScopeUnreadable(string agentId);
+
+    /// <summary>
+    /// The refusal for an unattended launch whose originating checkout falls outside the profile's
+    /// capture scope, or null to proceed. Only the daemon's own log names the checkout; what
+    /// reaches the server does not.
+    /// </summary>
+    async Task<CommandOutcome?> RefuseOutOfCaptureScopeAsync(string agentId, string? origin) {
+        var (profile, readable) = await CurrentCaptureProfileAsync();
+
+        // A config that could not be read is not evidence that nothing is scoped. Proceeding on
+        // an empty profile here would let a transient read error open the gate on exactly the
+        // checkout an existing list was excluding.
+        if (!readable) {
+            LogLaunchCaptureScopeUnreadable(agentId);
+            await _server.LaunchFailedAsync(agentId, AgentCaptureScope.UnreadableReason);
+
+            return new CommandOutcome(
+                CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        if (!AgentCaptureScope.Configured(profile)) return null;
+        if (!AgentCaptureScope.IsOutOfScope(origin, profile, _config.Home)) return null;
+
+        LogLaunchOutOfCaptureScope(agentId, origin ?? "");
+        await _server.LaunchFailedAsync(agentId, AgentCaptureScope.RefusalReason);
+
+        return new CommandOutcome(
+            CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+    }
+
+    /// <summary>
+    /// The capture lists as they stand now, read per launch rather than taken from the resolution
+    /// the daemon booted with. A daemon outlives its config, and a list added while one is running
+    /// has to bind to the next launch rather than the next restart —
+    /// <see cref="ProfileContext.Snapshot"/> says the same of any setting a long-lived process must
+    /// observe. Launches are rare enough for a disk read; the hook path this shares rules with is
+    /// the one that cannot afford one.
+    /// <para>Returns <c>Readable: false</c> for a config that exists and cannot be understood, and
+    /// the caller refuses the launch on it. Unknown lists are not absent lists: reading them as
+    /// empty would turn a corrupt or unreadable config into an open gate on exactly the checkout
+    /// an existing entry was excluding.</para>
+    /// </summary>
+    async Task<(Profile? Profile, bool Readable)> CurrentCaptureProfileAsync() {
+        // One parse, with the outcome carried out of it. A config that exists and cannot be read
+        // or understood loads as an empty profile, which is indistinguishable from one that scopes
+        // nothing — so the distinction has to come from the load itself rather than from a
+        // pre-check, which could only ever cover the failures it happened to anticipate.
+        var (outcome, snapshot) = await AppConfig.TryLoadProfileConfig(_config.ConfigRoot);
+
+        if (outcome == ProfileConfigLoad.Unreadable) return (null, false);
+
+        return (snapshot.Profiles.GetValueOrDefault(_config.Profiles.Name) ?? _config.Profiles.Effective, true);
+    }
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Vendor '{Vendor}' cannot apply a requested model; launching with its default and reporting no model instead of '{RequestedModel}', so the dashboard and analytics are not told a model is live that isn't.")]
     partial void LogModelSelectionUnsupported(string vendor, string requestedModel);
 
@@ -5338,9 +5475,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not build the explicit reviewer-model resolved report for agent {AgentId} (vendor {Vendor}, launch model {LaunchModel}) — no resolver or model no longer resolves; skipping the report (the server will fail the attempt closed)")]
     partial void LogExplicitReviewerModelUnreportable(string agentId, string vendor, string launchModel);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download launch attachments for agent {AgentId} (continuing)")]
-    partial void LogAttachmentDownloadFailed(Exception ex, string agentId);
-
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to build the approval-policy snapshot for agent {AgentId}; launching without one (permissions fall back to prompting)")]
     partial void LogPolicySnapshotBuildFailed(Exception ex, string agentId);
 
@@ -5361,6 +5495,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Could not report the dropped input for agent {AgentId} ({Reason})")]
     partial void LogSendInputRejectReportFailed(Exception ex, string agentId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment {AttachmentId} for agent {AgentId} unavailable: {Error}")]
+    partial void LogAttachmentFetchFailed(string agentId, string? attachmentId, string? error);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed launch for agent {AgentId} left its attachment directory to the live incarnation holding that id")]
+    partial void LogAttachmentsLeftToLiveAgent(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} cannot take attachments ({Detail})")]
+    partial void LogSendInputAttachmentsRefused(string agentId, string detail);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SendInput dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
     partial void LogSendInputUnknownAgent(string agentId, int knownAgents);
@@ -5437,15 +5580,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Captured failed-launch terminal tail for agent {AgentId} at {Path}")]
     partial void LogFailedLaunchCaptured(string agentId, string path);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download attachment {Id}: {Status}")]
-    partial void LogAttachmentNotFound(string id, System.Net.HttpStatusCode status);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment filename would escape directory: {FileName}")]
-    partial void LogAttachmentPathEscape(string fileName);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Error downloading attachment {Id}")]
-    partial void LogAttachmentError(Exception ex, string id);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to re-register agent {AgentId}")]
     partial void LogReRegisterFailed(Exception ex, string agentId);

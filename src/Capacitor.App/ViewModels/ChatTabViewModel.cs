@@ -11,29 +11,34 @@ using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Remote.Models;
 using DynamicData;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-public enum ChatTabPhase { Waiting, Reading, Missing, Unavailable }
+public enum ChatTabPhase { Waiting, Reading, Missing, Unavailable, Failed }
 
-/// The Chat tab: the session's transcript, tailed and projected into chat rows, plus the composer
+/// The Chat tab: the session's transcript, drained from a feed into chat rows, plus the composer
 /// that sends through whatever channel the session offers. Ctor-scoped; TeardownAsync is the one exit.
 ///
-/// Path identity is part of the read generation: a distinct transcript_path clears the rows and
-/// installs a fresh tail in one UI-thread step, and any read still in flight for the old file
-/// completes under a stale generation and is discarded.
-public sealed class ChatTabViewModel : ReactiveObject {
+/// Feed identity is part of the read generation: a distinct feed key clears the rows and installs a
+/// fresh feed in one UI-thread step, and any read still in flight for the old source completes
+/// under a stale generation and is discarded.
+public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     /// First retry gap after a failed withdraw; each further one doubles it.
     internal static readonly TimeSpan WithdrawRetryDelay = TimeSpan.FromSeconds(2);
     internal const int MaxWithdrawRetries = 3;
 
-    readonly string _agentId;
     readonly ChatInput _input;
-    readonly IChatTranscriptProjection? _projection;
+    readonly IAttachmentUploader _uploader;
+    readonly Func<string, IChatTranscriptFeed>? _openFeed;
     readonly string? _unavailableNote;
+    readonly string? _missingNote;
+    /// The last read's refusal, cleared by the next read that is not one. It stands in for the
+    /// rows while there are none and sits under them otherwise.
+    string? _failureNote;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
@@ -56,35 +61,27 @@ public sealed class ChatTabViewModel : ReactiveObject {
     readonly HashSet<ToolCallItem> _marked = new(ReferenceEqualityComparer.Instance);
     ToolGroupItem? _openGroup;
 
-    /// The tail, the generation it belongs to, and the projection context and line count that
-    /// live exactly as long as the file the tail is reading. Taken as one reference: reading them
-    /// separately lets a switch land between them and tag a read of the old file with the new
-    /// generation, which Apply's guard would then wave through onto the freshly cleared list.
-    sealed class TailLease(JsonlTail tail, int generation) {
-        public JsonlTail Tail { get; } = tail;
+    /// The feed and the generation it belongs to, taken as one reference: reading them separately
+    /// lets a switch land between them and tag a read of the old source with the new generation,
+    /// which Apply's guard would then wave through onto the freshly cleared list.
+    sealed class FeedLease(IChatTranscriptFeed feed, int generation) {
+        public IChatTranscriptFeed Feed { get; } = feed;
         public int Generation { get; } = generation;
-        TranscriptContext? _context;
-        int _linesRead;
-
-        // The app has no session id and persists nothing, so the agent id stands in; only attachment ids would read it.
-        public TranscriptContext ContextFor(IChatTranscriptProjection projection, string agentId) =>
-            _context ??= projection.CreateContext(agentId, null);
-
-        public void Reset() { _context = null; _linesRead = 0; }
-
-        // Counts the lines the tail yields, which skips blank lines, so it is not the file's physical line number.
-        public int NextLine() => ++_linesRead;
     }
 
     int _generation;
     int _inputGeneration;
     int _readInFlight;
-    string? _path;
+    string? _feedKey;
+    /// The session the listed foreign rows belong to.
+    string? _queueKey;
     string? _root;
-    volatile TailLease? _lease;
+    volatile FeedLease? _lease;
     ITimer? _timer;
     volatile Task? _pendingRead;
     readonly BehaviorSubject<string?> _rootSubject = new(null);
+
+    long? CurrentOffset => _lease?.Feed.CurrentOffset;
 
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
     public IAvaloniaReadOnlyList<QueuedChatMessage> QueuedMessages => _queuedMessages;
@@ -124,12 +121,41 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
-    public string PhaseNote => Phase switch {
+    public string PhaseNote => _items.Count > 0 ? "" : Phase switch {
         ChatTabPhase.Waiting     => "Waiting for the transcript…",
-        ChatTabPhase.Missing     => "The transcript file is missing",
+        ChatTabPhase.Missing     => _missingNote ?? "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
+        ChatTabPhase.Failed      => FailureNote(_failureNote),
         _                        => "",
     };
+
+    /// The chips staged for the next prompt. A send clears the ones it carried, never the tray.
+    public AttachmentTray Tray { get; } = new();
+
+    int _uploadingFiles;
+    /// How many chips the upload in flight carries — the snapshot the send took, not the tray,
+    /// which the user may go on staging into. Zero when nothing is uploading.
+    public int UploadingFiles {
+        get => _uploadingFiles;
+        private set {
+            if (_uploadingFiles == value) return;
+            var was = Uploading;
+            this.RaiseAndSetIfChanged(ref _uploadingFiles, value);
+            if (was != Uploading) this.RaisePropertyChanged(nameof(Uploading));
+        }
+    }
+
+    /// The staged bytes are on their way to the server; the prompt itself has not left yet.
+    public bool Uploading => UploadingFiles > 0;
+
+    readonly BehaviorSubject<string?> _intakeNotice = new(null);
+
+    void Notice(string? text) {
+        if (!_lifetimeToken.IsCancellationRequested) _intakeNotice.OnNext(text);
+    }
+
+    static string FailureNote(string? reason) =>
+        reason is null ? "The transcript could not be read" : $"The transcript could not be read: {reason}";
 
     string _composerText = "";
     int _composerEdits;
@@ -138,6 +164,7 @@ public sealed class ChatTabViewModel : ReactiveObject {
         set {
             if (string.Equals(_composerText, value, StringComparison.Ordinal)) return;
             _composerEdits++;
+            Notice(null);
             this.RaiseAndSetIfChanged(ref _composerText, value);
         }
     }
@@ -208,10 +235,12 @@ public sealed class ChatTabViewModel : ReactiveObject {
             _worked += _time.GetElapsedTime(pausedAt);
             _workingSince = null;
         }
-        ActivityNote = _status == "Starting"
-            ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
-            : working && _workingSince is { } since
-                ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
+        ActivityNote = _failureNote is { } failure && Phase != ChatTabPhase.Failed
+            ? FailureNote(failure)
+            : _status == "Starting"
+                ? VendorLabel.Length > 0 ? $"Starting {VendorLabel}…" : "Starting…"
+                : working && _workingSince is { } since
+                    ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
     }
 
     static string WorkingNote(TimeSpan elapsed) {
@@ -242,6 +271,34 @@ public sealed class ChatTabViewModel : ReactiveObject {
         return $"{dto.Kind} agent{flow}";
     }
 
+    /// The daemon cache as session facts: an add or update is the dto, a removal keeps the last
+    /// facts under a Completed status. Identical revisions are not republished.
+    static IObservable<ChatSessionInfo> LocalSession(string agentId, IDaemonClientService daemon) =>
+        daemon.Agents.Connect()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Scan((ChatSessionInfo?)null, (last, changes) => {
+                var info = last;
+                foreach (var change in changes) {
+                    if (change.Key != agentId) continue;
+                    if (change.Reason == ChangeReason.Remove)
+                        info = (info ?? ChatSessionInfo.Gone) with { Status = "Completed", StatusLabel = "Completed", Ended = true };
+                    else if (change.Reason is ChangeReason.Add or ChangeReason.Update)
+                        info = ChatSessionInfo.FromLocal(change.Current, ended: false);
+                }
+                return info;
+            })
+            .Where(info => info is not null)
+            .Select(info => info!)
+            .DistinctUntilChanged();
+
+    /// The dedup is per pane, not per feed: a projection failure that survives a transcript switch
+    /// would otherwise be logged again by every feed the pane opens.
+    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time) {
+        var logged = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        return path => new LocalTranscriptFeed(path, projection, agentId, time,
+            reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); });
+    }
+
     IBrush _statusDot = SessionStatusDots.For("");
     public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
 
@@ -254,23 +311,34 @@ public sealed class ChatTabViewModel : ReactiveObject {
     internal int WithdrawsInFlightForTesting => _withdrawing.Count;
 
     public ChatTabViewModel(
-            string agentId, IDaemonClientService daemon, ChatInput input,
+            string agentId, IDaemonClientService daemon, ChatInput input, IAttachmentUploader uploader,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             string? unavailableNote = null, IObservable<string?>? sessionId = null,
-            IObservable<bool>? localDaemonOnAppServer = null) {
-        _agentId = agentId;
+            IObservable<bool>? localDaemonOnAppServer = null)
+        : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
+               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
+               unavailableNote, null, sessionId, localDaemonOnAppServer) { }
+
+    public ChatTabViewModel(
+            string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
+            ChatInput input, IAttachmentUploader uploader, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
+            IPermissionService permissions, string? unavailableNote = null, string? missingNote = null,
+            IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
+            IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null) {
         _input = input;
+        _uploader = uploader;
         _disposables.Add(input);
-        _projection = projection;
+        _openFeed = openFeed;
         _unavailableNote = unavailableNote;
+        _missingNote = missingNote;
         _opener = opener;
         _time = time;
         _permissions = permissions;
         _lifetimeToken = _lifetime.Token;
-        _phase = projection is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
+        _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
         Cards = new PendingCardsViewModel(
-            agentId, AgentOrigin.Local, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
+            agentId, origin, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
             localDaemonOnAppServer);
         _hasPendingCards = Cards.WhenAnyValue(c => c.HasPendingCards)
             .ToProperty(this, x => x.HasPendingCards, initialValue: Cards.HasPendingCards)
@@ -293,20 +361,21 @@ public sealed class ChatTabViewModel : ReactiveObject {
                     }
                 }
                 Reconcile();
+                SyncPendingCardItems();
             })
             .DisposeWith(_disposables);
 
-        daemon.Agents.Connect()
+        session
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(OnAgentsChanged)
+            .Subscribe(OnSession)
             .DisposeWith(_disposables);
 
         _timer = time.CreateTimer(_ => OnTick(), null, PollInterval, PollInterval);
 
-        daemon.Snapshots
+        supportedVendors
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(snapshot => {
-                _options = HostedHarnessCatalog.Build(snapshot.Daemon.SupportedVendors);
+            .Subscribe(vendors => {
+                _options = HostedHarnessCatalog.Build(vendors);
                 VendorLabel = HostedHarnessCatalog.LabelFor(_options, _vendor);
                 RefreshActivityNote();
             })
@@ -317,7 +386,11 @@ public sealed class ChatTabViewModel : ReactiveObject {
         _composerHint = Observable.CombineLatest(
                 _input.WhenAnyValue(i => i.Hint),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-                (hint, readOnly) => readOnly ? "" : hint)
+                this.WhenAnyValue(x => x.UploadingFiles),
+                _intakeNotice,
+                (hint, readOnly, uploading, notice) =>
+                    uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
+                        : notice ?? (readOnly ? "" : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);
 
@@ -327,6 +400,18 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 (availability, readOnly) => !readOnly && availability != SendAvailability.Ended)
             .ToProperty(this, x => x.ShowsComposer,
                 initialValue: !IsReadOnlyParticipant && _input.Availability != SendAvailability.Ended)
+            .DisposeWith(_disposables);
+
+        // The view reaches the gate through the sink, so its two members are the ones the binding
+        // listens for: the channel's own notifications are republished under those names.
+        Observable.Merge(
+                _input.WhenAnyValue(i => i.CanAttach).Select(_ => Unit.Default),
+                _input.WhenAnyValue(i => i.AttachHint).Select(_ => Unit.Default),
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default))
+            .Subscribe(_ => {
+                this.RaisePropertyChanged(nameof(IAttachmentSink.CanAttach));
+                this.RaisePropertyChanged(nameof(IAttachmentSink.AttachHint));
+            })
             .DisposeWith(_disposables);
 
         var canSend = Observable.CombineLatest(
@@ -341,12 +426,39 @@ public sealed class ChatTabViewModel : ReactiveObject {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
-            var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, TranscriptLength(_path));
+            var files = Tray.Snapshot();
+            if (files.Count > 0 && !_input.CanAttach) { Notice(_input.AttachHint); return; }
+            IReadOnlyList<string> ids = [];
+            if (files.Count > 0) {
+                // The bytes have to be on the server before the prompt names them: a prompt that
+                // arrives first points the agent at ids the store has never seen.
+                UploadingFiles = files.Count;
+                UploadOutcome upload;
+                try { upload = await _uploader.UploadAsync(files, _lifetimeToken); }
+                catch (OperationCanceledException) { return; }
+                finally { UploadingFiles = 0; }
+                if (_lifetimeToken.IsCancellationRequested) return;
+                if (upload.Kind != UploadKind.Uploaded) {
+                    Notice(upload.Kind == UploadKind.Unauthorized ? "sign in to attach files" : upload.Reason ?? "the upload failed");
+                    return;
+                }
+                ids = upload.Ids;
+                // Re-asked after the upload: the window is long enough for the session to end or the
+                // daemon to drop the capability, and the channel would otherwise refuse the send with
+                // the chips still staged and nothing said about them.
+                if (!Attachments.CanAttach) {
+                    Notice(Attachments.AttachHint ?? LocalFrameChatInput.AttachmentsRefused);
+
+                    return;
+                }
+            }
+            var chipIds = files.Select(f => f.Id).ToList();
+            var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
             _lastSent = queued;
             _queuedMessages.Add(queued);
             RefreshQueue();
             ChatSendOutcome outcome;
-            try { outcome = await _input.SendAsync(snapshot, _lifetimeToken); }
+            try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
             catch (Exception ex) {
                 LogOnce($"send: {ex.Message}");
@@ -354,12 +466,12 @@ public sealed class ChatTabViewModel : ReactiveObject {
             }
             if (_lifetimeToken.IsCancellationRequested) return;
             if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
-            if (outcome == ChatSendOutcome.Rejected || (outcome == ChatSendOutcome.Accepted && _projection is null))
+            if (outcome == ChatSendOutcome.Rejected || (outcome == ChatSendOutcome.Accepted && _openFeed is null))
                 _queuedMessages.Remove(queued);
             else if (outcome == ChatSendOutcome.Unconfirmed)
                 queued.MarkUnconfirmed();
             RefreshQueue();
-            if (outcome == ChatSendOutcome.Accepted) ClearSentDraft(queued);
+            if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
             if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);
         _disposables.Add(SendCommand);
@@ -373,72 +485,79 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
         _disposables.Add(OpenLinkCommand);
+
+        serverQueue?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(ApplyServerQueue).DisposeWith(_disposables);
     }
 
-    void OnAgentsChanged(IChangeSet<AgentStatusDto, string> changes) {
-        foreach (var change in changes) {
-            if (change.Key == _agentId && change.Reason == ChangeReason.Remove) {
-                _status = "Completed";
-                foreach (var queued in _queuedMessages) queued.MarkUnconfirmed();
-                RefreshActivityNote();
-                RefreshQueue();
-            }
-            if (change.Key != _agentId || change.Reason is not (ChangeReason.Add or ChangeReason.Update)) continue;
-            OnDto(change.Current);
+    /// The server's queue for this session, whoever queued it. An own send it lists is queued
+    /// for certain; a prompt of nobody's here is another client's; a prompt it no longer lists
+    /// was delivered or withdrawn. Own sends still leave with the transcript's echo.
+    void ApplyServerQueue(IReadOnlyList<QueuedInputItem> items) {
+        var listed = new HashSet<Guid>();
+        foreach (var item in items) {
+            // An item with no id is unkeyed, not identified as nobody's: keying it would collide
+            // with every other such item and could disqualify an own send from its real match.
+            if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
+            if (_queuedMessages.Any(q => q.DispatchId == item.DispatchId)) continue;
+            var own = _queuedMessages.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
+            if (own is not null) own.MarkQueued(item.DispatchId);
+            else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
         }
+        foreach (var gone in _queuedMessages.Where(q => q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)).ToList())
+            _queuedMessages.Remove(gone);
+        RefreshQueue();
     }
 
-    void OnDto(AgentStatusDto dto) {
-        var notice = ParticipantNotice(dto);
-        ReadOnlyNotice = notice;
-        IsReadOnlyParticipant = notice.Length > 0;
-        _vendor = dto.Vendor;
-        // Tool paths are relative to the checkout the agent runs in. An older daemon sends only
-        // RepoPath: the repository for a primary, whose worktree beneath it ToolDetail strips, or
-        // the borrowed checkout for a reviewer.
-        var root = dto.WorktreePath ?? dto.RepoPath;
-        _root = root;
-        _rootSubject.OnNext(root);
-        VendorLabel = HostedHarnessCatalog.LabelFor(_options, dto.Vendor);
-        ModelLabel = HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "");
-        StatusText = SessionStatusDots.Label(dto);
-        StatusDot = SessionStatusDots.For(dto.Status);
-        _status = dto.Status;
-        if (SessionStatusDots.IsTerminal(_status))
-            foreach (var queued in _queuedMessages) queued.MarkUnconfirmed();
-        _awaitingInput = dto.AwaitingInput;
-        if (_projection is not null && dto.TranscriptPath is { } path && path != _path) SwitchPath(path);
+    void OnSession(ChatSessionInfo info) {
+        ReadOnlyNotice = info.ReadOnlyNotice;
+        IsReadOnlyParticipant = info.ReadOnlyNotice.Length > 0;
+        _vendor = info.Vendor;
+        _root = info.Root;
+        _rootSubject.OnNext(info.Root);
+        VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
+        ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
+        StatusText = info.StatusLabel;
+        StatusDot = SessionStatusDots.For(info.Status);
+        _status = info.Status;
+        if (info.Ended)
+            foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
+        _awaitingInput = info.AwaitingInput;
+        // A foreign row is the server's answer for one session. Moving to another — or to none,
+        // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
+        if (info.FeedKey != _queueKey) {
+            _queueKey = info.FeedKey;
+            foreach (var foreign in _queuedMessages.Where(q => q.IsForeign).ToList()) _queuedMessages.Remove(foreign);
+            RefreshQueue();
+        }
+        if (_openFeed is { } open && info.FeedKey is { } key && key != _feedKey) SwitchFeed(key, open);
         RefreshActivityNote();
         RefreshQueue();
     }
 
-    void SwitchPath(string path) {
+    void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
         _items.Clear();
         _pendingTools.Clear();
         _settledTools.Clear();
         _openGroup = null;
         _marked.Clear();
-        _path = path;
-        RebaseQueuedMessages(TranscriptLength(path));
-        _lease = new TailLease(new JsonlTail(path), Interlocked.Increment(ref _generation));
+        _feedKey = key;
+        var previous = _lease;
+        _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation));
+        previous?.Feed.Dispose();
+        RebaseQueuedMessages(CurrentOffset);
+        _failureNote = null;
         var wasWaiting = _phase == ChatTabPhase.Waiting;
         Phase = ChatTabPhase.Waiting;
         // The rows are gone, so the view has to re-read what stands in for them even when the phase
         // is unchanged — and only then, since the setter itself raises the note on a real change.
         if (wasWaiting) this.RaisePropertyChanged(nameof(PhaseNote));
+        SyncPendingCardItems();
         OnTick();
-    }
-
-    static long? TranscriptLength(string? path) {
-        if (path is null) return null;
-        try { return new FileInfo(path).Length; }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
     }
 
     void RebaseQueuedMessages(long? offset) {
         _inputGeneration++;
-        foreach (var queued in _queuedMessages) queued.Rebase(_inputGeneration, offset);
+        foreach (var queued in _queuedMessages.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
         RefreshQueue();
     }
 
@@ -449,6 +568,19 @@ public sealed class ChatTabViewModel : ReactiveObject {
     void ConfirmDelivery(QueuedChatMessage queued) {
         if (ReferenceEquals(queued, _lastSent)) _input.ConfirmLastSend();
         ClearSentDraft(queued);
+        Tray.RemoveAll(queued.AttachmentIds);
+    }
+
+    /// The one surface every intake source hands its result to.
+    public IAttachmentSink Attachments => this;
+
+    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant;
+    string? IAttachmentSink.AttachHint => _input.AttachHint;
+    int IAttachmentSink.FreeSlots => Tray.FreeSlots;
+
+    void IAttachmentSink.Accept(IntakeResult result) {
+        var refused = Tray.AddAll(result.Accepted).Concat(result.Refused).ToList();
+        Notice(RefusalNotice.Render(refused));
     }
 
     void OnTick() {
@@ -458,34 +590,15 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
         if (_lifetimeToken.IsCancellationRequested) return;
         RefreshActivityNote();
-        if (_lease is not { } lease || _projection is not { } projection) return;
+        if (_lease is not { } lease) return;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return;
-        _pendingRead = ReadAndApplyAsync(lease, projection);
+        _pendingRead = ReadAndApplyAsync(lease);
     }
 
-    async Task ReadAndApplyAsync(TailLease lease, IChatTranscriptProjection projection) {
+    async Task ReadAndApplyAsync(FeedLease lease) {
         try {
-            var (read, envelopes) = await Task.Run(() => {
-                var result = lease.Tail.ReadAppended();
-                if (result.Status == TailStatus.Reset) lease.Reset();
-                var list = new List<(ChatProjectionResult Projection, long Offset)>();
-                if (result.Lines.Count > 0) {
-                    var context = lease.ContextFor(projection, _agentId);
-                    context.BeginBatch();
-                    var receivedAt = _time.GetUtcNow();
-                    for (var index = 0; index < result.Lines.Count; index++) {
-                        var line = result.Lines[index];
-                        var lineNumber = lease.NextLine();
-                        try {
-                            list.Add((projection.ProjectWithInputs(line, lineNumber, receivedAt, context), result.LineStartOffsets[index]));
-                        }
-                        catch (Exception ex) { LogOnce($"projection: {ex.Message}"); }
-                    }
-                }
-                return (result, list);
-            }).ConfigureAwait(false);
-
-            await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read, envelopes));
+            var read = await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read));
         } catch (Exception ex) {
             LogOnce($"read: {ex.Message}");
         } finally {
@@ -493,20 +606,30 @@ public sealed class ChatTabViewModel : ReactiveObject {
         }
     }
 
-    void Apply(int generation, TailRead read, List<(ChatProjectionResult Projection, long Offset)> lines) {
+    void Apply(int generation, FeedRead read) {
         if (generation != Volatile.Read(ref _generation)) return;
 
         switch (read.Status) {
-            case TailStatus.Missing:
+            case FeedStatus.Missing:
                 Phase = ChatTabPhase.Missing;
                 return;
-            case TailStatus.Failed:
-                LogOnce(read.Failure ?? "read failed");
+            case FeedStatus.Failed:
+                var reason = read.Failure ?? "read failed";
+                LogOnce(reason);
+                var changed = !string.Equals(_failureNote, reason, StringComparison.Ordinal);
+                _failureNote = reason;
+                // No rows on screen: the reason stands in for them. Rows already shown stay, with
+                // the reason beneath them.
+                if (_items.Count == 0) Phase = ChatTabPhase.Failed;
+                if (changed) {
+                    this.RaisePropertyChanged(nameof(PhaseNote));
+                    RefreshActivityNote();
+                }
                 return;
-            case TailStatus.Reset:
-                // Skip everything already present in the new file, including appends that landed
-                // while this read was being projected. They may be replayed history, not receipts.
-                RebaseQueuedMessages(Math.Max(read.SnapshotLength ?? 0, TranscriptLength(_path) ?? 0));
+            case FeedStatus.Reset:
+                // Skip everything the new source replays: it may be history, not receipts. The feed
+                // names where that history ends — anything past it arrived after and can acknowledge.
+                RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
                 _items.Clear();
                 _pendingTools.Clear();
                 _settledTools.Clear();
@@ -515,19 +638,26 @@ public sealed class ChatTabViewModel : ReactiveObject {
                 break;
         }
 
+        // Any read that is not a refusal clears one: how long a refusal lasts is the feed's to
+        // say, and a feed whose refusal stands keeps answering with it.
+        if (_failureNote is not null) {
+            _failureNote = null;
+            RefreshActivityNote();
+        }
         Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
-        foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline))
-            queued.Rebase(_inputGeneration, Math.Max(read.SnapshotLength ?? 0, TranscriptLength(_path) ?? 0));
+        foreach (var queued in _queuedMessages.Where(q => !q.HasBaseline && !q.IsForeign))
+            queued.Rebase(_inputGeneration, read.SnapshotOffset ?? CurrentOffset ?? 0);
         RefreshQueue();
-        if (lines.Count == 0) {
+        if (read.Lines.Count == 0) {
+            SyncPendingCardItems();
             RefreshActivityNote();
             return;
         }
 
         var fresh = new List<ChatItemViewModel>();
-        foreach (var (projected, offset) in lines) {
+        foreach (var (projected, offset) in read.Lines) {
             foreach (var text in projected.SubmittedInputs) {
                 var acknowledged = _queuedMessages.FirstOrDefault(q => q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
@@ -572,7 +702,42 @@ public sealed class ChatTabViewModel : ReactiveObject {
         if (fresh.Count > 0) _items.AddRange(fresh);
         RefreshQueue();
         Reconcile();
+        SyncPendingCardItems();
         RefreshActivityNote();
+    }
+
+    /// Cards ride the same virtualizing list as the thread, always last, so a path switch or a
+    /// transcript reset cannot bury them in the middle of replayed rows.
+    void SyncPendingCardItems() {
+        var cards = PendingCards;
+        var start = _items.Count;
+        while (start > 0 && _items[start - 1] is PendingCardItem) start--;
+        if (TrailingCardsMatch(start, cards)) return;
+
+        foreach (var item in _items)
+            if (item is ToolGroupItem { PacksWithCard: true } packed)
+                packed.PacksWithCard = false;
+
+        var wasEmpty = _items.Count == 0;
+        for (var i = _items.Count - 1; i >= 0; i--)
+            if (_items[i] is PendingCardItem) _items.RemoveAt(i);
+
+        var packs = cards.Count > 0 && _items.Count > 0 && _items[^1] is ToolGroupItem;
+        if (packs) ((ToolGroupItem)_items[^1]).PacksWithCard = true;
+        var first = true;
+        foreach (var card in cards) {
+            _items.Add(new PendingCardItem(card, packsWithPrevious: first && packs));
+            first = false;
+        }
+        if (wasEmpty != (_items.Count == 0))
+            this.RaisePropertyChanged(nameof(PhaseNote));
+    }
+
+    bool TrailingCardsMatch(int start, ReadOnlyObservableCollection<PendingCardViewModel> cards) {
+        if (_items.Count - start != cards.Count) return false;
+        for (var i = 0; i < cards.Count; i++)
+            if (!ReferenceEquals(((PendingCardItem)_items[start + i]).Card, cards[i])) return false;
+        return true;
     }
 
     /// A row is marked iff some pending request targets it: by tool-use id when the request has
@@ -636,7 +801,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
 
     public Task TeardownAsync() {
         Interlocked.Increment(ref _generation);
+        var lease = _lease;
         _lease = null;
+        lease?.Feed.Dispose();
         _timer?.Dispose();
         _timer = null;
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
@@ -644,7 +811,9 @@ public sealed class ChatTabViewModel : ReactiveObject {
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();
+        Tray.Clear();
         _rootSubject.Dispose();
+        _intakeNotice.Dispose();
         _lifetime.Dispose();
         return Task.CompletedTask;
     }

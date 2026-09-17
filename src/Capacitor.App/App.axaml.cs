@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -20,6 +21,7 @@ using Capacitor.App.Views;
 using Capacitor.App.Views.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
@@ -131,6 +133,7 @@ public partial class App : Application {
     ServerPermissionFeed? _permissionFeed;
     SessionAttentionTracker? _attention;
     SessionAccessService? _sessionAccess;
+    PullRequestToneCache? _pullRequestTones;
     ConsentPromptCoordinator? _promptCoordinator;
     // Disposed with the other UI services below: it holds a constructor-scoped subscription to
     // the shared ticker, which is RefCount'd — an undisposed subscriber keeps the Interval (and
@@ -181,7 +184,12 @@ public partial class App : Application {
     // counterpart of the wizard sign-in quiesce.
     SignInWindow? _signInWindow;
     SettingsWindow? _settingsWindow;
+    FeedbackWindow? _feedbackWindow;
+    internal FeedbackWindow? FeedbackWindowForTests => _feedbackWindow;
     readonly AppMenu _appMenu = new(AppKitMenus.ShowAboutPanel);
+    // A field, not a local: the report items it retains are enabled only once the profile has
+    // resolved, long after the bar is attached.
+    AppMenuBar? _menuBar;
     Task? _reauthSettle;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
@@ -204,6 +212,7 @@ public partial class App : Application {
 
     public override void Initialize() {
         AvaloniaXamlLoader.Load(this);
+        LineSelection.Install();
         // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
         // "About Avalonia" when there is none.
         NativeMenu.SetMenu(this, _appMenu.Menu);
@@ -218,7 +227,8 @@ public partial class App : Application {
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => windowLifecycle.Dispose();
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
-            new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator)).Install();
+            _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
+            _menuBar.Install();
             _ = StartAsync(desktop);
         }
 
@@ -295,7 +305,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _permissionFeed, _attention, _permissions, _sessionAccess,
-                    _activity, _home, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -313,6 +323,7 @@ public partial class App : Application {
             _attention = null;
             _permissions = null;
             _sessionAccess = null;
+            _pullRequestTones = null;
             _pause = null;
             _activity = null;
             _home = null;
@@ -547,6 +558,7 @@ public partial class App : Application {
         // After the directory, which feeds it the session→agent map: a server-lane item names a
         // session, and only that map turns it into the agent whose card it belongs on.
         var readDetail = ServerSessionHttp.DetailReader(sessionHttp, profiles);
+        var uploader = new ServerAttachmentUploader(ServerHttp(profiles), profiles);
         var permissions = new PermissionService(
             service, ops, ct => PermissionSubscription.RunAsync(_daemonStore, service.DaemonName, ct),
             TimeProvider.System, _shutdown.Token, ServerSessionHttp.Responder(sessionHttp, profiles),
@@ -557,6 +569,8 @@ public partial class App : Application {
             serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, TimeProvider.System);
         var attention = new SessionAttentionTracker(serverLane, readDetail, TimeProvider.System);
         _sessionAccess = sessionAccess;
+        var pullRequestTones = new PullRequestToneCache(directory, readers, TimeProvider.System);
+        _pullRequestTones = pullRequestTones;
         _permissionFeed = permissionFeed;
         _attention = attention;
 
@@ -598,19 +612,31 @@ public partial class App : Application {
         // attached to the visual tree (WorkspaceView's own header comment).
         var attachFactory = CoreTerminalAttachClient.Factory(() => _daemonStore.SocketPath(service.DaemonName));
         Action requestSignIn = () => OpenSignInDialog(profiles, notifier);
+
+        var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
+        // A resolved server and nothing more — deliberately wider than Settings, which also needs a
+        // profile name for its store.
+        var feedbackApi = ServerHttp(profiles) is null ? null : _serverHttp!.GetRequiredService<IFeedbackApi>();
+        Action<FeedbackCategory>? openFeedback = feedbackApi is null
+            ? null
+            : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
+        _menuBar?.SetFeedbackAction(openFeedback);
+
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), TimeProvider.System, opener, permissions,
-            workContext, ops, requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
+            workContext, ops, uploader,
+            requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             },
-            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer);
+            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
         RemoteSessionViewModel? BuildRemote(string agentId) =>
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
-                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions)
+                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, TimeProvider.System,
+                    () => new XtermTerminalSurface(80, 24, PtyDumpPath))
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -621,16 +647,17 @@ public partial class App : Application {
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
                 requestSignIn: requestSignIn,
-                lifecycleAttention: lifecycleAttention,
+                lifecycleAttention: lifecycleAttention, pullRequestTones: pullRequestTones.Tones,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
                 // workspace, and the directory only keeps both rows when the twin is unproven.
-                originOf: id => directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
+                originOf: id => directory.Rows.Lookup($"local:{id}").HasValue || directory.Rows.Lookup($"pending:{id}").HasValue ? AgentOrigin.Local
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
-                modelCatalog: modelCatalog.Catalog, appServerUrl: profiles?.Resolution.ServerUrl),
+                modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
+                openFeedback: openFeedback),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -693,6 +720,40 @@ public partial class App : Application {
         _settingsWindow = window;
         window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
+        window.Show();
+        window.Activate();
+    }
+
+    // Deferred, so each window reads the CLI version installed when it opens rather than the one
+    // known at startup — the seed is what a daemon that never reported carries. The daemon version
+    // is the same stripped form the status line shows, so a report and that chip cannot disagree.
+    internal static IObservable<string> FeedbackTrailerFeed(
+            IDaemonClientService service, string appVersion, Func<string?> cliVersion) =>
+        Observable.Defer(() => service.Snapshots
+            // Snapshots arrive on the daemon client's pump thread and the trailer drives a bound
+            // hint. BEFORE StartWith, so the seed still arrives synchronously on subscribe — the
+            // hint would otherwise render an empty trailer for a beat.
+            .ObserveOn(ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler)
+            .Select(s => FeedbackTrailer.Build(appVersion, service.DaemonName,
+                MainWindowViewModel.StripBuildMetadata(s.Daemon.Version), cliVersion()))
+            .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, cliVersion())));
+
+    internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category) {
+        if (_shutdownStarted) return;
+        if (_feedbackWindow is { } open) {
+            if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
+            open.Activate();
+            ((FeedbackViewModel)open.DataContext!).Reopen(category);
+            return;
+        }
+
+        var vm = new FeedbackViewModel(api, category, trailer, RuntimeInformation.OSDescription,
+            signIn: signIn, appLifetime: _shutdown.Token);
+
+        var window = new FeedbackWindow { DataContext = vm };
+        _feedbackWindow = window;
+        window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
+        window.Closed += (_, _) => { _feedbackWindow = null; vm.Dispose(); };
         window.Show();
         window.Activate();
     }
@@ -1093,13 +1154,15 @@ public partial class App : Application {
             Func<string, WorkspaceViewModel>? workspaceFactory = null, string? tenantName = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null, Action? requestSignIn = null,
             IObservable<string?>? lifecycleAttention = null,
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            string? appServerUrl = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null,
+            Action<FeedbackCategory>? openFeedback = null) {
         // Notifier is set on the WINDOW (spec §11 toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1130,7 +1193,7 @@ public partial class App : Application {
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
-            modelCatalog: modelCatalog, appServerUrl: appServerUrl);
+            modelCatalog: modelCatalog, uploader: uploader, time: TimeProvider.System, appServerUrl: appServerUrl);
         // Same knot as home above, over the SAME `service` instance — its own openSession
         // callback closes over `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
@@ -1138,13 +1201,15 @@ public partial class App : Application {
         // own lookup would open the local one for both.
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
-            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), agentsWithPending: agentsWithPending);
+            openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), agentsWithPending: agentsWithPending,
+            pullRequestTones: pullRequestTones);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
             laneStatus: lane?.Status, restartPending: restartPending,
-            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory);
+            originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
+            openFeedback: openFeedback, opener: new ShellUrlOpener());
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
@@ -1592,9 +1657,16 @@ public partial class App : Application {
 
         e.Cancel = true;
         _shutdown.Cancel();
-        if (_shutdownStarted) return; // e.g. a rapid double Cmd+Q — disposal is already in flight
+        _ = StartShutdownAsync();
+    }
+
+    // The flag is raised BEFORE the disposal runs, and that ordering is what lets the pass close a
+    // dialog that cancels its own close while busy (settings, feedback). A second call — a rapid
+    // double Cmd+Q — finds disposal already in flight and does nothing.
+    internal Task StartShutdownAsync() {
+        if (_shutdownStarted) return Task.CompletedTask;
         _shutdownStarted = true;
-        _ = DisposeAndShutdownAsync();
+        return DisposeAndShutdownAsync();
     }
 
     // Split out of OnShutdownRequested so a test can drive BOTH passes (the event itself needs a
@@ -1625,7 +1697,7 @@ public partial class App : Application {
         _navigation.Latch();
     }
 
-    async Task DisposeAndShutdownAsync() {
+    internal async Task DisposeAndShutdownAsync() {
         // FIRST, before quiesce (which can wait a full minute) and before any disposal: a live
         // workspace holds a terminal attach on the daemon socket, and the clamp it implies must be
         // released for every other viewer as early as possible. Bounded at 5s and never throws.
@@ -1642,6 +1714,7 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
         if (_reauthSettle is { } reauthSettle) await reauthSettle.ConfigureAwait(false);
 
         // spec §3.6 + decision 2: an in-flight sign-in always settles, mutations get a bounded chance
@@ -1656,7 +1729,7 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _permissionFeed, _attention, _permissions, _sessionAccess,
-                    _activity, _home, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => _updates?.ApplyPendingOnExit());
         } else {

@@ -9,6 +9,7 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
 
@@ -23,7 +24,7 @@ namespace Capacitor.Cli.Commands.Harness;
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        IProcessStarter starter) {
+        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -240,11 +241,11 @@ public sealed class ClaudeHookCommand(
         try { return await enrichment; } catch { return fallbackBody; }
     }
 
-    // Repo/path exclusion gate shared by the main command path and the permission-request
-    // watcher self-heal: true when the active profile excludes this session's repo or cwd
-    // (caller should skip capture). The fallback repo detection is budgeted so a slow git/gh
-    // probe can't blow the hook deadline; if it can't resolve in time we fail open to capturing
-    // (the per-cwd cache makes subsequent sessions in an excluded repo resolve and exclude promptly).
+    // Repo/path scope gate shared by the main command path and the permission-request watcher
+    // self-heal: true when the active profile does not admit this session's repo or cwd (caller
+    // should skip capture). The fallback repo detection is budgeted so a slow git/gh probe can't
+    // blow the hook deadline. What an unresolved repo then means depends on the lists: with only a
+    // denylist it captures, but an allow list does not admit what it cannot place.
     /// <summary>
     /// The disabled-session and repo/path exclusion gates, callable from the degraded path.
     ///
@@ -295,19 +296,23 @@ public sealed class ClaudeHookCommand(
     }
 
     internal async Task<bool> IsSessionExcludedAsync(Profile? profile, string body, HookBudget budget) {
-        if (profile?.ExcludedRepos is { Length: > 0 } repos
-         && await RepoExclusion.IsExcludedAsync(config, body, repos, budget.Remaining)) {
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, body,
+                                                  profile?.AllowedRepos, profile?.ExcludedRepos, budget.Remaining)) {
             return true;
         }
 
-        if (profile?.ExcludedPaths is { Length: > 0 } paths) {
-            try {
-                var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
+        if (profile?.AllowedPaths is { Length: > 0 } || profile?.ExcludedPaths is { Length: > 0 }) {
+            string? cwd;
 
-                if (PathExclusion.IsExcluded(cwd, paths, home)) return true;
+            try {
+                cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
             } catch {
-                // Best effort
+                // A body we cannot read yields no cwd rather than a verdict: a denylist shrugs at
+                // that, an allowlist does not admit it. Deciding here would hand both the same answer.
+                cwd = null;
             }
+
+            if (PathExclusion.IsOutOfScope(cwd, profile?.AllowedPaths, profile?.ExcludedPaths, home)) return true;
         }
 
         return false;
@@ -425,13 +430,13 @@ public sealed class ClaudeHookCommand(
         if (command == "session-start") {
             // Awaited INSIDE the session-start block after EnsureWatcherRunning so it never delays
             // transcript-capture start.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
         } else if (command is "session-end" or "subagent-stop") {
             // Budgeted so a slow git probe can't push the bounded POST/spool path past the hook
             // deadline. The await below is also budget-bounded as a hard backstop.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(config, body, budget.Remaining, detectPullRequest: false);
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, budget.Remaining, detectPullRequest: false);
         } else {
-            body = await RepositoryDetection.EnrichWithRepositoryInfo(config, body, detectPullRequest: false);
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, body, detectPullRequest: false);
         }
 
         // Resolve the V2 profile once for repo/path exclusion and
@@ -788,14 +793,15 @@ public sealed class ClaudeHookCommand(
                     var coordinationFragment = CoordinationNoticesEmitter.BuildFragment(
                         responseNode, coordinationNoticesDisabled);
 
-                    // The static work-items nudge. Claude has always carried kcap-workitems, so
-                    // the availability gate is always satisfied here; only the opt-out can suppress it.
+                    // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
                     var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses);
+                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config));
+                    var plansNudge = PlansNudgeEmitter.Resolve(
+                        HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, harnessNudge);
+                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }
@@ -1131,7 +1137,7 @@ public sealed class ClaudeHookCommand(
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
             var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(config, clock.Time), http.ForMemoryAsync, clock.Time);
+                new SessionStartMemoryScopeResolver(router, config, workdir, clock.Time), http.ForMemoryAsync, clock.Time);
 
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,

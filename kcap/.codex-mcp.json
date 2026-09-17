@@ -23,6 +23,10 @@
     "kcap-workitems": {
       "command": "kcap",
       "args": ["mcp", "workitems"]
+    },
+    "kcap-plans": {
+      "command": "kcap",
+      "args": ["mcp", "plans"]
     }
   }
 }

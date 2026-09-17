@@ -1,14 +1,22 @@
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// A synthetic process table (pid -> (ppid, comm)) for resolver tests. Kept out of
+/// A synthetic process table (pid -> (ppid, names)) for resolver tests. Kept out of
 /// the test class so the TUnit source generator only sees [Test] methods there.
 /// </summary>
 static class ProcTable {
-    public static Func<int, (int ppid, string comm)?> Of(params (int pid, int ppid, string comm)[] rows) =>
+    public static Func<int, (int ppid, IReadOnlyList<string> names)?> Of(params (int pid, int ppid, string comm)[] rows) =>
+        OfNames([..rows.Select(r => (r.pid, r.ppid, (string[])[r.comm]))]);
+
+    /// <summary>
+    /// As <see cref="Of"/> but with every name a process reports, which is what the real
+    /// lookup returns: argv[0], the exec basename (and its versioned-install grandparent)
+    /// and the stat comm can each be a different string for one process.
+    /// </summary>
+    public static Func<int, (int ppid, IReadOnlyList<string> names)?> OfNames(params (int pid, int ppid, string[] names)[] rows) =>
         pid => {
-            foreach (var (p, ppid, comm) in rows) {
-                if (p == pid) return (ppid, comm);
+            foreach (var (p, ppid, names) in rows) {
+                if (p == pid) return (ppid, names);
             }
 
             return null;
@@ -221,4 +229,38 @@ public class CodingAgentPidResolverTests {
 
         await Assert.That(pid).IsNull();
     }
+
+    [Test]
+    public async Task Resolves_claude_when_only_argv0_still_names_it() {
+        // A native install puts the binary at .../claude/versions/<version>, so the exec
+        // basename is the version string and the title-mangled comm is the same string. argv[0]
+        // is the only source left that names the agent.
+        var lookup = ProcTable.OfNames((100, 80, ["claude", "2.1.272"]), (80, 1, ["-zsh"]));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 100, vendor: "claude", lookup);
+
+        await Assert.That(pid).IsEqualTo(100);
+    }
+
+    [Test]
+    public async Task A_version_string_name_does_not_discard_a_good_one() {
+        // The terminal shape: the comm names the agent and the exec path does not.
+        var lookup = ProcTable.OfNames((50, 20, ["2.1.272", "claude"]), (20, 1, ["-zsh"]));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 50, vendor: "claude", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
+    public async Task A_nameless_process_does_not_abort_the_walk() {
+        // A zombie or a permission-restricted hop must not stop the walk short of the agent:
+        // resolution failing is what triggers the fallback that mis-arms the watchdog.
+        var lookup = ProcTable.OfNames((90, 50, []), (50, 20, ["claude"]), (20, 1, ["-zsh"]));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "claude", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
 }
