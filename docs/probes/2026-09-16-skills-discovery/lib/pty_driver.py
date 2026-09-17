@@ -308,6 +308,8 @@ class PtySession(Session):
         raise TimeoutError(f"tui not ready within {timeout}s")
 
     def ask(self, prompt: str) -> AskResult:
+        # A wizard the vendor raises between turns would otherwise take the prompt as its input.
+        self._answer_dialogs()
         # The screen starts blank for the turn, so an earlier turn's answer cannot be read as this
         # one's; whatever the UI redraws afterwards is this turn's own output.
         with self._lock:

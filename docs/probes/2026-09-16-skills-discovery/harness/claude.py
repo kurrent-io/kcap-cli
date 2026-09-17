@@ -23,7 +23,8 @@ class ClaudeAdapter(Adapter):
     can_resume = True
     # An arrow and its Enter are typed a redraw apart; the browser dialog's default keeps the
     # browser tools off, which is what the probe wants.
-    tui_dialogs = ((r"Yes, I trust this folder", "\x1b[B\r"), (r"keep browser tools off", "\r"))
+    tui_dialogs = ((r"Yes, I trust this folder", "\x1b[B\r"), (r"keep browser tools off", "\r"),
+                   (r"Teach auto mode about your environment", "\x1b"))
     tui_exit = ("/exit\r", "\x03", "\x03")
     tui_ready = 5.0
 

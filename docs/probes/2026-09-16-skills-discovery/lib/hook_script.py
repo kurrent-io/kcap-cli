@@ -27,11 +27,15 @@ def write_hook_script(config_root: Path, skill_file: Path, body: str, stamp: Pat
         # A vendor that never closes the hook's stdin must not wedge the launch: capture briefly.
         # Backgrounded commands get /dev/null on fd 0 unless explicitly redirected, so the real
         # stdin is saved to fd 3 first and handed to the background reader from there. A vendor
-        # that hands the hook no stdin at all must not abort the script under set -e.
-        "{ exec 3<&0; } 2>/dev/null || exec 3</dev/null\n"
-        f"( cat <&3 > '{stamp}.stdin' ) & cat_pid=$!\n"
-        "sleep 2\n"
-        "kill $cat_pid 2>/dev/null || true\n"
+        # that hands the hook no stdin at all must not abort the script under set -e. A terminal
+        # is never read: its input is the interactive UI's, and a hook that consumes it leaves the
+        # vendor waiting for a keystroke it will never see.
+        "if [ ! -t 0 ]; then\n"
+        "  { exec 3<&0; } 2>/dev/null || exec 3</dev/null\n"
+        f"  ( cat <&3 > '{stamp}.stdin' ) & cat_pid=$!\n"
+        "  sleep 2\n"
+        "  kill $cat_pid 2>/dev/null || true\n"
+        "fi\n"
         "exit 0\n"
     )
     script.chmod(0o755)

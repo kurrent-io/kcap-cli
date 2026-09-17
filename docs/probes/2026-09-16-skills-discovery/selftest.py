@@ -409,6 +409,28 @@ from harness.fake import FakeAdapter  # noqa: E402
 from lib.print_driver import print_ask  # noqa: E402
 
 
+class HookOnATerminalTests(unittest.TestCase):
+    def test_hook_leaves_a_terminal_alone(self):
+        import pty as _pty
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            script = write_hook_script(root, root / "skills" / "x" / "SKILL.md", "body\n", stamp_path(root))
+            master, slave = _pty.openpty()
+            try:
+                started = time.time()
+                out = subprocess.run([str(script)], stdin=slave, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, timeout=20)
+                elapsed = time.time() - started
+            finally:
+                os.close(master)
+                os.close(slave)
+            self.assertEqual(out.returncode, 0)
+            self.assertTrue((root / "skills" / "x" / "SKILL.md").exists())
+            # A terminal's input belongs to the vendor's UI, so the hook neither reads nor waits.
+            self.assertFalse((Path(str(stamp_path(root)) + ".stdin")).exists())
+            self.assertLess(elapsed, 2.0)
+
+
 class AdapterTests(unittest.TestCase):
     def test_fake_adapter_round_trip(self):
         with tempfile.TemporaryDirectory() as d:
