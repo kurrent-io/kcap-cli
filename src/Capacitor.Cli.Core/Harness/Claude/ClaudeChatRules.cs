@@ -1,4 +1,3 @@
-// src/Capacitor.Cli.Core/Harness/Claude/ClaudeChatRules.cs
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Capacitor.Models.Transcripts.Harness.Claude;

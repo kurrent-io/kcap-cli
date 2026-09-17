@@ -11,10 +11,10 @@ code moves on; where an entry disagrees with the code, the code wins.
 A Claude session's subagents are read off the transcript alone: an `Agent` or `Task` call starts a
 row, a result whose `toolUseResult.status` is `async_launched` marks it background and binds the
 agent id, a task-notification or a `TaskStop` result ends it. The evidence is the same on both
-lanes because the leaf now writes the root `toolUseResult` of a single-result line into the
+lanes because the leaf writes the root `toolUseResult` of a single-result line into the
 `claude_code` extension as `tool_use_result` — the key and content kcap-server's normalizer already
-persists — so sessions ingested before this change list their subagents too. On a line with several
-results the object names none of them and is written on none.
+persists — so sessions the server ingested earlier list their subagents as well. On a line with
+several results the object names none of them and is written on none.
 
 The facts ride a third member of `ChatProjectionResult`, beside the rows, rather than on the wire
 envelope: `AcpEventEnvelope` is mirrored on the server with a per-field compat guard, and a display
