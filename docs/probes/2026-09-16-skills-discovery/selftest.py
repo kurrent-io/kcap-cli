@@ -18,7 +18,7 @@ class KitLayoutTests(unittest.TestCase):
 
 
 from lib.probe_skill import (  # noqa: E402
-    NO_SKILL, ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill,
+    NO_SKILL, TOKEN_RE, ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill,
 )
 
 
@@ -506,6 +506,27 @@ class _CountingAdapter(FakeAdapter):
         return super().ask(sb, mode, prompt)
 
 
+class _FrozenAdapter(FakeAdapter):
+    live_catalogue = False
+
+
+class _AncestorAdapter(FakeAdapter):
+    """A vendor anchored at the git root: reads the repo's roots wherever it is launched."""
+
+    def catalogue(self, sb):
+        lines = []
+        for root in self.read_roots:
+            for skill_md in sorted((sb.repo / root).glob("kcap-probe-*/SKILL.md")):
+                m = TOKEN_RE.search(skill_md.read_text())
+                if m:
+                    lines.append(f"{skill_md.parent.name}=PROBE-BODY-{m.group(1)}")
+        return lines
+
+
+class _NoResumeAdapter(_CountingAdapter):
+    can_resume = False
+
+
 class _RaisingAdapter(FakeAdapter):
     def ask(self, sb, mode, prompt):
         raise RuntimeError("vendor exploded")
@@ -598,12 +619,12 @@ class _LeakyControlAdapter(FakeAdapter):
 
 
 class RunnerTests(unittest.TestCase):
-    def _runner(self, d, runs=2):
-        return probe.Runner(FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
+    def _runner(self, d, adapter=None, runs=1):
+        return probe.Runner(adapter or FakeAdapter(), Path(d) / "out", runs=runs, base=Path(d))
 
     def test_s0_and_s1(self):
         with tempfile.TemporaryDirectory() as d:
-            r = self._runner(d)
+            r = self._runner(d, runs=2)
             recs = r.run_scenario("print", "S0")
             self.assertEqual([x.verdict for x in recs], ["not_visible", "not_visible"])
             recs = r.run_scenario("print", "S1")
@@ -638,7 +659,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_s4_roots_and_confirmation(self):
         with tempfile.TemporaryDirectory() as d:
-            r = self._runner(d)
+            r = self._runner(d, runs=2)
             r.run_scenario("print", "S1")
             recs = r.run_scenario("print", "S4")
             all_rows = [x for x in recs if x.arm == "S4/all-roots"]
@@ -850,7 +871,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_third_run_on_disagreement(self):
         with tempfile.TemporaryDirectory() as d:
-            r = self._runner(d)
+            r = self._runner(d, runs=2)
             calls = {"n": 0}
 
             def flaky():
@@ -865,6 +886,97 @@ class RunnerTests(unittest.TestCase):
             recs = r.run_arm(flaky, "print", "S1", "S1/native", None, "none")
             self.assertEqual(len(recs), 3)
 
+    def test_s5_live_catalogue(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("daemon", "S5")
+            self.assertEqual({r.arm: r.verdict for r in recs},
+                             {"S5/add": "visible_live", "S5/update": "visible_live", "S5/delete": "revoked"})
+            self.assertTrue(all("turn1=" in r.notes for r in recs))
+            self.assertTrue((Path(d) / "out" / "fake" / "daemon" / "S5" / "S5_add" / "run1.prior.raw.txt").is_file())
+
+    def test_s5_frozen_catalogue_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _FrozenAdapter()).run_scenario("daemon", "S5")
+            self.assertEqual({r.arm: r.verdict for r in recs},
+                             {"S5/add": "not_visible", "S5/update": "stale", "S5/delete": "stale"})
+
+    def test_s5_without_a_session_is_untested_without_a_turn(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _CountingAdapter()
+            a.open_session = lambda sb, mode: None
+            recs = self._runner(d, a).run_scenario("daemon", "S5")
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertEqual(a.calls, 0)
+
+    def test_s6_startup_mutation(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S6")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S6/update": "visible_first_turn", "S6/delete": "revoked"})
+            self.assertTrue(all(r.hook and r.hook["fired_at"] for r in recs))
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _NoFireAdapter()).run_scenario("print", "S6")
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertTrue(all("hook never fired" in r.notes for r in recs))
+
+    def test_s7_resume(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S7")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S7/add": "visible_first_turn", "S7/update": "visible_first_turn"})
+            self.assertTrue(all("session=fake-session" in r.notes and "--resume" in r.argv for r in recs))
+        with tempfile.TemporaryDirectory() as d:
+            a = _NoResumeAdapter()
+            recs = self._runner(d, a).run_scenario("print", "S7")
+            self.assertEqual({r.verdict for r in recs}, {"untested"})
+            self.assertEqual(a.calls, 0)
+
+    def test_s8_nested_cwd(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S8")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S8/ancestor": "not_visible", "S8/local": "visible_first_turn"})
+            self.assertTrue(all("cwd=sub/dir" in r.notes for r in recs))
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _AncestorAdapter()).run_scenario("print", "S8")
+            self.assertEqual({r.arm: r.verdict for r in recs}, {"S8/ancestor": "visible_first_turn", "S8/local": "not_visible"})
+
+    def test_s9_worktrees(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("print", "S9")
+            self.assertEqual({r.arm: r.verdict for r in recs},
+                             {"S9/linked-own": "visible_first_turn", "S9/linked-other": "not_visible"})
+            self.assertTrue(all(r.exclusion == "info-exclude" for r in recs))
+
+    def test_s10_peer_hook(self):
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d).run_scenario("daemon", "S10")
+            self.assertEqual([(r.arm, r.verdict) for r in recs], [("S10/hook-from-peer", "visible_live")])
+            self.assertIn("peer=visible_first_turn", recs[0].notes)
+            self.assertIn("turn1=not_visible", recs[0].notes)
+
+    def test_tui_mode_runs_controls_hook_and_live_arms(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            self.assertEqual([x.verdict for x in r.run_scenario("tui", "S0")], ["not_visible"])
+            self.assertEqual([x.verdict for x in r.run_scenario("tui", "S1")], ["visible_first_turn"])
+            recs = r.run_scenario("tui", "S2")
+            self.assertEqual({x.arm: x.verdict for x in recs}, {"S2/hook-adds-skill": "visible_first_turn"})
+            recs = r.run_scenario("tui", "S5")
+            self.assertEqual({x.arm: x.verdict for x in recs}, {"S5/add": "visible_live", "S5/reload": "visible_after_reload"})
+            self.assertEqual([x.hook["mechanism"] for x in recs if x.arm == "S5/reload"], ["/reload"])
+        with tempfile.TemporaryDirectory() as d:
+            recs = self._runner(d, _FrozenAdapter()).run_scenario("tui", "S5")
+            self.assertEqual({x.arm: x.verdict for x in recs}, {"S5/add": "not_visible", "S5/reload": "visible_after_reload"})
+
+    def test_mode_scenario_table_and_blocked_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            self.assertEqual(r.run_scenario("print", "S5"), [])
+            self.assertEqual(r.run_scenario("tui", "S4"), [])
+            self.assertEqual({x.scenario for x in r.record_blocked("tui", "nope")}, {"S0", "S1", "S2", "S5"})
+            self.assertEqual({x.scenario for x in r.record_blocked("daemon", "nope")},
+                             {"S0", "S1", "S2", "S3", "S4", "S5", "S6", "S10"})
+            self.assertEqual({x.scenario for x in r.record_blocked("print", "nope")},
+                             {"S0", "S1", "S2", "S3", "S4", "S6", "S7", "S8", "S9"})
+
     def test_cli_records_untested_rows_without_a_binary(self):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "out"
@@ -873,16 +985,17 @@ class RunnerTests(unittest.TestCase):
                                    "--outdir", str(out), "--base", d])
             self.assertEqual(code, 0)
             recs = _load(out)
-            self.assertEqual(len(recs), 8)
+            self.assertEqual(len(recs), 16)
             with mock.patch.dict(probe.ENTRIES, {"nobin": _NoBinaryAdapter}):
                 probe.main(["--harness", "nobin", "--mode", "print", "--turn",
                             "--outdir", str(out), "--base", d])
-            self.assertEqual(len(_load(out)), 8)
+            self.assertEqual(len(_load(out)), 16)
             self.assertEqual({r.verdict for r in recs}, {"untested"})
             self.assertEqual({r.notes for r in recs}, {"binary not installed"})
             self.assertEqual({r.arm for r in recs}, {
-                "S0/none", "S1/native", "S2/hook-creates-root", "S2/hook-adds-skill",
-                "S2/registration", "S3/gitignore", "S3/info-exclude", "S4/all-roots"})
+                "S0/none", "S1/native", "S2/hook-creates-root", "S2/hook-adds-skill", "S2/registration",
+                "S3/gitignore", "S3/info-exclude", "S4/all-roots", "S6/update", "S6/delete", "S7/add",
+                "S7/update", "S8/ancestor", "S8/local", "S9/linked-own", "S9/linked-other"})
 
     def test_cli_stops_the_entry_on_a_prompt_design_failure(self):
         with tempfile.TemporaryDirectory() as d:

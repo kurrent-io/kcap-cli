@@ -43,13 +43,15 @@ class FakeAdapter(Adapter):
     live_catalogue = True
 
     def __init__(self) -> None:
-        self._hook: Path | None = None
+        # Keyed by sandbox root: a real vendor's hook lives in that sandbox's own config, and one
+        # adapter instance now runs every scenario's arms, each in its own sandbox in turn.
+        self._hooks: dict[Path, Path] = {}
 
     def version(self, env: dict | None = None) -> str:
         return "1.0"
 
     def install_startup_hook(self, sb: Sandbox, script: Path) -> HookInfo:
-        self._hook = script
+        self._hooks[sb.root] = script
         return HookInfo(mechanism="fake-startup", config_path=str(script))
 
     def catalogue(self, sb: Sandbox) -> list[str]:
@@ -68,8 +70,9 @@ class FakeAdapter(Adapter):
                          first_request_at=started, stderr_path=None, exit_code=0)
 
     def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
-        if self._hook is not None:
-            subprocess.run([str(self._hook)], input="{}", capture_output=True, text=True, timeout=10)
+        hook = self._hooks.get(sb.root)
+        if hook is not None:
+            subprocess.run([str(hook)], input="{}", capture_output=True, text=True, timeout=10)
         return self.reply(self.catalogue(sb), ["fake"])
 
     def open_session(self, sb: Sandbox, mode: str) -> Session | None:
@@ -85,8 +88,9 @@ class FakeAdapter(Adapter):
 
     def tui_argv(self, sb: Sandbox) -> list[str] | None:
         servers = Path(__file__).resolve().parent.parent / "selftest_servers.py"
-        if self._hook is not None:
-            sb.env["KCAP_FAKE_HOOK"] = str(self._hook)
+        hook = self._hooks.get(sb.root)
+        if hook is not None:
+            sb.env["KCAP_FAKE_HOOK"] = str(hook)
         if not self.live_catalogue:
             sb.env["KCAP_FAKE_TUI_FROZEN"] = "1"
         return [sys.executable, str(servers), "tui"]
