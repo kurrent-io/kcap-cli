@@ -108,4 +108,38 @@
         <Setter Property="FontSize" Value="12.5" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <Style Selector="mv|MarkdownViewer Border.markdown-details">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:checked /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer :is(TextBlock).markdown-details-label">
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
 </Styles>

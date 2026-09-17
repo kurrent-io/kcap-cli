@@ -2,6 +2,8 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia;
 using MarkView.Avalonia.SyntaxHighlighting;
@@ -24,13 +26,19 @@ public sealed class MarkdownView : ContentControl {
     static readonly TextMateExtension Highlighting = new();
 
     readonly MarkdownViewer _viewer = new();
+    readonly DetailsState _details = new();
+    readonly DetailsExtension _detailsExtension;
 
     static MarkdownView() {
-        TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._viewer.Markdown = view.Text);
+        TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
+            view._details.Clear();
+            view._viewer.Markdown = view.Text;
+        });
         FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
     }
 
     public MarkdownView() {
+        _detailsExtension = new(_details, OnDetailsToggled);
         ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -58,10 +66,32 @@ public sealed class MarkdownView : ContentControl {
     }
 
     void ApplyFlavor() {
+        _details.Clear();
         _viewer.Extensions.Clear();
-        _viewer.Extensions.Add(Flavor == MarkdownFlavor.GitHub ? KcapMarkdownExtension.GitHub : KcapMarkdownExtension.Chat);
+        if (Flavor == MarkdownFlavor.GitHub) {
+            _viewer.Extensions.Add(KcapMarkdownExtension.GitHub);
+            _viewer.Extensions.Add(_detailsExtension);
+        } else {
+            _viewer.Extensions.Add(KcapMarkdownExtension.Chat);
+        }
         _viewer.Extensions.Add(Highlighting);
         // Only the pipeline change re-renders, so it goes last.
         _viewer.Pipeline = Flavor == MarkdownFlavor.GitHub ? GitHubPipeline.Instance : null;
     }
+
+    /// Re-rendering rebuilds MarkView's selection index, so it always matches what is visible.
+    /// The header that was pressed is gone with the old tree; its successor gets the focus back.
+    void OnDetailsToggled(int ordinal, bool expanded) {
+        _details.Set(ordinal, expanded);
+        var hadFocus = Header(ordinal)?.IsFocused == true;
+        Dispatcher.UIThread.Post(() => {
+            var text = Text;
+            _viewer.Markdown = null;
+            _viewer.Markdown = text;
+            if (hadFocus) Header(ordinal)?.Focus();
+        });
+    }
+
+    ToggleButton? Header(int ordinal) =>
+        this.GetVisualDescendants().OfType<ToggleButton>().FirstOrDefault(button => button.Tag is int tag && tag == ordinal);
 }
