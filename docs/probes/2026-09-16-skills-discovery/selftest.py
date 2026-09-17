@@ -966,6 +966,28 @@ class RunnerTests(unittest.TestCase):
             recs = self._runner(d, _FrozenAdapter()).run_scenario("tui", "S5")
             self.assertEqual({x.arm: x.verdict for x in recs}, {"S5/add": "not_visible", "S5/reload": "visible_after_reload"})
 
+    def test_tui_asks_for_the_marked_line_and_untested_without_one(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"KCAP_FAKE_TUI_BARE": "1"}):
+            # A vendor that answers with a bare token is unreadable on a screen that echoes the
+            # prompt: that is a failure to measure, not a skill that was not there.
+            recs = self._runner(d).run_scenario("tui", "S1")
+            self.assertEqual([x.verdict for x in recs], ["untested"])
+            self.assertEqual(recs[0].tokens_found, [])
+            self.assertIn("no reply read from the screen", recs[0].notes)
+
+    def test_recorded_row_reads_the_screen_under_the_same_rule_as_the_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._runner(d)
+            skill = ProbeSkill.fresh()
+            res = AskResult(reply_text="", raw=f"tool panel showed {skill.body_token}", argv=[],
+                            started_at=0.0, first_request_at=0.0, stderr_path=None, exit_code=None)
+            tui = r.record("tui", "S1", "S1/native", ".fake/skills", "none", res, "not_visible", {},
+                           name=skill.name)
+            self.assertEqual(tui.tokens_found, [])
+            printed = r.record("print", "S1", "S1/native", ".fake/skills", "none", res, "not_visible", {},
+                               name=skill.name)
+            self.assertEqual(printed.tokens_found, [skill.token])
+
     def test_mode_scenario_table_and_blocked_rows(self):
         with tempfile.TemporaryDirectory() as d:
             r = self._runner(d)

@@ -42,6 +42,10 @@ def combine(verdicts: list[str]) -> tuple[str, bool]:
 
 
 def needs_third_run(verdicts: list[str]) -> bool:
+    # A run that failed to measure is not a disagreement to break: the arm is cleared and
+    # measured again from scratch, and a third turn here would be spent on nothing.
+    if "untested" in verdicts:
+        return False
     return len(verdicts) == 2 and verdicts[0] != verdicts[1]
 
 

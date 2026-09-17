@@ -32,7 +32,9 @@ from harness.base import Adapter, AskResult, Session  # noqa: E402
 from lib.git_exclusion import apply as apply_exclusion, assert_untracked_state  # noqa: E402
 from lib.hook_script import read_stamp, stamp_path, write_hook_script  # noqa: E402
 from lib.isolation import Sandbox, add_worktree, new_sandbox  # noqa: E402
-from lib.probe_skill import ProbeSkill, multi_prompt, parse_reply, single_prompt, write_skill  # noqa: E402
+from lib.probe_skill import (  # noqa: E402
+    ProbeSkill, multi_prompt, parse_reply, single_prompt, tui_prompt, write_skill,
+)
 from lib.recorder import (  # noqa: E402
     RunRecord, emit_matrix, load_runs, next_run_path, os_label, run_dir, write_run,
 )
@@ -64,17 +66,32 @@ MODE_SCENARIOS: dict[str, tuple[str, ...]] = {
 }
 
 
+# The arms of a scenario, per mode: a sweep and the blocked rows it stands in for read the same
+# table, so a mode cannot record a row for an arm it never runs.
+SCENARIO_ARMS: dict[str, tuple[str, ...]] = {
+    "S0": ("none",), "S1": ("native",), "S2": S2_ARMS, "S3": S3_ARMS, "S5": S5_ARMS, "S6": S6_ARMS,
+    "S7": S7_ARMS, "S8": S8_ARMS, "S9": S9_ARMS, "S10": ("hook-from-peer",),
+}
+TUI_SCENARIO_ARMS: dict[str, tuple[str, ...]] = {"S2": ("hook-adds-skill",), "S5": S5_TUI_ARMS}
+
+
+def arms_of(mode: str, scenario: str) -> tuple[str, ...]:
+    if mode == "tui" and scenario in TUI_SCENARIO_ARMS:
+        return TUI_SCENARIO_ARMS[scenario]
+    return SCENARIO_ARMS[scenario]
+
+
 def arms_for(mode: str) -> list[tuple[str, str, bool, str]]:
     """Every arm a full sweep runs in this mode, so an entry that cannot run gets a row per arm."""
     wanted = MODE_SCENARIOS[mode]
     out: list[tuple[str, str, bool, str]] = [("S0", "S0/none", False, "none"), ("S1", "S1/native", True, "none")]
-    out += [("S2", f"S2/{a}", True, "none") for a in (("hook-adds-skill",) if mode == "tui" else S2_ARMS)]
+    out += [("S2", f"S2/{a}", True, "none") for a in arms_of(mode, "S2")]
     if "S3" in wanted:
         out += [("S3", f"S3/{e}", True, e) for e in S3_ARMS]
     if "S4" in wanted:
         out.append(("S4", "S4/all-roots", False, "none"))
     if "S5" in wanted:
-        out += [("S5", f"S5/{a}", True, "none") for a in (S5_TUI_ARMS if mode == "tui" else S5_ARMS)]
+        out += [("S5", f"S5/{a}", True, "none") for a in arms_of(mode, "S5")]
     if "S6" in wanted:
         out += [("S6", f"S6/{a}", True, "none") for a in S6_ARMS]
     if "S7" in wanted:
@@ -141,7 +158,7 @@ class Runner:
                sb: Sandbox | None = None, notes: str = "", started: float | None = None,
                auth_ok: bool | None = None, name: str | None = None,
                prior: AskResult | None = None) -> RunRecord:
-        reply = parse_reply(res.reply_text, res.raw, name) if res else None
+        reply = parse_reply(res.reply_text, self._raw_for(mode, res), name) if res else None
         rec = RunRecord(
             entry=self.adapter.entry, harness=self.adapter.harness, binary=self._binary,
             version=self._version, os=self._os, mode=mode, argv=res.argv if res else [],
@@ -251,7 +268,7 @@ class Runner:
         if mode == "tui":
             session = self._open(sb, "tui")
             try:
-                res = session.ask(prompt)
+                res = self._ask_session(session, mode, prompt)
             finally:
                 session.close()
         else:
@@ -266,6 +283,16 @@ class Runner:
                 errors = [line.strip() for line in text.splitlines() if "Error" in line or "error" in line]
                 reason = (errors[0] if errors else text[-300:].replace("\n", " | "))[:300]
             raise RuntimeError(f"vendor exit {res.exit_code} with no reply; {res.notes}; stderr: {reason}")
+        return res
+
+    def _prompt(self, mode: str, skill: ProbeSkill) -> str:
+        # The screen echoes whatever is typed, so the interactive form asks for a marked line.
+        return tui_prompt(skill) if mode == "tui" else single_prompt(skill)
+
+    def _ask_session(self, session: Session, mode: str, prompt: str) -> AskResult:
+        res = session.ask(prompt)
+        if mode == "tui" and not res.reply_text.strip():
+            raise RuntimeError(f"no reply read from the screen; {res.notes}")
         return res
 
     def _open(self, sb: Sandbox, mode: str) -> Session:
@@ -300,7 +327,7 @@ class Runner:
         started = time.time()
         sb = self.sandbox()
         skill = ProbeSkill.fresh()
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         try:
             verdict = judge_control(parse_reply(res.reply_text, res.raw, skill.name))
         except PromptDesignFailure as ex:
@@ -329,7 +356,7 @@ class Runner:
             return self.record(mode, scenario, arm, root, exclusion, None, "untested",
                                {"native": skill.token}, sb=sb, started=started,
                                notes=f"git state: {ex}")
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         verdict = judge_single(skill.token, parse_reply(res.reply_text, self._raw_for(mode, res), skill.name))
         return self.record(mode, scenario, arm, root, exclusion, res, verdict,
                            {"native": skill.token}, sb=sb, started=started, name=skill.name)
@@ -356,7 +383,7 @@ class Runner:
                 return self.record(mode, "S2", f"S2/{arm}", root, "none", None, "untested", {},
                                    sb=sb, notes="no startup hook mechanism for this entry", started=started)
             reload_used = False
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         verdict = judge_single(skill.token, parse_reply(res.reply_text, self._raw_for(mode, res), skill.name),
                                reload_used=reload_used)
         hook = self._hook_dict(sb, info.mechanism, info.config_path)
@@ -396,7 +423,7 @@ class Runner:
         sb = self.sandbox()
         skill = ProbeSkill.fresh()
         write_skill(sb.repo / root, skill, flat=a.flat_skill_layout and root == a.native_root)
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         verdict = judge_root(skill.token, root in a.documented_roots,
                              parse_reply(res.reply_text, res.raw, skill.name))
         return self.record(mode, "S4", f"S4/confirm-{root_key}", root, "none", res, verdict,
@@ -414,7 +441,7 @@ class Runner:
             write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
         session = self._open(sb, mode)
         try:
-            first = session.ask(single_prompt(skill))
+            first = self._ask_session(session, mode, self._prompt(mode, skill))
             turn1 = self._judge_turn(mode, first, skill)
             if arm in ("update", "delete") and turn1 != "visible_first_turn":
                 return self.record(mode, "S5", f"S5/{arm}", root, "none", first, "untested", {"native": skill.token},
@@ -436,7 +463,7 @@ class Runner:
             else:
                 old = skill.token
                 self._remove_skill(sb, root, skill)
-            second = session.ask(single_prompt(skill))
+            second = self._ask_session(session, mode, self._prompt(mode, skill))
         finally:
             session.close()
         reply = parse_reply(second.reply_text, self._raw_for(mode, second), skill.name)
@@ -468,7 +495,7 @@ class Runner:
         if info is None:
             return self.record(mode, "S6", f"S6/{arm}", root, "none", None, "untested", {}, sb=sb, started=started,
                                notes="no startup hook mechanism for this entry")
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         reply = parse_reply(res.reply_text, self._raw_for(mode, res), skill.name)
         if arm == "update":
             verdict = judge_update(skill.token, old_skill.token, reply, live=False)
@@ -498,7 +525,7 @@ class Runner:
         old: str | None = None
         if arm == "update":
             write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
-        first = self._ask(sb, mode, single_prompt(skill))
+        first = self._ask(sb, mode, self._prompt(mode, skill))
         turn1 = self._judge_turn(mode, first, skill)
         sid = a.session_id(first)
         if sid is None:
@@ -513,7 +540,7 @@ class Runner:
             old = skill.token
             skill = skill.variant()
         write_skill(sb.repo / root, skill, flat=a.flat_skill_layout)
-        res = a.resume(sb, sid, single_prompt(skill))
+        res = a.resume(sb, sid, self._prompt(mode, skill))
         if res is None:
             return self.record(mode, "S7", f"S7/{arm}", root, "none", first, "untested", {"native": skill.token},
                                sb=sb, started=started, notes=f"turn1={turn1}; no resume launch for this entry",
@@ -533,7 +560,7 @@ class Runner:
         skill = ProbeSkill.fresh()
         tree = sb.repo if arm == "ancestor" else sb.cwd
         write_skill(tree / root, skill, flat=a.flat_skill_layout)
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         verdict = self._judge_turn(mode, res, skill)
         return self.record(mode, "S8", f"S8/{arm}", root, "none", res, verdict, {"native": skill.token}, sb=sb,
                            started=started, notes="cwd=sub/dir", name=skill.name)
@@ -555,7 +582,7 @@ class Runner:
         except AssertionError as ex:
             return self.record(mode, "S9", f"S9/{arm}", root, "info-exclude", None, "untested",
                                {"native": skill.token}, sb=sb, started=started, notes=f"git state: {ex}")
-        res = self._ask(sb, mode, single_prompt(skill))
+        res = self._ask(sb, mode, self._prompt(mode, skill))
         verdict = self._judge_turn(mode, res, skill)
         where = "linked" if tree == wt else "main"
         return self.record(mode, "S9", f"S9/{arm}", root, "info-exclude", res, verdict, {"native": skill.token},
@@ -570,16 +597,16 @@ class Runner:
         target = a.skill_file(sb, root, skill.name)
         session = self._open(sb, "daemon")
         try:
-            first = session.ask(single_prompt(skill))
+            first = self._ask_session(session, mode, self._prompt(mode, skill))
             turn1 = self._judge_turn("daemon", first, skill)
             script = write_hook_script(sb.config_root, target, skill.render(), stamp_path(sb.config_root))
             info = a.install_startup_hook(sb, script)
             if info is None:
                 return self.record(mode, "S10", "S10/hook-from-peer", root, "none", first, "untested", {}, sb=sb,
                                    started=started, notes="no startup hook mechanism for this entry", name=skill.name)
-            peer = self._ask(sb, "print", single_prompt(skill))
+            peer = self._ask(sb, "print", self._prompt("print", skill))
             peer_verdict = self._judge_turn("print", peer, skill)
-            second = session.ask(single_prompt(skill))
+            second = self._ask_session(session, mode, self._prompt(mode, skill))
         finally:
             session.close()
         hook = self._hook_dict(sb, info.mechanism, info.config_path)
@@ -594,6 +621,8 @@ class Runner:
     # -- scenarios ----------------------------------------------------------------------------
 
     def run_scenario(self, mode: str, scenario: str, arms: list[str] | None = None) -> list[RunRecord]:
+        if scenario not in SCENARIOS:
+            raise ValueError(scenario)
         if scenario not in MODE_SCENARIOS[mode]:
             return []
         gated = scenario not in ("S0", "S1") and not self.s1_ok.get(mode, True)
@@ -606,8 +635,7 @@ class Runner:
             self.s1_ok[mode] = combine([r.verdict for r in recs])[0] == "visible_first_turn"
             out += recs
         elif scenario == "S2":
-            default_arms = ("hook-adds-skill",) if mode == "tui" else S2_ARMS
-            for arm in arms or default_arms:
+            for arm in arms or arms_of(mode, "S2"):
                 if gated:
                     out += self._blocked(mode, "S2", f"S2/{arm}", native, "none")
                 elif arm == "registration":
@@ -616,7 +644,7 @@ class Runner:
                     out += self.run_arm(lambda a=arm: self.arm_s2(mode, a), mode, "S2", f"S2/{arm}",
                                         native, "none")
         elif scenario == "S3":
-            for exclusion in arms or S3_ARMS:
+            for exclusion in arms or arms_of(mode, "S3"):
                 if gated:
                     out += self._blocked(mode, "S3", f"S3/{exclusion}", native, exclusion)
                 else:
@@ -637,11 +665,9 @@ class Runner:
                 out += self.run_once(lambda k=key, r=root: self.arm_s4_confirm(mode, k, r), mode, "S4",
                                      f"S4/confirm-{key}", root, "none")
         elif scenario in ("S5", "S6", "S7", "S8", "S9"):
-            table = {"S5": S5_TUI_ARMS if mode == "tui" else S5_ARMS, "S6": S6_ARMS, "S7": S7_ARMS,
-                     "S8": S8_ARMS, "S9": S9_ARMS}[scenario]
             fn = {"S5": self.arm_s5, "S6": self.arm_s6, "S7": self.arm_s7, "S8": self.arm_s8, "S9": self.arm_s9}[scenario]
             exclusion = "info-exclude" if scenario == "S9" else "none"
-            for arm in arms or table:
+            for arm in arms or arms_of(mode, scenario):
                 if gated:
                     out += self._blocked(mode, scenario, f"{scenario}/{arm}", native, exclusion)
                 else:

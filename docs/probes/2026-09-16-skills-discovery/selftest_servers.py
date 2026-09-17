@@ -135,7 +135,11 @@ def tui() -> None:
             # disk must not be mistaken for it.
             match = next((e for e in entries if e.split("=", 1)[0] in line), None)
             value = match.split("=", 1)[1] if match else "NO-SKILL"
-            out.write(f"\x1b[32m**PROBE-REPLY: {value}**\x1b[0m\r\n> ")
+            if "PROBE-REPLY" in line and os.environ.get("KCAP_FAKE_TUI_BARE") != "1":
+                # A spinner redrawing the status line while the answer streams beside it.
+                out.write(f"\x1b[32m**PROBE-REPLY: {value}**\x1b[0m\r\n\x1b[A\x1b[999C working\r\n> ")
+            else:
+                out.write(f"{value}\r\n> ")
         else:
             out.write("?\r\n> ")
         out.flush()

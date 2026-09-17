@@ -36,6 +36,9 @@ class FakeAdapter(Adapter):
     documented_roots = frozenset({".fake/skills", ".agents/skills"})
     modes = ("print", "daemon", "tui")
     can_resume = True
+    passthrough_env = ("KCAP_FAKE_TUI_BARE",)
+    # A screen the fake never writes to is waited on for this long, so the suite stays quick.
+    turn_timeout = 15.0
     tui_reload = "/reload"
     tui_ready = 0.3
     # What the fake vendor actually loads, which a subclass keeps while narrowing what it documents.
