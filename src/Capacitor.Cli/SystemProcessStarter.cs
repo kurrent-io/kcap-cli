@@ -26,10 +26,39 @@ public sealed class SystemProcessStarter : IProcessStarter {
             return null;
         }
 
-        if (psi.RedirectStandardInput) process.StandardInput.Close();
+        // Disposing the wrapper releases this process's handle on the child; it does not
+        // signal the child, which goes on running detached. Nothing here waits on it, so an
+        // undisposed wrapper would hold that handle until finalization.
+        using (process) {
+            if (psi.RedirectStandardInput) process.StandardInput.Close();
+            if (psi.RedirectStandardOutput) process.StandardOutput.Close();
+            if (psi.RedirectStandardError) process.StandardError.Close();
+
+            return process.Id;
+        }
+    }
+
+    /// <summary>
+    /// Windows names the single pipe handle in the child's inherit list, so nothing else crosses.
+    /// Unix needs no equivalent: the sweep marks this process's pipe descriptors close-on-exec and
+    /// <c>exec</c> honours that, leaving only the descriptors the redirect itself installs.
+    /// </summary>
+    public (int Pid, Stream StandardInput)? StartDetachedWithStdin(ProcessStartInfo psi) {
+        if (OperatingSystem.IsWindows()) {
+            return ProcessHelpers.StartDetachedWindowsWithStdin(psi);
+        }
+
+        ProcessHelpers.PreventInheritedHandles();
+
+        if (Process.Start(psi) is not { } process) {
+            return null;
+        }
+
         if (psi.RedirectStandardOutput) process.StandardOutput.Close();
         if (psi.RedirectStandardError) process.StandardError.Close();
 
-        return process.Id;
+        // The wrapper is NOT disposed here: it owns the stdin pipe being handed back, and the
+        // caller has not written the payload yet. Closing that stream is what releases it.
+        return (process.Id, process.StandardInput.BaseStream);
     }
 }

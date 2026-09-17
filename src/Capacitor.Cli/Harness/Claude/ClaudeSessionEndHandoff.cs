@@ -33,7 +33,7 @@ static class ClaudeSessionEndHandoff {
     /// not fully happen — the caller then runs the event inline.
     /// </summary>
     public static bool TrySpawn(string[] args, string body, ConfigRoot config, IProcessStarter starter) {
-        Process? process = null;
+        int? pid = null;
 
         try {
             var psi = new ProcessStartInfo(Environment.ProcessPath ?? "kcap") {
@@ -52,27 +52,20 @@ static class ClaudeSessionEndHandoff {
             psi.Environment[ConfigRoot.ConfigDirEnvVar] = config.Directory;
 
             // Same pipe-leak hazard as the watcher spawn: the child must not hold Claude's hook
-            // pipes open, or Claude waits on them past the hook's own exit.
-            //
-            // This is the one detached spawn that cannot use IProcessStarter.StartDetached: the
-            // payload is handed over through the child's stdin, and a pipe can only reach a child
-            // by being inherited. Windows therefore still inherits the rest of the agent's
-            // handles here, so the leak survives on this path until the spawn passes an explicit
-            // PROC_THREAD_ATTRIBUTE_HANDLE_LIST naming just that one pipe.
-            ProcessHelpers.PreventInheritedHandles();
-
-            process = starter.Start(psi);
-
-            if (process is null) {
+            // pipes open, or Claude waits on them past the hook's own exit. The payload travels on
+            // the child's stdin, so this spawn cannot refuse every handle the way the others do —
+            // it hands over that one pipe and nothing else.
+            if (starter.StartDetachedWithStdin(psi) is not { } child) {
                 Console.Error.WriteLine("[kcap] session-end hand-off: failed to start the detached continuation; running inline");
 
                 return false;
             }
 
-            process.StandardInput.Write(body);
-            process.StandardInput.Close();
-            process.StandardOutput.Close();
-            process.StandardError.Close();
+            pid = child.Pid;
+
+            using (var payload = new StreamWriter(child.StandardInput)) {
+                payload.Write(body);
+            }
 
             return true;
         } catch (Exception ex) {
@@ -80,11 +73,14 @@ static class ClaudeSessionEndHandoff {
 
             // A child that started but never got the full payload must not outlive this failure:
             // the inline path is about to do the work, and two owners would double-post.
-            try { process?.Kill(entireProcessTree: true); } catch { }
+            if (pid is { } started) {
+                try {
+                    using var child = Process.GetProcessById(started);
+                    child.Kill(entireProcessTree: true);
+                } catch { }
+            }
 
             return false;
-        } finally {
-            process?.Dispose();
         }
     }
 

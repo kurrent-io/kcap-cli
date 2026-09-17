@@ -32,4 +32,11 @@ sealed class FakeProcessStarter : IProcessStarter {
     /// <summary>Counts alongside <see cref="Start"/>: a test asserting a guard ran cares that
     /// nothing was spawned, not which spawn shape the caller reached for.</summary>
     public int? StartDetached(ProcessStartInfo psi) => Start(psi)?.Id;
+
+    /// <summary>
+    /// Counts alongside <see cref="Start"/> too, and hands back the stub child's own stdin so a
+    /// test can assert on what the caller wrote to it.
+    /// </summary>
+    public (int Pid, Stream StandardInput)? StartDetachedWithStdin(ProcessStartInfo psi) =>
+        Start(psi) is { } child ? (child.Id, child.StandardInput.BaseStream) : null;
 }
