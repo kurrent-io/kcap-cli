@@ -266,8 +266,12 @@ which ids fell where. Succeeded is `Loaded` or `Resumed`, **or `Skipped` with
 whose call nonetheless posted a carried child (`CursorImportSource.cs:578-625`) has landed real work
 under its own session, and that is exactly what the flag exists to report. Skipped is `Skipped` with
 nothing sent. `ResolveRoutedOutcomeForCounting` (`ImportCommand.cs:522`) keeps governing the
-Done-grid *counts*; the per-id partition is recorded from the raw outcome and the flag before that
-suppression, so the two never disagree about an id.
+Done-grid *counts* unchanged, and the two answer different questions: the grid says what this call
+sent for its own stream, the partition says whether the server session landed work. They differ on
+exactly one shape — a `New` parent whose only content was a carried child, which the grid counts as
+skipped today (`IsSkippedChildContentOverride` promotes only an `AlreadyLoaded` parent) and the
+partition counts as succeeded. The test pins that divergence rather than hiding it; aligning the
+grid is a plain-import display change and a follow-up (Out of scope).
 
 **Reporting the selection and the partition.** Two records, one per checkpoint:
 
@@ -811,7 +815,8 @@ sendable content and no children lands in `SkippedIds`; own-call `Loaded`/`Resum
 posted (`Skipped`, `SentChildContent: true`) lands in `SucceededIds`, and with no remainder that run
 reaches §4 row 8, not row 4; a carried child appears in no list;
 `Complete ⇒ Selected == Succeeded + Skipped + Failed`; the per-id partition is taken from the raw
-outcome and disagrees with nothing the Done grid counts.
+outcome and the child-content flag, and the carried-child fixture pins the one known divergence
+from the Done grid: the `New` parent is in `SucceededIds` while the grid still counts it as skipped.
 
 **Discovery contract**, through the real `ISetupImportRunner` interface: a source whose
 `DiscoverAsync` throws → `Fault` set, `Result == null`, the step prints the failure line and the
@@ -936,3 +941,6 @@ section mentions newest-first prioritization and nothing else changes there.
   the whole scan). Setup totalizes the scan as a whole; per-source resilience is its own change.
 - Surfacing `retry_after_seconds` and the effective row cap structurally through the analytics MCP.
   The skill reads both from the text the MCP returns today.
+- Counting a `New` Cursor parent whose only content was a carried child as loaded in `kcap import`'s
+  Done grid (`IsSkippedChildContentOverride` promotes only `AlreadyLoaded` parents). Setup's
+  partition treats it as landed; the grid's display is its own change.
